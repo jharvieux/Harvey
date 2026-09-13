@@ -70,6 +70,21 @@ interface DependencyInstallation {
   version?: string;
 }
 
+interface LicenseOrigin {
+  component: SbomComponent;
+  path?: string;
+  // An npm path fallback does not prove the package's published name when an alias
+  // declaration reaches that installation. Yarn selectors likewise need resolution.
+  explicitName: boolean;
+  aliasSpecifier?: string;
+}
+
+interface UnresolvedLockAlias {
+  name: string;
+  declared: string;
+  path: string;
+}
+
 // #1079: `unmatched` is the whole point of this shape. Completeness used to be derived from
 // `components.length > 0`, so a parser that recovered 1 of 900 entries still reported "complete"
 // — the partial-presented-as-whole failure the module header calls THE risk with an SBOM. Every
@@ -78,6 +93,8 @@ interface DependencyInstallation {
 interface ParsedLock {
   components: SbomComponent[];
   installations: DependencyInstallation[];
+  licenseOrigins: LicenseOrigin[];
+  unresolvedLockAliases: UnresolvedLockAlias[];
   unmatched: number;
   ranges: DependencyRangeScope;
 }
@@ -85,6 +102,8 @@ interface ParsedLock {
 interface DependencySource {
   components: SbomComponent[];
   installations: DependencyInstallation[];
+  licenseOrigins: LicenseOrigin[];
+  unresolvedLockAliases: UnresolvedLockAlias[];
   source: string; // the file the components came from
   completeness: SbomCompleteness;
   note: string;
@@ -434,6 +453,8 @@ export function parsePackageLock(text: string): ParsedLock {
   const lock = raw as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
   const out = new Map<string, SbomComponent>();
   const installations = new Map<string, DependencyInstallation>();
+  const licenseOrigins: LicenseOrigin[] = [];
+  const unresolvedLockAliases: UnresolvedLockAlias[] = [];
   let unmatched = 0;
   const licenseId = (raw: unknown): string | undefined => {
     if (typeof raw === "string") return raw.trim() || undefined;
@@ -443,14 +464,16 @@ export function parsePackageLock(text: string): ParsedLock {
   };
   const add = (name: string, meta: LockEntry, path: string): void => {
     const license = licenseId(meta.license);
-    out.set(`${name}@${meta.version ?? ""}`, {
+    const component: SbomComponent = {
       name,
       version: meta.version ?? "",
       ...(meta.dev ? { dev: true } : {}),
       ...(license ? { license } : {}),
       ...(meta.integrity ? { integrity: meta.integrity } : {}),
       ...(meta.hasInstallScript ? { hasInstallScript: true } : {}),
-    });
+    };
+    out.set(`${name}@${meta.version ?? ""}`, component);
+    licenseOrigins.push({ component, path, explicitName: typeof meta.name === "string" && validPackageName(meta.name) });
     if (meta.version) installations.set(path, { path, name, version: meta.version });
   };
 
@@ -466,6 +489,11 @@ export function parsePackageLock(text: string): ParsedLock {
       unmatched++;
       continue;
     }
+    if (typeof meta.version === "string" && meta.version.startsWith("npm:")) {
+      unresolvedLockAliases.push({ name: pathName, declared: meta.version, path });
+      unmatched++;
+      continue;
+    }
     add(packageMetadataName(meta, pathName), meta, path);
   }
 
@@ -474,14 +502,19 @@ export function parsePackageLock(text: string): ParsedLock {
       const path = `${owner === "." ? "" : `${owner}/`}node_modules/${name}`;
       installations.set(path, { path });
       if (!isRecord(meta)) { unmatched++; continue; }
-      if (meta.version) add(packageMetadataName(meta, name), meta, path);
+      if (typeof meta.version === "string" && meta.version.startsWith("npm:")) {
+        // A v1 alias descriptor is not a selected package version. Its target and
+        // selected release remain unproved even when the string contains a version.
+        unresolvedLockAliases.push({ name, declared: meta.version, path });
+        unmatched++;
+      } else if (meta.version) add(packageMetadataName(meta, name), meta, path);
       else unmatched++;
       if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>, path);
     }
   };
   if (!lock.packages && lock.dependencies) walkV1(lock.dependencies);
 
-  return { components: [...out.values()], installations: [...installations.values()], unmatched, ranges: packageLockRanges(raw) };
+  return { components: [...out.values()], installations: [...installations.values()], licenseOrigins, unresolvedLockAliases, unmatched, ranges: packageLockRanges(raw) };
 }
 
 // pnpm-lock.yaml, `packages:` section only. Three key shapes across lockfile versions:
@@ -521,24 +554,31 @@ export function parsePnpmLock(text: string): ParsedLock {
       unmatched++;
     }
   }
-  return { components: [...out.values()], installations: [], unmatched, ranges: pnpmRanges(text) };
+  return { components: [...out.values()], installations: [], licenseOrigins: [...out.values()].map((component) => ({ component, explicitName: true })), unresolvedLockAliases: [], unmatched, ranges: pnpmRanges(text) };
 }
 
 // yarn.lock — both the v1 format (`braces@^2.3.1:` / `  version "2.3.2"`) and Berry's
 // (`"braces@npm:^2.3.1":` / `  version: 2.3.2`). v1 records `integrity`, Berry records `checksum`.
 export function parseYarnLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
+  const licenseOrigins: LicenseOrigin[] = [];
   let name: string | undefined;
+  let aliasSpecifier: string | undefined;
   let current: SbomComponent | undefined;
+  let currentOrigin: LicenseOrigin | undefined;
   let unmatched = 0;
   for (const line of text.split("\n")) {
+    if (line.startsWith("__metadata:")) continue;
     const header = /^"?(@?[^@"\s][^@"]*)@/.exec(line);
     if (/^\S/.test(line) && line.trimEnd().endsWith(":")) {
       // A header that never reaches a `version` line yielded no component — count it when the
       // next header arrives, so a truncated or unfamiliar entry cannot pass as a clean parse.
       if (name) unmatched++;
       name = header?.[1];
+      const selector = line.trim().replace(/:$/, "").replace(/^"|"$/g, "");
+      aliasSpecifier = name && selector.slice(name.length + 1).startsWith("npm:") ? selector.slice(name.length + 1) : undefined;
       current = undefined;
+      currentOrigin = undefined;
       if (!name) unmatched++;
       continue;
     }
@@ -547,15 +587,45 @@ export function parseYarnLock(text: string): ParsedLock {
       current.integrity = integrity[1];
       continue;
     }
+    const resolution = /^\s+resol(?:ution|ved):?\s+"?([^"\s]+)"?\s*$/.exec(line);
+    if (current && currentOrigin?.aliasSpecifier && resolution?.[1]) {
+      const target = npmAliasTarget(currentOrigin.aliasSpecifier);
+      const selected = resolution[1];
+      let resolvedName: string | undefined;
+      let resolvedVersion: string | undefined;
+      const berry = /^(@?[^@\s]+(?:\/[^@\s]+)?)@npm:([^@\s]+)$/.exec(selected);
+      if (berry) { resolvedName = berry[1]; resolvedVersion = berry[2]; }
+      else {
+        try {
+          const url = new URL(selected);
+          if (url.hostname === "registry.npmjs.org" && url.protocol === "https:") {
+            const path = decodeURIComponent(url.pathname);
+            const match = /^\/(@[^/]+\/[^/]+|[^/]+)\/-\/([^/]+)-([^/]+)\.tgz$/.exec(path);
+            if (match && match[2] === match[1]!.split("/").at(-1)) {
+              resolvedName = match[1]; resolvedVersion = match[3];
+            }
+          }
+        } catch { /* A non-registry locator cannot establish published identity. */ }
+      }
+      if (target && resolvedName === target.name && resolvedVersion === current.version && aliasVersionMatches(current.version, target.range)) {
+        out.delete(`${current.name}@${current.version}`);
+        current.name = resolvedName;
+        out.set(`${current.name}@${current.version}`, current);
+        currentOrigin.explicitName = true;
+      }
+      continue;
+    }
     const version = /^\s+version:?\s+"?([^"\s]+)"?\s*$/.exec(line);
     if (name && version?.[1]) {
       current = { name, version: version[1] };
       out.set(`${name}@${version[1]}`, current);
+      currentOrigin = { component: current, explicitName: !aliasSpecifier, ...(aliasSpecifier ? { aliasSpecifier } : {}) };
+      licenseOrigins.push(currentOrigin);
       name = undefined;
     }
   }
   if (name) unmatched++;
-  return { components: [...out.values()], installations: [], unmatched, ranges: yarnRanges(text) };
+  return { components: [...out.values()], installations: [], licenseOrigins, unresolvedLockAliases: [], unmatched, ranges: yarnRanges(text) };
 }
 
 const PARSERS: { file: string; parse: (text: string) => ParsedLock }[] = [
@@ -603,12 +673,14 @@ export function collectDependencies(dir: string): DependencySource {
     if (!existsSync(path)) continue;
     let components: SbomComponent[] = [];
     let installations: DependencyInstallation[] = [];
+    let licenseOrigins: LicenseOrigin[] = [];
+    let unresolvedLockAliases: UnresolvedLockAlias[] = [];
     let unmatched = 0;
     let parseError: string | undefined;
     let ranges = unreadRangeSource(file, file === "package-lock.json" ? "package-lock" : file === "pnpm-lock.yaml" ? "pnpm" : "yarn",
       `${file} is present but could not be parsed; its declaration ranges are not assessed.`);
     try {
-      ({ components, installations, unmatched, ranges } = parse(readFileSync(path, "utf8")));
+      ({ components, installations, licenseOrigins, unresolvedLockAliases, unmatched, ranges } = parse(readFileSync(path, "utf8")));
     } catch (err) {
       parseError = (err as Error).message;
     }
@@ -621,6 +693,8 @@ export function collectDependencies(dir: string): DependencySource {
         return {
           components,
           installations,
+          licenseOrigins,
+          unresolvedLockAliases,
           source: file,
           completeness: "incomplete",
           rangeScopes,
@@ -629,7 +703,7 @@ export function collectDependencies(dir: string): DependencySource {
             "Treat the component list as partial: an absent component here means unlisted, not absent from the project.",
         };
       }
-      return { components, installations, source: file, completeness: "complete", note: `Resolved dependency tree parsed from ${file}.`, rangeScopes };
+      return { components, installations, licenseOrigins, unresolvedLockAliases, source: file, completeness: "complete", note: `Resolved dependency tree parsed from ${file}.`, rangeScopes };
     }
     // A lockfile that is present but yields nothing is the dangerous case: it looks like a clean
     // parse. Degrade to the manifest and say the lockfile was not understood.
@@ -637,6 +711,8 @@ export function collectDependencies(dir: string): DependencySource {
     return {
       components: fallback,
       installations: [],
+      licenseOrigins: fallback.map((component) => ({ component, explicitName: !component.version.startsWith("npm:") })),
+      unresolvedLockAliases,
       source: "package.json",
       completeness: "incomplete",
       rangeScopes,
@@ -652,13 +728,15 @@ export function collectDependencies(dir: string): DependencySource {
     ? `Lockfile source(s) ${rangeScopes.map((scope) => scope.source).join(", ")} are present, but no supported resolved-tree parser selected them.`
     : undefined;
   if (fallback.length === 0) {
-    return { components: [], installations: [], source: "(none)", completeness: "unknown", note: unsupportedLockfiles
+    return { components: [], installations: [], licenseOrigins: [], unresolvedLockAliases: [], source: "(none)", completeness: "unknown", note: unsupportedLockfiles
       ? `${unsupportedLockfiles} No manifest dependency inventory was available. This is an empty BOM, not a dependency-free project.`
       : "No lockfile and no package.json were found, so no dependency inventory could be built. This is an empty BOM, not a dependency-free project.", rangeScopes };
   }
   return {
     components: fallback,
     installations: [],
+    licenseOrigins: fallback.map((component) => ({ component, explicitName: !component.version.startsWith("npm:") })),
+    unresolvedLockAliases: [],
     source: "package.json",
     completeness: "incomplete",
     note: `${unsupportedLockfiles ?? "No lockfile was found."} This BOM lists the manifest's DIRECT dependencies at their declared version RANGES only — the transitive tree is NOT included and the versions are not resolved.`,
@@ -672,7 +750,7 @@ export interface LicenseCandidate {
   // A manifest's npm alias key is not a published-package identity until a matching
   // installation proves the target and selected version. Keep the declaration intact
   // so the license consumer can disclose this gap without querying the alias key.
-  unresolvedAlias?: { declared: string; targetName?: string; range?: string };
+  unresolvedAlias?: { declared: string; targetName?: string; range?: string; ownerPath?: string };
   // The license the lockfile records, when its format has the field. package-lock.json does;
   // pnpm-lock.yaml and yarn.lock do not, so for those every candidate needs a registry lookup.
   license?: string;
@@ -729,6 +807,13 @@ export function licenseScope(dir: string): LicenseScope {
   const npmTree = deps.source === "package-lock.json";
   const unresolved = new Map<string, LicenseCandidate>();
   const directResolved = new Set<string>();
+  const ordinaryDeclaredNames = new Set<string>();
+  const uncertainAliasPaths = new Set<string>();
+  const ordinaryProvenPaths = new Set<string>();
+  const aliasCandidate = (name: string, declared: string, direct: boolean, ownerPath?: string): LicenseCandidate => {
+    const target = npmAliasTarget(declared);
+    return { name, direct, unresolvedAlias: { declared, ...(target ? { targetName: target.name, range: target.range } : {}), ...(ownerPath ? { ownerPath } : {}) } };
+  };
   for (const manifest of workspace.manifests) {
     for (const section of [...RANGE_SECTIONS, "peerDependencies"] as const) {
       for (const [name, specifier] of Object.entries(manifest[section] ?? {})) {
@@ -737,32 +822,78 @@ export function licenseScope(dir: string): LicenseScope {
         if (typeof specifier === "string" && specifier.startsWith("npm:")) {
           const target = npmAliasTarget(specifier);
           const installation = npmTree ? visibleInstallation(installations, manifest.label, name) : undefined;
-          if (target && installation?.version && installation.name === target.name && aliasVersionMatches(installation.version, target.range)) {
+          const origin = installation && deps.licenseOrigins.find((entry) => entry.path === installation.path);
+          if (target && installation?.version && origin?.explicitName && installation.name === target.name && aliasVersionMatches(installation.version, target.range)) {
             directResolved.add(`${installation.name}\u0000${installation.version}`);
           } else {
             // Success in another manifest never erases this declaration's unresolved coverage.
-            unresolved.set(`alias\u0000${name}\u0000${specifier}`, {
-              name, direct: true,
-              unresolvedAlias: {
-                declared: specifier,
-                ...(target ? { targetName: target.name, range: target.range } : {}),
-              },
-            });
+            unresolved.set(`alias\u0000${name}\u0000${specifier}`, aliasCandidate(name, specifier, true));
+          }
+          if (installation && !origin?.explicitName) uncertainAliasPaths.add(installation.path);
+          if (!npmTree && target) {
+            const resolved = deps.licenseOrigins.find((entry) => entry.aliasSpecifier === specifier && entry.explicitName &&
+              entry.component.name === target.name && aliasVersionMatches(entry.component.version, target.range));
+            if (resolved) {
+              directResolved.add(`${resolved.component.name}\u0000${resolved.component.version}`);
+              unresolved.delete(`alias\u0000${name}\u0000${specifier}`);
+            }
           }
         } else {
           // Ordinary declarations retain their existing name-based reach.
+          ordinaryDeclaredNames.add(name);
           const matches = componentsByName.get(name) ?? [];
           if (matches.length === 0) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
           for (const component of matches) directResolved.add(`${component.name}\u0000${component.version}`);
+          if (npmTree) {
+            const installation = visibleInstallation(installations, manifest.label, name);
+            if (installation?.version && installation.name === name && typeof specifier === "string" && aliasVersionMatches(installation.version, specifier)) ordinaryProvenPaths.add(installation.path);
+          }
         }
       }
     }
   }
+  if (npmTree) {
+    for (const edge of deps.rangeScopes[0]?.edges ?? []) {
+      const installation = visibleInstallation(installations, `${edge.ownerPath}/package.json`, edge.name);
+      if (!edge.range.startsWith("npm:")) {
+        if (installation?.version && installation.name === edge.name && aliasVersionMatches(installation.version, edge.range)) ordinaryProvenPaths.add(installation.path);
+        continue;
+      }
+      const target = npmAliasTarget(edge.range);
+      const origin = installation && deps.licenseOrigins.find((entry) => entry.path === installation.path);
+      if (target && installation?.version && origin?.explicitName && installation.name === target.name && aliasVersionMatches(installation.version, target.range)) continue;
+      unresolved.set(`transitive\u0000${edge.ownerPath}\u0000${edge.name}\u0000${edge.range}`, aliasCandidate(edge.name, edge.range, false, edge.ownerPath));
+      if (installation && !origin?.explicitName) uncertainAliasPaths.add(installation.path);
+    }
+  }
+  for (const alias of deps.unresolvedLockAliases) {
+    if (alias.path === `node_modules/${alias.name}` && workspace.manifests.some((manifest) =>
+      manifest.label === "package.json" && ([...RANGE_SECTIONS, "peerDependencies"] as const).some((section) =>
+        manifest[section]?.[alias.name]?.startsWith("npm:")))) continue;
+    if (![...unresolved.values()].some((candidate) => candidate.name === alias.name && candidate.unresolvedAlias?.declared === alias.declared)) {
+      unresolved.set(`lock\u0000${alias.path}\u0000${alias.declared}`, aliasCandidate(alias.name, alias.declared, false, alias.path));
+    }
+  }
   const candidates: LicenseCandidate[] = [];
-  for (const c of deps.components) {
+  const accepted = new Map<string, SbomComponent>();
+  for (const origin of deps.licenseOrigins) {
+    const c = origin.component;
     // The manifest-only inventory records declaration specifiers in `version`; an npm:
     // value is not an installed version or a license lookup coordinate.
     if (deps.source === "package.json" && typeof c.version === "string" && c.version.startsWith("npm:")) continue;
+    if (origin.aliasSpecifier && !origin.explicitName) {
+      if (![...unresolved.values()].some((candidate) => candidate.name === c.name && candidate.unresolvedAlias?.declared === origin.aliasSpecifier)) {
+        unresolved.set(`yarn\u0000${c.name}\u0000${origin.aliasSpecifier}`, aliasCandidate(c.name, origin.aliasSpecifier, false));
+      }
+      continue;
+    }
+    if (origin.path && uncertainAliasPaths.has(origin.path) && !origin.explicitName && !ordinaryProvenPaths.has(origin.path)) continue;
+    accepted.set(`${c.name}\u0000${c.version}`, c);
+  }
+  for (const name of ordinaryDeclaredNames) {
+    if (![...accepted.values()].some((component) => component.name === name)) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
+  }
+  for (const c of accepted.values()) {
     candidates.push({
       name: c.name,
       ...(c.version ? { version: c.version } : {}),

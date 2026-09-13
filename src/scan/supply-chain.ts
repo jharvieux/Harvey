@@ -688,8 +688,8 @@ export async function checkLicenseCompliance(
     const { name, version } = candidate;
     const coordinate = version ? `${name}@${version}` : name;
     if (candidate.unresolvedAlias) {
-      const { declared, targetName, range } = candidate.unresolvedAlias;
-      indeterminate.push(`${name} (declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}; declaration-to-installation resolution unproved)`);
+      const { declared, targetName, range, ownerPath } = candidate.unresolvedAlias;
+      indeterminate.push(`${name} (declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}${ownerPath ? `; owner ${ownerPath}` : ""}; declaration-to-installation resolution unproved)`);
       reasons.add("the selected dependency inventory did not prove that the declared npm alias target and range resolve to a matching installed package/version; a registry response for the alias key cannot establish that identity");
       continue;
     }

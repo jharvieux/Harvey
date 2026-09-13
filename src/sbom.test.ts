@@ -771,6 +771,151 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
     expect(findings[0]?.evidence).toContain("Not assessed: missing");
   });
+
+  it.each(["MIT", "GPL-3.0"])("discloses an npm v3 alias with no canonical metadata under %s registry data", async (license) => {
+    write({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, {
+      "node_modules/alias": { version: "2.0.0" },
+    });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(await checkLicenseCompliance(scope, { skipRegistry: true })).toEqual(findings);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("alias");
+    expect(findings[0]?.evidence).toContain("npm:@actual/pkg@^2.0.0");
+    expect(findings[0]?.evidence).toContain("Not assessed:");
+  });
+
+  it.each(["MIT", "GPL-3.0"])("discloses a v1 alias descriptor instead of looking up its literal version under %s", async (license) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 1, dependencies: { alias: { version: "npm:@actual/pkg@2.0.0" } } }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(await checkLicenseCompliance(scope, { skipRegistry: true })).toEqual(findings);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("Not assessed: alias");
+  });
+
+  it.each(["MIT", "GPL-3.0"])("discloses a transitive npm alias without canonical metadata under %s", async (license) => {
+    write({ dependencies: { parent: "1.0.0" } }, {
+      "node_modules/parent": { version: "1.0.0", license: "MIT", dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+      "node_modules/parent/node_modules/alias": { version: "2.0.0" },
+    });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(await checkLicenseCompliance(scope, { skipRegistry: true })).toEqual(findings);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("npm:@actual/pkg@^2.0.0");
+    expect(findings[0]?.evidence).toContain("owner node_modules/parent");
+    expect(findings[0]?.evidence).toContain("Not assessed: alias");
+  });
+
+  it("retains explicitly named ordinary identity beside a mismatched root alias declaration", async () => {
+    write({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, {
+      "node_modules/alias": { name: "alias", version: "1.0.0", license: "GPL-3.0" },
+    });
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-alias@1.0.0", "SUP-LICENSE-00"]);
+  });
+
+  it("keeps an ordinary root installation when only a member declares the alias", async () => {
+    write({ workspaces: ["packages/*"], dependencies: { alias: "1.0.0" } }, {
+      "node_modules/alias": { version: "1.0.0", license: "GPL-3.0" },
+    }, { "packages/a": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } } });
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-alias@1.0.0", "SUP-LICENSE-00"]);
+  });
+
+  it.each(["MIT", "GPL-3.0"])("discloses a Yarn alias selector without using its key as a registry coordinate under %s", async (license) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "yarn.lock"), '"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n  resolved "https://registry.npmjs.org/@actual/pkg/-/pkg-2.0.0.tgz"\n');
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license }), { status: 200 }));
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
+    expect(findings.map((finding) => finding.id)).toEqual(license === "GPL-3.0" ? ["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0"] : []);
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-COPYLEFT-alias@2.0.0");
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-UNKNOWN-alias@2.0.0");
+  });
+
+  it("uses Berry's canonical resolution for an npm alias", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "yarn.lock"), '__metadata:\n  version: 8\n"alias@npm:@actual/pkg@^2.0.0":\n  version: 2.0.0\n  resolution: "@actual/pkg@npm:2.0.0"\n');
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license: "GPL-3.0" }), { status: 200 }));
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0"]);
+  });
+
+  it("discloses a Yarn alias whose selector has no proven canonical resolution", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "yarn.lock"), '"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n');
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(await checkLicenseCompliance(scope, { skipRegistry: true })).toEqual(findings);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("npm:@actual/pkg@^2.0.0");
+  });
+
+  it("discloses a transitive-only Yarn alias without a proven resolution", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+    writeFileSync(join(dir, "yarn.lock"), 'parent@1.0.0:\n  version "1.0.0"\n  dependencies:\n    alias "npm:@actual/pkg@^2.0.0"\n\n"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n');
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ license: String(url).includes("/parent/") ? "MIT" : "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith("https://registry.npmjs.org/parent/1.0.0");
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("Not assessed: alias");
+    expect(findings[0]?.evidence).toContain("npm:@actual/pkg@^2.0.0");
+  });
+
+  it("discloses an npm v1 transitive alias descriptor without a published version", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 1, dependencies: {
+      parent: { version: "1.0.0", license: "MIT", dependencies: { alias: { version: "npm:@actual/pkg@2.0.0" } } },
+    } }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("owner node_modules/parent/node_modules/alias");
+  });
+
+  it("discloses a malformed npm alias declaration without classifying its path key", async () => {
+    write({ dependencies: { alias: "npm:@actual/pkg@invalid-range" } }, { "node_modules/alias": { version: "2.0.0" } });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("invalid-range");
+  });
+
+  it("keeps pnpm's canonical package key while disclosing unproved alias reach", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages:\n  '@actual/pkg@2.0.0':\n    resolution: {integrity: sha512-x==}\n");
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license: "GPL-3.0" }), { status: 200 }));
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0", "SUP-LICENSE-00"]);
+    expect(findings[1]?.evidence).toContain("Not assessed: alias");
+  });
+
+  it("keeps a nested explicitly named ordinary package beside a root alias gap", async () => {
+    write({ dependencies: { parent: "1.0.0", alias: "npm:@actual/pkg@^2.0.0" } }, {
+      "node_modules/parent": { version: "1.0.0", license: "MIT" },
+      "node_modules/parent/node_modules/alias": { name: "alias", version: "1.0.0", license: "GPL-3.0" },
+    });
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-alias@1.0.0", "SUP-LICENSE-00"]);
+  });
 });
 
 // The failure mode that makes an SBOM worse than none: a partial inventory that reads as whole.
