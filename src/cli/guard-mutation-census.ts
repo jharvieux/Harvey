@@ -35,11 +35,13 @@ function option(flag: string): string | undefined {
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
+  let created = false;
   try {
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
+    created = true;
     renameSync(temporary, path);
   } finally {
-    rmSync(temporary, { force: true });
+    if (created) rmSync(temporary, { force: true });
   }
 }
 

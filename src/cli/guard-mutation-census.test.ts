@@ -156,6 +156,26 @@ describe("guard mutation production CLI comparison (#1890)", () => {
     }
     expect(readFileSync(p.baselinePath, "utf8")).toBe(before); expect(readFileSync(p.reportPath, "utf8")).toBe(raw);
   });
+
+  it("preserves a preexisting atomic temporary file selected as the baseline", async () => {
+    const p = prepare(); const output = join(p.dir, "normalized.json");
+    const preload = join(p.dir, "preexisting-temp.mjs");
+    writeFileSync(preload, `import { copyFileSync, writeFileSync } from 'node:fs';
+const index = process.argv.indexOf('--baseline') + 1;
+const output = process.argv[process.argv.indexOf('--normalized-out') + 1];
+const temporary = output + '.' + process.pid + '.tmp';
+copyFileSync(process.argv[index], temporary);
+process.argv[index] = temporary;
+writeFileSync(output + '.selected', temporary);
+`);
+    const before = readFileSync(p.baselinePath);
+    const result = await run([...p.args, "--normalized-out", output], { ...process.env, NODE_OPTIONS: `--import=${preload}` });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("EEXIST");
+    const temporary = readFileSync(`${output}.selected`, "utf8");
+    expect(readFileSync(temporary)).toEqual(before);
+    expect(existsSync(output)).toBe(false);
+  });
 });
 
 function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report" = "blocked") {
