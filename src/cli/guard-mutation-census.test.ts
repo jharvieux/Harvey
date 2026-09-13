@@ -273,11 +273,15 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     expect(readFileSync(join(p.dir, "guard-mutation-baseline.json"))).toEqual(baselineBefore);
   });
 
-  it.each(["symlink", "hardlink", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
+  it.each(["symlink", "hardlink", "symlink to hardlink", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
     const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
     const target = kind === "reserved JSON" ? probeOutput(p.dir, "json") : probeOutput(p.dir, "log");
     if (kind === "symlink" || kind === "reserved JSON") symlinkSync(baseline, target);
     if (kind === "hardlink") linkSync(baseline, target);
+    if (kind === "symlink to hardlink") {
+      const alias = join(p.dir, "reports", "guard-mutation", "baseline-hardlink.json");
+      linkSync(baseline, alias); symlinkSync(alias, target);
+    }
     if (kind === "directory alias") {
       const alias = join(p.dir, "reports-alias"); symlinkSync(join(p.dir, "reports", "guard-mutation"), alias);
       copyFileSync(baseline, target);

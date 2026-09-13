@@ -3,7 +3,7 @@ import "./sync-stdio.js";
 // Only --update-baseline writes the baseline, after printing population/identity/review deltas.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,11 +67,12 @@ function resolvePathIdentity(path: string, seen: Set<string>): string {
 
 function separateOutput(output: string, protectedPaths: string[]): void {
   const identity = pathIdentity(output);
-  const outputStat = existsSync(output) ? statSync(output) : undefined;
+  const outputStat = existsSync(identity) ? lstatSync(identity) : undefined;
   if (protectedPaths.some((path) => {
-    if (pathIdentity(path) === identity) return true;
-    if (!outputStat || !existsSync(path)) return false;
-    const protectedStat = statSync(path);
+    const protectedIdentity = pathIdentity(path);
+    if (protectedIdentity === identity) return true;
+    if (!outputStat || !existsSync(protectedIdentity)) return false;
+    const protectedStat = lstatSync(protectedIdentity);
     return outputStat.dev === protectedStat.dev && outputStat.ino === protectedStat.ino;
   })) throw new Error(`output would overwrite an input or baseline: ${output}`);
 }
