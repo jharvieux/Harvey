@@ -1,13 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { guardMutationDigest, guardMutationReviewRequirements, normalizeGuardMutationCensus, type GuardMutationBaseline, type GuardMutationReceipt } from "../guard-mutation-baseline.js";
 import type { StrykerMutant } from "../mutation-scan.js";
 import { GUARD_SET } from "../guard-mutation-census.js";
+import { writeGuardJson, type GuardShardManifest, type GuardShardTerminal } from "../guard-mutation-bundle.js";
+import { readEntriesSafe } from "../fs-walk.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(ROOT, "src", "cli", "guard-mutation-census.ts");
@@ -33,13 +35,13 @@ function prepare(name = "measured.json", change?: (r: Report, receipt: GuardMuta
   return { dir, baselinePath, reportPath, receiptPath, raw, receipt, args };
 }
 
-function run(args: string[], env: NodeJS.ProcessEnv = process.env, cli = CLI, cwd = ROOT): Promise<{ status: number; output: string }> {
+function run(args: string[], env: NodeJS.ProcessEnv = process.env, cli = CLI, cwd = ROOT, onOutput?: (output: string) => void): Promise<{ status: number; output: string }> {
   return new Promise((done, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (text: string) => { output += text; });
-    child.stderr.on("data", (text: string) => { output += text; });
+    const collect = (text: string) => { output += text; onOutput?.(output); };
+    child.stdout.on("data", collect); child.stderr.on("data", collect);
     child.once("error", reject);
     child.once("close", (status) => done({ status: status ?? 1, output }));
   });
@@ -156,35 +158,56 @@ describe("guard mutation production CLI comparison (#1890)", () => {
     }
     expect(readFileSync(p.baselinePath, "utf8")).toBe(before); expect(readFileSync(p.reportPath, "utf8")).toBe(raw);
   });
+});
 
-  it("preserves a preexisting atomic temporary file selected as the baseline", async () => {
-    const p = prepare(); const output = join(p.dir, "normalized.json");
-    const preload = join(p.dir, "preexisting-temp.mjs");
-    writeFileSync(preload, `import { copyFileSync, writeFileSync } from 'node:fs';
-const index = process.argv.indexOf('--baseline') + 1;
-const output = process.argv[process.argv.indexOf('--normalized-out') + 1];
-const temporary = output + '.' + process.pid + '.tmp';
-copyFileSync(process.argv[index], temporary);
-process.argv[index] = temporary;
-writeFileSync(output + '.selected', temporary);
-`);
+describe("guard census output identity and atomic ownership", () => {
+  it.each(["hardlink", "symlink to hardlink", "filesystem-order symlink"])("rejects a %s of a protected replay input", async (kind) => {
+    const p = prepare(); const alias = join(p.dir, "alias.json");
+    if (kind === "hardlink") linkSync(p.baselinePath, alias);
+    if (kind === "symlink to hardlink") { const linked = join(p.dir, "linked.json"); linkSync(p.baselinePath, linked); symlinkSync(linked, alias); }
+    if (kind === "filesystem-order symlink") {
+      mkdirSync(join(p.dir, "child")); mkdirSync(join(p.dir, "links"));
+      symlinkSync(join(p.dir, "child"), join(p.dir, "links", "directory"));
+      symlinkSync("directory/../baseline.json", join(p.dir, "links", "output.json"));
+      symlinkSync(join(p.dir, "links", "output.json"), alias);
+    }
     const before = readFileSync(p.baselinePath);
-    const result = await run([...p.args, "--normalized-out", output], { ...process.env, NODE_OPTIONS: `--import=${preload}` });
+    const result = await run([...p.args, "--normalized-out", alias]);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("output would overwrite");
+    expect(readFileSync(p.baselinePath)).toEqual(before);
+  });
+
+  it.each(["baseline", "unrelated file"])("retains a preexisting atomic sibling owned by %s", async (role) => {
+    const p = prepare(); const output = join(p.dir, "normalized.json"); const wrapper = join(p.dir, "atomic-wrapper.mts");
+    writeFileSync(wrapper, `import {copyFileSync, writeFileSync} from 'node:fs';
+const temporary=${JSON.stringify(output)}+'.'+process.pid+'.tmp';
+${role === "baseline" ? `copyFileSync(${JSON.stringify(p.baselinePath)},temporary);` : "writeFileSync(temporary,'unrelated sentinel');"}
+console.log('TEMP_PATH '+temporary);
+process.argv=[process.execPath,${JSON.stringify(CLI)},...${JSON.stringify(role === "baseline" ? ["--report", p.reportPath, "--receipt", p.receiptPath] : p.args)},${role === "baseline" ? "'--baseline',temporary," : ""}'--normalized-out',${JSON.stringify(output)}];
+await import(${JSON.stringify(CLI)});
+`);
+    const result = await run([], process.env, wrapper); const marker = /TEMP_PATH (.+)/.exec(result.output); expect(marker, result.output).toBeTruthy(); const temporary = marker![1]!;
     expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("EEXIST");
-    const temporary = readFileSync(`${output}.selected`, "utf8");
-    expect(readFileSync(temporary)).toEqual(before);
+    expect(result.output).toContain(role === "baseline" ? "output would overwrite" : "EEXIST");
+    expect(readFileSync(temporary, "utf8")).toBe(role === "baseline" ? readFileSync(p.baselinePath, "utf8") : "unrelated sentinel");
     expect(existsSync(output)).toBe(false);
+  });
+
+  it("keeps an unowned bundle-writer temporary file on exclusive-create failure", async () => {
+    const p = prepare(); const output = join(p.dir, "artifact.json"); const temporary = `${output}.${process.pid}.tmp`;
+    writeFileSync(temporary, "retained evidence");
+    await expect(writeGuardJson(output, { value: true })).rejects.toThrow("EEXIST");
+    expect(readFileSync(temporary, "utf8")).toBe("retained evidence"); expect(existsSync(output)).toBe(false);
   });
 });
 
-function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report" = "blocked") {
+function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report" | "hang" | "isolation" | "new-survivor" = "blocked") {
   const dir = mkdtempSync(join(tmpdir(), "harvey-guard-fresh-")); dirs.push(dir);
   const copy = (file: string, destination = file) => {
     mkdirSync(dirname(join(dir, destination)), { recursive: true });
     copyFileSync(join(ROOT, file), join(dir, destination));
   };
-  for (const file of ["package.json", "pnpm-lock.yaml", "stryker.guards.config.json", "src/cli/guard-mutation-census.ts", "src/cli/args.ts", "src/cli/sync-stdio.ts", "src/guard-mutation-census.ts", "src/guard-mutation-baseline.ts", "src/mutation-scan.ts"]) copy(file);
+  for (const file of ["package.json", "pnpm-lock.yaml", "vitest.config.ts", "stryker.guards.config.json", "src/cli/guard-mutation-census.ts", "src/cli/args.ts", "src/cli/sync-stdio.ts", "src/guard-mutation-census.ts", "src/guard-mutation-baseline.ts", "src/guard-mutation-shards.ts", "src/guard-mutation-process.ts", "src/guard-mutation-bundle.ts", "src/mutation-scan.ts"]) copy(file);
   copy("src/__fixtures__/guard-mutation/baseline.json", "guard-mutation-baseline.json");
   const fixtureReport = JSON.parse(readFileSync(join(FIXTURES, "measured.json"), "utf8")) as Report & { framework: { version: string } };
   const measuredExclusion = JSON.parse(readFileSync(join(FIXTURES, "exclusion-measurable.json"), "utf8")) as Report;
@@ -208,6 +231,7 @@ function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as GuardMutationBaseline;
   const identity = baseline.census.receipt.toolchain;
   const requireFromProject = createRequire(join(dir, "package.json"));
+  baseline.census.receipt.configSha256 = guardMutationDigest(readFileSync(join(dir, "stryker.guards.config.json")));
   identity.node = process.version;
   identity.packageManager = (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { packageManager: string }).packageManager;
   identity.packageJsonSha256 = guardMutationDigest(readFileSync(join(dir, "package.json")));
@@ -239,10 +263,23 @@ if (config.dryRunOnly) {
   console.error('01:00:00 (1) ERROR Stryker There were failed tests in the initial test run.');
   process.exit(1);
 }
-if (mode === 'main-fails') process.exit(1);
-if (mode === 'no-report') process.exit(0);
+if (mode === 'main-fails' && config.mutate[0] === 'src/alert-paths.ts') { console.error('distinct-shard-cause'); process.exit(9); }
+if (mode === 'no-report' && config.mutate[0] === 'src/alert-paths.ts') process.exit(0);
+if (mode === 'hang' && config.mutate[0] === 'src/alert-paths.ts') { console.log('HANG READY'); setInterval(()=>{},1000); return; }
 fs.mkdirSync(path.dirname(config.jsonReporter.fileName), {recursive:true});
-fs.copyFileSync('fixture-report.json', config.jsonReporter.fileName);
+const report = JSON.parse(fs.readFileSync('fixture-report.json','utf8'));
+report.files = Object.fromEntries(config.mutate.map(file => [file, report.files[file]]));
+report.config = config;
+if (mode === 'new-survivor' && config.mutate[0] === 'src/ci-liveness.ts') report.files[config.mutate[0]].mutants[0].status = 'Survived';
+const finish = () => fs.writeFileSync(config.jsonReporter.fileName, JSON.stringify(report));
+if (mode === 'isolation') {
+  const file = config.mutate[0]; const before = fs.readFileSync(file);
+  fs.writeFileSync(file, '// private instrumentation');
+  fs.mkdirSync('node_modules/.vite', {recursive:true});
+  fs.writeFileSync('node_modules/.vite/guard-isolation-marker',process.cwd());
+  console.log('PRIVATE CHECKOUT '+process.cwd());
+  setTimeout(()=>{ fs.writeFileSync(file,before); finish(); },250);
+} else finish();
 `);
   chmodSync(executable, 0o755);
   const bin = join(dir, "node_modules", ".bin"); mkdirSync(bin);
@@ -256,127 +293,13 @@ fs.copyFileSync('fixture-report.json', config.jsonReporter.fileName);
 }
 
 describe("guard mutation fresh-run production orchestration (#1890)", () => {
-  const probeOutput = (dir: string, suffix: "config.json" | "log" | "json") => join(dir, "reports", "guard-mutation", `src-recorded-reasons.ts.probe.${suffix}`);
-
-  it.each([
-    ["baseline", "config.json"],
-    ["baseline", "log"],
-    ["receipt", "config.json"],
-    ["normalized-out", "config.json"],
-    ["reviews", "config.json"],
-    ["config", "config.json"],
-    ["raw-report", "config.json"],
-    ["raw-report", "log"],
-  ] as const)("rejects a generated probe %s collision with %s before Stryker starts", async (role, suffix) => {
-    const p = freshProject(); const path = probeOutput(p.dir, suffix);
-    const args: string[] = [];
-    if (role === "baseline") { copyFileSync(join(p.dir, "guard-mutation-baseline.json"), path); args.push("--baseline", path); }
-    if (role === "receipt") { writeFileSync(path, "receipt sentinel\n"); args.push("--receipt", path); }
-    if (role === "normalized-out") { writeFileSync(path, "normalized sentinel\n"); args.push("--normalized-out", path); }
-    if (role === "reviews") { writeFileSync(path, "[]\n"); args.push("--reviews", path, "--update-baseline"); }
-    if (role === "config") { copyFileSync(join(p.dir, "stryker.guards.config.json"), path); args.push("--config", path); }
-    if (role === "raw-report") {
-      const config = JSON.parse(readFileSync(join(p.dir, "stryker.guards.config.json"), "utf8")) as { jsonReporter: { fileName: string } };
-      config.jsonReporter.fileName = path;
-      const custom = join(p.dir, "reports", "guard-mutation", "custom.config.json");
-      writeFileSync(custom, JSON.stringify(config)); args.push("--config", custom);
-      writeFileSync(path, "raw report sentinel\n");
-    }
-    const before = readFileSync(path);
-    const baselineBefore = readFileSync(join(p.dir, "guard-mutation-baseline.json"));
-    const result = await run(args, process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(result.output).not.toContain("Running Stryker");
-    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
-    expect(readFileSync(path)).toEqual(before);
-    expect(readFileSync(join(p.dir, "guard-mutation-baseline.json"))).toEqual(baselineBefore);
-  });
-
-  it.each(["symlink", "hardlink", "symlink to hardlink", "symlink before parent traversal", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
-    const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
-    const target = kind === "reserved JSON" ? probeOutput(p.dir, "json") : probeOutput(p.dir, "log");
-    if (kind === "symlink" || kind === "reserved JSON") symlinkSync(baseline, target);
-    if (kind === "hardlink") linkSync(baseline, target);
-    if (kind === "symlink to hardlink") {
-      const alias = join(p.dir, "reports", "guard-mutation", "baseline-hardlink.json");
-      linkSync(baseline, alias); symlinkSync(alias, target);
-    }
-    if (kind === "symlink before parent traversal") {
-      const child = join(p.dir, "child"); mkdirSync(child);
-      symlinkSync(child, join(p.dir, "reports", "guard-mutation", "alias"));
-      symlinkSync("alias/../guard-mutation-baseline.json", target);
-    }
-    if (kind === "directory alias") {
-      const alias = join(p.dir, "reports-alias"); symlinkSync(join(p.dir, "reports", "guard-mutation"), alias);
-      copyFileSync(baseline, target);
-      const args = ["--baseline", join(alias, "src-recorded-reasons.ts.probe.log")];
-      const before = readFileSync(target);
-      const result = await run(args, process.env, p.cli, p.dir);
-      expect(result.status, result.output).toBe(1);
-      expect(result.output).toContain("output would overwrite");
-      expect(readFileSync(target)).toEqual(before);
-      expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
-      return;
-    }
-    const before = readFileSync(baseline);
-    const result = await run([], process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(result.output).not.toContain("Running Stryker");
-    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
-    expect(readFileSync(baseline)).toEqual(before);
-  });
-
-  it("rejects aliases between two generated probe destinations", async () => {
-    const p = freshProject(); const config = probeOutput(p.dir, "config.json"); const log = probeOutput(p.dir, "log");
-    symlinkSync(config, log);
-    const result = await run([], process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(result.output).not.toContain("Running Stryker");
-    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
-  });
-
-  it("resolves a dangling probe alias after following a symlink before parent traversal", async () => {
-    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
-    mkdirSync(join(directory, "child")); symlinkSync(join(directory, "child"), join(p.dir, "alias"));
-    symlinkSync(`${p.dir}/alias/../src-recorded-reasons.ts.probe.config.json`, probeOutput(p.dir, "log"));
-    const result = await run([], process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
-    expect(existsSync(probeOutput(p.dir, "config.json"))).toBe(false);
-  });
-
-  it.each(["mutation.json", "mutation.receipt.json", "src-recorded-reasons.ts.probe.log"])("rejects prospective output aliases differing only in case: %s", async (name) => {
-    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
-    const before = existsSync(join(directory, name)) ? readFileSync(join(directory, name)) : undefined;
-    const result = await run(["--normalized-out", join(directory, name.toUpperCase())], process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
-    if (before) expect(readFileSync(join(directory, name))).toEqual(before);
-    else expect(existsSync(join(directory, name))).toBe(false);
-  });
-
-  it.each([["straße", "STRASSE"], ["STRAẞE", "strasse"], ["Σ", "ς"], ["ſ", "s"], ["ﬃ", "ffi"]])("rejects Unicode case expansion between prospective report %s and normalized output %s", async (reportName, normalizedName) => {
-    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
-    const config = JSON.parse(readFileSync(join(p.dir, "stryker.guards.config.json"), "utf8")) as { jsonReporter: { fileName: string } };
-    config.jsonReporter.fileName = join(directory, `${reportName}.json`);
-    const custom = join(directory, "custom.config.json"); writeFileSync(custom, JSON.stringify(config));
-    const result = await run(["--config", custom, "--normalized-out", join(directory, `${normalizedName}.JSON`)], process.env, p.cli, p.dir);
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("output would overwrite");
-    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
-    expect(existsSync(config.jsonReporter.fileName)).toBe(false);
-  });
-
   it("runs the configured guard set and fresh exclusion probe, then writes and compares a bound receipt", async () => {
     const p = freshProject(); const result = await run([], process.env, p.cli, p.dir);
     expect(result.status, result.output).toBe(0); expect(result.output).toContain("GUARD BASELINE PASS");
-    const calls = readFileSync(join(p.dir, "reports/guard-mutation/calls.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-    expect(calls[0]?.length).toBe(GUARD_SET.length - 1); expect(calls[1]).toEqual(["src/recorded-reasons.ts"]);
+    const match = /GUARD BUNDLE (.+)/.exec(result.output)!;
+    const manifest = JSON.parse(readFileSync(join(match[1]!, "manifest.json"), "utf8")) as { shards: { guard: string; kind: string }[] };
+    expect(manifest.shards.map((shard) => shard.guard).sort()).toEqual([...GUARD_SET].sort());
+    expect(manifest.shards.filter((shard) => shard.kind === "exclusion").map((shard) => shard.guard)).toEqual(["src/recorded-reasons.ts"]);
     const capture = JSON.parse(readFileSync(join(p.dir, "reports/guard-mutation/mutation.receipt.json"), "utf8")) as GuardMutationReceipt;
     expect(capture.reportSha256).toBe(guardMutationDigest(readFileSync(p.reportPath)));
     expect(capture.exclusionChecks[0]).toMatchObject({ outcome: "blocked", exitCode: 1 });
@@ -402,4 +325,221 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     expect(result.status, result.output).toBe(1); expect(result.output).toContain("requires a clean committed worktree");
     expect(existsSync(join(p.dir, "reports/guard-mutation/calls.jsonl"))).toBe(false);
   });
+});
+
+const bundlePath = (output: string): string => { const value = /GUARD BUNDLE (.+)/.exec(output)?.[1]; expect(value, output).toBeTruthy(); return value!; };
+const readObject = <T>(path: string): T => JSON.parse(readFileSync(path, "utf8")) as T;
+const writeObject = (path: string, value: unknown) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+
+describe("bounded guard shards through the production CLI (#1891)", () => {
+  it("uses independent process/filesystem identities and preserves the parent source bytes", async () => {
+    const p = freshProject("isolation");
+    const sources = GUARD_SET.map((file) => readFileSync(join(p.dir, file), "utf8"));
+    const result = await run([], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(0);
+    const bundle = bundlePath(result.output);
+    const manifest = readObject<GuardShardManifest>(join(bundle, "manifest.json"));
+    expect(result.output).toContain("Test counts in sharded captures are execution records");
+    expect(manifest.bounds.concurrency).toBe(2);
+    expect(new Set(manifest.shards.map((shard) => shard.workspace)).size).toBe(GUARD_SET.length);
+    for (const shard of manifest.shards) {
+      const terminal = readObject<GuardShardTerminal>(join(bundle, "shards", shard.id, "terminal.json"));
+      expect(terminal.state).toBe("completed");
+      expect(terminal.startedAt >= manifest.createdAt).toBe(true);
+      if (shard.kind === "mutation") expect(terminal.commands.find((command) => command.stdout.path.endsWith("/stryker.stdout.log"))!.stdout.tail).toContain(`PRIVATE CHECKOUT ${join(bundle, shard.workspace)}`);
+      expect(readFileSync(join(bundle, shard.workspace, ".git", "HEAD"), "utf8").trim()).toBe(manifest.sourceCommit);
+      expect(readEntriesSafe(join(bundle, shard.workspace, "node_modules"))).toMatchObject({
+        entries: expect.arrayContaining([expect.objectContaining({ name: "@stryker-mutator" })]),
+        dangling: [],
+      });
+      expect(lstatSync(join(bundle, shard.workspace, "node_modules")).isSymbolicLink()).toBe(false);
+      if (shard.kind === "mutation") expect(readFileSync(join(bundle, shard.workspace, "node_modules/.vite/guard-isolation-marker"), "utf8")).toBe(join(bundle, shard.workspace));
+    }
+    expect(existsSync(join(p.dir, "node_modules/.vite/guard-isolation-marker"))).toBe(false);
+    expect(GUARD_SET.map((file) => readFileSync(join(p.dir, file), "utf8"))).toEqual(sources);
+    const conservation = readObject<{ attempted: number; accounted: number }>(join(bundle, "aggregate.conservation.json"));
+    expect(conservation.attempted).toBe(8); expect(conservation.accounted).toBe(8);
+    expect((await run(["--bundle", bundle], process.env, p.cli, p.dir)).status).toBe(0);
+  });
+
+  it.each(["main-fails", "hang", "no-report"] as const)("accounts for every sibling after %s and never normalizes a smaller census", async (mode) => {
+    const p = freshProject(mode);
+    const result = await run(["--shard-timeout-ms", "1500"], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    const bundle = bundlePath(result.output);
+    const manifest = readObject<GuardShardManifest>(join(bundle, "manifest.json"));
+    const terminals = manifest.shards.map((shard) => readObject<GuardShardTerminal>(join(bundle, "shards", shard.id, "terminal.json")));
+    expect(terminals).toHaveLength(GUARD_SET.length);
+    expect(terminals.filter((terminal) => terminal.state === "completed")).toHaveLength(GUARD_SET.length - 1);
+    const failed = terminals.find((terminal) => terminal.guard === "src/alert-paths.ts")!;
+    expect(failed.state).toBe(mode === "hang" ? "timed-out" : mode === "main-fails" ? "failed" : "error");
+    if (mode === "main-fails") expect(failed.commands.find((command) => command.stderr.path.endsWith("/stryker.stderr.log"))!.stderr.tail).toContain("distinct-shard-cause");
+    expect(existsSync(join(bundle, "runtime.json"))).toBe(true);
+    expect(existsSync(join(bundle, "census.json"))).toBe(false);
+    expect(readObject<{ conservation: { declared: number; terminal: number; failed: number } }>(join(bundle, "bundle.json")).conservation).toEqual({ declared: 7, terminal: 7, completed: 6, failed: 1 });
+    expect((await run(["--bundle", bundle], process.env, p.cli, p.dir)).status).toBe(1);
+  });
+
+  it("bounds the aggregate and records queued shards as not started", async () => {
+    const p = freshProject("hang");
+    const result = await run(["--concurrency", "1", "--aggregate-timeout-ms", "1100"], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    const bundle = bundlePath(result.output);
+    const manifest = readObject<GuardShardManifest>(join(bundle, "manifest.json"));
+    const terminals = manifest.shards.map((shard) => readObject<GuardShardTerminal>(join(bundle, "shards", shard.id, "terminal.json")));
+    expect(terminals).toHaveLength(GUARD_SET.length);
+    expect(terminals.some((terminal) => terminal.state === "aggregate-timeout")).toBe(true);
+    expect(terminals.some((terminal) => terminal.state === "not-started")).toBe(true);
+    expect(terminals.every((terminal) => terminal.finishedAt)).toBe(true);
+  });
+
+  it.each(["comparison", "explicit update"])("rejects a baseline changed after MANIFEST before %s, preserving the concurrent bytes", async (mode) => {
+    const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
+    const changed = readObject<GuardMutationBaseline>(baseline); changed.reviews[0]!.owner = "concurrent baseline owner";
+    const concurrentBytes = `${JSON.stringify(changed, null, 2)}\n`; let changedDuringRun = false;
+    const result = await run(mode === "explicit update" ? ["--update-baseline"] : [], process.env, p.cli, p.dir, (output) => {
+      if (!changedDuringRun && output.includes("MANIFEST ")) { changedDuringRun = true; writeFileSync(baseline, concurrentBytes); }
+    });
+    expect(changedDuringRun).toBe(true); expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("baseline changed during the census"); expect(result.output).not.toContain("GUARD BASELINE PASS");
+    expect(readFileSync(baseline, "utf8")).toBe(concurrentBytes);
+    expect(existsSync(join(bundlePath(result.output), "comparison.json"))).toBe(false);
+    expect(existsSync(join(bundlePath(result.output), "aggregate.json"))).toBe(true);
+  });
+
+  it("feeds the complete aggregate into the production survivor comparator", async () => {
+    const p = freshProject("new-survivor");
+    const before = readFileSync(join(p.dir, "guard-mutation-baseline.json"));
+    const result = await run([], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("new-survivor:src/ci-liveness.ts:");
+    expect(readFileSync(join(p.dir, "guard-mutation-baseline.json"))).toEqual(before);
+    const comparison = readObject<{ ok: boolean; reportSha256: string }>(join(bundlePath(result.output), "comparison.json"));
+    expect(comparison.ok).toBe(false); expect(comparison.reportSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([["capture", "CAPTURE"], ["straße", "STRASSE"], ["STRAẞE", "strasse"], ["Σ", "ς"], ["ſ", "s"], ["ﬃ", "ffi"]])("rejects prospective bundle namespace %s aliases through %s before any child", async (name, alias) => {
+    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation"); const bundle = join(directory, name!);
+    const before = readFileSync(p.reportPath);
+    const result = await run(["--bundle-dir", bundle, "--normalized-out", join(directory, alias!, "shards/guard-01/config.json")], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("bundle output would overwrite");
+    expect(result.output).not.toContain("GUARD BUNDLE"); expect(existsSync(bundle)).toBe(false);
+    expect(readFileSync(p.reportPath)).toEqual(before);
+  });
+
+  it("follows directory symlinks before parent traversal for a prospective bundle namespace", async () => {
+    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
+    mkdirSync(join(directory, "physical", "child"), { recursive: true });
+    symlinkSync("physical/child", join(directory, "alias"));
+    symlinkSync("alias/../capture", join(directory, "output-directory"));
+    const bundle = join(directory, "physical", "capture"); const before = readFileSync(p.reportPath);
+    const result = await run(["--bundle-dir", bundle, "--normalized-out", join(directory, "output-directory", "manifest.json")], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("bundle output would overwrite");
+    expect(result.output).not.toContain("GUARD BUNDLE"); expect(existsSync(bundle)).toBe(false);
+    expect(readFileSync(p.reportPath)).toEqual(before);
+  });
+
+  it.each(["mutation.json", "mutation.receipt.json"])("rejects case aliases between legacy output %s and the normalized output", async (name) => {
+    const p = freshProject(); const before = readFileSync(p.reportPath);
+    const result = await run(["--normalized-out", join(p.dir, "reports/guard-mutation", name.toUpperCase())], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("output would overwrite");
+    expect(result.output).not.toContain("GUARD BUNDLE"); expect(readFileSync(p.reportPath)).toEqual(before);
+  });
+
+  it.each([["normalized-out", "src/ci-liveness.ts"], ["normalized-out", "package.json"], ["receipt", "pnpm-lock.yaml"], ["raw-report", "src/recorded-reasons.ts"], ["normalized-out", "vitest.config.ts"]])("protects the %s destination from overwriting source input %s", async (role, file) => {
+    const p = freshProject(); const output = join(p.dir, file!); const before = readFileSync(output); const args: string[] = [];
+    if (role === "raw-report") {
+      const config = readObject<{ jsonReporter: { fileName: string } }>(join(p.dir, "stryker.guards.config.json"));
+      config.jsonReporter.fileName = output;
+      const custom = join(p.dir, "reports/guard-mutation/custom.config.json"); writeObject(custom, config); args.push("--config", custom);
+    } else args.push(`--${role}`, output);
+    const result = await run(args, process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("output would overwrite");
+    expect(result.output).not.toContain("GUARD BUNDLE"); expect(readFileSync(output)).toEqual(before);
+  });
+
+  it("rejects every bundle/output collision before any subprocess or destructive output cleanup", async () => {
+    const p = freshProject(); const bundle = join(p.dir, "reports", "guard-mutation", "capture");
+    const before = readFileSync(p.reportPath);
+    for (const relative of ["manifest.json", "base.config.json", "shards/guard-01/config.json", "shards/guard-01/terminal.json", "shards/guard-05/stryker.stderr.log", "aggregate.json", "comparison.json"]) {
+      const result = await run(["--bundle-dir", bundle, "--normalized-out", join(bundle, relative)], process.env, p.cli, p.dir);
+      expect(result.status, result.output).toBe(1); expect(result.output).toContain("bundle output would overwrite");
+      expect(existsSync(bundle)).toBe(false); expect(readFileSync(p.reportPath)).toEqual(before);
+    }
+    mkdirSync(bundle); const alias = join(p.dir, "bundle-alias"); symlinkSync(bundle, alias);
+    const aliased = await run(["--bundle-dir", alias, "--normalized-out", join(bundle, "manifest.json")], process.env, p.cli, p.dir);
+    expect(aliased.status, aliased.output).toBe(1); expect(aliased.output).toContain("bundle output would overwrite");
+    expect(readEntriesSafe(bundle)).toEqual({ entries: [], dangling: [] });
+  });
+});
+
+describe("immutable raw-bundle reader adversarial CLI controls (#1891)", () => {
+  let project: ReturnType<typeof freshProject>;
+  let original: string;
+  beforeAll(async () => {
+    project = freshProject(); dirs.splice(dirs.indexOf(project.dir), 1);
+    const result = await run([], process.env, project.cli, project.dir);
+    expect(result.status, result.output).toBe(0); original = bundlePath(result.output);
+  });
+  afterAll(() => rmSync(project.dir, { recursive: true, force: true }));
+
+  async function reject(change: (bundle: string) => void, expected: string, reseal = false) {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-guard-tamper-")); dirs.push(dir);
+    cpSync(original, dir, { recursive: true, filter: (path) => !path.includes("/workspaces") });
+    change(dir);
+    if (reseal) {
+      const seal = readObject<{ artifacts: { path: string; sha256: string }[]; manifestSha256: string }>(join(dir, "bundle.json"));
+      for (const artifact of seal.artifacts) artifact.sha256 = guardMutationDigest(readFileSync(join(dir, artifact.path)));
+      seal.manifestSha256 = guardMutationDigest(readFileSync(join(dir, "manifest.json")));
+      writeObject(join(dir, "bundle.json"), seal);
+    }
+    const result = await run(["--bundle", dir], process.env, project.cli, project.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain(expected);
+    expect(result.output).not.toContain("GUARD BASELINE PASS");
+  }
+
+  it("rejects a case alias into a retained replay bundle before writing its artifact", async () => {
+    const before = readFileSync(join(original, "manifest.json"));
+    const result = await run(["--bundle", original, "--normalized-out", join(dirname(original), original.split("/").at(-1)!.toUpperCase(), "manifest.json")], process.env, project.cli, project.dir);
+    expect(result.status, result.output).toBe(1); expect(result.output).toContain("bundle output would overwrite");
+    expect(readFileSync(join(original, "manifest.json"))).toEqual(before);
+  });
+
+  it.each(["missing", "corrupt", "symlink", "unreadable"])("rejects a %s raw report", async (mode) => reject((dir) => {
+    const path = join(dir, "shards/guard-01/mutation.json");
+    if (mode === "unreadable") chmodSync(path, 0o000);
+    else if (mode === "corrupt") writeFileSync(path, "{invalid-json");
+    else { rmSync(path); if (mode === "symlink") symlinkSync(join(original, "shards/guard-01/mutation.json"), path); }
+  }, mode === "missing" ? "bundle artifact inventory changed" : mode === "corrupt" ? "corrupt bundle artifact" : mode === "unreadable" ? "EACCES" : "nonregular bundle artifact"));
+
+  it.each(["missing", "duplicate"])("rejects a %s guard in a freshly digest-bound manifest", async (mode) => reject((dir) => {
+    const path = join(dir, "manifest.json"); const manifest = readObject<GuardShardManifest>(path);
+    if (mode === "missing") manifest.shards.pop(); else manifest.shards.push(manifest.shards[0]!);
+    writeObject(path, manifest);
+  }, "manifest does not exactly partition", true));
+
+  it.each(["duplicate", "timed-out", "source", "toolchain", "config", "blocking", "tail"])("rejects %s terminal evidence even after outer digests are refreshed", async (mode) => reject((dir) => {
+    const path = join(dir, "shards/guard-01/terminal.json"); const terminal = readObject<GuardShardTerminal>(path);
+    if (mode === "duplicate") terminal.id = "guard-02";
+    if (mode === "timed-out") terminal.state = "timed-out";
+    if (mode === "source") terminal.sourceSha256[terminal.guard] = "0".repeat(64);
+    if (mode === "toolchain") terminal.toolchain.node = "v99.0.0";
+    if (mode === "config") terminal.configSha256 = "0".repeat(64);
+    if (mode === "blocking") terminal.commands[0]!.maxParentBlockMs = 59_000;
+    if (mode === "tail") terminal.commands[0]!.stdout.tail = "invented output";
+    writeObject(path, terminal);
+  }, { duplicate: "terminal identity", "timed-out": "incomplete shard", source: "source identity mismatch", toolchain: "toolchain mismatch", config: "config receipt mismatch", blocking: "blocking budget", tail: "output tail mismatch" }[mode]!, true));
+
+  it("refuses a missing guard population inside a correctly digest-bound raw shard", async () => reject((dir) => {
+    const path = join(dir, "shards/guard-01/mutation.json"); const report = readObject<Report>(path); report.files = {}; writeObject(path, report);
+    const terminalPath = join(dir, "shards/guard-01/terminal.json"); const terminal = readObject<GuardShardTerminal>(terminalPath);
+    terminal.rawReport!.sha256 = guardMutationDigest(readFileSync(path)); writeObject(terminalPath, terminal);
+  }, "missing or duplicate guard population", true));
+
+  it("runs the #1890 normalizer over raw mutant identities instead of trusting an arbitrary census JSON", async () => reject((dir) => {
+    const path = join(dir, "shards/guard-01/mutation.json"); const report = readObject<Report>(path);
+    report.files["src/acceptance-conservation.ts"]!.mutants.push(report.files["src/acceptance-conservation.ts"]!.mutants[0]!); writeObject(path, report);
+    const terminalPath = join(dir, "shards/guard-01/terminal.json"); const terminal = readObject<GuardShardTerminal>(terminalPath);
+    terminal.rawReport!.sha256 = guardMutationDigest(readFileSync(path)); writeObject(terminalPath, terminal);
+    writeObject(join(dir, "census.json"), { schemaVersion: 1, guards: [], ok: true });
+  }, "mutant identity", true));
 });
