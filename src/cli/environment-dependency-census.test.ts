@@ -53,6 +53,50 @@ function registryControl(source: string, siblings: Record<string, string | Uint8
 
 describe("environment dependency shipping CLI (#1906)", () => {
   it.each([
+    ["function declaration", "function make(this: void, tier: string) { return [{ ...BASE, expectedTier: tier ?? 'review' }]; } export const CORPUS = make('local');"],
+    ["overload implementation", "function make(this: void, tier: string): unknown[]; function make(this: void, tier: string) { return [{ ...BASE, expectedTier: tier ?? 'review' }]; } export const CORPUS = make('local');"],
+    ["function expression", "const make = function(this: void, tier: string) { return [{ ...BASE, expectedTier: tier ?? 'review' }]; }; export const CORPUS = make('local');"],
+    ["destructured runtime parameter", "function make(this: void, { tier }: { tier: string }) { return [{ ...BASE, expectedTier: tier }]; } export const CORPUS = make({ tier: 'local' });"],
+    ["extra runtime arguments", "function make(this: void, tier: string) { return [{ ...BASE, expectedTier: tier ?? 'review' }]; } export const CORPUS = make('local', 'review');"],
+    ["missing runtime argument", "function make(this: void, tier?: string) { return [{ ...BASE, expectedTier: tier ?? 'review' }]; } export const CORPUS = make();"],
+    ["map callback positions", "export const CORPUS = ['local'].map(function(this: void, tier, index, input) { return { ...BASE, id: index === 0 && input[0] === tier ? 'OWNED' : 'OTHER', expectedTier: tier }; });"],
+    ["flatMap callback positions", "export const CORPUS = ['local'].flatMap(function(this: void, tier, index) { return [{ ...BASE, id: index === 0 ? 'OWNED' : 'OTHER', expectedTier: tier }]; });"],
+    ["filter callback positions", "const tiers = ['local'].filter(function(this: void, tier) { return tier === 'local'; }); export const CORPUS = [{ ...BASE, expectedTier: tiers[0] ?? 'review' }];"],
+    ["some callback positions", "function make() { const rows = []; ['local', 'review'].some(function(this: void, tier, index) { rows.push({ ...BASE, id: index === 0 ? 'OWNED' : 'OTHER', expectedTier: tier }); return true; }); return rows; } export const CORPUS = make();"],
+  ])("preserves runtime argument positions after this erasure for %s", async (_, source) => {
+    const p = registryControl(`const BASE = { id: 'OWNED', kind: 'positive', location: 'fixture' };
+export const LIVE_TIERS = ['local', 'connected', 'hosted'];
+export function mechanicalCorpus(corpus) { return corpus.filter((e) => e.module === undefined); }
+${source}\n`, { "../cli/validate-calibration.ts": "import { CORPUS, mechanicalCorpus } from '../scan/calibration.ts'; const scoredCorpus = mechanicalCorpus(CORPUS);\n" });
+    const oracle = await runNode(["--import", "tsx", "--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); const { mechanicalCorpus, buildCoverageMatrix } = await import(${JSON.stringify(pathToFileURL(join(ROOT, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify({ members: CORPUS.map(row => row.id), scored: buildCoverageMatrix([], mechanicalCorpus(CORPUS)).rows.filter(row => !row.notScored).map(row => row.id) }));`]);
+    expect(oracle.status, oracle.output).toBe(0);
+    const actual = JSON.parse(oracle.output) as { members: string[]; scored: string[] };
+    expect(actual.members).toEqual(["OWNED"]);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { rows: { id: string; evidence: { anchor: string }; assertionVenue: unknown }[] };
+    const rows = inventory.rows.filter(row => row.id.includes("#CORPUS/"));
+    expect(rows.map(row => row.evidence.anchor.replace("CORPUS/", ""))).toEqual(actual.members);
+    expect(rows.filter(row => row.assertionVenue).map(row => row.evidence.anchor.replace("CORPUS/", ""))).toEqual(actual.scored);
+  });
+
+  it.each([
+    ["runtime default", "function make(this: void, tier = 'local') { return [BASE]; } export const CORPUS = make();", 0, "factory rest/default parameters are not modeled"],
+    ["runtime rest", "function make(this: void, ...tiers: string[]) { return [BASE]; } export const CORPUS = make('local');", 0, "factory rest/default parameters are not modeled"],
+    ["duplicate runtime names", "function make(this: void, tier, tier) { return [BASE]; } export const CORPUS = make();", 1, "duplicate lexical binding tier"],
+    ["misplaced erased parameter", "function make(tier: string, this: void) { return [BASE]; } export const CORPUS = make('local');", 0, "erased this parameter shape is not modeled"],
+    ["arrow erased parameter", "const make = (this: void, tier: string) => [BASE]; export const CORPUS = make('local');", 1, "erased this parameter shape is not modeled"],
+    ["defaulted erased parameter", "function make(this: void = undefined, tier: string) { return [BASE]; } export const CORPUS = make('local');", 1, "registry source has unresolved parser diagnostics"],
+  ])("keeps this erasure within the supported grammar for %s", async (_, source, nativeExit, error) => {
+    const p = registryControl(`const BASE = { id: 'OWNED', kind: 'positive', location: 'fixture' }; ${source}\n`);
+    const oracle = await runNode(["--import", "tsx", "--input-type=module", "--eval", `await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)});`]);
+    expect(oracle.status, oracle.output).toBe(nativeExit);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(error);
+  });
+
+  it.each([
     ["module constants", "const tier = 'local'; const \\u0074ier = 'review'; export const CORPUS = [BASE];", 1],
     ["class and constant", "class tier {} const \\u0074ier = 'review'; export const CORPUS = [BASE];", 1],
     ["function declarations", "function tier() { return 'local'; } function \\u0074ier() { return 'review'; } export const CORPUS = [BASE];", 1],

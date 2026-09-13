@@ -4,8 +4,8 @@ import type { CensusFile } from "./environment-dependency-census-discovery.js";
 
 type Scope = { values: Map<string, unknown>; pending: Set<string>; parent?: Scope; file: CensusFile };
 type Closure = { node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression; scope: Scope };
-export interface CensusSourceRecord { value: Record<string, unknown>; file: CensusFile; node: ts.Node }
-export interface CensusImportBoundary { file: CensusFile; node: ts.Node; dependency: string }
+interface CensusSourceRecord { value: Record<string, unknown>; file: CensusFile; node: ts.Node }
+interface CensusImportBoundary { file: CensusFile; node: ts.Node; dependency: string }
 
 /** Interpret only the finite data-construction grammar used by the registry. No module is executed. */
 export function censusSourceRecords(files: Map<string, CensusFile>, path: string, symbol: string, boundary?: (record: CensusImportBoundary) => void): CensusSourceRecord[] {
@@ -50,10 +50,15 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (ts.isIdentifier(name)) reserveBinding(name, names);
     else for (const element of name.elements) if (!ts.isOmittedExpression(element)) reservePattern(element.name, names);
   };
+  const runtimeParameters = (parameters: readonly ts.ParameterDeclaration[]): readonly ts.ParameterDeclaration[] => parameters.filter((parameter, index) => {
+    if (!ts.isIdentifier(parameter.name) || parameter.name.text !== "this") return true;
+    if (index !== 0 || parameter.dotDotDotToken || parameter.initializer || parameter.questionToken || ts.isArrowFunction(parameter.parent)) fail(parameter, "erased this parameter shape is not modeled");
+    return false;
+  });
   const checkParameters = (node: ts.Node): void => {
     if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) && node.body) {
       const names = new Set<string>();
-      for (const parameter of node.parameters) if (!ts.isIdentifier(parameter.name) || parameter.name.text !== "this") reservePattern(parameter.name, names);
+      for (const parameter of runtimeParameters(node.parameters)) reservePattern(parameter.name, names);
     }
     ts.forEachChild(node, checkParameters);
   };
@@ -61,6 +66,8 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     const found = scopes.get(sourcePath); if (found) return found;
     const file = files.get(sourcePath);
     if (!file?.source || file.gitMode === "120000" || file.gitMode === "160000") throw new Error(`environment census: unresolved registry source ${sourcePath}`);
+    const diagnostics = (file.source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics;
+    if (!diagnostics || diagnostics.length) fail(file.source, "registry source has unresolved parser diagnostics");
     const names = new Set<string>();
     checkParameters(file.source);
     for (const statement of file.source.statements) {
@@ -242,7 +249,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (!fn || !fn.node.body) return fail(at, "only source-local data factories may be called");
     if (fn.node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) || fn.node.asteriskToken) return fail(at, "async/generator factories are not modeled");
     const scope: Scope = { values: new Map(), pending: new Set(), parent: fn.scope, file: fn.scope.file };
-    fn.node.parameters.forEach((p, i) => { if (p.dotDotDotToken || p.initializer) fail(p, "factory rest/default parameters are not modeled"); bind(p.name, args[i], scope); });
+    runtimeParameters(fn.node.parameters).forEach((p, i) => { if (p.dotDotDotToken || p.initializer) fail(p, "factory rest/default parameters are not modeled"); bind(p.name, args[i], scope); });
     const previous = construction; construction ??= {};
     try { return ts.isBlock(fn.node.body) ? statements(fn.node.body.statements, scope)?.value : evaluate(fn.node.body, scope); }
     finally { construction = previous; }
