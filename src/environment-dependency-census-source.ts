@@ -155,6 +155,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return !evaluate(node.operand, scope);
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Set" && (!node.arguments || node.arguments.length <= 1)) {
       // The only constructor admitted is the built-in finite Set used by unrelated scorer constants.
+      if (scope.parent) return fail(node, "Set construction is admitted only at module scope, without parameter or local shadowing");
       if (scope.file.source!.statements.some((s) => ts.isFunctionDeclaration(s) && s.name?.text === "Set" || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => d.name.getText() === "Set") || ts.isImportDeclaration(s) && s.importClause?.getText().includes("Set"))) return fail(node, "shadowed Set constructor is not modeled");
       const values = node.arguments?.[0] ? evaluate(node.arguments[0], scope) : [];
       if (!Array.isArray(values)) return fail(node, "Set input must be finite data");

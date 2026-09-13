@@ -117,6 +117,7 @@ describe("environment census discovery and typed completeness (#1906)", () => {
       "while (false) { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); }",
       "const unused = (() => { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); return []; })();",
       "const unused = { get measured() { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); return 1; } };",
+      "const unused = ((Set) => new Set([]))(function Replacement() { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); return []; });",
     ]) {
       writeFileSync(path, original + `\n${effect}`);
       expect(() => p.current(), effect).toThrow("unresolved registry construction");
