@@ -103,7 +103,7 @@ installation, source-scanner identities can also be checked in the population pa
 root scanners are checked after that preparation, before the target's mechanical scan; a scoped
 quality invocation is checked at its own later preparation boundary. Installations remain
 per-target and are not duplicated by the population pass. Non-cacheable scanners stay fresh and
-disclose why they cannot contribute cache-equivalence evidence.
+disclose their concrete cache-eligibility exclusions.
 
 Only after readiness succeeds does fresh execution compare every eligible family, phase, and
 scanner. Changed findings, semantic diagnostics, examined scope, or producer receipts still fail
