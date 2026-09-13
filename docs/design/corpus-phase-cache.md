@@ -169,7 +169,14 @@ modules and target providers are not imported for this decision.
 The same lifecycle evidence separately governs the source-only scanner caches: when an install may
 have rewritten target-owned source/configuration, detect-static and mutation detect-only execute
 fresh. Conflicting package-manager evidence, declared-version mismatches, and failed or unobserved
-selector setup return incomplete preparation. Missing or non-reproducible locks may use a
+selector setup return incomplete preparation. An explicit corpus installation policy can resolve
+undeclared conflicting locks for the exact target revision and original install inputs it names.
+Flori at `908eaff6fcf598c0fe1043faaaecb6a4083c90d5` uses the operator-approved
+`pnpm@11.1.3` and `pnpm-lock.yaml` for installation. Both original lockfiles remain audit inputs;
+the preparation records their conflict and the operator's choice and disables cache reuse.
+A different revision, changed original inputs, mismatched manager identity, or failed installation
+returns incomplete preparation. This installation choice does not select an OSV matching policy.
+Missing or non-reproducible locks may use a
 non-cacheable legacy installation; successful fallback requires the same observed selected manager,
 the bounded environment, explicit dependency-store arguments, and a successful install outcome.
 npm aliases, pnpm catalogs/workspaces, and Yarn install configuration are part of the recursive
