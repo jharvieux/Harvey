@@ -1,22 +1,5 @@
-// #1738 — mutation-test the GUARDS, so "this check has no failing direction" is a measurement instead of a
-// discovery.
-//
-// Harvey's gates are the least-guarded code in the repo. One sweep on 2026-07-31 found roughly
-// fourteen distinct guards that report and never fail, and #1628 then quantified the same shape in
-// the corpus: 223 of 384 mechanical positives (58%) had no failing direction, and giving them one
-// cost nothing. Every one of those was found by a human reading code. This is the mechanical form
-// of the same question: mutate a guard's own logic and ask whether anything goes red.
-//
-// THE SIGNAL IS `all mutants survived` FOR A GIVEN GUARD. A file whose every mutant survives is a
-// file no test in the suite distinguishes from a rewrite of it — stated mechanically rather than found
-// by inspection. `vacuousTestFiles` (#1100) answers the mirror question from the TEST side; this
-// answers it from the GUARD side, and the two disagree in useful ways: a guard can be killed by an
-// unrelated test while its own test file is vacuous, and vice versa.
-//
-// REPORT ONLY. Operator ruling 2026-07-31 on #1738: build it as report-only, promote it to blocking
-// once we are comfortable with it. Promotion is a SEPARATE, LATER DECISION — nothing here returns a
-// non-zero exit, and the CLI has no verdict branch to flip. Do not add one
-// without that ruling; the point of writing this down is that nobody flips it quietly.
+// #1890 promotes the measured guard census to a versioned blocking baseline.
+// The comparator owns the verdict; this formatter keeps the measured populations visible.
 
 import { vacuousTestFiles } from "./mutation-scan.js";
 import type { StrykerReport } from "./mutation-scan.js";
@@ -24,10 +7,10 @@ import type { StrykerReport } from "./mutation-scan.js";
 /**
  * The guard set #1738 names, as a declared list rather than as whatever `stryker.guards.config.json`
  * happens to say. `guardSetIsFullyAccounted` requires every member to be either mutated or recorded
- * below with a reason, so a file quietly dropped from `mutate` fails `pnpm verify` instead of
+ * in the baseline with a fresh exclusion probe and reviewed reason, so a file quietly dropped from `mutate` fails `pnpm verify` instead of
  * disappearing from a census that keeps reading green.
  */
-const GUARD_SET = [
+export const GUARD_SET = [
   "src/acceptance-conservation.ts",
   "src/alert-paths.ts",
   "src/calibration-verdict.ts",
@@ -37,20 +20,14 @@ const GUARD_SET = [
   "src/scored-gates.ts",
 ] as const;
 
-/** Guards this run did not mutate, and what was tried. Disclosed in the census output, never silent. */
-export const NOT_MUTATED: Record<string, string> = {
-  "src/recorded-reasons.ts":
-    "MEASURED 2026-08-01: instrumenting it alone fails Stryker's dry run before any mutant is scored — `the repo's own recorded reasons (the gate pnpm verify enforces) are all well-formed` returns 2 errors. That gate reads REASON blocks out of SOURCE COMMENTS and this file carries 7 of them, so the instrumenter perturbs the very input the guard reads. This bounds the MEASUREMENT, not the guard. " +
-    "Falsifier: `test -x node_modules/.bin/stryker || exit 127; node -e 'const c=require(\"./stryker.guards.config.json\");c.mutate=[\"src/recorded-reasons.ts\"];c.jsonReporter.fileName=\"reports/guard-mutation/reasons-falsifier.json\";require(\"fs\").writeFileSync(\"/tmp/stryker.reasons.json\",JSON.stringify(c))' && node_modules/.bin/stryker run /tmp/stryker.reasons.json` — exits 0 once the dry run completes.",
-};
-
 /** Every declared guard is either mutated or disclosed — and never both. */
-export function guardSetIsFullyAccounted(mutated: readonly string[]): { missing: string[]; doubleBooked: string[] } {
+export function guardSetIsFullyAccounted(mutated: readonly string[], excluded: readonly string[] = []): { missing: string[]; doubleBooked: string[]; unexpected: string[] } {
   const declared = new Set<string>(GUARD_SET);
-  const covered = new Set([...mutated, ...Object.keys(NOT_MUTATED)]);
+  const covered = new Set([...mutated, ...excluded]);
   return {
     missing: [...declared].filter((f) => !covered.has(f)).sort(),
-    doubleBooked: mutated.filter((f) => f in NOT_MUTATED).sort(),
+    doubleBooked: mutated.filter((f) => excluded.includes(f)).sort(),
+    unexpected: [...covered].filter((f) => !declared.has(f)).concat(mutated.filter((f, i) => mutated.indexOf(f) !== i), excluded.filter((f, i) => excluded.indexOf(f) !== i)).sort(),
   };
 }
 
@@ -147,11 +124,6 @@ export function formatGuardCensus(census: GuardCensus): string {
   out.push("  effect. It is the file's OWN subject that decides, and this join does not know it.");
   for (const t of census.vacuousGuardTests) out.push(`  ${t.path}: ${t.tests} test(s), ${t.executedMutants} executed mutant(s), 0 killed`);
   if (census.vacuousGuardTests.length === 0) out.push("  (none — every test file that reached a guard killed at least one mutation of it)");
-  if (Object.keys(NOT_MUTATED).length > 0) {
-    out.push("");
-    out.push(`NOT MUTATED — ${Object.keys(NOT_MUTATED).length} declared guard(s) this run did not measure. Stated, because an absent row cannot be argued with:`);
-    for (const [file, why] of Object.entries(NOT_MUTATED)) out.push(`  ${file}: ${why}`);
-  }
   if (census.unscored.length > 0) {
     out.push("");
     out.push(`NOT EVIDENCE — ${census.unscored.length} guard file(s) produced no scorable mutant (compile error, ignored, or nothing to mutate).`);
@@ -159,8 +131,6 @@ export function formatGuardCensus(census: GuardCensus): string {
     for (const r of census.unscored) out.push(`  ${r.file}: ${r.mutants} mutant(s), none scorable`);
   }
   out.push("");
-  out.push("REPORT ONLY — this never fails the build (operator ruling 2026-07-31 on #1738). Promoting it to");
-  out.push("blocking is a separate, later decision; the number above is the argument for it, and the thing");
-  out.push("that should shrink.");
+  out.push("BLOCKING — the CLI compares every declared guard and retained row with guard-mutation-baseline.json (#1890).");
   return out.join("\n");
 }

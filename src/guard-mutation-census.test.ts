@@ -8,7 +8,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { formatGuardCensus, guardMutationCensus, guardSetIsFullyAccounted, NOT_MUTATED } from "./guard-mutation-census.js";
+import { formatGuardCensus, guardMutationCensus, guardSetIsFullyAccounted } from "./guard-mutation-census.js";
 import type { StrykerMutant, StrykerReport } from "./mutation-scan.js";
 
 const capture = (name: string): StrykerReport => JSON.parse(readFileSync(new URL(`./scan/__fixtures__/stryker/${name}`, import.meta.url), "utf8")) as StrykerReport;
@@ -60,14 +60,14 @@ describe("guardMutationCensus (#1738)", () => {
     expect(out).toContain("a measurement that did not happen");
   });
 
-  it("prints the zero-kill population and says, in the output, that it never fails the build", () => {
+  it("prints the zero-kill population and the blocking baseline contract", () => {
     const out = formatGuardCensus(guardMutationCensus(capture("stryker-9.6.1-m8-vacuous.json")));
     expect(out).toContain("GUARDS WITH ZERO KILLED MUTANTS");
     expect(out).toContain("vacuous.ts: 12 scorable mutant(s), 0 killed");
     // The operator ruling travels with the tool. A reader who sees only the census must not have to
     // guess whether a red number here blocks anything.
-    expect(out).toContain("REPORT ONLY");
-    expect(out).toContain("separate, later decision");
+    expect(out).toContain("BLOCKING");
+    expect(out).toContain("guard-mutation-baseline.json");
   });
 
   it("says 'none' explicitly when nothing qualifies — an absent row cannot be argued with", () => {
@@ -89,21 +89,27 @@ describe("guardMutationCensus (#1738)", () => {
 describe("every declared guard is either mutated or disclosed (#1738)", () => {
   const config = JSON.parse(readFileSync(new URL("../stryker.guards.config.json", import.meta.url), "utf8")) as { mutate: string[] };
 
-  it("the config's mutate list and NOT_MUTATED partition GUARD_SET", () => {
-    const { missing, doubleBooked } = guardSetIsFullyAccounted(config.mutate);
-    expect(missing, "these declared guards are neither mutated nor recorded in NOT_MUTATED, so they left the census silently").toEqual([]);
+  const baseline = JSON.parse(readFileSync(new URL("../guard-mutation-baseline.json", import.meta.url), "utf8")) as { census: { guards: { file: string; state: string; exclusion?: { attempted: number; outcome: string; command: string } }[] } };
+  const excluded = baseline.census.guards.filter((g) => g.state === "excluded").map((g) => g.file);
+
+  it("the config's mutate list and reviewed baseline exclusions partition GUARD_SET", () => {
+    const { missing, doubleBooked } = guardSetIsFullyAccounted(config.mutate, excluded);
+    expect(missing, "these declared guards are neither mutated nor recorded in the baseline, so they left the census silently").toEqual([]);
     expect(doubleBooked, "these are both mutated and recorded as unmutatable — one of the two claims is stale").toEqual([]);
   });
 
   it("NEGATIVE CONTROL: dropping a guard from mutate without recording why is caught", () => {
-    expect(guardSetIsFullyAccounted(config.mutate.filter((f) => f !== "src/ci-liveness.ts")).missing).toEqual(["src/ci-liveness.ts"]);
-    expect(guardSetIsFullyAccounted([...config.mutate, "src/recorded-reasons.ts"]).doubleBooked).toEqual(["src/recorded-reasons.ts"]);
+    expect(guardSetIsFullyAccounted(config.mutate.filter((f) => f !== "src/ci-liveness.ts"), excluded).missing).toEqual(["src/ci-liveness.ts"]);
+    expect(guardSetIsFullyAccounted(config.mutate, [...excluded, "src/ci-liveness.ts"]).doubleBooked).toEqual(["src/ci-liveness.ts"]);
   });
 
-  it("every NOT_MUTATED reason names what was actually run, not an intuition", () => {
-    for (const [file, why] of Object.entries(NOT_MUTATED)) {
-      expect(why, `${file}'s NOT_MUTATED reason is not provenance-tagged`).toMatch(/MEASURED|TRIED/);
-      expect(why, `${file}'s NOT_MUTATED reason carries no falsifier`).toContain("Falsifier:");
+  it("every excluded guard records a fresh actual attempt and its command", () => {
+    for (const guard of baseline.census.guards.filter((g) => g.state === "excluded")) {
+      expect(guard.exclusion?.outcome).toBe("blocked");
+      expect(guard.exclusion?.attempted).toBeGreaterThan(0);
+      expect(guard.exclusion?.command).toContain("stryker");
     }
+    expect(guardSetIsFullyAccounted([...config.mutate, "src/not-a-guard.ts"], excluded).unexpected).toEqual(["src/not-a-guard.ts"]);
+    expect(guardSetIsFullyAccounted([...config.mutate, config.mutate[0]!], excluded).unexpected).toEqual([config.mutate[0]!]);
   });
 });
