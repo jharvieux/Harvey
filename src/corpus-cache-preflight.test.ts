@@ -22,6 +22,7 @@ interface TrackedInvocation {
   child: ChildProcess;
   result: Promise<InvocationResult>;
   firstByte: Promise<boolean>;
+  progress: () => string;
   finished: boolean;
   cleanup?: Promise<void>;
 }
@@ -80,6 +81,12 @@ async function terminateAndReap(invocation: TrackedInvocation): Promise<void> {
 
 async function reapActiveInvocations(): Promise<void> {
   await Promise.all([...activeInvocations].map(terminateAndReap));
+}
+
+function reportInterruptedInvocations(): void {
+  for (const invocation of activeInvocations) {
+    if (!invocation.finished) console.error(invocation.progress());
+  }
 }
 
 async function waitForFile(path: string, timeoutMs = 5_000): Promise<void> {
@@ -142,7 +149,12 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = new Promise<InvocationResult>((resolve) => { settle = resolve; });
     let observeFirstByte!: (observed: boolean) => void;
     const firstByte = new Promise<boolean>((resolve) => { observeFirstByte = resolve; });
-    const invocation: TrackedInvocation = { child, result, firstByte, finished: false };
+    const startedAt = Date.now();
+    let lastOutputAt = startedAt;
+    const invocation: TrackedInvocation = {
+      child, result, firstByte, finished: false,
+      progress: () => `Interrupted corpus preflight CLI (pid ${child.pid}, ${(Date.now() - startedAt) / 1000}s elapsed, ${(Date.now() - lastOutputAt) / 1000}s since output)\nstdout tail:\n${stdout.slice(-2_000)}\nstderr tail:\n${stderr.slice(-6_000)}`,
+    };
     // The outer CLI owns scanner children. A detached group lets test teardown terminate only this
     // invocation and await it before the shared disposable fixture directories are removed.
     let stdout = "";
@@ -158,6 +170,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
       settle({ status, stdout, stderr: `${stderr}${cause}` });
     };
     const retain = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
+      lastOutputAt = Date.now();
       if (!observedFirstByte) {
         observedFirstByte = true;
         observeFirstByte(true);
@@ -186,9 +199,9 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     };
   }
 
-  const copyCache = (): string => {
+  const copyCache = (source = seedCache): string => {
     const cache = temporary("harvey-preflight-cache-copy-");
-    cpSync(seedCache, cache, { recursive: true });
+    cpSync(source, cache, { recursive: true });
     return cache;
   };
 
@@ -225,6 +238,14 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const registry = registryFixture(join(fixtureRoot, "registry"));
     const bin = join(fixtureRoot, "bin");
     mkdirSync(bin);
+    // Reuse only V8's bytecode for unchanged module bytes. Every scanner still starts its real
+    // CLI and recomputes findings. The launcher reaches tools inside quality's bounded PATH
+    // without widening its production environment allowlist; the whole cache is suite-owned.
+    const compileCache = join(fixtureRoot, "node-compile-cache");
+    const nodeLauncher = join(bin, "node");
+    const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(nodeLauncher, `#!/bin/sh\nexport NODE_COMPILE_CACHE=${shellQuote(compileCache)}\nexec ${shellQuote(process.execPath)} "$@"\n`);
+    chmodSync(nodeLauncher, 0o755);
     // Copy before chmod: a test must never mutate committed fixture permissions or a shared tool.
     const binary = join(bin, "binary.mjs");
     cpSync(join(fixtures, "binary.mjs"), binary);
@@ -235,6 +256,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
       ...process.env,
       pnpm_config_verify_deps_before_run: "false",
       PATH: `${bin}:${process.env.PATH}`,
+      NODE_COMPILE_CACHE: compileCache,
       HARVEY_PREFLIGHT_TARGETS: targets,
       HARVEY_PREFLIGHT_ADVISORIES: advisories,
       HARVEY_CORPUS_EXTERNAL_STATE_MODE: "live",
@@ -255,9 +277,13 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(seeded.output).toContain("CACHE MISS quality-scan");
   });
 
-  afterEach(async () => { await reapActiveInvocations(); });
+  afterEach(async ({ task }) => {
+    if (task.result?.state === "fail") reportInterruptedInvocations();
+    await reapActiveInvocations();
+  });
 
   afterAll(async () => {
+    reportInterruptedInvocations();
     await reapActiveInvocations();
     directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   });
@@ -266,11 +292,16 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const before = artifacts(seedCache);
     const result = await invoke(copyCache(), ["--force-cold-cache"]);
     expect(result.status, result.output).toBe(0);
-    for (const { value } of before) {
-      if (value.schema === 8 && value.family && value.output) expect(result.output).toContain(`CACHE VERIFY semgrep family ${String(value.family)} ${String(value.key).slice(0, 12)}`);
-      if (value.schema === 5 && value.phase) expect(result.output).toContain(`CACHE VERIFY ${String(value.phase)} ${String(value.key).slice(0, 12)}`);
-      if (value.schema === 2 && value.scanner) expect(result.output).toContain(`CACHE VERIFY ${String(value.scanner)} ${String(value.key).slice(0, 12)}`);
-    }
+    const expected = before.flatMap(({ path, value }) => {
+      const component = value.schema === 8 && value.family && value.output ? `semgrep family ${String(value.family)}`
+        : value.schema === 5 && value.phase ? String(value.phase)
+          : value.schema === 2 && value.scanner ? String(value.scanner) : undefined;
+      const slug = path.startsWith(join(seedCache, "shard1")) ? "fixture-first" : "fixture-later";
+      return component ? [`${slug}: CACHE VERIFY ${component} ${String(value.key).slice(0, 12)}`] : [];
+    });
+    expect(expected).toHaveLength(45);
+    const compared = [...result.output.matchAll(/^ {2}(fixture-(?:first|later): CACHE VERIFY .+? [a-f0-9]{12}):/gm)].map((match) => match[1]!);
+    expect(compared.sort()).toEqual(expected.sort());
     expect(new Set(before.filter(({ value }) => value.schema === 2).map(({ value }) => value.scanner)))
       .toEqual(new Set(["detect-static", "quality-scan", "mutation-detect-only"]));
     expect(result.output).not.toContain("CACHE MISS semgrep family");
@@ -289,22 +320,33 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.children).toEqual([]);
   });
 
-  it("compares the additional reproducible phase consumers in snapshot mode", async () => {
-    const cache = temporary("harvey-preflight-snapshot-cache-");
+  describe("snapshot phase consumers", () => {
+    let snapshotSeed: string;
     const flags = ["--target", "fixture-first"];
     const snapshot = { HARVEY_CORPUS_EXTERNAL_STATE_MODE: "snapshot" };
-    const seeded = await invoke(cache, flags, snapshot);
-    expect(seeded.status, seeded.output).toBe(0);
-    const result = await invoke(cache, [...flags, "--force-cold-cache"], snapshot);
-    expect(result.status, result.output).toBe(0);
-    expect(result.output).toContain("CACHE VERIFY secrets-history");
-    expect(result.output).toContain("CACHE VERIFY dependency-advisory");
-    expect(result.children.some((child) => child.binary === "trufflehog")).toBe(false);
-    rmSync(join(cache, "shard1", "dependency-advisory"), { recursive: true });
-    const missing = await invoke(cache, [...flags, "--force-cold-cache"], snapshot);
-    expect(missing.status, missing.output).not.toBe(0);
-    expect(missing.output).toContain("mechanical-phase:dependency-advisory: missing:");
-    expect(missing.children).toEqual([]);
+
+    beforeAll(async () => {
+      snapshotSeed = temporary("harvey-preflight-snapshot-cache-");
+      const seeded = await invoke(snapshotSeed, flags, snapshot);
+      expect(seeded.status, seeded.output).toBe(0);
+    });
+
+    it("compares the additional reproducible phase consumers in snapshot mode", async () => {
+      const result = await invoke(copyCache(snapshotSeed), [...flags, "--force-cold-cache"], snapshot);
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("CACHE VERIFY secrets-history");
+      expect(result.output).toContain("CACHE VERIFY dependency-advisory");
+      expect(result.children.some((child) => child.binary === "trufflehog")).toBe(false);
+    });
+
+    it("rejects a missing snapshot advisory seed before any scan", async () => {
+      const cache = copyCache(snapshotSeed);
+      rmSync(join(cache, "shard1", "dependency-advisory"), { recursive: true });
+      const missing = await invoke(cache, [...flags, "--force-cold-cache"], snapshot);
+      expect(missing.status, missing.output).not.toBe(0);
+      expect(missing.output).toContain("mechanical-phase:dependency-advisory: missing:");
+      expect(missing.children).toEqual([]);
+    });
   });
 
   it("checks a later target before scanning any earlier target", async () => {
@@ -329,7 +371,20 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
   });
 
   it("rejects a changed observed tool version before execution", async () => {
-    const result = await invoke(copyCache(), ["--force-cold-cache"], { HARVEY_PREFLIGHT_TOOL_VERSION: "fixture-2" });
+    const changedBin = temporary("harvey-preflight-changed-tool-");
+    const binary = join(changedBin, "binary.mjs");
+    const semgrep = join(changedBin, "semgrep");
+    cpSync(join(fixtures, "binary.mjs"), binary);
+    chmodSync(binary, 0o755);
+    symlinkSync(binary, semgrep);
+    symlinkSync(join(root, "node_modules"), join(changedBin, "node_modules"), "dir");
+    const observedVersion = () => execFileSync(semgrep, ["--version"], { env: environment, encoding: "utf8" }).trim();
+    expect(observedVersion()).toBe("semgrep fixture-1");
+    // Warm this exact path, then change its bytes: V8 reuse must not preserve the prior tool
+    // behavior, and the production version probe must still reject its now-incompatible seed.
+    writeFileSync(binary, readFileSync(binary, "utf8").replace('?? "fixture-1"', '?? "fixture-2"'));
+    expect(observedVersion()).toBe("semgrep fixture-2");
+    const result = await invoke(copyCache(), ["--force-cold-cache"], { PATH: `${changedBin}:${environment.PATH}` });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("identity.externalInputs.semgrep");
     expect(result.children).toEqual([]);
@@ -404,21 +459,32 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.output).not.toContain(`CACHE MISS quality-scan ${qualityKeys[1]}`);
   });
 
-  it("plans eligible source scanners across the population without installing dependencies", async () => {
-    const cache = temporary("harvey-preflight-without-install-");
-    const seeded = await invoke(cache, [], {}, false);
-    expect(seeded.status, seeded.output).toBe(0);
-    const verified = await invoke(cache, ["--force-cold-cache"], {}, false);
-    expect(verified.status, verified.output).toBe(0);
-    expect(verified.output).toContain("CACHE PREFLIGHT EXCLUDED quality-scan");
-    expect(verified.output).toContain("CACHE VERIFY detect-static");
-    expect(verified.output).toContain("CACHE VERIFY mutation-detect-only");
-    rmSync(join(cache, "shard2", "corpus-scanners", "mutation-detect-only"), { recursive: true });
-    const missing = await invoke(cache, ["--force-cold-cache"], {}, false);
-    expect(missing.status, missing.output).not.toBe(0);
-    expect(missing.output).toContain("fixture-later: forced-cold cache preflight rejected");
-    expect(missing.output).toContain("corpus-scanner:mutation-detect-only");
-    expect(missing.children).toEqual([]);
+  describe("source scanner population without dependency installation", () => {
+    let sourceSeed: string;
+
+    beforeAll(async () => {
+      sourceSeed = temporary("harvey-preflight-without-install-");
+      const seeded = await invoke(sourceSeed, [], {}, false);
+      expect(seeded.status, seeded.output).toBe(0);
+    });
+
+    it("plans eligible source scanners across the population without installing dependencies", async () => {
+      const verified = await invoke(copyCache(sourceSeed), ["--force-cold-cache"], {}, false);
+      expect(verified.status, verified.output).toBe(0);
+      expect(verified.output).toContain("CACHE PREFLIGHT EXCLUDED quality-scan");
+      expect(verified.output).toContain("CACHE VERIFY detect-static");
+      expect(verified.output).toContain("CACHE VERIFY mutation-detect-only");
+    });
+
+    it("rejects a missing later source scanner seed across the uninstalled population", async () => {
+      const cache = copyCache(sourceSeed);
+      rmSync(join(cache, "shard2", "corpus-scanners", "mutation-detect-only"), { recursive: true });
+      const missing = await invoke(cache, ["--force-cold-cache"], {}, false);
+      expect(missing.status, missing.output).not.toBe(0);
+      expect(missing.output).toContain("fixture-later: forced-cold cache preflight rejected");
+      expect(missing.output).toContain("corpus-scanner:mutation-detect-only");
+      expect(missing.children).toEqual([]);
+    });
   });
 
   it("keeps physically changed fresh family output red after a valid preflight", async () => {

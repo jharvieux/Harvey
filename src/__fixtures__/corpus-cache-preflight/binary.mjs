@@ -2,7 +2,6 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename } from "node:path";
-import { parse } from "yaml";
 
 const binary = basename(process.argv[1]);
 const args = process.argv.slice(2);
@@ -24,6 +23,7 @@ if (args.includes("--version") || args.includes("version")) {
     await new Promise(() => {});
   }
   if (binary === "semgrep") {
+    const { parse } = await import("yaml");
     const config = args[args.indexOf("--config") + 1];
     const rules = parse(readFileSync(config, "utf8")).rules;
     const changed = process.env.HARVEY_PREFLIGHT_CHANGED_OUTPUT === "1";
