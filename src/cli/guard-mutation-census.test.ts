@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -236,6 +236,79 @@ fs.copyFileSync('fixture-report.json', config.jsonReporter.fileName);
 }
 
 describe("guard mutation fresh-run production orchestration (#1890)", () => {
+  const probeOutput = (dir: string, suffix: "config.json" | "log" | "json") => join(dir, "reports", "guard-mutation", `src-recorded-reasons.ts.probe.${suffix}`);
+
+  it.each([
+    ["baseline", "config.json"],
+    ["baseline", "log"],
+    ["receipt", "config.json"],
+    ["normalized-out", "config.json"],
+    ["reviews", "config.json"],
+    ["config", "config.json"],
+    ["raw-report", "config.json"],
+    ["raw-report", "log"],
+  ] as const)("rejects a generated probe %s collision with %s before Stryker starts", async (role, suffix) => {
+    const p = freshProject(); const path = probeOutput(p.dir, suffix);
+    const args: string[] = [];
+    if (role === "baseline") { copyFileSync(join(p.dir, "guard-mutation-baseline.json"), path); args.push("--baseline", path); }
+    if (role === "receipt") { writeFileSync(path, "receipt sentinel\n"); args.push("--receipt", path); }
+    if (role === "normalized-out") { writeFileSync(path, "normalized sentinel\n"); args.push("--normalized-out", path); }
+    if (role === "reviews") { writeFileSync(path, "[]\n"); args.push("--reviews", path, "--update-baseline"); }
+    if (role === "config") { copyFileSync(join(p.dir, "stryker.guards.config.json"), path); args.push("--config", path); }
+    if (role === "raw-report") {
+      const config = JSON.parse(readFileSync(join(p.dir, "stryker.guards.config.json"), "utf8")) as { jsonReporter: { fileName: string } };
+      config.jsonReporter.fileName = path;
+      const custom = join(p.dir, "reports", "guard-mutation", "custom.config.json");
+      writeFileSync(custom, JSON.stringify(config)); args.push("--config", custom);
+      writeFileSync(path, "raw report sentinel\n");
+    }
+    const before = readFileSync(path);
+    const baselineBefore = readFileSync(join(p.dir, "guard-mutation-baseline.json"));
+    const result = await run(args, process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(result.output).not.toContain("Running Stryker");
+    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
+    expect(readFileSync(path)).toEqual(before);
+    expect(readFileSync(join(p.dir, "guard-mutation-baseline.json"))).toEqual(baselineBefore);
+  });
+
+  it.each(["symlink", "hardlink", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
+    const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
+    const target = kind === "reserved JSON" ? probeOutput(p.dir, "json") : probeOutput(p.dir, "log");
+    if (kind === "symlink" || kind === "reserved JSON") symlinkSync(baseline, target);
+    if (kind === "hardlink") linkSync(baseline, target);
+    if (kind === "directory alias") {
+      const alias = join(p.dir, "reports-alias"); symlinkSync(join(p.dir, "reports", "guard-mutation"), alias);
+      copyFileSync(baseline, target);
+      const args = ["--baseline", join(alias, "src-recorded-reasons.ts.probe.log")];
+      const before = readFileSync(target);
+      const result = await run(args, process.env, p.cli, p.dir);
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain("output would overwrite");
+      expect(readFileSync(target)).toEqual(before);
+      expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
+      return;
+    }
+    const before = readFileSync(baseline);
+    const result = await run([], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(result.output).not.toContain("Running Stryker");
+    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
+    expect(readFileSync(baseline)).toEqual(before);
+  });
+
+  it("rejects aliases between two generated probe destinations", async () => {
+    const p = freshProject(); const config = probeOutput(p.dir, "config.json"); const log = probeOutput(p.dir, "log");
+    symlinkSync(config, log);
+    const result = await run([], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(result.output).not.toContain("Running Stryker");
+    expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
+  });
+
   it("runs the configured guard set and fresh exclusion probe, then writes and compares a bound receipt", async () => {
     const p = freshProject(); const result = await run([], process.env, p.cli, p.dir);
     expect(result.status, result.output).toBe(0); expect(result.output).toContain("GUARD BASELINE PASS");

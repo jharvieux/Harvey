@@ -3,7 +3,7 @@ import "./sync-stdio.js";
 // Only --update-baseline writes the baseline, after printing population/identity/review deltas.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,17 +44,52 @@ function writeJson(path: string, value: unknown): void {
 }
 
 function pathIdentity(path: string): string {
-  let ancestor = resolve(path);
+  return resolvePathIdentity(resolve(path), new Set());
+}
+
+function resolvePathIdentity(path: string, seen: Set<string>): string {
+  if (seen.has(path)) throw new Error(`cyclic output path alias: ${path}`);
+  seen.add(path);
+  let ancestor = path;
   const suffix: string[] = [];
-  while (!existsSync(ancestor)) {
-    suffix.unshift(relative(dirname(ancestor), ancestor));
-    ancestor = dirname(ancestor);
+  while (true) {
+    try {
+      const entry = lstatSync(ancestor);
+      if (entry.isSymbolicLink()) return resolve(resolvePathIdentity(resolve(dirname(ancestor), readlinkSync(ancestor)), seen), ...suffix);
+      return resolve(realpathSync(ancestor), ...suffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      suffix.unshift(relative(dirname(ancestor), ancestor));
+      ancestor = dirname(ancestor);
+    }
   }
-  return resolve(realpathSync(ancestor), ...suffix);
 }
 
 function separateOutput(output: string, protectedPaths: string[]): void {
-  if (protectedPaths.some((path) => pathIdentity(path) === pathIdentity(output))) throw new Error(`output would overwrite an input or baseline: ${output}`);
+  const identity = pathIdentity(output);
+  const outputStat = existsSync(output) ? statSync(output) : undefined;
+  if (protectedPaths.some((path) => {
+    if (pathIdentity(path) === identity) return true;
+    if (!outputStat || !existsSync(path)) return false;
+    const protectedStat = statSync(path);
+    return outputStat.dev === protectedStat.dev && outputStat.ino === protectedStat.ino;
+  })) throw new Error(`output would overwrite an input or baseline: ${output}`);
+}
+
+type ProbePaths = { file: string; config: string; log: string; json: string };
+
+function preflightGeneratedOutputs(reportPath: string, omitted: string[], protectedPaths: string[]): ProbePaths[] {
+  const outputs = [reportPath];
+  const probes = omitted.map((file) => {
+    const name = file.replaceAll("/", "-");
+    const directory = dirname(reportPath);
+    return { file, config: join(directory, `${name}.probe.config.json`), log: join(directory, `${name}.probe.log`), json: join(directory, `${name}.probe.json`) };
+  });
+  for (const probe of probes) for (const output of [probe.config, probe.log, probe.json]) {
+    separateOutput(output, [...protectedPaths, ...outputs]);
+    outputs.push(output);
+  }
+  return probes;
 }
 
 function toolchain(): GuardMutationReceipt["toolchain"] {
@@ -80,8 +115,10 @@ function runFresh(configPath: string, receiptPath: string, protectedPaths: strin
   if (accounting.missing.length || accounting.doubleBooked.length || accounting.unexpected.length) throw new Error(`guard config does not partition the declared guard set: ${JSON.stringify(accounting)}`);
   if (!config.jsonReporter?.fileName) throw new Error("guard config must name its JSON report");
   const reportPath = resolve(REPO_ROOT, config.jsonReporter.fileName);
-  separateOutput(reportPath, [...protectedPaths, configPath, receiptPath]);
-  separateOutput(receiptPath, [...protectedPaths, configPath]);
+  const protectedInputs = [...protectedPaths, configPath, ...GUARD_SET.map((file) => join(REPO_ROOT, file)), join(REPO_ROOT, "package.json"), join(REPO_ROOT, "pnpm-lock.yaml")];
+  separateOutput(reportPath, [...protectedInputs, receiptPath]);
+  separateOutput(receiptPath, [...protectedInputs, reportPath]);
+  const probes = preflightGeneratedOutputs(reportPath, omitted, [...protectedInputs, receiptPath]);
   const startedAt = new Date().toISOString();
   const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
   const sourceSha256 = Object.fromEntries(GUARD_SET.map((file) => [file, digestFile(join(REPO_ROOT, file))]));
@@ -94,14 +131,12 @@ function runFresh(configPath: string, receiptPath: string, protectedPaths: strin
   execFileSync(join(REPO_ROOT, "node_modules", ".bin", "stryker"), ["run", configPath], { cwd: REPO_ROOT, stdio: "inherit" });
   if (!existsSync(reportPath)) throw new Error(`Stryker produced no report at ${reportPath}`);
   const exclusionChecks: GuardMutationReceipt["exclusionChecks"] = [];
-  for (const file of omitted) {
+  for (const { file, config: probeConfig, log: logPath, json: probeJson } of probes) {
     const name = file.replaceAll("/", "-");
-    const probeConfig = join(dirname(reportPath), `${name}.probe.config.json`);
-    const logPath = join(dirname(reportPath), `${name}.probe.log`);
     mkdirSync(dirname(probeConfig), { recursive: true });
     // A successful instrumented dry run falsifies an exclusion; it does not stand in for the
     // full mutant population. The next run must include that guard before the baseline shrinks.
-    writeJson(probeConfig, { ...config, mutate: [file], dryRunOnly: true, reporters: ["json", "clear-text"], jsonReporter: { fileName: join(dirname(reportPath), `${name}.probe.json`) } });
+    writeJson(probeConfig, { ...config, mutate: [file], dryRunOnly: true, reporters: ["json", "clear-text"], jsonReporter: { fileName: probeJson } });
     const args = ["run", probeConfig];
     const probe = spawnSync(join(REPO_ROOT, "node_modules", ".bin", "stryker"), args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     const output = `${probe.stdout ?? ""}${probe.stderr ?? ""}${probe.error?.message ?? ""}`;
