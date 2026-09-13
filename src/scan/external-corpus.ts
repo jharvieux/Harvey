@@ -210,10 +210,24 @@ function formatMutationClaim(b: MutationBaseline, numbers?: { mutationScore: num
 //   - unclear      : ambiguous evidence (recorded honestly, never forced into a tier)
 export type Provenance = "professional" | "ai-assisted" | "ai-generated" | "unclear";
 
+/** Operator permission to install one retained mixed-lock input; never a target declaration. */
+export interface CorpusInstallationPolicy {
+  kind: "operator-selected";
+  targetSlug: string;
+  targetRevision: string;
+  sourceRoot: ".";
+  packageManager: "pnpm";
+  packageManagerVersion: string;
+  lockfile: "pnpm-lock.yaml";
+  installConfigurationSha256: string;
+  provenance: string;
+}
+
 export interface ExternalTarget {
   slug: string; // local clone dir name used by the sweep + this file's baselines
   repo: string; // owner/name on GitHub
   commit: string; // pinned — baselines are only meaningful against this tree
+  installationPolicy?: CorpusInstallationPolicy;
   license: string;
   // #413: authorship provenance (see Provenance above). Metadata only — the drift baselines below
   // are unaffected. `provenanceNote` records the evidence the verdict rests on.
@@ -1072,6 +1086,17 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     slug: "flori-web",
     repo: "jharvieux/harvey-corpus-flori-web",
     commit: "908eaff6fcf598c0fe1043faaaecb6a4083c90d5",
+    installationPolicy: {
+      kind: "operator-selected",
+      targetSlug: "flori-web",
+      targetRevision: "908eaff6fcf598c0fe1043faaaecb6a4083c90d5",
+      sourceRoot: ".",
+      packageManager: "pnpm",
+      packageManagerVersion: "11.1.3",
+      lockfile: "pnpm-lock.yaml",
+      installConfigurationSha256: "bf830351e2b7fa6817e9abf0751d3f2b152a7f1f9677145449966d1625a27df2",
+      provenance: "#2047: operator approved pnpm 11.1.3 for this exact Flori revision and retained install inputs. package.json declares no manager; valid npm and pnpm locks conflict. Both locks remain audit inputs. Installation and quality results are never reused under this policy.",
+    },
     license: "none (all rights reserved)",
     provenance: "ai-generated",
     provenanceNote: "#413/#1832: original flori-ai-kr/web@bead044 had Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. Upstream became inaccessible, so the private recovery mirror pins a synthetic root commit whose tree is byte-identical (tree 062ad8ac) without claiming the shallow cache recovered unavailable ancestry. No license — clone-and-scan only, never vendor.",

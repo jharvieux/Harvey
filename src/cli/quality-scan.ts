@@ -525,7 +525,7 @@ for (const scope of scopes) {
     }
     knipReports.push(report);
   } catch (err) {
-    const reason = gapReason(err);
+    const reason = degradedKnipReason ? `${degradedKnipReason}; source-only Knip failed: ${gapReason(err)}` : gapReason(err);
     knipGaps.push({ scope: label, reason });
     console.error(`⚠ knip ${isTimeout(err) ? "timed out" : "failed"} on ${label} — M5 dead-code coverage skipped for this scope: ${reason}`);
   }

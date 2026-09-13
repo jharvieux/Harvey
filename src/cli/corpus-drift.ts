@@ -56,7 +56,6 @@ import { recordMeasured } from "../ci-liveness.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { SEVERITIES, type Finding } from "../findings.js";
-import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
@@ -87,11 +86,12 @@ import {
   scoreFreeTierExpectation,
   scoreMutationBaseline,
   type CountedBaselineDiagnostic,
+  type ExternalTarget,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
-import { prepareCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
+import { installCorpusDependencyExtras, prepareCorpusDependencies, releaseCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
 import { corpusCacheNamespaceForTarget, shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
@@ -271,70 +271,34 @@ if (baselineFindingsPath) {
   }
 }
 
-// #251: knip resolves a target's config imports only when the target's own deps are present
-// (CLAUDE.md's M5 prereq) — without this, M5-knip was unrun on 4 of 6 targets. Off by default and
-// on in the scheduled job (--install): a clone-and-install of six real repos is minutes and a lot
-// of network, which a local `pnpm corpus-drift --target X` shouldn't pay unless it's asking about
-// M5. Measured 2026-07-15: installing is inert for the other modules (M4 and both already-scored
-// M5-knip baselines reproduced byte-identically with deps present).
-//
-// Failure is NOT fatal to the target: quality-scan degrades to its M5-00 "did not run" finding
-// (#223), the M5-knip baseline then drifts, and the job says so — which is the loud failure this
-// job exists for. Swallowing the install error to keep other modules scoring is the same call
-// runScanner already makes.
+// Knip can execute target/provider config against installed dependencies. Failed preparation
+// rejects its partial tree and carries its reason into source-only M5-98, or M5-00 if that scan
+// also fails. Preparation evidence governs admission independently of Knip's exit or baseline.
 //
 // #1268: `npm install` at a pnpm-workspace root resolves only the ROOT packages — MEASURED against
 // inbox-zero/rallly (external-corpus.ts's recorded M8 not-run reasons: apps/web/node_modules simply
 // does not exist afterward) and fails outright on carbon (a pnpm-catalog `catalog:` dependency,
 // EUNSUPPORTEDPROTOCOL). The target's own lockfile says which package manager actually resolves it.
 //
-// A second, narrower #1268 finding, MEASURED against the real inbox-zero clone: its own
-// `pnpm-workspace.yaml` opts into `enableGlobalVirtualStore: true`, which stores the resolved
-// package graph OUTSIDE the project (under pnpm's global home dir,
-// `~/Library/pnpm/store/v11/links/...` on macOS) rather than in
-// the project's own node_modules/.pnpm. pnpm's own dependency resolution is unaffected, but any
-// tool that dynamically resolves a SIBLING package via Node's own node_modules directory walk
-// relative to ITS OWN real (globally-stored) file path can no longer find it — Stryker does exactly
-// this for both its runner plugins and its own `import("typescript")` (src/mutation-scan.ts's
-// scaffoldStrykerConfig `plugins` fix, #1284, does not help here: the walk never reaches the
-// project's node_modules at all). Disabling it for the disposable corpus clone (never the target's
-// own repo) reproduced a real 76.00% Stryker run against inbox-zero's apps/web (this PR).
-const GLOBAL_VIRTUAL_STORE_TRUE = /^(\s*enableGlobalVirtualStore\s*:\s*)true\s*$/m;
-
-function disableGlobalVirtualStoreIfSet(dir: string): void {
-  const path = join(dir, "pnpm-workspace.yaml");
-  if (!existsSync(path)) return;
-  const text = readFileSync(path, "utf8");
-  if (!GLOBAL_VIRTUAL_STORE_TRUE.test(text)) return;
-  writeFileSync(path, text.replace(GLOBAL_VIRTUAL_STORE_TRUE, "$1false"));
-  console.error(`  #1268: ${path} opts into enableGlobalVirtualStore — disabled for this clone (Stryker's own plugin/typescript resolution cannot reach a globally-stored package graph)`);
-}
-
-function installTargetDeps(dir: string, flags: readonly string[], identity?: {
+// Portable-store options belong in the install argv, not edits to the target's workspace policy.
+function installTargetDeps(dir: string, flags: readonly string[], identity: {
+  targetSlug?: string;
   targetRevision: string;
   targetTree: string;
   sourceRoot: string;
-}, cacheDir = phaseCacheDir): DependencyPreparationResult | undefined {
-  const pm = detectPackageManager(dir);
-  if (pm === "pnpm") disableGlobalVirtualStoreIfSet(dir);
-  if (cacheDir && identity) {
-    return prepareCorpusDependencies({
-      targetDir: dir,
-      sourceRoot: identity.sourceRoot,
-      cacheDir,
-      targetRevision: identity.targetRevision,
-      targetTree: identity.targetTree,
-      installFlags: npmOnlyFlags(pm, flags),
-      onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
-    });
-  }
-  const { bin, args } = installAllCommand(pm, npmOnlyFlags(pm, flags));
-  try {
-    execFileSync(bin, args, { cwd: dir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, CI: "true" } });
-  } catch {
-    console.error(`  ⚠ ${bin} install failed — M5-knip will report its #223 did-not-run finding and drift against the baseline`);
-  }
-  return undefined;
+  installationPolicy?: ExternalTarget["installationPolicy"];
+}, cacheDir = phaseCacheDir): DependencyPreparationResult {
+  return prepareCorpusDependencies({
+    targetDir: dir,
+    sourceRoot: identity.sourceRoot,
+    cacheDir,
+    targetSlug: identity.targetSlug,
+    targetRevision: identity.targetRevision,
+    targetTree: identity.targetTree,
+    installFlags: flags,
+    installationPolicy: identity.installationPolicy,
+    onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
+  });
 }
 
 // #1574: PER-PHASE cost, per target. #1586 measured each target's TOTAL from banner intervals and
@@ -429,6 +393,7 @@ async function runScanner(options: ScannerInvocation & {
     scriptArgs: options.scriptArgs,
     targetDir: options.targetDir,
     targetConfig: options.targetConfig,
+    dependencyPreparation: options.dependencyPreparation,
     onEvent: (message: string) => console.error(`  ${phaseTarget}: ${message}`),
   };
   const cache = options.cacheDir ? {
@@ -436,7 +401,6 @@ async function runScanner(options: ScannerInvocation & {
     mode: forceColdCache ? "verify" as const : "read-write" as const,
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
-    dependencyPreparation: options.dependencyPreparation,
   } : undefined;
   const result = options.scanner === "quality-scan"
     ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", cache })
@@ -464,17 +428,19 @@ async function runScanner(options: ScannerInvocation & {
 // `appDir` is where the config, the Stryker install, and mutation-scan itself all point — the
 // clone root for a single-package target (proposit/boxyhq, cfg.appPath undefined), or the
 // workspace MEMBER that actually carries the suite (inbox-zero's apps/web) when set. The package
-// manager is still detected from the clone ROOT: that is where the workspace's lockfile lives.
-function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig): { mutationScore: number; killed: number; valid: number } {
-  const pm = detectPackageManager(dir);
+// manager comes from the clone ROOT's preparation: that is where the workspace's lockfile lives.
+function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig, preparation: DependencyPreparationResult | undefined): { mutationScore: number; killed: number; valid: number } {
+  if (!preparation) throw new Error(`${slug}: M8 mutation scoring requires dependency preparation; run with --install`);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
-  const { bin, args } = installExtraCommand(pm, [...cfg.strykerPackages]);
   // withRestoredManifest(dir, ...) restores the WORKSPACE lockfile (shared, lives at the clone
   // root); a `pnpm add` run with cwd: appDir writes the extra packages into appDir's OWN
   // package.json, which this does not restore — a no-op gap here since `dir` is a disposable temp
   // clone discarded after this run, not the client's real repo (see mutation-scan.ts's --install
   // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
-  withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...npmOnlyFlags(pm, cfg.installFlags)], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
+  installCorpusDependencyExtras(preparation, {
+    appDir, packages: cfg.strykerPackages, installFlags: cfg.installFlags,
+    onEvent: (message) => console.error(`  ${slug}: ${message}`),
+  });
 
   // #1496/#1693: the vendored Stryker config, plus (for a target whose own suite is unscoreable —
   // multi-tenant-starter's Docker-per-mutant cost) the DB-free suite that config points at, written
@@ -671,6 +637,7 @@ const rows: Row[] = [];
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
 // as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
 const findingsBySlug: Record<string, Finding[]> = {};
+const dependencyPreparationsBySlug: Record<string, DependencyPreparationResult[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
 const advisoryObservation: CorpusAdvisoryObservationArtifact | undefined = advisoryObservationPath ? {
@@ -713,6 +680,8 @@ for (const target of targets) {
   const targetPhaseCacheDir = phaseCacheDir
     ? join(phaseCacheDir, `shard${corpusCacheNamespaceForTarget(EXTERNAL_CORPUS.map((entry) => entry.slug), target.slug)}`)
     : undefined;
+  const dependencyPreparations: DependencyPreparationResult[] = [];
+  dependencyPreparationsBySlug[target.slug] = dependencyPreparations;
   try {
     // One authoritative preparation boundary for hosted scoring and the independent replay: exact
     // pin, remove declared reference subtrees, then capture before dependency installation can
@@ -845,11 +814,14 @@ for (const target of targets) {
     // visible and keeps quality-scan fresh.
     const dependencyPreparation = install
       ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
+        targetSlug: target.slug,
         targetRevision: target.commit,
         targetTree: targetTreeIdentity,
         sourceRoot: ".",
+        installationPolicy: target.installationPolicy,
       }, targetPhaseCacheDir))
       : undefined;
+    if (dependencyPreparation) dependencyPreparations.push(dependencyPreparation);
     const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
@@ -865,7 +837,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8));
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8, dependencyPreparation));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
@@ -891,9 +863,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
       ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -909,11 +881,14 @@ for (const target of targets) {
       }
       const scopedDependencyPreparation = install
         ? timed("install", () => installTargetDeps(rootDir, [], {
+          targetSlug: target.slug,
           targetRevision: target.commit,
           targetTree: targetTreeIdentity,
           sourceRoot: m5Root,
+          installationPolicy: target.installationPolicy,
         }, targetPhaseCacheDir))
         : undefined;
+      if (scopedDependencyPreparation) dependencyPreparations.push(scopedDependencyPreparation);
       const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
@@ -986,6 +961,7 @@ for (const target of targets) {
     }
     throw error;
   } finally {
+    for (const preparation of dependencyPreparations) releaseCorpusDependencies(preparation, keep);
     const total = (Date.now() - startedAt) / 1000;
     const phases = phaseSeconds[target.slug] ?? {};
     const timedTotal = Object.values(phases).reduce((a, b) => a + b, 0);
@@ -1081,6 +1057,7 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
   rows,
   findings: findingsBySlug,
+  dependencyPreparations: dependencyPreparationsBySlug,
   detectors: detectorRecordsBySlug,
   mechanicalContexts: mechanicalContextBySlug,
   ...(currentExecution ? { currentMechanicalExecution: currentExecution } : {}),

@@ -140,11 +140,17 @@ mutation records the exact test-file path digest and the package/config/workspac
 consumed. A computed dynamic implementation import without a statically resolvable local path keeps that scanner
 fresh instead of writing an under-keyed artifact.
 
-`quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
-keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
-version, Node/ABI, platform/architecture, install flags, and every value in the bounded execution
-environment (`CI`, `HOME`, `PATH`, and `TMPDIR`). A hit still performs a frozen offline
-materialization into the disposable clone. Corrupt/incomplete receipts or stores reject visibly
+Quality cache reuse additionally requires a complete dependency-preparation receipt. Preparation
+returns installation evidence with or without a phase cache. Schema-3 receipts bind the target
+pin/tree, lockfile and recursive install configuration, observed manager entry point/hash/version
+and Node runtime, platform/architecture, install flags, and every value in the bounded execution
+environment. That environment retains `CI`, `HOME`, `PATH`, `TMPDIR`, and the supported Corepack,
+pnpm, XDG and platform selector settings enumerated by `SELECTOR_ENVIRONMENT` in
+`src/corpus-dependency-preparation.ts`. The target-cwd version probe is installation setup: it can
+provision a manager. Later attempts invoke that selected entry point and record the actual command,
+identity and outcome; a changed or unobserved selection rejects preparation. A hit still performs
+a frozen offline materialization into the disposable clone. Cached and uncached failures carry
+the concrete install reason into M5 output, including reduced-Knip and quality-child failures. Corrupt/incomplete receipts or stores reject visibly
 and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
 to bypass every target Knip/framework/provider config and attempt Knip directly in its all-plugins-
 disabled, Harvey-inferred-entry source tier. Success preserves review-tier M5 findings and emits
@@ -162,10 +168,19 @@ enumerable installed package sets returns `cacheable: false`. Package metadata i
 modules and target providers are not imported for this decision.
 The same lifecycle evidence separately governs the source-only scanner caches: when an install may
 have rewritten target-owned source/configuration, detect-static and mutation detect-only execute
-fresh. Package-manager selection is also fail-safe: conflicting lockfile families, a declaration
-that disagrees with the selected lockfile, or a declared version that disagrees with the executable
-forces the legacy non-cacheable path. npm aliases, pnpm catalogs/workspaces, and Yarn install
-configuration are part of the recursive preparation identity.
+fresh. Conflicting package-manager evidence, declared-version mismatches, and failed or unobserved
+selector setup return incomplete preparation. An explicit corpus installation policy can resolve
+undeclared conflicting locks for the exact target revision and original install inputs it names.
+Flori at `908eaff6fcf598c0fe1043faaaecb6a4083c90d5` uses the operator-approved
+`pnpm@11.1.3` and `pnpm-lock.yaml` for installation. Both original lockfiles remain audit inputs;
+the preparation records their conflict and the operator's choice and disables cache reuse.
+A different revision, changed original inputs, mismatched manager identity, or failed installation
+returns incomplete preparation. This installation choice does not select an OSV matching policy.
+Missing or non-reproducible locks may use a
+non-cacheable legacy installation; successful fallback requires the same observed selected manager,
+the bounded environment, explicit dependency-store arguments, and a successful install outcome.
+npm aliases, pnpm catalogs/workspaces, and Yarn install configuration are part of the recursive
+preparation identity.
 
 Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
 framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
@@ -187,10 +202,14 @@ clients from two checkout paths.
 
 pnpm is forced to `enableGlobalVirtualStore=false`. pnpm 10/11 still writes a versioned `projects`
 symlink to the current checkout, and a target can otherwise produce a versioned `links` installed
-graph. Both trees are removed after every install; only content/index bytes remain. A real pnpm
+graph. Sanitation removes those trees from the explicit canonical dependency content store after
+successful frozen/offline materialization and after attempted legacy installations. A real pnpm
 cold-to-offline test with an actual package verifies the second checkout succeeds after that
-sanitization, then asserts the store has no symlink and no `node_modules` path. This preserves the
-content-addressed store/offline-materialization design rather than archiving an installed tree.
+sanitization, then asserts the store has no symlink and no `node_modules` path. Manager provisioning
+state is separate and potentially shared: no per-shard isolation is claimed for Corepack or native
+pnpm manager state. Binding the selected entry point after setup prevents native pnpm from
+provisioning another manager under the dependency-store argument. The cache retains portable
+content-store data rather than an archive of the installed tree.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling

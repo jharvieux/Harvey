@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -447,7 +447,7 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     writeFileSync(receipt, JSON.stringify({ schema: 0, key: cold.key }));
     expect(prepareCorpusDependencies(options).status).toBe("miss");
     expect(events).toContainEqual(expect.stringContaining("DEPENDENCY PREP REJECT npm"));
-    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ schema: 2 });
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ schema: 3 });
     expect(runInstall).toHaveBeenCalledTimes(2);
   });
 
@@ -493,5 +493,23 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     });
     expect(result).toMatchObject({ status: "non-cacheable", complete: true, cacheable: false });
     expect(result.reason).toContain("no package-manager lockfile");
+  });
+
+  it("rejects partial installation links without following them into a separate dependency tree (#2047)", () => {
+    const target = fixture("npm");
+    const external = fixture("npm");
+    mkdirSync(join(external, "node_modules"));
+    writeFileSync(join(external, "node_modules/keep.txt"), "separate tree");
+    symlinkSync(external, join(target, "linked-workspace"), "dir");
+    const result = prepareCorpusDependencies({
+      targetDir: target, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.12.1",
+      runInstall: () => {
+        symlinkSync(join(external, "missing"), join(target, "node_modules"), "dir");
+        throw new Error("install failed after linking a partial tree");
+      },
+    });
+    expect(result.complete).toBe(false);
+    expect(() => lstatSync(join(target, "node_modules"))).toThrow();
+    expect(readFileSync(join(external, "node_modules/keep.txt"), "utf8")).toBe("separate tree");
   });
 });
