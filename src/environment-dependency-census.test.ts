@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -137,11 +137,23 @@ describe("environment census discovery and typed completeness (#1906)", () => {
 
 type Fields = Record<string, unknown>;
 
+function checkCurrentInventory(): Promise<{ status: number; output: string }> {
+  return new Promise((done, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/cli/environment-dependency-census.ts"), "--check"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (text: string) => { output += text; });
+    child.stderr.on("data", (text: string) => { output += text; });
+    child.once("error", reject);
+    child.once("close", (status) => done({ status: status ?? 1, output }));
+  });
+}
+
 describe("committed environment population and existing owner seams (#1906)", () => {
-  it("matches every current input and preserves actual narrower populations and historical identities", () => {
-    const inventory = buildEnvironmentInventory(readCensusSnapshot(ROOT, undefined, true));
-    const recorded = JSON.parse(readFileSync(join(ROOT, "src/environment-dependency-inventory.json"), "utf8")) as EnvironmentInventory;
-    expect(compareEnvironmentInventory(inventory, recorded).problems).toEqual([]);
+  it("matches every current input and preserves actual narrower populations and historical identities", async () => {
+    const result = await checkCurrentInventory();
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(join(ROOT, "src/environment-dependency-inventory.json"), "utf8")) as EnvironmentInventory;
     expect(inventory.population.classes.map((c) => c.dependencyClass)).toEqual([...ENVIRONMENT_CLASSES]);
     expect(inventory.reconciliations.find((r) => r.registry === "#1853 external-corpus schema")?.members.length).toBeGreaterThan(100);
     expect(inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")?.members.length).toBeGreaterThan(100);
