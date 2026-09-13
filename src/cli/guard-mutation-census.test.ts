@@ -34,13 +34,13 @@ function prepare(name = "measured.json", change?: (r: Report, receipt: GuardMuta
   return { dir, baselinePath, reportPath, receiptPath, raw, receipt, args };
 }
 
-function run(args: string[], env: NodeJS.ProcessEnv = process.env, cli = CLI, cwd = ROOT): Promise<{ status: number; output: string }> {
+function run(args: string[], env: NodeJS.ProcessEnv = process.env, cli = CLI, cwd = ROOT, onOutput?: (output: string) => void): Promise<{ status: number; output: string }> {
   return new Promise((done, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (text: string) => { output += text; });
-    child.stderr.on("data", (text: string) => { output += text; });
+    const collect = (text: string) => { output += text; onOutput?.(output); };
+    child.stdout.on("data", collect); child.stderr.on("data", collect);
     child.once("error", reject);
     child.once("close", (status) => done({ status: status ?? 1, output }));
   });
@@ -387,6 +387,20 @@ describe("bounded guard shards through the production CLI (#1891)", () => {
     expect(terminals.some((terminal) => terminal.state === "aggregate-timeout")).toBe(true);
     expect(terminals.some((terminal) => terminal.state === "not-started")).toBe(true);
     expect(terminals.every((terminal) => terminal.finishedAt)).toBe(true);
+  });
+
+  it.each(["comparison", "explicit update"])("rejects a baseline changed after MANIFEST before %s, preserving the concurrent bytes", async (mode) => {
+    const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
+    const changed = readObject<GuardMutationBaseline>(baseline); changed.reviews[0]!.owner = "concurrent baseline owner";
+    const concurrentBytes = `${JSON.stringify(changed, null, 2)}\n`; let changedDuringRun = false;
+    const result = await run(mode === "explicit update" ? ["--update-baseline"] : [], process.env, p.cli, p.dir, (output) => {
+      if (!changedDuringRun && output.includes("MANIFEST ")) { changedDuringRun = true; writeFileSync(baseline, concurrentBytes); }
+    });
+    expect(changedDuringRun).toBe(true); expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("baseline changed during the census"); expect(result.output).not.toContain("GUARD BASELINE PASS");
+    expect(readFileSync(baseline, "utf8")).toBe(concurrentBytes);
+    expect(existsSync(join(bundlePath(result.output), "comparison.json"))).toBe(false);
+    expect(existsSync(join(bundlePath(result.output), "aggregate.json"))).toBe(true);
   });
 
   it("feeds the complete aggregate into the production survivor comparator", async () => {

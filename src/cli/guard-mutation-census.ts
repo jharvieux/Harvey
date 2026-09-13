@@ -162,7 +162,13 @@ async function main(): Promise<void> {
   if (reviewsOption && !update) throw new Error("--reviews requires explicit --update-baseline");
   if (supplied && !receiptOption) throw new Error("--report requires --receipt; the current machine cannot supply a historical report's Node/package identity");
   if (!update && !existsSync(baselinePath)) throw new Error(`no baseline at ${baselinePath}; creating one requires --update-baseline and reviewed ownership records`);
-  const previous = existsSync(baselinePath) ? parseGuardMutationBaseline(readJson(baselinePath), new Date().toISOString(), update) : undefined;
+  const baselineBytes = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
+  const baselineSha256 = baselineBytes ? guardMutationDigest(baselineBytes) : undefined;
+  const previous = baselineBytes ? parseGuardMutationBaseline(JSON.parse(baselineBytes.toString("utf8")) as unknown, new Date().toISOString(), update) : undefined;
+  const assertBaselineUnchanged = () => {
+    const current = existsSync(baselinePath) ? digestFile(baselinePath) : undefined;
+    if (current !== baselineSha256) throw new Error("baseline changed during the census; retain this capture and compare again against the intended baseline");
+  };
   const receiptPath = resolve(receiptOption ?? join(REPO_ROOT, "reports", "guard-mutation", "mutation.receipt.json"));
   const sourceInputs = [configPath, ...[...GUARD_SET, "package.json", "pnpm-lock.yaml", "vitest.config.ts"].map((file) => join(REPO_ROOT, file))];
   if (normalizedPath) separateOutput(normalizedPath, [...sourceInputs, baselinePath, receiptPath, ...(supplied ? [resolve(supplied)] : []), ...(reviewsOption ? [resolve(reviewsOption)] : [])]);
@@ -188,13 +194,15 @@ async function main(): Promise<void> {
       if ((JSON.parse(checked || "null") as { url?: string } | null)?.url !== issue) throw new Error(`remediation issue could not be verified: ${issue}`);
     }
     console.log(`\nSEMANTIC DELTA (${result.delta.length}):\n${result.delta.map((line) => `  ${line}`).join("\n") || "  (none)"}`);
+    assertBaselineUnchanged();
     writeJson(baselinePath, result.baseline);
     console.log(`BASELINE UPDATED explicitly: ${baselinePath}`);
     return;
   }
+  assertBaselineUnchanged();
   const comparison = compareGuardMutationCensus(census, previous!);
   if (captured?.bundleDir) writeJson(join(captured.bundleDir, "comparison.json"), {
-    schemaVersion: 1, baselineSha256: digestFile(baselinePath), bundleSha256: digestFile(join(captured.bundleDir, "bundle.json")),
+    schemaVersion: 1, baselineSha256, bundleSha256: digestFile(join(captured.bundleDir, "bundle.json")),
     reportSha256: census.receipt.reportSha256, ...comparison,
   });
   for (const change of comparison.delta) console.log(`  ${change}`);
