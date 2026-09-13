@@ -875,11 +875,11 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
 });
 
 // These controls execute the shipping corpus call sites as well as the real quality CLI. Extract
-// only the two functions to avoid starting unrelated corpus scanners, clones or advisory queries.
+// their function chain to avoid starting unrelated corpus scanners, clones or advisory queries.
 function corpusInstallConsumer() {
   const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
   const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
-  const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && ["installTargetDeps", "runScanner", "disableGlobalVirtualStoreIfSet"].includes(node.name?.text ?? "")).map((node) => node.getText(ast)).join("\n");
+  const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && ["installTargetDeps", "scannerInvocation", "runScanner", "disableGlobalVirtualStoreIfSet"].includes(node.name?.text ?? "")).map((node) => node.getText(ast)).join("\n");
   const bindings = { ...packageManagers, execFileSync, existsSync, join, readFileSync, writeFileSync, prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "2047-control", forceColdCache: false, GLOBAL_VIRTUAL_STORE_TRUE: /^(\s*enableGlobalVirtualStore:\s*)true\s*$/m };
   const code = ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   return new Function(...Object.keys(bindings), `${code}\nreturn {installTargetDeps,runScanner};`)(...Object.values(bindings)) as {

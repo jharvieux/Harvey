@@ -312,6 +312,38 @@
         "src/workspaces.ts",
         "tools/pii-classify.mjs"
       ]
+    },
+    {
+      "id": "corpus-cache-preflight",
+      "testFile": "src/corpus-cache-preflight.test.ts",
+      "weightSeconds": 101.5,
+      "paths": [
+        ".github/workflows/corpus-drift.yml",
+        "src/__fixtures__/corpus-cache-preflight/",
+        "src/corpus-",
+        "src/cli/corpus-drift.ts",
+        "src/cli/corpus-drift.test.ts",
+        "src/scan/semgrep.ts",
+        "src/scan/semgrep.test.ts",
+        "src/scan/semgrep-family-cache.ts",
+        "src/scan/semgrep-family-cache.test.ts",
+        "src/scan/mechanical-phase-cache.ts",
+        "src/scan/mechanical-phase-cache.test.ts",
+        "src/scan/mechanical.ts",
+        "src/scan/mechanical.test.ts",
+        "src/scan/dependencies.ts",
+        "src/scan/dependencies.test.ts",
+        "src/scan/external-corpus.ts",
+        "src/scan/external-corpus.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/cli/mutation-scan.ts",
+        "src/cli/mutation-scan.test.ts",
+        "src/mutation-scan.ts",
+        "src/mutation-scan.test.ts"
+      ]
     }
   ]
 }
