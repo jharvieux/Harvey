@@ -971,7 +971,7 @@ export function installCorpusDependencyExtras(preparation: DependencyPreparation
   preparation.sourceTreeCacheable = false;
   preparation.sourceTreeReason = "additional tool installation can change the installed population and execute lifecycle code";
   try {
-    const observation = withRestoredManifest(session.targetDir, manager, () => observePackageManager(manager, "tool-install", {
+    const observation = withRestoredManifest([session.targetDir, options.appDir], manager, () => observePackageManager(manager, "tool-install", {
       bin, args, cwd: options.appDir, env: environment,
     }, selected));
     if (!matchesSelectedPackageManager(observation.selected, selected)) {

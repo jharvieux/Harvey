@@ -8,7 +8,7 @@
 // manager actually resolves its tree.
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 // Shared by the legacy execution helpers and the evidence-bearing readiness contract.
 export type PackageManager = "npm" | "pnpm" | "yarn";
@@ -196,26 +196,24 @@ function lockfileFor(pm: PackageManager): string | undefined {
   return undefined;
 }
 
-// The pnpm/yarn equivalent of npm's `--no-save`: snapshots package.json + the package manager's own
-// lockfile (whichever exist) before running `fn`, then restores both to their EXACT original bytes
-// afterward (success or failure) — so an extra-package install leaves node_modules provisioned but
-// the target's manifest/lockfile byte-identical to what an operator or client would see, the same
-// guarantee npm's own flag gives natively. A file absent before stays absent after (removed, not
-// written back as empty), so a target with no lockfile at all is never handed a phantom one.
-export function withRestoredManifest<T>(dir: string, pm: PackageManager, fn: () => T): T {
+// The pnpm/yarn equivalent of npm's `--no-save`: snapshots package.json and the selected lockfile
+// in every affected directory (the workspace root and, when distinct, the member running `add`).
+// Restores exact original bytes after success or failure and removes files absent beforehand, while
+// leaving the provisioned node_modules available to the caller.
+export function withRestoredManifest<T>(dirs: string | readonly string[], pm: PackageManager, fn: () => T): T {
   if (pm === "npm") return fn(); // npm's own --no-save already leaves nothing to restore
-  const pkgPath = join(dir, "package.json");
   const lockName = lockfileFor(pm);
-  const lockPath = lockName ? join(dir, lockName) : undefined;
-  const pkgBefore = existsSync(pkgPath) ? readFileSync(pkgPath) : undefined;
-  const lockBefore = lockPath && existsSync(lockPath) ? readFileSync(lockPath) : undefined;
+  const paths = [...new Set((typeof dirs === "string" ? [dirs] : dirs).map((dir) => resolve(dir)))].flatMap((dir) => [
+    join(dir, "package.json"),
+    ...(lockName ? [join(dir, lockName)] : []),
+  ]);
+  const before = paths.map((path) => ({ path, content: existsSync(path) ? readFileSync(path) : undefined }));
   try {
     return fn();
   } finally {
-    if (pkgBefore !== undefined) writeFileSync(pkgPath, pkgBefore);
-    if (lockPath) {
-      if (lockBefore !== undefined) writeFileSync(lockPath, lockBefore);
-      else rmSync(lockPath, { force: true });
+    for (const { path, content } of before) {
+      if (content !== undefined) writeFileSync(path, content);
+      else rmSync(path, { force: true });
     }
   }
 }
