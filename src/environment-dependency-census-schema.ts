@@ -19,6 +19,9 @@ export interface EnvironmentDependencyRow {
   dependency: string;
   observedIdentity: string | null;
   identitySource: EvidenceLocation | null;
+  declaredIdentity: string | null;
+  declarationSource: EvidenceLocation | null;
+  decision: { owner: string; reference: string; disposition: "unverified" | "accepted"; location: EvidenceLocation } | null;
   pinSource: { location: EvidenceLocation; identity: string; scope: "environment-behavior" | "output-schema" | "artifact-integrity" } | null;
   assertionVenue: { location: EvidenceLocation; scope: "environment-behavior" | "output-schema" | "artifact-integrity"; claim: string } | null;
   freshness: { requirement: string; observedAt: string | null; expiresAt: string | null; enforcedBy: EvidenceLocation | null };
@@ -63,9 +66,9 @@ export interface EnvironmentInventory {
   rows: EnvironmentDependencyRow[];
   reconciliations: CensusReconciliation[];
   population: {
-    venues: number; rows: number; authoritativeVenues: number; candidateVenues: number; opaqueVenues: number; environmentAssertions: number; schemaAssertions: number;
-    residualRows: number; vocabularyCandidates: number; authoritativeRecords: number; authoritativeObservedIdentities: number; authoritativeUnresolved: number; authoritativeDynamic: number;
-    classes: { dependencyClass: EnvironmentClass; rows: number; pinned: number; recorded: number; accepted: number; whollyUnbound: number; dynamic: number; unresolved: number; emptyReason: string | null }[];
+    venues: number; rows: number; authoritativeVenues: number; candidateVenues: number; opaqueVenues: number; environmentAssertions: number; schemaAssertions: number; integrityAssertions: number; noAssertions: number;
+    residualRows: number; vocabularyCandidates: number; authoritativeRecords: number; authoritativeObservedIdentities: number; authoritativeDeclaredIdentities: number; authoritativeUnresolved: number; authoritativeDynamic: number;
+    classes: { dependencyClass: EnvironmentClass; rows: number; authoritativeRecords: number; candidateRows: number; pinned: number; recorded: number; accepted: number; whollyUnbound: number; dynamic: number; unresolved: number; emptyReason: string | null }[];
   };
   exclusions: { path: string; owner: string; reason: string }[];
   limitations: string[];
@@ -106,22 +109,26 @@ export function censusPopulation(venues: EvidenceVenue[], rows: EnvironmentDepen
     opaqueVenues: venues.filter((v) => v.disposition === "opaque-unresolved").length,
     environmentAssertions: rows.filter((r) => r.assertionVenue?.scope === "environment-behavior").length,
     schemaAssertions: rows.filter((r) => r.assertionVenue?.scope === "output-schema").length,
+    integrityAssertions: rows.filter((r) => r.assertionVenue?.scope === "artifact-integrity").length,
+    noAssertions: rows.filter((r) => r.assertionVenue === null).length,
     residualRows: rows.filter((r) => r.classification === "residual-unresolved").length,
     vocabularyCandidates: rows.filter((r) => r.classification === "vocabulary-candidate").length,
     authoritativeRecords: rows.filter((r) => r.classification === "authoritative-record").length,
     authoritativeObservedIdentities: rows.filter((r) => r.classification === "authoritative-record" && r.observedIdentity !== null).length,
+    authoritativeDeclaredIdentities: rows.filter((r) => r.classification === "authoritative-record" && r.declaredIdentity !== null).length,
     authoritativeUnresolved: rows.filter((r) => r.classification === "authoritative-record" && r.resolution === "unresolved").length,
     authoritativeDynamic: rows.filter((r) => r.classification === "authoritative-record" && r.resolution === "dynamic").length,
     classes: ENVIRONMENT_CLASSES.map((dependencyClass) => {
       const members = rows.filter((row) => row.dependencyClass === dependencyClass);
-      return { dependencyClass, rows: members.length,
+      const authoritativeRecords = members.filter((r) => r.classification === "authoritative-record").length;
+      return { dependencyClass, rows: members.length, authoritativeRecords, candidateRows: members.length - authoritativeRecords,
         pinned: members.filter((r) => r.state === "pinned").length,
         recorded: members.filter((r) => r.state === "recorded").length,
         accepted: members.filter((r) => r.state === "accepted").length,
         whollyUnbound: members.filter((r) => r.state === "wholly-unbound").length,
         dynamic: members.filter((r) => r.resolution === "dynamic").length,
         unresolved: members.filter((r) => r.resolution === "unresolved").length,
-        emptyReason: members.length ? null : "No dependency was identified in the retained content/adapter population. This is not proof that this environment input cannot affect execution.",
+        emptyReason: authoritativeRecords ? null : "No authoritative dependency record was identified for this class in the retained adapter population. This is not proof that this environment input cannot affect execution.",
       };
     }),
   };
@@ -170,14 +177,17 @@ export function validateEnvironmentInventory(value: unknown): asserts value is E
     if (!["authoritative", "unresolved"].includes(String(consumer.resolution))) fail("unregistered consumer resolution");
     if (consumer.resolution === "authoritative") location(consumer.location, "consumer.location");
     if (row.observedIdentity !== null) { text(row.observedIdentity, "observedIdentity"); location(row.identitySource, "identitySource"); }
+    if (row.declaredIdentity !== null) { text(row.declaredIdentity, "declaredIdentity"); location(row.declarationSource, "declarationSource"); }
+    if (row.decision !== null) { text(row.decision.owner, "decision.owner"); text(row.decision.reference, "decision.reference"); location(row.decision.location, "decision.location"); if (!["unverified", "accepted"].includes(row.decision.disposition)) fail(`unknown decision disposition ${row.id}`); }
+    if (row.state === "accepted" && row.decision?.disposition !== "accepted") fail(`unverified decision cannot be accepted ${row.id}`);
     const scopes = ["environment-behavior", "output-schema", "artifact-integrity"];
     if (row.pinSource !== null) { location(row.pinSource.location, "pinSource"); text(row.pinSource.identity, "pinSource.identity"); if (!scopes.includes(row.pinSource.scope)) fail(`unknown pin scope ${row.id}`); }
     if (row.assertionVenue !== null) { location(row.assertionVenue.location, "assertionVenue"); text(row.assertionVenue.claim, "assertionVenue.claim"); if (!scopes.includes(row.assertionVenue.scope)) fail(`unknown assertion scope ${row.id}`); }
     if (!["pinned", "recorded", "accepted", "wholly-unbound"].includes(row.state)) fail(`unknown state ${row.id}`);
     if (!["identified", "dynamic", "unresolved"].includes(row.resolution)) fail(`unknown resolution ${row.id}`);
     if (row.state === "pinned" && (!row.observedIdentity || !row.identitySource || !row.pinSource || row.pinSource.identity !== row.observedIdentity || !row.assertionVenue || row.consumer.resolution !== "authoritative")) fail(`unproven identity pin ${row.id}`);
-    if (row.state === "recorded" && !row.observedIdentity) fail(`recorded identity missing ${row.id}`);
-    if (row.classification !== "authoritative-record" && (row.state !== "wholly-unbound" || row.resolution !== "unresolved" || row.observedIdentity !== null || row.pinSource !== null || row.assertionVenue !== null || row.consumer.resolution !== "unresolved")) fail(`unresolved candidate was promoted ${row.id}`);
+    if (row.state === "recorded" && !row.observedIdentity && !row.declaredIdentity) fail(`recorded observation or declaration missing ${row.id}`);
+    if (row.classification !== "authoritative-record" && (row.state !== "wholly-unbound" || row.resolution !== "unresolved" || row.observedIdentity !== null || row.declaredIdentity !== null || row.decision !== null || row.pinSource !== null || row.assertionVenue !== null || row.consumer.resolution !== "unresolved")) fail(`unresolved candidate was promoted ${row.id}`);
     const freshness = record(row.freshness, "freshness"); text(freshness.requirement, "freshness.requirement");
     for (const key of ["observedAt", "expiresAt"] as const) if (freshness[key] !== null && (typeof freshness[key] !== "string" || !Number.isFinite(Date.parse(String(freshness[key]))))) fail(`invalid ${key} ${row.id}`);
     if (!Array.isArray(row.links)) fail(`row links missing ${row.id}`);

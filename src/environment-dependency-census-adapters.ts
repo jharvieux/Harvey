@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { parseRecordedReasons } from "./recorded-reasons.js";
+import { censusSourceRecords } from "./environment-dependency-census-source.js";
 import { censusLocation, type CensusFile, type CensusSnapshot } from "./environment-dependency-census-discovery.js";
 import { censusDigest, ENVIRONMENT_CLASSES, type CensusReconciliation, type EnvironmentClass, type EnvironmentDependencyRow, type EvidenceLocation, type EvidenceVenue } from "./environment-dependency-census-schema.js";
 
@@ -78,7 +79,7 @@ function row(ctx: AdapterContext, file: CensusFile, key: string, dependencyClass
     id: `${file.path}#${key}:${dependencyClass}:${dependency}`, venue: file.path,
     evidence: censusLocation(file, key),
     consumer: { location: null, resolution: "unresolved", reason: "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption." },
-    dependencyClass, classification: "authoritative-record", dependency, observedIdentity: null, identitySource: null, pinSource: null, assertionVenue: null,
+    dependencyClass, classification: "authoritative-record", dependency, observedIdentity: null, identitySource: null, declaredIdentity: null, declarationSource: null, decision: null, pinSource: null, assertionVenue: null,
     freshness: unknownFreshness(), state: "wholly-unbound", resolution: "unresolved",
     owner: "#1906 discovery", schemaOwner: null, environmentOwner: "#1909 stability evidence",
     links: [], reason: "Environment identity, binding, assertion and freshness remain unresolved; this row preserves the candidate instead of treating it as assessed.",
@@ -103,11 +104,12 @@ function genericRows(ctx: AdapterContext): void {
     row(ctx, file, "whole-content", "unresolved", "unclassified-content", { classification: "residual-unresolved", reason: file.limitation ?? "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them." });
     const text = file.text;
     if (!text) continue;
-    for (const [kind, hint] of CLASS_HINTS) if (hint.test(text)) row(ctx, file, "content-hint", kind, "unresolved-reference", {
+    const hinted = new Set<EnvironmentClass>();
+    for (const [kind, hint] of CLASS_HINTS) if (hint.test(text)) { hinted.add(kind); row(ctx, file, "content-hint", kind, "unresolved-reference", {
       classification: "vocabulary-candidate",
       evidence: censusLocation(file, "content-hint", text.match(hint)?.[0]),
       reason: "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
-    });
+    }); }
     // New explicitly declared environment classes cannot be hidden in extensionless data.
     const visited = new Set<unknown>();
     const checkDeclared = (value: unknown): void => {
@@ -115,6 +117,10 @@ function genericRows(ctx: AdapterContext): void {
       visited.add(value);
       const declared = object(value).environmentDependencyClass;
       if (declared !== undefined && !ENVIRONMENT_CLASSES.includes(declared as EnvironmentClass)) throw new Error(`unregistered environment dependency class ${String(declared)} in ${file.path}`);
+      if (declared !== undefined && !hinted.has(declared as EnvironmentClass)) {
+        hinted.add(declared as EnvironmentClass);
+        row(ctx, file, "declared-class", declared as EnvironmentClass, "unresolved-reference", { classification: "vocabulary-candidate", reason: "Content explicitly declares this supported dependency class. Its consumer, observed identity and behavior remain unresolved; declaring the class does not bind it." });
+      }
       for (const child of Object.values(value)) checkDeclared(child);
     };
     checkDeclared(file.data);
@@ -141,12 +147,13 @@ function reasonRows(ctx: AdapterContext): void {
       const ids = classes.map((kind) => row(ctx, file, evidence.anchor, kind, decisional ? "recorded-decision" : live ? `live-tier-${live}` : "empirical-falsifier", {
         evidence, consumer: consumer(parser, "The existing recorded-reason parser supplies the block fields; its usual directory/extension and execution-tier scope is not extended by this census."),
         owner: f.OWNER ?? "src/recorded-reasons.ts reason policy", environmentOwner: f.OWNER ?? "#1909 stability evidence",
-        state: decisional && !!f.OWNER && !!f.DECISION ? "accepted" : "wholly-unbound",
+        state: "wholly-unbound",
+        decision: decisional && f.DECISION ? { owner: f.OWNER ?? "unresolved owner", reference: f.DECISION, disposition: "unverified", location: evidence } : null,
         resolution: live || (f.FALSIFIER ?? "").includes("<") ? "dynamic" : "unresolved",
         assertionVenue: f.FALSIFIER ? { location: assertion, scope: "environment-behavior", claim: `Declared falsifier, not executed by the offline census${live ? `; requires ${live}` : ""}: ${f.FALSIFIER}` } : null,
         freshness: { requirement: decisional ? "Operator decision; no empirical revalidation is inferred." : "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it.", observedAt: dateIn(f.PROVENANCE ?? ""), expiresAt: null, enforcedBy: f.FALSIFIER ? assertion : null },
         links: ["src/cli/validate-reasons.ts", "#1909"],
-        reason: `${decisional ? `Decisional reason; explicit owner/decision ${f.OWNER && f.DECISION ? "recorded" : "unresolved"}` : "Empirical reason with environment/tool identities not supplied by the reason format"}. ${f.REASON ?? ""}${reason.parseErrors.length ? ` Parser reports: ${reason.parseErrors.join("; ")}` : ""}`,
+        reason: `${decisional ? `Decisional record; acceptance is unverified because OWNER/DECISION fields can name a pending operator question` : "Empirical reason with environment/tool identities not supplied by the reason format"}. ${f.REASON ?? ""}${reason.parseErrors.length ? ` Parser reports: ${reason.parseErrors.join("; ")}` : ""}`,
       }).id);
       members.push({ key: `${file.path}:${reason.line}`, evidence, rowIds: ids, reason: "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run." });
     }
@@ -277,15 +284,15 @@ function corpusRows(ctx: AdapterContext): void {
   if (external) {
     const scorer = reference(ctx, external.path, "scoreExternalBaseline");
     const members: CensusReconciliation["members"] = [];
-    for (const { node, value } of sourceObjects(external)) {
-      if (!string(value.slug) || !value.modules) continue;
+    for (const { file, node, value } of censusSourceRecords(ctx.files, external.path, "EXTERNAL_CORPUS")) {
+      if (!string(value.slug) || !value.modules) throw new Error("environment census: unresolved EXTERNAL_CORPUS target");
       const slug = string(value.slug)!;
       const commit = string(value.commit);
-      const evidence = censusLocation(external, `EXTERNAL_CORPUS/${slug}`, node.getText(external.source));
+      const evidence = censusLocation(file, `EXTERNAL_CORPUS/${slug}`, node.getText(file.source));
       for (const [module, baseline] of Object.entries(object(value.modules))) {
         const b = object(baseline);
         const note = string(b.note) ?? string(b.reason) ?? "";
-        const source = row(ctx, external, `${evidence.anchor}/${module}`, "source-revision", `${slug}@${module}`, {
+        const source = row(ctx, file, `${evidence.anchor}/${module}`, "source-revision", `${slug}@${module}`, {
           evidence: { ...evidence, anchor: `${evidence.anchor}/${module}` }, consumer: consumer(scorer, "The production scorer consumes this target's inline module baseline; #1853 owns extraction into a versioned per-target schema."),
           observedIdentity: commit, identitySource: commit ? evidence : null,
           pinSource: commit ? { location: evidence, identity: commit, scope: "environment-behavior" } : null,
@@ -300,7 +307,7 @@ function corpusRows(ctx: AdapterContext): void {
         if (module === "M5-knip") dependencies.push(["tool", "knip"], ["package-manager", "target-installation"]);
         if (module === "M8") dependencies.push(["tool", "stryker"], ["package-manager", "target-test-installation"]);
         if (module === "M10") dependencies.push(["database", "schema-dialect"]);
-        const related = dependencies.map(([kind, name]) => row(ctx, external, `${evidence.anchor}/${module}`, kind, name, { evidence: source.evidence, consumer: source.consumer, owner: source.owner, freshness: source.freshness, links: [source.id, "#1853", "#1909"], reason: "This inline baseline has no uniform measured toolchain reference. A current package lock or workflow pin is not assigned retroactively to its historical measurement." }).id);
+        const related = dependencies.map(([kind, name]) => row(ctx, file, `${evidence.anchor}/${module}`, kind, name, { evidence: source.evidence, consumer: source.consumer, owner: source.owner, freshness: source.freshness, links: [source.id, "#1853", "#1909"], reason: "This inline baseline has no uniform measured toolchain reference. A current package lock or workflow pin is not assigned retroactively to its historical measurement." }).id);
         members.push({ key: `${slug}:${module}`, evidence: source.evidence, rowIds: [source.id, ...related], reason: source.reason });
       }
     }
@@ -314,15 +321,16 @@ function corpusRows(ctx: AdapterContext): void {
   const semantic = ctx.files.get("src/scan/semantic-corpus.ts");
   if (semantic) {
     const members: CensusReconciliation["members"] = [];
-    for (const { node, value } of sourceObjects(semantic)) if (value.slug && value.recordedCaught !== undefined && value.ref) {
-      const evidence = censusLocation(semantic, `SEMANTIC_CORPUS/${value.slug}`, node.getText(semantic.source));
-      const valueRow = row(ctx, semantic, evidence.anchor, "source-revision", String(value.slug), {
+    for (const { file, node, value } of censusSourceRecords(ctx.files, semantic.path, "SEMANTIC_CORPUS")) {
+      if (!value.slug || value.recordedCaught === undefined || !value.ref) throw new Error("environment census: unresolved SEMANTIC_CORPUS target");
+      const evidence = censusLocation(file, `SEMANTIC_CORPUS/${value.slug}`, node.getText(file.source));
+      const valueRow = row(ctx, file, evidence.anchor, "source-revision", String(value.slug), {
         evidence, consumer: consumer(reference(ctx, semantic.path, "scoreSemanticPass"), "Semantic recall scorer reads the transcribed per-target answer key."), observedIdentity: `${value.repo}@${value.ref}`, identitySource: evidence, state: "recorded", resolution: "dynamic",
         owner: "src/scan/semantic-corpus.ts semantic answer keys", links: [String(value.source), "src/cli/validate-semantic.ts", "#1909"],
         freshness: { requirement: "recordedCaught is historical. A present pass is scored with the existing MAX_PASS_AGE_MS policy; a branch name is not an immutable source pin.", observedAt: isoDate(value.recordedOn), expiresAt: null, enforcedBy: reference(ctx, semantic.path, "MAX_PASS_AGE_MS") },
         reason: "Retain the recorded branch/ref, measurement date and document link. No current model identity, immutable target commit or environment identity is inferred.",
       });
-      const model = row(ctx, semantic, evidence.anchor, "mutable-data", "semantic-model-provider", { evidence, consumer: valueRow.consumer, owner: valueRow.owner, resolution: "dynamic", links: [valueRow.id, "#1909"], reason: "The answer key does not bind an executing model/provider identity. Only separately recorded pass evidence can establish a present semantic run." });
+      const model = row(ctx, file, evidence.anchor, "mutable-data", "semantic-model-provider", { evidence, consumer: valueRow.consumer, owner: valueRow.owner, resolution: "dynamic", links: [valueRow.id, "#1909"], reason: "The answer key does not bind an executing model/provider identity. Only separately recorded pass evidence can establish a present semantic run." });
       members.push({ key: String(value.slug), evidence, rowIds: [valueRow.id, model.id], reason: valueRow.reason });
     }
     authoritative(ctx, semantic, "semantic recall answer keys");
@@ -331,31 +339,20 @@ function corpusRows(ctx: AdapterContext): void {
   const calibration = ctx.files.get("src/scan/calibration.ts");
   if (calibration?.source) {
     const members: CensusReconciliation["members"] = [];
-    const imports = new Map<string, string>();
-    for (const statement of calibration.source.statements) if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
-      const specifier = statement.moduleSpecifier.text;
-      const path = posix.normalize(posix.join(posix.dirname(calibration.path), specifier)).replace(/\.js$/, ".ts");
-      for (const binding of statement.importClause.namedBindings.elements) imports.set(binding.name.text, path);
-    }
-    const spreads = (calibration.text ?? "").match(/export const CORPUS[^=]*=\s*\[([\s\S]*?)\n\]/)?.[1] ?? "";
-    for (const match of spreads.matchAll(/\.\.\.([A-Za-z\d_]+)/g)) {
-      const path = imports.get(match[1]!);
-      const file = path ? ctx.files.get(path) : undefined;
-      if (!file) throw new Error(`calibration spread ${match[1]} has no resolved source`);
-      for (const { node, value } of sourceObjects(file)) if (typeof value.id === "string" && typeof value.kind === "string" && typeof value.location === "string") {
-        const evidence = censusLocation(file, `CORPUS/${value.id}`, node.getText(file.source));
-        const r = row(ctx, file, evidence.anchor, "unresolved", "calibration-execution-environment", { evidence,
-          consumer: consumer(reference(ctx, calibration.path, "CORPUS"), `Imported as ${match[1]} and spread into the scored CORPUS. Source targets are intentional inputs, not raw external-tool output captures.`),
-          assertionVenue: { location: reference(ctx, "src/cli/validate-calibration.ts", "CORPUS"), scope: "environment-behavior", claim: "The live calibration CLI scores actual output; unit scoring of recorded output is a separate assertion. This census does not rerun binaries or live tiers." },
-          owner: "src/scan/calibration.ts scored answer keys", schemaOwner: "#1901 only for overlapping captured parser inputs", links: ["targets/calibration", "src/scan/calibration.test.ts", "src/cli/validate-calibration.ts", "#1909"],
-          freshness: { requirement: "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes.", observedAt: dateIn(String(value.note ?? "")), expiresAt: null, enforcedBy: null },
-          reason: "The imported scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. These remain unresolved; a source-file digest is not a runtime measurement.",
-        });
-        members.push({ key: value.id, evidence, rowIds: [r.id], reason: `Resolved ${match[1]} import and actual CORPUS spread.` });
-      }
+    for (const { file, node, value } of censusSourceRecords(ctx.files, calibration.path, "CORPUS")) {
+      if (typeof value.id !== "string" || typeof value.kind !== "string" || typeof value.location !== "string") throw new Error(`environment census: unresolved CORPUS entry at ${file.path}; id/kind/location must resolve`);
+      const evidence = censusLocation(file, `CORPUS/${value.id}`, node.getText(file.source));
+      const r = row(ctx, file, evidence.anchor, "unresolved", "calibration-execution-environment", { evidence,
+        consumer: consumer(reference(ctx, calibration.path, "CORPUS"), "Resolved from the actual CORPUS initializer through named imports, constants, inline entries, spreads and finite data factories. Unconsumed sibling objects do not become registry members."),
+        assertionVenue: { location: reference(ctx, "src/cli/validate-calibration.ts", "CORPUS"), scope: "environment-behavior", claim: "The live calibration CLI scores actual output; unit scoring of recorded output is a separate assertion. This census does not rerun binaries or live tiers." },
+        owner: "src/scan/calibration.ts scored answer keys", schemaOwner: "#1901 only for overlapping captured parser inputs", links: ["targets/calibration", "src/scan/calibration.test.ts", "src/cli/validate-calibration.ts", "#1909"],
+        freshness: { requirement: "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes.", observedAt: dateIn(String(value.note ?? "")), expiresAt: null, enforcedBy: null },
+        reason: "The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. These remain unresolved; a source-file digest is not a runtime measurement.",
+      });
+      members.push({ key: value.id, evidence, rowIds: [r.id], reason: "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member." });
       authoritative(ctx, file, "calibration answer-key registry");
     }
-    ctx.reconciliations.push({ registry: "CORPUS imported/spread entries", owner: "src/scan/calibration.ts", state: "present", members, reason: "Source imports and CORPUS spreads determine the scored population. Filename matches alone are not used to assert membership; unmatched files stay visible conservative candidates." });
+    ctx.reconciliations.push({ registry: "CORPUS imported/spread entries", owner: "src/scan/calibration.ts", state: "present", members, reason: "The actual CORPUS initializer and its data dependencies determine membership, including finite factory-built entries. Unsupported syntax and duplicate/malformed entries fail generation. Unconsumed sibling objects remain outside the registry and retain whole-file residual coverage." });
   }
 }
 
@@ -434,7 +431,7 @@ function workflowRows(ctx: AdapterContext): void {
       const declaration = consumer(evidence, "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.");
       const declared = (key: string, kind: EnvironmentClass, dependency: string, value: unknown, reason: string): void => {
         const identity = typeof value === "string" ? value : value === undefined ? null : JSON.stringify(value);
-        row(ctx, file, `jobs/${jobName}/${key}`, kind, dependency, { evidence, consumer: declaration, observedIdentity: identity, identitySource: identity ? evidence : null, state: identity ? "recorded" : "wholly-unbound", resolution: "dynamic", owner: file.path, links: ["#1909"], reason, freshness: { requirement: "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence.", observedAt: null, expiresAt: null, enforcedBy: null } });
+        row(ctx, file, `jobs/${jobName}/${key}`, kind, dependency, { evidence, consumer: declaration, declaredIdentity: identity, declarationSource: identity ? evidence : null, state: identity ? "recorded" : "wholly-unbound", resolution: "dynamic", owner: file.path, links: ["#1909"], reason, freshness: { requirement: "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence.", observedAt: null, expiresAt: null, enforcedBy: null } });
       };
       if (data.jobs) declared("runs-on", "runner-image", "hosted-runner", job["runs-on"], "A runs-on label or expression is a mutable runner selector, not a measured immutable image identity.");
       const globalDefault = object(object(object(data.defaults).run)).shell;

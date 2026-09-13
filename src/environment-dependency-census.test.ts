@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildEnvironmentInventory, compareEnvironmentInventory } from "./environment-dependency-census.js";
 import { readCensusSnapshot } from "./environment-dependency-census-discovery.js";
 import { censusJson, censusPopulation, ENVIRONMENT_CLASSES, validateEnvironmentInventory, type EnvironmentInventory } from "./environment-dependency-census-schema.js";
+import { CORPUS } from "./scan/calibration.js";
+import { EXTERNAL_CORPUS } from "./scan/external-corpus.js";
+import { SEMANTIC_CORPUS } from "./scan/semantic-corpus.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dirs: string[] = [];
@@ -80,6 +83,51 @@ describe("environment census discovery and typed completeness (#1906)", () => {
     expect(after.venues[0]?.disposition).toBe("authoritative-adapter");
     expect(compareEnvironmentInventory(after, before).ok).toBe(false);
     expect(after.rows.find((r) => r.dependency === "unclassified-content")).toMatchObject({ state: "wholly-unbound", resolution: "unresolved" });
+  });
+
+  it("reconciles only consumed registry members, including constants, factories and inline spreads", () => {
+    const p = repository({
+      "src/scan/calibration.ts": "import { entries as used } from './inputs.js'; export const CORPUS = [...used, { id: 'INLINE', kind: 'negative', location: 'inline' }];",
+      "src/scan/inputs.ts": [
+        "const ROOT = 'fixture';",
+        "const DATA = [{ key: 'one' }, { key: 'two' }];",
+        "const mapped = DATA.flatMap(c => [{ id: `MAP-${c.key.toUpperCase()}`, kind: 'positive', location: `${ROOT}/${c.key}` }]);",
+        "function make(label: string) { const out = []; for (const { key } of DATA) { out.push({ id: `${label}-${key}`, kind: 'negative', location: `${ROOT}/${key}` }); } return out; }",
+        "export const entries = [...mapped, ...make('LOOP')];",
+        "export const unconsumed = [{ id: 'PHANTOM', kind: 'negative', location: 'not-scored' }];",
+      ].join("\n"),
+      "src/cli/validate-calibration.ts": "import { CORPUS } from '../scan/calibration.js';",
+    });
+    const members = (inventory: EnvironmentInventory) => inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")!.members.map((r) => r.key);
+    const before = p.committed();
+    expect(members(before)).toEqual(["INLINE", "LOOP-one", "LOOP-two", "MAP-ONE", "MAP-TWO"]);
+    const path = join(p.root, "src/scan/inputs.ts"); const original = readFileSync(path, "utf8");
+    writeFileSync(path, original.replace("{ key: 'two' }", "{ key: 'two' }, { key: 'three' }"));
+    const changed = p.current();
+    expect(compareEnvironmentInventory(changed, before).ok).toBe(false);
+    expect(members(changed)).toEqual(["INLINE", "LOOP-one", "LOOP-three", "LOOP-two", "MAP-ONE", "MAP-THREE", "MAP-TWO"]);
+    writeFileSync(path, original.replace("export const entries = [...mapped, ...make('LOOP')];", "export const entries = process.exit(73);"));
+    expect(() => p.current()).toThrow("unresolved registry construction");
+    writeFileSync(path, original + "\nentries.push({ id: 'SIDE-EFFECT', kind: 'negative', location: 'late' });");
+    expect(() => p.current()).toThrow("top-level effects");
+  });
+
+  it("records declarations and pending decisions without fabricating observation or acceptance", () => {
+    const p = repository({
+      "workflow": "jobs:\n  evidence:\n    runs-on: macos-15\n    steps:\n      - uses: vendor/action@v1\n      - run: echo proof\n        shell: bash\n        env:\n          TZ: UTC\n",
+      "src/recorded-reasons.ts": "export function parseRecordedReasons() {}\nexport function revalidateReasons() {}\n",
+      "decision.md": "<!--\nREASON: this is an open operator ruling\nKIND: decisional\nPROVENANCE: MEASURED 2026-09-13 from the recorded question\nOWNER: operator\nDECISION: #1367 (question recorded on the issue with proposed wording)\n-->\n",
+    });
+    const inventory = p.committed();
+    const declaration = inventory.rows.find((r) => r.dependency === "hosted-runner")!;
+    expect(declaration).toMatchObject({ observedIdentity: null, identitySource: null, declaredIdentity: "macos-15", pinSource: null, state: "recorded", resolution: "dynamic" });
+    expect(inventory.population.authoritativeObservedIdentities).toBe(0);
+    expect(inventory.population.authoritativeDeclaredIdentities).toBe(4);
+    const decision = inventory.rows.find((r) => r.dependency === "recorded-decision")!;
+    expect(decision).toMatchObject({ state: "wholly-unbound", decision: { owner: "operator", disposition: "unverified" } });
+    const bad = structuredClone(inventory); bad.rows.find((r) => r.id === decision.id)!.state = "accepted";
+    bad.population = censusPopulation(bad.venues, bad.rows);
+    expect(() => validateEnvironmentInventory(bad)).toThrow("unverified decision cannot be accepted");
   });
 
   it("unknown explicit dependency class and missing owned rows cannot be normalized away", () => {
@@ -155,15 +203,16 @@ describe("committed environment population and existing owner seams (#1906)", ()
     expect(result.status, result.output).toBe(0);
     const inventory = JSON.parse(readFileSync(join(ROOT, "src/environment-dependency-inventory.json"), "utf8")) as EnvironmentInventory;
     expect(inventory.population.classes.map((c) => c.dependencyClass)).toEqual([...ENVIRONMENT_CLASSES]);
-    expect(inventory.reconciliations.find((r) => r.registry === "#1853 external-corpus schema")?.members.length).toBeGreaterThan(100);
-    expect(inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")?.members.length).toBeGreaterThan(100);
-    expect(inventory.reconciliations.find((r) => r.registry === "SEMANTIC_CORPUS")?.members.length).toBeGreaterThan(0);
+    expect(inventory.reconciliations.find((r) => r.registry === "#1853 external-corpus schema")?.members.map((m) => m.key)).toEqual(EXTERNAL_CORPUS.flatMap((t) => Object.keys(t.modules).map((module) => `${t.slug}:${module}`)).sort());
+    expect(inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")?.members.map((m) => m.key)).toEqual(CORPUS.map((r) => r.id).sort());
+    expect(inventory.reconciliations.find((r) => r.registry === "SEMANTIC_CORPUS")?.members.map((m) => m.key)).toEqual(SEMANTIC_CORPUS.map((r) => r.slug).sort());
     const truffle = inventory.rows.filter((r) => r.dependency === "trufflehog" && r.evidence.anchor === "captured-output");
     expect(truffle).toHaveLength(2);
     expect(truffle.every((r) => r.pinSource?.identity === "3.97.0" && r.observedIdentity === "3.96.0" && r.state === "recorded" && r.assertionVenue?.scope === "output-schema" && r.schemaOwner?.includes("#1901"))).toBe(true);
     expect(inventory.rows.find((r) => r.venue === "src/__fixtures__/current-mechanical-run-32334325227.json" && r.dependency === "semgrep")).toMatchObject({ observedIdentity: "1.164.0", state: "recorded", pinSource: null });
     expect(inventory.rows.find((r) => r.dependency === "historical-M2-stack")).toMatchObject({ state: "recorded", resolution: "dynamic", freshness: { enforcedBy: null } });
-    expect(inventory.rows.some((r) => r.venue === ".github/workflows/issue-1799-hosted-preflight.yml" && r.dependencyClass === "locale" && r.observedIdentity === "UTC")).toBe(true);
+    expect(inventory.rows.some((r) => r.venue === ".github/workflows/issue-1799-hosted-preflight.yml" && r.dependencyClass === "locale" && r.declaredIdentity === "UTC" && r.observedIdentity === null)).toBe(true);
+    expect(inventory.rows.filter((r) => r.venue === "docs/tier1-runbook.md" && r.decision?.reference.includes("#1367")).every((r) => r.state === "wholly-unbound" && r.decision?.disposition === "unverified")).toBe(true);
     expect(inventory.rows.some((r) => r.venue === "reports/atc/captures/m8-mutation-broad.json" && r.dependency === "historical-audit-environment")).toBe(true);
   });
 });

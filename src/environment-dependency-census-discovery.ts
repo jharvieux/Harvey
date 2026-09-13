@@ -59,8 +59,8 @@ function decode(path: string, bytes: Buffer, gitMode = "100644", gitOid = census
 /** Read Git objects, never execute source or follow a committed symlink to host files. */
 export function readCensusSnapshot(root: string, ref: string | undefined, workingTree = false): CensusSnapshot {
   const git = (args: string[], input?: string): Buffer => execFileSync("git", args, { cwd: root, input, maxBuffer: 512 * 1024 * 1024 });
-  const commit = git(["rev-parse", "--verify", `${ref ?? "HEAD"}^{commit}`]).toString().trim();
-  const tree = git(["rev-parse", "--verify", `${commit}^{tree}`]).toString().trim();
+  const commit = git(["rev-parse", "--verify", "--end-of-options", `${ref ?? "HEAD"}^{commit}`]).toString().trim();
+  const tree = git(["rev-parse", "--verify", "--end-of-options", `${commit}^{tree}`]).toString().trim();
   const commitPayload = git(["cat-file", "commit", commit]).toString("base64");
   if (!/^[a-f0-9]{40}$/.test(commit) || !/^[a-f0-9]{40}$/.test(tree)) throw new Error("census requires exact Git object identities");
   const entries = git(["ls-tree", "--full-tree", "-r", "-z", commit]).toString().split("\0").filter(Boolean).map((entry) => {

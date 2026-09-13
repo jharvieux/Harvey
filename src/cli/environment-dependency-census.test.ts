@@ -101,5 +101,7 @@ describe("environment dependency shipping CLI (#1906)", () => {
     expect(ambiguous.status, ambiguous.output).toBe(1);
     expect(ambiguous.output).toContain("--check cannot rewrite");
     expect(readFileSync(p.inventory, "utf8")).toBe('{"schemaVersion":99}\n');
+    const optionRef = await run(["--root", p.root, "--ref", "--help"]);
+    expect(optionRef.status, optionRef.output).toBe(1);
   });
 });

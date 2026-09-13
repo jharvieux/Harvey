@@ -59,8 +59,8 @@ export function summarizeEnvironmentInventory(inventory: EnvironmentInventory): 
     `Environment dependency census: ${inventory.source.commit} (${inventory.source.mode})`,
     `Discovery receipts: ${p.venues} blobs; ${p.authoritativeVenues} with authoritative adapters, ${p.candidateVenues} conservative candidates, ${p.opaqueVenues} opaque unresolved.`,
     `Rows are separate populations: ${p.residualRows} residual-content rows, ${p.vocabularyCandidates} vocabulary candidates, ${p.authoritativeRecords} authoritative records.`,
-    `Authoritative records: ${p.authoritativeObservedIdentities} observed identities; ${p.authoritativeUnresolved} unresolved, ${p.authoritativeDynamic} dynamic. Every blob retains a residual unresolved-content row.`,
-    `Declared assertion venues: ${p.environmentAssertions} environment-behavior, ${p.schemaAssertions} output-schema; assertions were not executed by this census.`,
-    ...p.classes.map((c) => `${c.dependencyClass}: ${c.rows} rows; pinned=${c.pinned}, recorded=${c.recorded}, accepted=${c.accepted}, wholly-unbound=${c.whollyUnbound}, dynamic=${c.dynamic}, unresolved=${c.unresolved}${c.emptyReason ? `; ${c.emptyReason}` : ""}`),
+    `Authoritative records: ${p.authoritativeObservedIdentities} observed identities, ${p.authoritativeDeclaredIdentities} declared identities; ${p.authoritativeUnresolved} unresolved, ${p.authoritativeDynamic} dynamic. Every blob retains a residual unresolved-content row.`,
+    `Declared assertion venues: ${p.environmentAssertions} environment-behavior, ${p.schemaAssertions} output-schema, ${p.integrityAssertions} artifact-integrity, ${p.noAssertions} absent; assertions were not executed by this census.`,
+    ...p.classes.map((c) => `${c.dependencyClass}: ${c.rows} rows (${c.authoritativeRecords} authoritative, ${c.candidateRows} candidate); pinned=${c.pinned}, recorded=${c.recorded}, accepted=${c.accepted}, wholly-unbound=${c.whollyUnbound}, dynamic=${c.dynamic}, unresolved=${c.unresolved}${c.emptyReason ? `; ${c.emptyReason}` : ""}`),
   ].join("\n");
 }
