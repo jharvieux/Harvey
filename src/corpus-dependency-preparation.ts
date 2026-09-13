@@ -935,8 +935,8 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
 
   if (policy) {
     // A conflict was resolved by the operator, so no receipt, content store or scanner result may
-    // be reused. Frozen-only execution cannot turn a failed authorized install into a different
-    // dependency population via legacy fallback. Retain and enforce both original lock inputs.
+    // be reused. Frozen-only execution rejects a failed install without a legacy fallback to a
+    // different dependency population. Retain and enforce both original lock inputs.
     removeInstalledTrees(options.targetDir);
     try {
       mkdirSync(storeDir, { recursive: true });

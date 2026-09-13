@@ -134,7 +134,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(false);
     const meta = { client: "Policy evidence", subtitle: "#2047", date: "2026-09-12", commit: f.targetRevision, auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Preparation failure", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
     expect(buildHtml({ meta, findings: failure.findings })).toContain("ERR_POLICY_INSTALL");
-  }, 30_000);
+  });
 
   it.each([
     ["target", { targetSlug: "different" }], ["revision", { targetRevision: "2".repeat(40) }],
