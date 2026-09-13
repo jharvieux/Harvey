@@ -128,6 +128,57 @@ export const CORPUS = make();\n`);
   });
 
   it.each([
+    ["opaque field", "unknown"],
+    ["opaque nested array/object", "[{ nested: { value: unknown } }]"],
+    ["closure", "() => unknown"],
+    ["Set", "new Set(['one'])"],
+    ["RegExp", "/ready/"],
+    ["undefined", "undefined"],
+    ["nonfinite number", "1e309"],
+    ["cyclic array", "cycle()"],
+  ])("rejects selected record data containing %s before adapter consumption", async (_, expression) => {
+    const p = registryControl(`import { unknown } from 'unresolved-package';
+function cycle() { const values = []; values.push(values); return values; }
+export const CORPUS = [{ id: 'BASE', kind: 'positive', location: 'fixture', metadata: ${expression} }];\n`);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("selected registry data CORPUS[0].metadata");
+  });
+
+  it("preserves shared acyclic selected-record data", async () => {
+    const p = registryControl("const shared = { checks: ['ready'] }; export const CORPUS = [{ id: 'BASE', kind: 'positive', location: 'fixture', metadata: { first: shared, second: shared } }];\n");
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+  });
+
+  it.each([
+    ["consumed module initializer", "const source = [BASE]; const earlier = source.map(entry => entry); const later = source.push(SIDE); export const CORPUS = later ? earlier : source;"],
+    ["escaped factory array", "function seed() { return [BASE]; } const source = seed(); const earlier = source.map(entry => entry); const later = source.push(SIDE); export const CORPUS = later ? earlier : source;"],
+    ["lazy module factory result", "function seed() { return [BASE]; } const source = seed(); function make() { source.push(SIDE); return source; } export const CORPUS = make();"],
+    ["captured mutable factory state", "function seed() { const source = [BASE]; return () => { source.push(SIDE); return source; }; } const next = seed(); export const CORPUS = next();"],
+  ])("rejects reordered mutations through %s", async (_, source) => {
+    const p = registryControl(`const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' }; const SIDE = { ...BASE, id: 'SIDE' }; ${source}\n`);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("array mutation must stay inside its active factory construction");
+  });
+
+  it("preserves nested factory-local array mutation in source order", async () => {
+    const p = registryControl("const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' }; function seed() { return [BASE]; } function make() { const local = seed(); local.push({ ...BASE, id: 'SIDE' }); return local; } export const CORPUS = make();\n");
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { reconciliations: { registry: string; members: { key: string }[] }[] };
+    expect(inventory.reconciliations.find(row => row.registry === "CORPUS imported/spread entries")?.members.map(member => member.key)).toEqual(["BASE", "SIDE"]);
+  });
+
+  it.each(["export default function effect() { return true; }", "export default class effect {}"])("does not admit a named import from %s", async (source) => {
+    const p = registryControl("import { effect } from './effect.ts'; export function unused() { return effect; } export const CORPUS = [{ id: 'BASE', kind: 'positive', location: 'fixture' }];\n", { "effect.ts": source });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("unresolved value import effect");
+  });
+
+  it.each([
     ["valid committed JSON", '{"version":1}', 0, ""],
     ["missing committed JSON", null, 1, "must resolve to retained text bytes"],
     ["non-data committed input", "export const sideEffect = 1;", 1, "Unexpected token"],

@@ -16,6 +16,8 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   let remaining = 250_000;
   let mutationAllowed = true;
   const independentArrays = new WeakSet<unknown[]>();
+  let construction: object | null = null;
+  const localArrays = new WeakMap<unknown[], object>();
   const builtins = new WeakMap<object, string>();
   const snapshotPaths = new WeakMap<object, { path: string; kind: "module-url" | "source-url" | "opaque-path" }>();
   const importGuards = new WeakSet<ts.Node>();
@@ -63,7 +65,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) for (const binding of clause.namedBindings.elements) {
           if (binding.isTypeOnly) continue;
           const name = binding.propertyName?.text ?? binding.name.text;
-          const exported = imported.file.source!.statements.some((s) => ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) && (ts.isFunctionDeclaration(s) && s.name?.text === name || ts.isClassDeclaration(s) && s.name?.text === name || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name)));
+          const exported = imported.file.source!.statements.some((s) => ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) && !ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) && (ts.isFunctionDeclaration(s) && s.name?.text === name || ts.isClassDeclaration(s) && s.name?.text === name || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name)));
           if (!exported) fail(binding, `unresolved value import ${name} from ${imported.file.path}`);
         }
       } else boundary?.({ file, node: statement, dependency: specifier });
@@ -122,7 +124,10 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         }
         if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name) && declaration.name.text === name) {
           if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !declaration.initializer) return fail(declaration, "registry globals must be initialized constants");
-          const value = evaluate(declaration.initializer, scope); scope.values.set(name, value); return value;
+          // A lazily reached module initializer cannot share its caller factory's mutation lifetime.
+          const previous = construction; construction = null;
+          try { const value = evaluate(declaration.initializer, scope); scope.values.set(name, value); return value; }
+          finally { construction = previous; }
         }
         if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
           const imported = statement.importClause.namedBindings.elements.find((e) => e.name.text === name && !e.isTypeOnly);
@@ -166,7 +171,9 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (fn.node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) || fn.node.asteriskToken) return fail(at, "async/generator factories are not modeled");
     const scope: Scope = { values: new Map(), parent: fn.scope, file: fn.scope.file };
     fn.node.parameters.forEach((p, i) => { if (p.dotDotDotToken || p.initializer) fail(p, "factory rest/default parameters are not modeled"); bind(p.name, args[i], scope); });
-    return ts.isBlock(fn.node.body) ? statements(fn.node.body.statements, scope)?.value : evaluate(fn.node.body, scope);
+    const previous = construction; construction ??= {};
+    try { return ts.isBlock(fn.node.body) ? statements(fn.node.body.statements, scope)?.value : evaluate(fn.node.body, scope); }
+    finally { construction = previous; }
   };
   // These operations prove that otherwise unused import initializers do not alter registry data.
   // They cannot construct the selected registry. Paths remain opaque, package values stay unknown,
@@ -223,6 +230,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (ts.isArrayLiteralExpression(node)) {
       const data: unknown[] = [];
       if (!mutationAllowed) independentArrays.add(data);
+      if (scope.parent && construction) localArrays.set(data, construction);
       for (const entry of node.elements) {
         const value = evaluate(ts.isSpreadElement(entry) ? entry.expression : entry, scope);
         if (ts.isSpreadElement(entry)) { if (!Array.isArray(value)) fail(entry, "array spread input must be finite data"); data.push(...value as unknown[]); }
@@ -306,9 +314,14 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
             if (method === "some") return receiver.some(callback);
             const result = method === "filter" ? receiver.filter(callback) : method === "flatMap" ? receiver.flatMap(callback) : receiver.map(callback);
             if (!mutationAllowed) independentArrays.add(result);
+            if (scope.parent && construction) localArrays.set(result, construction);
             return result;
           }
-          if (method === "push") { if (!mutationAllowed && !independentArrays.has(receiver)) return fail(node, "unused initializer may mutate registry data"); return receiver.push(...args); }
+          if (method === "push") {
+            if (!mutationAllowed && !independentArrays.has(receiver)) return fail(node, "unused initializer may mutate registry data");
+            if (!construction || localArrays.get(receiver) !== construction) return fail(node, "array mutation must stay inside its active factory construction");
+            return receiver.push(...args);
+          }
           if (method === "join" && args.length <= 1 && args.every((v) => typeof v === "string") && receiver.every((v) => ["string", "number", "boolean"].includes(typeof v))) return receiver.join(args[0] as string | undefined);
         }
         return fail(node, `method ${method} is not modeled`);
@@ -334,6 +347,34 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     }
   }
   if (!Array.isArray(value) || !value.length) throw new Error(`environment census: registry ${path}#${symbol} is not a nonempty array`);
+  // No adapter may see markers, functions or cyclic/non-data containers disguised as a record.
+  // Check the complete selected population before returning any member; shared acyclic data is valid.
+  const active = new WeakSet<object>(); const checked = new WeakSet<object>();
+  const selectedData = (data: unknown, field: string, at: ts.Node): void => {
+    tick(at);
+    if (data === null || typeof data === "string" || typeof data === "boolean" || typeof data === "number" && Number.isFinite(data)) return;
+    const reject = (detail: string): never => fail(at, `selected registry data ${field}: ${detail}`);
+    if (!data || typeof data !== "object") return reject(`unsupported ${typeof data} value`);
+    if (isOpaque(data)) return reject("unknown/opaque import or metadata value");
+    if (closures.has(data)) return reject("function value is not record data");
+    const prototype = Object.getPrototypeOf(data) as unknown;
+    if (Array.isArray(data) ? prototype !== Array.prototype : prototype !== null && prototype !== Object.prototype) return reject("non-data object");
+    if (active.has(data)) return reject("cyclic record data");
+    if (checked.has(data)) return;
+    active.add(data);
+    const node = origins.get(data)?.node ?? at;
+    for (const key of Reflect.ownKeys(data)) {
+      if (typeof key !== "string") return reject("symbol property is not record data");
+      if (Array.isArray(data) && key === "length") continue;
+      if (Array.isArray(data) && (!/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= data.length)) return reject("extended array is not record data");
+      const descriptor = Object.getOwnPropertyDescriptor(data, key)!;
+      if (!Object.hasOwn(descriptor, "value")) return reject("accessor is not record data");
+      selectedData(descriptor.value, Array.isArray(data) ? `${field}[${key}]` : `${field}.${key}`, node);
+    }
+    if (Array.isArray(data) && Object.keys(data).length !== data.length) return reject("sparse or extended array is not record data");
+    active.delete(data); checked.add(data);
+  };
+  selectedData(value, symbol, scope.file.source!);
   return value.map((entry) => {
     const origin = entry && typeof entry === "object" && !Array.isArray(entry) ? origins.get(entry) : undefined;
     if (!origin) throw new Error(`environment census: registry ${path}#${symbol} contains an unresolved record`);
