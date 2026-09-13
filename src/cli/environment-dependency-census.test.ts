@@ -2,7 +2,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -23,9 +24,9 @@ function prepare() {
   return { root, dir, git, inventory: join(dir, "inventory.json"), head: git(["rev-parse", "HEAD"]).trim() };
 }
 
-function run(args: string[]): Promise<{ status: number; output: string }> {
+function runNode(args: string[]): Promise<{ status: number; output: string }> {
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", (text: string) => { output += text; });
@@ -35,7 +36,124 @@ function run(args: string[]): Promise<{ status: number; output: string }> {
   });
 }
 
+const run = (args: string[]) => runNode(["--import", "tsx", CLI, ...args]);
+
+function registryControl(source: string, siblings: Record<string, string | Uint8Array> = {}) {
+  const p = prepare();
+  mkdirSync(join(p.root, "src/scan"), { recursive: true });
+  writeFileSync(join(p.root, "package.json"), '{"type":"module"}\n');
+  writeFileSync(join(p.root, "src/scan/calibration.ts"), source);
+  for (const [path, text] of Object.entries(siblings)) writeFileSync(join(p.root, "src/scan", path), text);
+  p.git(["add", "."]);
+  p.git(["-c", "user.name=Census control", "-c", "user.email=census@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Add registry evaluation control"]);
+  return p;
+}
+
 describe("environment dependency shipping CLI (#1906)", () => {
+  it.each([
+    ["some short circuit", "const out = [BASE]; [ONE, TWO].some(entry => { out.push(entry); return true; }); return out;"],
+    ["some exhaustion", "const out = [BASE]; [ONE, TWO].some(entry => { out.push(entry); return false; }); return out;"],
+    ["flatMap immediate flattening", "const shared = []; return [BASE, ONE].flatMap(entry => { const prior = shared.length; shared.push(entry); return prior ? [] : shared; });"],
+    ["map length snapshot", "const input = [BASE]; return input.map(entry => { input.push(ONE); return entry; });"],
+    ["filter length snapshot", "const input = [BASE]; return input.filter(() => { input.push(ONE); return true; });"],
+    ["replace substitution", "return [{ ...BASE, id: BASE.id.replace(/^BASE/, '$&-EXACT') }];"],
+    ["replace dollar and suffix", "return [{ ...BASE, id: 'BASE-tail'.replace(/^BASE/, \"$$$&$'\") }];"],
+    ["Set size branch", "return seen.size ? [ONE] : [BASE];"],
+  ])("matches native module membership for %s", async (_, body) => {
+    const p = registryControl(`const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' };
+const ONE = { ...BASE, id: 'ONE' }; const TWO = { ...BASE, id: 'TWO' }; const seen = new Set(['one']);
+function make() { ${body} }
+export const CORPUS = make();\n`);
+    // Only this test's newly authored fixture is executed; census input remains unevaluated by the CLI.
+    const oracle = await runNode(["--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify(CORPUS.map(entry => entry.id).sort()));`]);
+    expect(oracle.status, oracle.output).toBe(0);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { reconciliations: { registry: string; members: { key: string }[] }[] };
+    expect(inventory.reconciliations.find(row => row.registry === "CORPUS imported/spread entries")?.members.map(member => member.key)).toEqual(JSON.parse(oracle.output));
+  });
+
+  it.each([
+    ["every remains unsupported", "const ignored = [BASE].every(entry => { return false; });", "method every is not modeled"],
+    ["empty array invalid callback", "const ignored = [].map(undefined);", "array callback must be a source-local function"],
+    ["truthy Set size guard", "const seen = new Set(['one']); if (seen.size) { throw new Error('invalid population'); }", "registry admission guard rejected"],
+    ["unmodeled inherited property", "const seen = new Set(['one']); const ignored = seen.has;", "property has is not modeled"],
+  ])("refuses to publish when %s", async (_, prefix, error) => {
+    const p = registryControl(`const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' };\n${prefix}\nexport const CORPUS = [BASE];\n`);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(error);
+  });
+
+  it("admits unused value-import modules before publishing registry membership", async () => {
+    const p = registryControl("import { BASE } from './data.ts'; import { effect } from './effect.ts'; export function unused() { return effect; } export const CORPUS = BASE;\n", {
+      "data.ts": "export const BASE = [{ id: 'BASE', kind: 'positive', location: 'fixture' }];\n",
+      "effect.ts": "import { BASE } from './data.ts'; BASE.push({ id: 'SIDE', kind: 'positive', location: 'fixture' }); export const effect = true;\n",
+    });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("top-level effects are outside the registry grammar");
+  });
+
+  it.each([
+    ["unused initializer mutation", "import { BASE } from './data.ts'; const ignored = BASE.push({ id: 'SIDE', kind: 'positive', location: 'fixture' }); export const effect = true;", "unused initializer may mutate registry data"],
+    ["shadowed undefined initializer", "import { BASE } from './data.ts'; const undefined = BASE.push({ id: 'SIDE', kind: 'positive', location: 'fixture' }); export const effect = true;", "unused initializer may mutate registry data"],
+    ["transitive namespace import", "import * as nested from './nested.ts'; export function effect() { return nested; }", "top-level effects are outside the registry grammar"],
+    ["transitive side-effect import", "import './nested.ts'; export const effect = true;", "top-level effects are outside the registry grammar"],
+    ["unknown imported semantic value", "import { metadata } from 'unresolved-package'; const ignored = metadata ? 1 : 0; export const effect = true;", "unknown semantic value"],
+    ["opaque path admission condition", "import { resolve } from 'node:path'; import { fileURLToPath } from 'node:url'; const root = resolve(fileURLToPath(import.meta.url), '..'); if (root) { throw new Error('unknown'); } export const effect = true;", "unknown semantic value"],
+    ["unknown initialization call", "import { mystery } from 'unresolved-package'; const ignored = mystery(); export const effect = true;", "is not demonstrably inert"],
+    ["opaque Set membership", "import { metadata } from 'unresolved-package'; const seen = new Set([metadata]); if (seen.size) { throw new Error('unknown'); } export const effect = true;", "unknown semantic Set membership"],
+    ["class parameter decorator", "function decorate() { return true; } class Metadata { constructor(@decorate value) {} } export const effect = true;", "top-level effects are outside the registry grammar"],
+    ["missing named value export", "const effect = true;", "unresolved value import effect"],
+    ["derived opaque URL base", "import { fileURLToPath } from 'node:url'; const base = fileURLToPath(import.meta.url); const ignored = new URL('./input.json', base); export const effect = true;", "inert constructor arguments are not modeled"],
+  ])("rejects %s anywhere in the value-import graph", async (_, imported, error) => {
+    const p = registryControl("import { BASE } from './data.ts'; import { effect } from './effect.ts'; export function unused() { return effect; } export const CORPUS = BASE;\n", {
+      "data.ts": "export const BASE = [{ id: 'BASE', kind: 'positive', location: 'fixture' }];\n",
+      "effect.ts": `${imported}\n`,
+      "nested.ts": "import { BASE } from './data.ts'; BASE.push({ id: 'SIDE', kind: 'positive', location: 'fixture' });\n",
+    });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(error);
+  });
+
+  it("refuses imported native metadata as a registry membership selector", async () => {
+    const p = registryControl("import { ROOT } from './effect.ts'; const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' }; export const CORPUS = ROOT ? [BASE] : [{ ...BASE, id: 'SIDE' }];\n", {
+      "effect.ts": "import { resolve } from 'node:path'; import { fileURLToPath } from 'node:url'; export const ROOT = resolve(fileURLToPath(import.meta.url), '..');\n",
+    });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("native metadata cannot determine registry membership");
+  });
+
+  it.each([
+    ["valid committed JSON", '{"version":1}', 0, ""],
+    ["missing committed JSON", null, 1, "must resolve to retained text bytes"],
+    ["non-data committed input", "export const sideEffect = 1;", 1, "Unexpected token"],
+    ["gzip bytes rather than decoded JSON", gzipSync('{"version":1}'), 1, "Unexpected token"],
+    ["false data admission", '{"version":2}', 1, "registry admission guard rejected"],
+  ])("proves unused initialization only from %s", async (_, input, status, error) => {
+    const p = registryControl("import { effect } from './effect.ts'; export function unused() { return effect; } export const CORPUS = [{ id: 'BASE', kind: 'positive', location: 'fixture' }];\n", {
+      "effect.ts": "import { readFileSync } from 'node:fs'; const data = JSON.parse(readFileSync(new URL('./input.json', import.meta.url), 'utf8')); if (data.version !== 1) { throw new Error('invalid input'); } export function effect() { return data; }\n",
+      ...(input === null ? {} : { "input.json": input }),
+    });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(status);
+    if (status) expect(result.output).toContain(error);
+    else {
+      const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { rows: { dependency: string; observedIdentity: unknown; declaredIdentity: unknown; state: string; assertionVenue: unknown }[] };
+      expect(inventory.rows.find(row => row.dependency === "node:fs")).toMatchObject({ observedIdentity: null, declaredIdentity: "node:fs", state: "wholly-unbound", assertionVenue: null });
+      // A host file that was not committed cannot repair missing snapshot input.
+      p.git(["rm", "src/scan/input.json"]);
+      p.git(["-c", "user.name=Census control", "-c", "user.email=census@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Remove snapshot input"]);
+      writeFileSync(join(p.root, "src/scan/input.json"), '{"version":1}');
+      const absent = await run(["--root", p.root, "--out", p.inventory]);
+      expect(absent.status, absent.output).toBe(1);
+      expect(absent.output).toContain("must resolve to retained text bytes");
+    }
+  });
+
   it("generates exact immutable normalized output and check mode preserves its bytes", async () => {
     const p = prepare();
     const first = await run(["--root", p.root, "--ref", p.head, "--out", p.inventory]);

@@ -98,6 +98,26 @@ function authoritative(ctx: AdapterContext, file: CensusFile, owner: string): vo
 
 function consumer(location: EvidenceLocation, reason: string): EnvironmentDependencyRow["consumer"] { return { location, resolution: "authoritative", reason }; }
 
+function sourceRecords(ctx: AdapterContext, file: CensusFile, symbol: string) {
+  return censusSourceRecords(ctx.files, file.path, symbol, ({ file: dependencyFile, node, dependency }) => {
+    const key = `registry-import-boundary/${node.getStart()}`;
+    const dependencyClass = dependency.startsWith("node:") || dependency === "standalone-entry-point" ? "runtime" : "tool";
+    const id = `${dependencyFile.path}#${key}:${dependencyClass}:${dependency}`;
+    const link = `${file.path}#${symbol}`;
+    const existing = ctx.rows.find((r) => r.id === id);
+    if (existing) { if (!existing.links.includes(link)) existing.links.push(link); return; }
+    const evidence = censusLocation(dependencyFile, key, node.getText());
+    row(ctx, dependencyFile, key, dependencyClass, dependency, {
+      evidence, declaredIdentity: dependency, declarationSource: evidence,
+      consumer: consumer(evidence, `Value-import initialization is reachable from ${link}, including unused bindings. Every committed relative source dependency passes the finite initializer admission check.`),
+      owner: "#1906 registry import admission; #1909 runtime and package initialization", links: [link, "#1909"],
+      reason: dependency === "standalone-entry-point"
+        ? "This exact import.meta.url/process.argv main-entry guard is inactive when the dependency is imported. Standalone execution and its environment are outside the registry import context; its body is not an assertion or an observed run."
+        : "Native/package module initialization is outside the committed relative source graph and remains unresolved. No package code executes in the census. Known inert metadata operations cannot determine registry membership; opaque values cannot control admission. This declaration is not an observed package identity or an environment assertion.",
+    });
+  });
+}
+
 function genericRows(ctx: AdapterContext): void {
   for (const file of ctx.snapshot.files) {
     // Always retain the semantic residual, including files with no vocabulary hit.
@@ -283,7 +303,7 @@ function corpusRows(ctx: AdapterContext): void {
   const external = ctx.files.get("src/scan/external-corpus.ts");
   if (external) {
     const members: CensusReconciliation["members"] = [];
-    for (const { file, node, value } of censusSourceRecords(ctx.files, external.path, "EXTERNAL_CORPUS")) {
+    for (const { file, node, value } of sourceRecords(ctx, external, "EXTERNAL_CORPUS")) {
       if (!string(value.slug) || !value.modules) throw new Error("environment census: unresolved EXTERNAL_CORPUS target");
       const slug = string(value.slug)!;
       const commit = string(value.commit);
@@ -324,7 +344,7 @@ function corpusRows(ctx: AdapterContext): void {
   const semantic = ctx.files.get("src/scan/semantic-corpus.ts");
   if (semantic) {
     const members: CensusReconciliation["members"] = [];
-    for (const { file, node, value } of censusSourceRecords(ctx.files, semantic.path, "SEMANTIC_CORPUS")) {
+    for (const { file, node, value } of sourceRecords(ctx, semantic, "SEMANTIC_CORPUS")) {
       if (!value.slug || value.recordedCaught === undefined || !value.ref) throw new Error("environment census: unresolved SEMANTIC_CORPUS target");
       const evidence = censusLocation(file, `SEMANTIC_CORPUS/${value.slug}`, node.getText(file.source));
       const valueRow = row(ctx, file, evidence.anchor, "source-revision", String(value.slug), {
@@ -347,8 +367,8 @@ function corpusRows(ctx: AdapterContext): void {
     const liveTiers = variableValue(calibration, "LIVE_TIERS");
     const m6Source = ctx.files.get("src/scan/calibration/m6-handrolled.entries.ts");
     const m6Consumer = ctx.files.get("src/scan/m6-indicator-corpus.ts");
-    const m6Members = m6Source && m6Consumer?.text?.includes("corpus: CorpusEntry[] = m6HandrolledEntries") ? new Set(censusSourceRecords(ctx.files, m6Source.path, "m6HandrolledEntries").map((r) => r.value.id)) : new Set();
-    for (const { file, node, value } of censusSourceRecords(ctx.files, calibration.path, "CORPUS")) {
+    const m6Members = m6Source && m6Consumer?.text?.includes("corpus: CorpusEntry[] = m6HandrolledEntries") ? new Set(sourceRecords(ctx, m6Source, "m6HandrolledEntries").map((r) => r.value.id)) : new Set();
+    for (const { file, node, value } of sourceRecords(ctx, calibration, "CORPUS")) {
       if (typeof value.id !== "string" || typeof value.kind !== "string" || typeof value.location !== "string") throw new Error(`environment census: unresolved CORPUS entry at ${file.path}; id/kind/location must resolve`);
       const evidence = censusLocation(file, `CORPUS/${value.id}`, node.getText(file.source));
       const assertionVenue: EnvironmentDependencyRow["assertionVenue"] = mechanicalSelection && value.module === undefined && Array.isArray(liveTiers) && !liveTiers.includes(value.expectedTier)

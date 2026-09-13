@@ -5,9 +5,10 @@ import type { CensusFile } from "./environment-dependency-census-discovery.js";
 type Scope = { values: Map<string, unknown>; parent?: Scope; file: CensusFile };
 type Closure = { node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression; scope: Scope };
 export interface CensusSourceRecord { value: Record<string, unknown>; file: CensusFile; node: ts.Node }
+export interface CensusImportBoundary { file: CensusFile; node: ts.Node; dependency: string }
 
 /** Interpret only the finite data-construction grammar used by the registry. No module is executed. */
-export function censusSourceRecords(files: Map<string, CensusFile>, path: string, symbol: string): CensusSourceRecord[] {
+export function censusSourceRecords(files: Map<string, CensusFile>, path: string, symbol: string, boundary?: (record: CensusImportBoundary) => void): CensusSourceRecord[] {
   const scopes = new Map<string, Scope>();
   const closures = new WeakMap<object, Closure>();
   const origins = new WeakMap<object, { file: CensusFile; node: ts.Node }>();
@@ -15,22 +16,84 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   let remaining = 250_000;
   let mutationAllowed = true;
   const independentArrays = new WeakSet<unknown[]>();
+  const builtins = new WeakMap<object, string>();
+  const snapshotPaths = new WeakMap<object, { path: string; kind: "module-url" | "source-url" | "opaque-path" }>();
+  const importGuards = new WeakSet<ts.Node>();
   const fail = (node: ts.Node, message: string): never => { throw new Error(`environment census: unresolved registry construction ${node.getSourceFile().fileName}:${node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1}: ${message}`); };
   const tick = (node: ts.Node): void => { if (--remaining < 0) fail(node, "finite data-construction budget exhausted"); };
+  const modulePath = (file: CensusFile, specifier: string): string => posix.normalize(posix.join(posix.dirname(file.path), specifier)).replace(/\.js$/, ".ts");
+  const builtin = (key: string): object => { const value = {}; builtins.set(value, key); return value; };
+  const snapshotPath = (name: string, kind: "module-url" | "source-url" | "opaque-path"): object => { const value = {}; snapshotPaths.set(value, { path: name, kind }); return value; };
+  const isOpaque = (value: unknown): boolean => !!value && typeof value === "object" && (snapshotPaths.has(value) || builtins.has(value));
+  const known = (value: unknown, at: ts.Node): unknown => { if (isOpaque(value)) fail(at, "unknown semantic value at an import boundary"); return value; };
+  const inertOnly = (at: ts.Node): void => { if (mutationAllowed) fail(at, "native metadata cannot determine registry membership"); };
+  const shadows = (name: string, file: CensusFile): boolean => file.source!.statements.some((s) => {
+    if (ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s)) return s.name?.text === name;
+    if (ts.isVariableStatement(s)) return s.declarationList.declarations.some((d) => d.name.getText() === name);
+    if (!ts.isImportDeclaration(s) || s.importClause?.isTypeOnly) return false;
+    const clause = s.importClause;
+    return clause?.name?.text === name || !!clause?.namedBindings && (ts.isNamespaceImport(clause.namedBindings) ? clause.namedBindings.name.text === name : clause.namedBindings.elements.some((e) => !e.isTypeOnly && e.name.text === name));
+  });
+  const hasDecorator = (node: ts.Node): boolean => ts.isDecorator(node) || !!ts.forEachChild(node, (child) => hasDecorator(child) || undefined);
   const scopeFor = (sourcePath: string): Scope => {
     const found = scopes.get(sourcePath); if (found) return found;
     const file = files.get(sourcePath);
-    if (!file?.source) throw new Error(`environment census: unresolved registry source ${sourcePath}`);
+    if (!file?.source || file.gitMode === "120000" || file.gitMode === "160000") throw new Error(`environment census: unresolved registry source ${sourcePath}`);
     for (const statement of file.source.statements) {
       const throwGuard = ts.isIfStatement(statement) && !statement.elseStatement && ts.isBlock(statement.thenStatement) && statement.thenStatement.statements.length === 1 && ts.isThrowStatement(statement.thenStatement.statements[0]!);
-      const inertDeclaration = ts.isImportDeclaration(statement) && !!statement.importClause || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEmptyStatement(statement) || ts.isExportDeclaration(statement) && statement.isTypeOnly;
-      if (!inertDeclaration && !ts.isVariableStatement(statement) && !throwGuard) fail(statement, "top-level effects are outside the registry grammar");
+      // Only this exact main-entry guard is false when this dependency is imported. It is not
+      // a license to discard arbitrary conditional initialization or a shadowed process value.
+      const entryGuard = sourcePath !== path && ts.isIfStatement(statement) && !statement.elseStatement && statement.expression.getText().replace(/\s/g, "") === 'import.meta.url===`file://${process.argv[1]}`' && !shadows("process", file);
+      if (entryGuard) { importGuards.add(statement); boundary?.({ file, node: statement, dependency: "standalone-entry-point" }); }
+      const inertClass = ts.isClassDeclaration(statement) && !hasDecorator(statement) && !statement.members.some((m) => ts.isClassStaticBlockDeclaration(m) || ts.canHaveModifiers(m) && ts.getModifiers(m)?.some((v) => v.kind === ts.SyntaxKind.StaticKeyword) || m.name && ts.isComputedPropertyName(m.name)) && (!statement.heritageClauses?.length || statement.heritageClauses.length === 1 && statement.heritageClauses[0]!.token === ts.SyntaxKind.ExtendsKeyword && statement.heritageClauses[0]!.types.length === 1 && statement.heritageClauses[0]!.types[0]!.expression.getText() === "Error" && !shadows("Error", file));
+      const inertDeclaration = ts.isImportDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEmptyStatement(statement) || ts.isExportDeclaration(statement) && statement.isTypeOnly || inertClass;
+      if (!inertDeclaration && !ts.isVariableStatement(statement) && !throwGuard && !entryGuard) fail(statement, "top-level effects are outside the registry grammar");
     }
-    const scope = { values: new Map<string, unknown>(), file }; scopes.set(sourcePath, scope); return scope;
+    const scope = { values: new Map<string, unknown>(), file }; scopes.set(sourcePath, scope);
+    // Value imports initialize their modules even when their imported binding is unused.
+    // Walk the entire committed relative graph before resolving any selected declaration.
+    for (const statement of file.source.statements) if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause;
+      if (clause?.isTypeOnly || clause?.namedBindings && ts.isNamedImports(clause.namedBindings) && !clause.name && clause.namedBindings.elements.length > 0 && clause.namedBindings.elements.every((e) => e.isTypeOnly)) continue;
+      if (!ts.isStringLiteral(statement.moduleSpecifier)) fail(statement, "nonliteral import is not modeled");
+      const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
+      if (specifier.startsWith(".")) {
+        const imported = scopeFor(modulePath(file, specifier));
+        if (clause?.name) fail(statement, "relative default imports are outside the registry grammar");
+        if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) for (const binding of clause.namedBindings.elements) {
+          if (binding.isTypeOnly) continue;
+          const name = binding.propertyName?.text ?? binding.name.text;
+          const exported = imported.file.source!.statements.some((s) => ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) && (ts.isFunctionDeclaration(s) && s.name?.text === name || ts.isClassDeclaration(s) && s.name?.text === name || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name)));
+          if (!exported) fail(binding, `unresolved value import ${name} from ${imported.file.path}`);
+        }
+      } else boundary?.({ file, node: statement, dependency: specifier });
+    }
+    return scope;
   };
   const own = (value: unknown, key: string, node: ts.Node): unknown => {
     if (key === "__proto__" || key === "constructor" || key === "prototype") return fail(node, "prototype access is outside the registry grammar");
-    if (value !== null && typeof value === "object") return Object.hasOwn(value, key) ? (value as Record<string, unknown>)[key] : undefined;
+    if (value instanceof Set) {
+      if (key === "size") { if ([...value].some(isOpaque)) fail(node, "unknown semantic Set membership at an import boundary"); return value.size; }
+      return fail(node, `Set property ${key} is not modeled`);
+    }
+    if (value instanceof RegExp) {
+      if (key === "source") return value.source;
+      return fail(node, `RegExp property ${key} is not modeled`);
+    }
+    if (value && typeof value === "object" && closures.has(value)) return fail(node, "function properties are outside the registry grammar");
+    if (value && typeof value === "object" && snapshotPaths.has(value)) {
+      if (key === "pathname" && snapshotPaths.get(value)!.kind === "source-url") return snapshotPath(snapshotPaths.get(value)!.path, "opaque-path");
+      return fail(node, `snapshot location property ${key} is not modeled`);
+    }
+    if (value && typeof value === "object" && builtins.has(value)) {
+      const keyPath = `${builtins.get(value)}.${key}`;
+      return builtin(keyPath);
+    }
+    if (value !== null && typeof value === "object") {
+      if (Object.hasOwn(value, key)) return (value as Record<string, unknown>)[key];
+      if (key in Object.prototype || Array.isArray(value) && key in Array.prototype) return fail(node, `inherited property ${key} is not modeled`);
+      return undefined;
+    }
     return fail(node, "property receiver is not registry data");
   };
   const bind = (name: ts.BindingName, value: unknown, scope: Scope): void => {
@@ -49,7 +112,6 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   const lookup = (name: string, scope: Scope, at: ts.Node): unknown => {
     if (scope.values.has(name)) return scope.values.get(name);
     if (scope.parent) return lookup(name, scope.parent, at);
-    if (name === "undefined") return undefined;
     const key = `${scope.file.path}#${name}`;
     if (resolving.has(key)) return fail(at, `cyclic declaration ${key}`);
     resolving.add(key);
@@ -65,11 +127,14 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
           const imported = statement.importClause.namedBindings.elements.find((e) => e.name.text === name && !e.isTypeOnly);
           if (!imported) continue;
-          if (!statement.moduleSpecifier.text.startsWith(".")) return fail(statement, "external imports cannot construct registry data");
-          const next = posix.normalize(posix.join(posix.dirname(scope.file.path), statement.moduleSpecifier.text)).replace(/\.js$/, ".ts");
+          if (!statement.moduleSpecifier.text.startsWith(".")) { const value = builtin(`${statement.moduleSpecifier.text}.${imported.propertyName?.text ?? imported.name.text}`); scope.values.set(name, value); return value; }
+          const next = modulePath(scope.file, statement.moduleSpecifier.text);
           const value = lookup(imported.propertyName?.text ?? imported.name.text, scopeFor(next), imported); scope.values.set(name, value); return value;
         }
+        if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && !statement.importClause?.isTypeOnly && statement.importClause?.name?.text === name && !statement.moduleSpecifier.text.startsWith(".")) { const value = builtin(`${statement.moduleSpecifier.text}.default`); scope.values.set(name, value); return value; }
       }
+      if (name === "undefined") return undefined;
+      if (["Array", "Object", "JSON", "String"].includes(name)) return builtin(name);
       return fail(at, `unresolved declaration ${key}`);
     } finally { resolving.delete(key); }
   };
@@ -103,12 +168,37 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     fn.node.parameters.forEach((p, i) => { if (p.dotDotDotToken || p.initializer) fail(p, "factory rest/default parameters are not modeled"); bind(p.name, args[i], scope); });
     return ts.isBlock(fn.node.body) ? statements(fn.node.body.statements, scope)?.value : evaluate(fn.node.body, scope);
   };
+  // These operations prove that otherwise unused import initializers do not alter registry data.
+  // They cannot construct the selected registry. Paths remain opaque, package values stay unknown,
+  // and the sole read is served from retained source bytes rather than the host filesystem.
+  const inertCall = (key: string, args: unknown[], node: ts.Node): unknown => {
+    inertOnly(node);
+    if (key === "Array.isArray" && args.length === 1) return Array.isArray(known(args[0], node));
+    if (key === "JSON.parse" && args.length === 1 && typeof args[0] === "string") return JSON.parse(args[0]) as unknown;
+    if (key === "Object.fromEntries" && args.length === 1 && Array.isArray(args[0]) && args[0].every((entry) => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) return Object.fromEntries(args[0] as [string, unknown][]);
+    if (key === "node:fs.readFileSync" && args.length === 2 && args[1] === "utf8" && args[0] && typeof args[0] === "object") {
+      const source = snapshotPaths.get(args[0]);
+      const file = source?.kind === "source-url" ? files.get(source.path) : undefined;
+      if (!file || file.text === null || file.gitMode === "120000" || file.gitMode === "160000") return fail(node, "inert source read must resolve to retained text bytes");
+      return file.bytes.toString("utf8");
+    }
+    if (key === "node:url.fileURLToPath" && args.length === 1 && args[0] && typeof args[0] === "object") {
+      const source = snapshotPaths.get(args[0]);
+      if (source && source.kind !== "opaque-path") return snapshotPath(source.path, "opaque-path");
+    }
+    if (["node:path.dirname", "node:path.join", "node:path.resolve"].includes(key) && args.length && args.every((arg) => typeof arg === "string" || !!arg && typeof arg === "object" && snapshotPaths.get(arg)?.kind === "opaque-path")) {
+      const values = args.map((arg) => typeof arg === "string" ? arg : snapshotPaths.get(arg as object)!.path);
+      if (key === "node:path.dirname" && args.length === 1) return snapshotPath(posix.dirname(values[0]!), "opaque-path");
+      if (key !== "node:path.dirname") return snapshotPath(posix.join(...values), "opaque-path");
+    }
+    return fail(node, `import initializer call ${key} is not demonstrably inert`);
+  };
   const evaluate = (node: ts.Expression, scope: Scope): unknown => {
     tick(node);
     if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node)) return evaluate(node.expression, scope);
     if (ts.isStringLiteralLike(node)) return node.text;
     if (ts.isNumericLiteral(node)) return Number(node.text);
-    if (ts.isRegularExpressionLiteral(node)) return { regularExpressionSource: node.getText() };
+    if (ts.isRegularExpressionLiteral(node)) { const text = node.getText(); const end = text.lastIndexOf("/"); return new RegExp(text.slice(1, end), text.slice(end + 1)); }
     if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
     if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
     if (node.kind === ts.SyntaxKind.NullKeyword) return null;
@@ -119,7 +209,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       for (const property of node.properties) {
         if (ts.isSpreadAssignment(property)) {
           const value = evaluate(property.expression, scope);
-          if (!value || typeof value !== "object" || Array.isArray(value) || closures.has(value)) fail(property, "object spread input must be registry data");
+          if (!value || typeof value !== "object" || Array.isArray(value) || closures.has(value) || isOpaque(value)) fail(property, "object spread input must be registry data");
           Object.assign(data, value);
         } else if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
           if (ts.isComputedPropertyName(property.name)) fail(property, "computed property is not modeled");
@@ -145,59 +235,87 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       if (value !== null && typeof value === "object") fail(span, "template substitution must be scalar");
       return String(value) + span.literal.text;
     }).join("");
-    if (ts.isConditionalExpression(node)) return evaluate(evaluate(node.condition, scope) ? node.whenTrue : node.whenFalse, scope);
+    if (ts.isConditionalExpression(node)) return evaluate(known(evaluate(node.condition, scope), node.condition) ? node.whenTrue : node.whenFalse, scope);
+    if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword && node.name.text === "url") { inertOnly(node); return snapshotPath(scope.file.path, "module-url"); }
     if (ts.isPropertyAccessExpression(node)) return own(evaluate(node.expression, scope), node.name.text, node);
     if (ts.isElementAccessExpression(node)) {
       const key = evaluate(node.argumentExpression, scope);
       if (typeof key !== "string" && typeof key !== "number") return fail(node, "element key must be scalar");
       return own(evaluate(node.expression, scope), String(key), node);
     }
-    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return !evaluate(node.operand, scope);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return !known(evaluate(node.operand, scope), node);
+    if (ts.isTaggedTemplateExpression(node) && ts.isPropertyAccessExpression(node.tag) && ts.isIdentifier(node.tag.expression) && node.tag.expression.text === "String" && node.tag.name.text === "raw" && !scope.parent && !shadows("String", scope.file)) {
+      inertOnly(node);
+      if (ts.isNoSubstitutionTemplateLiteral(node.template)) return node.template.rawText ?? node.template.text;
+      return (node.template.head.rawText ?? node.template.head.text) + node.template.templateSpans.map((span) => {
+        const value = known(evaluate(span.expression, scope), span);
+        if (value !== null && typeof value === "object") fail(span, "raw template substitution must be scalar");
+        return String(value) + (span.literal.rawText ?? span.literal.text);
+      }).join("");
+    }
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && ["RegExp", "URL"].includes(node.expression.text) && !scope.parent && !shadows(node.expression.text, scope.file)) {
+      inertOnly(node);
+      const args = node.arguments?.map((arg) => evaluate(arg, scope)) ?? [];
+      if (node.expression.text === "RegExp" && args.length >= 1 && args.length <= 2 && args.every((arg) => typeof arg === "string")) return new RegExp(args[0] as string, args[1] as string | undefined);
+      if (node.expression.text === "URL" && args.length === 2 && typeof args[0] === "string" && args[0].startsWith(".") && args[1] && typeof args[1] === "object" && snapshotPaths.get(args[1])?.kind === "module-url") {
+        const source = posix.normalize(posix.join(posix.dirname(snapshotPaths.get(args[1])!.path), args[0]));
+        if (source.startsWith("../") || source.startsWith("/") || /[?#%\\]/.test(source)) return fail(node, "snapshot URL must stay within committed source");
+        return snapshotPath(source, "source-url");
+      }
+      return fail(node, "inert constructor arguments are not modeled");
+    }
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Set" && (!node.arguments || node.arguments.length <= 1)) {
       // The only constructor admitted is the built-in finite Set used by unrelated scorer constants.
       if (scope.parent) return fail(node, "Set construction is admitted only at module scope, without parameter or local shadowing");
-      if (scope.file.source!.statements.some((s) => ts.isFunctionDeclaration(s) && s.name?.text === "Set" || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => d.name.getText() === "Set") || ts.isImportDeclaration(s) && s.importClause?.getText().includes("Set"))) return fail(node, "shadowed Set constructor is not modeled");
+      if (shadows("Set", scope.file)) return fail(node, "shadowed Set constructor is not modeled");
       const values = node.arguments?.[0] ? evaluate(node.arguments[0], scope) : [];
       if (!Array.isArray(values)) return fail(node, "Set input must be finite data");
       return new Set(values);
     }
     if (ts.isBinaryExpression(node)) {
-      const left = evaluate(node.left, scope);
+      const left = known(evaluate(node.left, scope), node.left);
       if (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) return left ?? evaluate(node.right, scope);
       if (node.operatorToken.kind === ts.SyntaxKind.BarBarToken) return left || evaluate(node.right, scope);
       if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return left && evaluate(node.right, scope);
-      const right = evaluate(node.right, scope);
+      const right = known(evaluate(node.right, scope), node.right);
       if (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) return left === right;
       if (node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken) return left !== right;
       if (node.operatorToken.kind === ts.SyntaxKind.GreaterThanToken && typeof left === "number" && typeof right === "number") return left > right;
       if (node.operatorToken.kind === ts.SyntaxKind.PlusToken && typeof left === "string" && typeof right === "string") return left + right;
+      if (node.operatorToken.kind === ts.SyntaxKind.AsteriskToken && typeof left === "number" && typeof right === "number") { inertOnly(node); return left * right; }
       return fail(node, "binary operation is not modeled");
     }
     if (ts.isCallExpression(node)) {
       if (ts.isPropertyAccessExpression(node.expression)) {
         const receiver = evaluate(node.expression.expression, scope); const method = node.expression.name.text;
         if (typeof receiver === "string" && method === "replace" && node.arguments.length === 2 && ts.isRegularExpressionLiteral(node.arguments[0]!)) {
-          // Prefix removal is sufficient for current IDs; arbitrary regex execution is not admitted.
+          // The prefix is literal and anchored; native string replacement preserves $ substitutions.
           const prefix = node.arguments[0]!.getText().match(/^\/\^([A-Za-z0-9_-]+)\/$/)?.[1];
           const replacement = evaluate(node.arguments[1]!, scope);
           if (!prefix || typeof replacement !== "string") return fail(node, "only literal anchored-prefix replacement is modeled");
-          return receiver.startsWith(prefix) ? replacement + receiver.slice(prefix.length) : receiver;
+          return receiver.startsWith(prefix) ? receiver.replace(prefix, replacement) : receiver;
         }
         const args = node.arguments.map((arg) => evaluate(arg, scope));
+        if (receiver && typeof receiver === "object" && builtins.has(receiver)) return inertCall(`${builtins.get(receiver)}.${method}`, args, node);
         if (typeof receiver === "string" && method === "toUpperCase" && !args.length) return receiver.toUpperCase();
         if (Array.isArray(receiver)) {
           if ((method === "map" || method === "flatMap" || method === "filter" || method === "some") && args.length === 1) {
-            const mapped = receiver.map((value, index) => invoke(args[0], [value, index, receiver], node));
-            if (method === "filter") return receiver.filter((_, index) => Boolean(mapped[index]));
-            if (method === "some") return mapped.some(Boolean);
-            return method === "flatMap" ? mapped.flat() : mapped;
+            if (!args[0] || typeof args[0] !== "object" || !closures.has(args[0])) return fail(node, "array callback must be a source-local function, even for an empty input");
+            // Native iteration preserves short-circuiting, captured length and immediate flattening.
+            const callback = (value: unknown, index: number) => known(invoke(args[0], [value, index, receiver], node), node);
+            if (method === "some") return receiver.some(callback);
+            const result = method === "filter" ? receiver.filter(callback) : method === "flatMap" ? receiver.flatMap(callback) : receiver.map(callback);
+            if (!mutationAllowed) independentArrays.add(result);
+            return result;
           }
           if (method === "push") { if (!mutationAllowed && !independentArrays.has(receiver)) return fail(node, "unused initializer may mutate registry data"); return receiver.push(...args); }
           if (method === "join" && args.length <= 1 && args.every((v) => typeof v === "string") && receiver.every((v) => ["string", "number", "boolean"].includes(typeof v))) return receiver.join(args[0] as string | undefined);
         }
         return fail(node, `method ${method} is not modeled`);
       }
-      return invoke(evaluate(node.expression, scope), node.arguments.map((arg) => evaluate(arg, scope)), node);
+      const callable = evaluate(node.expression, scope); const args = node.arguments.map((arg) => evaluate(arg, scope));
+      if (callable && typeof callable === "object" && builtins.has(callable)) return inertCall(builtins.get(callable)!, args, node);
+      return invoke(callable, args, node);
     }
     return fail(node, `expression ${ts.SyntaxKind[node.kind]} is not modeled`);
   };
@@ -212,7 +330,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
         lookup(declaration.name.getText(), module, declaration);
       }
-      if (ts.isIfStatement(statement) && evaluate(statement.expression, module)) fail(statement, "registry admission guard rejected this source population");
+      if (ts.isIfStatement(statement) && !importGuards.has(statement) && known(evaluate(statement.expression, module), statement)) fail(statement, "registry admission guard rejected this source population");
     }
   }
   if (!Array.isArray(value) || !value.length) throw new Error(`environment census: registry ${path}#${symbol} is not a nonempty array`);
