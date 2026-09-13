@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -566,7 +566,7 @@ function installInputs(root: string): string[] {
         continue;
       }
       const rel = relative(root, entry.path).replaceAll("\\", "/");
-      if (INSTALL_INPUT_NAMES.has(entry.name) || rel.startsWith(".yarn/patches/") || rel.startsWith(".yarn/plugins/") || rel.startsWith(".yarn/releases/") || rel.startsWith("patches/")) files.push(entry.path);
+      if (isInstallInput(rel)) files.push(entry.path);
     }
   };
   walk(root);
@@ -740,36 +740,207 @@ function writeReceipt(path: string, key: string, identity: PreparationIdentity, 
   parseReceipt(readFileSync(path, "utf8"), key, identity);
 }
 
-export function prepareCorpusDependencies(options: DependencyPreparationOptions): DependencyPreparationResult {
-  // The content store remains live while a target consumer can add tools to its installed tree.
-  // The caller releases it after its final consumer, including failure paths.
-  const scratch = options.cacheDir && !options.installationPolicy ? undefined : mkdtempSync(join(tmpdir(), "harvey-dependency-store-"));
-  const environment = preparationEnvironment(options.environment);
-  const originalInputs = options.installationPolicy
-    ? new Map(installInputs(options.targetDir).map((path) => [path, readFileSync(path)]))
-    : undefined;
+interface OperatorInputSnapshot {
+  root: string;
+  ancestors: Map<string, Stats>;
+  directories: Map<string, Stats>;
+  files: Map<string, { content: Buffer; mode: number }>;
+  captured: boolean;
+  resolution?: PackageManagerResolution;
+  configuration?: string;
+  failure?: DependencyPreparationResult;
+}
+
+function assertOperatorBoundary(snapshot: OperatorInputSnapshot): void {
+  for (const [path, original] of snapshot.ancestors) {
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    if (!current?.isDirectory() || current.dev !== original.dev || current.ino !== original.ino) {
+      throw new Error(`operator install-input boundary changed outside the owned target: ${path}`);
+    }
+  }
+}
+
+function regularInput(path: string): { content: Buffer; mode: number } {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const result = prepareDependencies(options, resolve(scratch ?? options.cacheDir!), environment);
-    installationSessions.set(result, {
-      targetDir: resolve(options.targetDir), environment, manager: result.packageManager,
-      selected: result.installation?.stages.findLast((stage) => stage.stage === "version-probe")?.selected,
-      storeDir: result.installation!.dependencyStore, scratch,
-    });
-    return result;
-  } catch (error) {
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
-    throw error;
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error(`operator install input must be a regular, unshared file: ${path}`);
+    return { content: readFileSync(descriptor), mode: stat.mode & 0o777 };
   } finally {
-    if (originalInputs) {
-      for (const path of installInputs(options.targetDir)) if (!originalInputs.has(path)) rmSync(path, { force: true });
-      for (const [path, content] of originalInputs) {
-        if (!existsSync(path) || !readFileSync(path).equals(content)) {
-          mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, content);
-        }
+    closeSync(descriptor);
+  }
+}
+
+function isInstallInput(path: string): boolean {
+  return INSTALL_INPUT_NAMES.has(basename(path)) || [".yarn/patches/", ".yarn/plugins/", ".yarn/releases/", "patches/"].some((prefix) => path.startsWith(prefix));
+}
+
+function readOperatorInputs(snapshot: OperatorInputSnapshot, files: OperatorInputSnapshot["files"] = new Map(), checkTopology = true): OperatorInputSnapshot["files"] {
+  assertOperatorBoundary(snapshot);
+  const walk = (dir: string): void => {
+    const current = lstatSync(dir);
+    const original = snapshot.directories.get(dir);
+    if (!current.isDirectory() || (checkTopology && original && (current.dev !== original.dev || current.ino !== original.ino))) throw new Error(`operator install-input directory topology changed: ${dir}`);
+    if (!snapshot.captured) snapshot.directories.set(dir, current);
+    for (const entry of readEntriesLstatSafe(dir)) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      const path = relative(snapshot.root, entry.path).replaceAll("\\", "/");
+      if (entry.isSymbolicLink) throw new Error(`operator install-input topology contains a symbolic link: ${path}`);
+      if (INSTALL_INPUT_NAMES.has(entry.name) && !entry.isFile) throw new Error(`operator install input is not a regular file: ${path}`);
+      if (entry.isDirectory) walk(entry.path);
+      else if (isInstallInput(path)) files.set(path, regularInput(entry.path));
+    }
+  };
+  walk(snapshot.root);
+  return files;
+}
+
+function assertOperatorInputsUnchanged(snapshot: OperatorInputSnapshot, checkTopology = true): void {
+  const current = readOperatorInputs(snapshot, new Map(), checkTopology);
+  if (current.size !== snapshot.files.size || [...snapshot.files].some(([path, original]) => {
+    const file = current.get(path);
+    return !file || !file.content.equals(original.content) || file.mode !== original.mode;
+  })) throw new Error("operator-authorized installation changed original install inputs");
+}
+
+/** Restore only through real directories inside the original, still-owned target boundary. */
+function restoreOperatorInputs(snapshot: OperatorInputSnapshot): string[] {
+  const failures: string[] = [];
+  const attempt = (action: () => void): void => {
+    try { action(); } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+  };
+  const directory = (path: string): void => {
+    assertOperatorBoundary(snapshot);
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    if (current?.isDirectory()) return;
+    if (current) rmSync(path, { recursive: true, force: true });
+    mkdirSync(path);
+  };
+  const parents = (path: string): void => {
+    directory(snapshot.root);
+    let dir = snapshot.root;
+    for (const part of dirname(path).split("/").filter((part) => part !== ".")) {
+      dir = join(dir, part);
+      directory(dir);
+    }
+  };
+  attempt(() => {
+    directory(snapshot.root);
+    for (const path of snapshot.files.keys()) parents(path);
+    const walk = (dir: string): void => {
+      assertOperatorBoundary(snapshot);
+      if (!lstatSync(dir).isDirectory()) throw new Error(`operator restoration refuses a non-directory: ${dir}`);
+      for (const entry of readEntriesLstatSafe(dir)) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const path = relative(snapshot.root, entry.path).replaceAll("\\", "/");
+        if (entry.isSymbolicLink || (isInstallInput(path) && !snapshot.files.has(path) && !entry.isDirectory)) rmSync(entry.path, { force: true });
+        else if (INSTALL_INPUT_NAMES.has(entry.name) && !snapshot.files.has(path)) rmSync(entry.path, { recursive: true, force: true });
+        else if (entry.isDirectory) walk(entry.path);
+      }
+    };
+    walk(snapshot.root);
+  });
+  for (const [path, original] of snapshot.files) attempt(() => {
+    parents(path);
+    const destination = join(snapshot.root, path);
+    const current = lstatSync(destination, { throwIfNoEntry: false });
+    if (current?.isFile() && current.nlink === 1) {
+      try {
+        const file = regularInput(destination);
+        if (file.content.equals(original.content) && file.mode === original.mode) return;
+      } catch { /* Replace the owned leaf; never write through an unreadable link or shared inode. */ }
+    }
+    if (current) rmSync(destination, { recursive: true, force: true });
+    writeFileSync(destination, original.content, { flag: "wx", mode: original.mode });
+  });
+  attempt(() => assertOperatorInputsUnchanged(snapshot, false));
+  return failures;
+}
+
+function operatorPreparationFailure(options: DependencyPreparationOptions, snapshot: OperatorInputSnapshot | undefined, store: string, reason: string): DependencyPreparationResult {
+  const policy = options.installationPolicy!;
+  const prior = snapshot?.failure;
+  return {
+    ...prior, status: "incomplete", complete: false, cacheable: false, sourceTreeCacheable: false,
+    packageManager: prior?.packageManager ?? "pnpm", packageManagerVersion: prior?.packageManagerVersion ?? "unavailable",
+    reason: combineReasons(prior?.reason, reason, `operator policy: ${policy.provenance}`)!,
+    sourceTreeReason: "operator preparation or input restoration failed; the installed population is rejected",
+    installation: prior?.installation ?? {
+      sourceRoot: options.sourceRoot ?? ".", stages: [], dependencyStore: store,
+      operatorPolicy: {
+        policy, admission: "rejected", installConfigurationSha256: snapshot?.configuration ?? "unavailable",
+        sourceResolution: snapshot?.resolution ?? { status: "not-assessed", reason: "unreadable-manifest", detail: reason, evidence: [] },
+        lockfiles: ["package-lock.json", "pnpm-lock.yaml"].flatMap((path) => {
+          const original = snapshot?.files.get(path);
+          return original ? [{ path, sha256: digest(original.content) }] : [];
+        }),
+      },
+      managerProvisioning: { kind: "installation-setup", isolation: "not-guaranteed", reason: "Package-manager provisioning did not complete.", selectorEnvironment: {} },
+    },
+  };
+}
+
+export function prepareCorpusDependencies(options: DependencyPreparationOptions): DependencyPreparationResult {
+  // No target code runs until every operator input has a restorable, contained snapshot.
+  const environment = preparationEnvironment(options.environment);
+  let scratch: string | undefined;
+  let snapshot: OperatorInputSnapshot | undefined;
+  let result: DependencyPreparationResult;
+  try {
+    if (options.installationPolicy) {
+      const parent = realpathSync(dirname(resolve(options.targetDir)));
+      snapshot = { root: join(parent, basename(resolve(options.targetDir))), ancestors: new Map(), directories: new Map(), files: new Map(), captured: false };
+      for (let dir = parent; ; dir = dirname(dir)) {
+        snapshot.ancestors.set(dir, lstatSync(dir));
+        if (dirname(dir) === dir) break;
+      }
+      snapshot.files = readOperatorInputs(snapshot, snapshot.files);
+      snapshot.resolution = resolvePackageManagerEvidence(snapshot.root);
+      const hash = createHash("sha256");
+      for (const [path, file] of [...snapshot.files].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) hash.update(path).update("\0").update(file.content).update("\0");
+      snapshot.configuration = hash.digest("hex");
+      snapshot.captured = true;
+      options = { ...options, targetDir: snapshot.root };
+    }
+    // Keep successful private stores live until the final consumer releases its session.
+    scratch = options.cacheDir && !options.installationPolicy ? undefined : mkdtempSync(join(tmpdir(), "harvey-dependency-store-"));
+    result = prepareDependencies(options, resolve(scratch ?? options.cacheDir!), environment, snapshot);
+  } catch (error) {
+    if (!options.installationPolicy) {
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
+      throw error;
+    }
+    result = operatorPreparationFailure(options, snapshot, scratch ?? "unavailable", `operator dependency preparation failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (snapshot?.captured) {
+    snapshot.failure = result;
+    let changed: string | undefined;
+    try { assertOperatorInputsUnchanged(snapshot); } catch (error) { changed = error instanceof Error ? error.message : String(error); }
+    const restoration = restoreOperatorInputs(snapshot);
+    if (changed || restoration.length) result = operatorPreparationFailure(options, snapshot, scratch ?? "unavailable", combineReasons(changed, restoration.length ? `operator input restoration incomplete: ${restoration.join("; ")}` : undefined)!);
+    if (!result.complete) {
+      try {
+        assertOperatorBoundary(snapshot);
+        if (lstatSync(snapshot.root, { throwIfNoEntry: false })?.isDirectory()) removeInstalledTrees(snapshot.root);
+      } catch (error) {
+        result.reason = combineReasons(result.reason, `rejected installed-tree cleanup failed: ${error instanceof Error ? error.message : String(error)}`)!;
       }
     }
   }
+  if (options.installationPolicy && !result.complete) {
+    if (scratch) {
+      try { rmSync(scratch, { recursive: true, force: true }); } catch (error) {
+        result.reason = combineReasons(result.reason, `private dependency-store cleanup failed: ${error instanceof Error ? error.message : String(error)}`)!;
+      }
+    }
+    return result;
+  }
+  installationSessions.set(result, {
+    targetDir: resolve(options.targetDir), environment, manager: result.packageManager,
+    selected: result.installation?.stages.findLast((stage) => stage.stage === "version-probe")?.selected,
+    storeDir: result.installation!.dependencyStore, scratch,
+  });
+  return result;
 }
 
 export function releaseCorpusDependencies(preparation: DependencyPreparationResult, keepStore = false): void {
@@ -849,9 +1020,9 @@ function operatorPolicyRejection(options: DependencyPreparationOptions, resoluti
   return undefined;
 }
 
-function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string, environment: NodeJS.ProcessEnv): DependencyPreparationResult {
-  const resolution = resolvePackageManagerEvidence(options.targetDir);
-  const originalInstallConfiguration = digestInstallInputs(options.targetDir);
+function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string, environment: NodeJS.ProcessEnv, operatorInputs?: OperatorInputSnapshot): DependencyPreparationResult {
+  const resolution = operatorInputs?.resolution ?? resolvePackageManagerEvidence(options.targetDir);
+  const originalInstallConfiguration = operatorInputs?.configuration ?? digestInstallInputs(options.targetDir);
   const policy = options.installationPolicy;
   const policyRejection = operatorPolicyRejection(options, resolution, originalInstallConfiguration);
   const manager = policy && !policyRejection ? policy.packageManager : resolution.status === "selected" ? resolution.manager : detectPackageManager(options.targetDir);
@@ -884,6 +1055,11 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
       selectorEnvironment: Object.fromEntries(SELECTOR_ENVIRONMENT.filter((name) => environment[name] !== undefined).map((name) => [name, `sha256:${digest(environment[name]!)}`])),
     },
   };
+  if (operatorInputs) operatorInputs.failure = {
+    status: "incomplete", complete: false, cacheable: false, packageManager: manager,
+    packageManagerVersion: version, lockfileDigest: lockDigest, installation, reason: describePreparationStages(stages),
+    sourceTreeCacheable: false,
+  };
   let identityRejected = false;
   const runInstall = (invocation: InstallInvocation, stage: DependencyPreparationStage["stage"]): void => {
     let observation: DependencyPreparationStage;
@@ -911,7 +1087,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
   };
   options.onEvent?.(`DEPENDENCY PREP SETUP ${describePreparationStages(stages)}; ${installation.managerProvisioning.reason}`);
   const incomplete = (reason: string): DependencyPreparationResult => {
-    removeInstalledTrees(options.targetDir);
+    if (!policy) removeInstalledTrees(options.targetDir);
     const failure = `${combineReasons(reason, policy ? `operator policy: ${policy.provenance}; original source resolution: ${resolution.status === "not-assessed" ? resolution.detail : resolution.status}` : undefined)}\n${describePreparationStages(stages)}`;
     options.onEvent?.(`DEPENDENCY PREP INCOMPLETE ${manager}: ${failure}; M5-knip will preserve its did-not-run/degraded semantics`);
     return {
@@ -928,6 +1104,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
     : manager === "pnpm"
       ? [...PNPM_PORTABLE_STORE_FLAGS]
       : [];
+  if (operatorInputs) assertOperatorInputsUnchanged(operatorInputs);
   const inputInspection = inspectCorpusDependencyInputs(options.targetDir, manager, version);
   if (inputInspection.installConfiguration !== originalInstallConfiguration) {
     return incomplete("package-manager selection/provisioning changed target-owned install inputs; the original input identity cannot be admitted");
@@ -941,14 +1118,12 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
     try {
       mkdirSync(storeDir, { recursive: true });
       runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, false), cwd: options.targetDir, env: environment }, "frozen");
-      if (digestInstallInputs(options.targetDir) !== originalInstallConfiguration) return incomplete("operator-authorized installation changed original install inputs");
+      assertOperatorInputsUnchanged(operatorInputs!);
       const reason = `operator-selected ${manager}@${version} using ${policy.lockfile}; ${policy.provenance}; original source conflict retained: ${resolution.status === "not-assessed" ? resolution.detail : resolution.status}; frozen installation completed; cache reuse disabled`;
       options.onEvent?.(`DEPENDENCY PREP OPERATOR ${reason}`);
       return { status: "non-cacheable", complete: true, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, installation, reason, sourceTreeCacheable: false, sourceTreeReason: "operator-selected mixed-lock installation is never cacheable" };
     } catch (error) {
       return incomplete(`operator-authorized frozen installation failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      sanitizePnpmStore(storeDir);
     }
   }
 
