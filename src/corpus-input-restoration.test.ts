@@ -10,32 +10,35 @@ import { runCorpusScanner } from "./corpus-scanner-runner.js";
 import type { CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 // Execute both shipping propagation boundaries without starting unrelated corpus scanners.
-function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult {
+function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> } {
   const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
   const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
-  const helper = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "installTargetDeps")!.getText(ast);
-  let declaration = "";
+  const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
+  const installer = functionText("installTargetDeps");
+  const scannerInvocation = functionText("scannerInvocation");
+  const rootScannerOptions = functionText("rootScannerOptions");
+  const runScanner = functionText("runScanner");
+  let preparation = "";
   let registration = "";
-  let collection = "";
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "dependencyPreparation" && node.initializer?.getText(ast).includes("installTargetDeps")) declaration = `const ${node.getText(ast)};`;
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "prepareDependencies" && node.initializer?.getText(ast).includes("installTargetDeps")) preparation = `const ${node.getText(ast)};`;
     if (ts.isExpressionStatement(node) && node.getText(ast).startsWith("dependencyPreparationsBySlug[target.slug] =")) registration = node.getText(ast);
-    if (ts.isIfStatement(node) && node.expression.getText(ast) === "dependencyPreparation") collection = node.getText(ast);
     ts.forEachChild(node, visit);
   };
   visit(ast);
-  expect(declaration).not.toBe("");
+  expect([installer, preparation, registration, rootScannerOptions, scannerInvocation, runScanner]).not.toContain("");
   const serializer = ast.statements.find((node) => ts.isIfStatement(node) && node.expression.getText(ast) === "jsonOut")!.getText(ast);
   const bindings = {
-    prepareCorpusDependencies, phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
+    prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
     target: { slug: policy.targetSlug, commit: policy.targetRevision, installationPolicy: policy },
-    targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true,
+    targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true, forceColdCache: false,
     timed: (_name: string, fn: () => unknown) => fn(),
     writeFileSync, jsonOut: join(targetDir, "corpus-policy.json"), rows: [], findingsBySlug: {},
     dependencyPreparationsBySlug: {}, detectorRecordsBySlug: {}, mechanicalContextBySlug: {}, currentExecution: undefined,
   };
-  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${helper}\n${declaration}\n${collection}\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  return new Function(...Object.keys(bindings), `${code}\nreturn dependencyPreparation;`)(...Object.values(bindings)) as DependencyPreparationResult;
+  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const handoff = new Function(...Object.keys(bindings), `${code}\nreturn { dependencyPreparation, runQualityScan };`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
+  return Object.assign(handoff.dependencyPreparation, { runQualityScan: handoff.runQualityScan });
 }
 
 describe("operator install-input restoration boundary (#2047)", () => {
@@ -211,7 +214,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
   it("delivers the topology failure and original lock evidence through the real M5 client consumer", async () => {
     const f = fixture("install-file-directory");
     const preparation = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(preparation);
-    const result = await runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "restoration failure consumer", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation: preparation });
+    const result = await preparation.runQualityScan();
     expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("not a regular file") }));
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(false);
     const meta = { client: "Restoration evidence", subtitle: "#2047", date: "2026-09-12", commit: f.targetRevision, auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Preparation failure", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
