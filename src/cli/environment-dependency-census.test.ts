@@ -53,6 +53,47 @@ function registryControl(source: string, siblings: Record<string, string | Uint8
 
 describe("environment dependency shipping CLI (#1906)", () => {
   it.each([
+    ["module constants", "const tier = 'local'; const \\u0074ier = 'review'; export const CORPUS = [BASE];", 1],
+    ["class and constant", "class tier {} const \\u0074ier = 'review'; export const CORPUS = [BASE];", 1],
+    ["function declarations", "function tier() { return 'local'; } function \\u0074ier() { return 'review'; } export const CORPUS = [BASE];", 1],
+    ["function and constant", "function tier() { return 'local'; } const \\u0074ier = 'review'; export const CORPUS = [BASE];", 1],
+    ["value import and constant", "import { tier } from './dep.ts'; const \\u0074ier = 'review'; export const CORPUS = [{ ...BASE, expectedTier: tier }];", 0],
+    ["called factory parameters", "function make(tier, \\u0074ier) { return [BASE]; } export const CORPUS = make('local', 'review');", 1],
+    ["unused factory parameters", "function unused(tier, \\u0074ier) { return tier; } export const CORPUS = [BASE];", 1],
+    ["destructured parameters", "function make({ a: tier }, { b: \\u0074ier }) { return [BASE]; } export const CORPUS = make({ a: 1 }, { b: 2 });", 1],
+    ["local destructuring", "function make() { const { a: tier, b: \\u0074ier } = { a: 1, b: 2 }; return [BASE]; } export const CORPUS = make();", 1],
+    ["parameter and local", "function make(tier) { const \\u0074ier = 'review'; return [BASE]; } export const CORPUS = make('local');", 1],
+  ])("rejects canonical binding collisions between %s", async (_, source, nativeExit) => {
+    const p = registryControl(`const BASE = { id: 'OWNED', kind: 'positive', location: 'fixture' }; ${source}\n`, { "dep.ts": "export const tier = 'local';\n" });
+    const oracle = await runNode(["--import", "tsx", "--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify(CORPUS));`]);
+    expect(oracle.status, oracle.output).toBe(nativeExit);
+    if (nativeExit) expect(oracle.output).toMatch(/already been declared|cannot be bound multiple times/);
+    else expect(JSON.parse(oracle.output)[0]).toMatchObject({ expectedTier: "review" });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("duplicate lexical binding tier");
+  });
+
+  it.each([
+    ["duplicate object keys", "export const CORPUS = [{ ...BASE, id: 'OLD', '\\u0069d': 'OWNED' }];"],
+    ["duplicate canonical numeric keys", "const keys = { 16: 'OLD', 0x10: 'OWNED' }; export const CORPUS = [{ ...BASE, id: keys[16] }];"],
+    ["separate factory scopes", "function make() { const id = 'OWNED'; return { ...BASE, id }; } function other() { const id = 'OTHER'; return id; } export const CORPUS = [make()];"],
+    ["distinct destructuring names for one key", "function make({ id: first, id: second }) { return [{ ...BASE, id: first === second ? first : 'OTHER' }]; } export const CORPUS = make({ id: 'OWNED' });"],
+    ["erased type and value names", "interface id { value: string } const id = 'OWNED'; export const CORPUS = [{ ...BASE, id }];"],
+    ["erased import and value names", "import type { id } from './types.ts'; const id = 'OWNED'; export const CORPUS = [{ ...BASE, id }];"],
+    ["erased function overloads", "function make(value: string): unknown[]; function make(value: number): unknown[]; function make(value: unknown) { return [BASE]; } export const CORPUS = make(1);"],
+  ])("preserves valid canonical binding scopes for %s", async (_, source) => {
+    const p = registryControl(`const BASE = { id: 'OWNED', kind: 'positive', location: 'fixture' }; ${source}\n`, { "types.ts": "export interface id { value: string }\n" });
+    const oracle = await runNode(["--import", "tsx", "--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify(CORPUS.map(row => row.id)));`]);
+    expect(oracle.status, oracle.output).toBe(0);
+    expect(JSON.parse(oracle.output)).toEqual(["OWNED"]);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { reconciliations: { registry: string; members: { key: string }[] }[] };
+    expect(inventory.reconciliations.find(row => row.registry === "CORPUS imported/spread entries")?.members.map(member => member.key)).toEqual(["OWNED"]);
+  });
+
+  it.each([
     ["Unicode string tier", "", "'\\u0065xpectedTier': 'local'"],
     ["Unicode string module", "", "'\\u006dodule': 'M6'"],
     ["hexadecimal string module", "", "'\\x6dodule': 'M6'"],
@@ -285,7 +326,7 @@ export const CORPUS = [{ id: 'BASE', kind: 'positive', location: 'fixture', meta
     else {
       const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { rows: { dependency: string; observedIdentity: unknown; declaredIdentity: unknown; state: string; assertionVenue: unknown }[] };
       expect(inventory.rows.find(row => row.dependency === "node:fs")).toMatchObject({ observedIdentity: null, declaredIdentity: "node:fs", state: "wholly-unbound", assertionVenue: null });
-      // A host file that was not committed cannot repair missing snapshot input.
+      // This control retains a host-only file while requiring the missing committed input to reject.
       p.git(["rm", "src/scan/input.json"]);
       p.git(["-c", "user.name=Census control", "-c", "user.email=census@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Remove snapshot input"]);
       writeFileSync(join(p.root, "src/scan/input.json"), '{"version":1}');

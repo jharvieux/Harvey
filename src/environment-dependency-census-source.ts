@@ -42,11 +42,39 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     return clause?.name?.text === name || !!clause?.namedBindings && (ts.isNamespaceImport(clause.namedBindings) ? clause.namedBindings.name.text === name : clause.namedBindings.elements.some((e) => !e.isTypeOnly && e.name.text === name));
   });
   const hasDecorator = (node: ts.Node): boolean => ts.isDecorator(node) || !!ts.forEachChild(node, (child) => hasDecorator(child) || undefined);
+  const reserveBinding = (name: ts.Identifier, names: Set<string>): void => {
+    if (names.has(name.text)) fail(name, `duplicate lexical binding ${name.text}; ambiguous value declarations are outside the registry grammar`);
+    names.add(name.text);
+  };
+  const reservePattern = (name: ts.BindingName, names: Set<string>): void => {
+    if (ts.isIdentifier(name)) reserveBinding(name, names);
+    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) reservePattern(element.name, names);
+  };
+  const checkParameters = (node: ts.Node): void => {
+    if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) && node.body) {
+      const names = new Set<string>();
+      for (const parameter of node.parameters) if (!ts.isIdentifier(parameter.name) || parameter.name.text !== "this") reservePattern(parameter.name, names);
+    }
+    ts.forEachChild(node, checkParameters);
+  };
   const scopeFor = (sourcePath: string): Scope => {
     const found = scopes.get(sourcePath); if (found) return found;
     const file = files.get(sourcePath);
     if (!file?.source || file.gitMode === "120000" || file.gitMode === "160000") throw new Error(`environment census: unresolved registry source ${sourcePath}`);
+    const names = new Set<string>();
+    checkParameters(file.source);
     for (const statement of file.source.statements) {
+      // Type-only names and overload signatures are erased; runtime declarations share one table.
+      if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) reservePattern(declaration.name, names);
+      if ((ts.isFunctionDeclaration(statement) && statement.body || ts.isClassDeclaration(statement)) && statement.name && !statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)) reserveBinding(statement.name, names);
+      if (ts.isImportDeclaration(statement) && statement.importClause && !statement.importClause.isTypeOnly) {
+        const clause = statement.importClause;
+        if (clause.name) reserveBinding(clause.name, names);
+        if (clause.namedBindings) {
+          if (ts.isNamespaceImport(clause.namedBindings)) reserveBinding(clause.namedBindings.name, names);
+          else for (const binding of clause.namedBindings.elements) if (!binding.isTypeOnly) reserveBinding(binding.name, names);
+        }
+      }
       const throwGuard = ts.isIfStatement(statement) && !statement.elseStatement && ts.isBlock(statement.thenStatement) && statement.thenStatement.statements.length === 1 && ts.isThrowStatement(statement.thenStatement.statements[0]!);
       // Only this exact main-entry guard is false when this dependency is imported. It is not
       // a license to discard arbitrary conditional initialization or a shadowed process value.
@@ -126,8 +154,8 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   };
   const declareLocal = (name: ts.BindingName, scope: Scope): void => {
     if (ts.isIdentifier(name)) {
-      if (scope.pending.has(name.text) || scope.values.has(name.text)) fail(name, `duplicate lexical binding ${name.text}`);
-      scope.pending.add(name.text); return;
+      if (scope.values.has(name.text)) fail(name, `duplicate lexical binding ${name.text}`);
+      reserveBinding(name, scope.pending); return;
     }
     if (ts.isObjectBindingPattern(name)) { for (const part of name.elements) declareLocal(part.name, scope); return; }
     fail(name, "binding shape is not modeled");
@@ -150,7 +178,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     resolving.add(key);
     try {
       for (const statement of scope.file.source!.statements) {
-        if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) {
+        if (ts.isFunctionDeclaration(statement) && statement.body && statement.name?.text === name) {
           const value = closure(statement, scope); scope.values.set(name, value); return value;
         }
         if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name) && declaration.name.text === name) {
@@ -220,7 +248,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     finally { construction = previous; }
   };
   // These operations prove that otherwise unused import initializers do not alter registry data.
-  // They cannot construct the selected registry. Paths remain opaque, package values stay unknown,
+  // Selected registry construction rejects these metadata calls. Paths remain opaque, package values stay unknown,
   // and the sole read is served from retained source bytes rather than the host filesystem.
   const inertCall = (key: string, args: unknown[], node: ts.Node): unknown => {
     inertOnly(node);
