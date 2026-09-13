@@ -87,10 +87,24 @@ describe("heavy PR impact planner", () => {
     expect(new Set(HEAVY_CLI_TESTS).size).toBe(HEAVY_CLI_TESTS.length);
   });
 
+  it("routes the preflight process suite and its shipping cache inputs to a heavy shard", () => {
+    for (const path of [
+      "src/corpus-cache-preflight.test.ts", "src/__fixtures__/corpus-cache-preflight/binary.mjs",
+      "src/cli/corpus-drift.ts", "src/corpus-scanner-runner.ts", "src/corpus-scanner-cache.ts",
+      "src/scan/semgrep.ts", "src/scan/semgrep-family-cache.ts", "src/scan/mechanical-phase-cache.ts",
+      ".github/workflows/corpus-drift.yml",
+    ]) {
+      const plan = buildHeavyPlan(registry, [path]);
+      expect(plan.selected, path).toContain("corpus-cache-preflight");
+      const shards = shardSelectedWorkloads(registry, plan.selected, 2);
+      expect(shards.include.flatMap((shard) => shard.workloadIds).filter((id) => id === "corpus-cache-preflight"), path).toHaveLength(1);
+    }
+  });
+
   it("scopes a mutation change to its CLI, cache, orchestrator, and inventory consumers", () => {
     expect(selectHeavyWorkloads(registry, ["src/mutation-scan.ts"])).toMatchObject({
       mode: "scoped",
-      selected: ["run-audit", "mutation-scan", "corpus-scanner-cross-process", ...censusOwners],
+      selected: ["run-audit", "mutation-scan", "corpus-scanner-cross-process", ...censusOwners, "corpus-cache-preflight"],
       unmatched: [],
     });
   });
@@ -103,6 +117,7 @@ describe("heavy PR impact planner", () => {
       "quality-scan",
       "corpus-scanner-cross-process",
       ...censusOwners,
+      "corpus-cache-preflight",
     ]);
     expect(selectHeavyWorkloads(registry, ["src/audit-report.ts"]).selected).toEqual(["run-audit", ...censusOwners]);
     expect(selectHeavyWorkloads(registry, ["src/health-scorecard.ts"]).selected).toEqual(["run-audit", "quick-scan", ...censusOwners]);
@@ -120,13 +135,14 @@ describe("heavy PR impact planner", () => {
       "quality-scan",
       "corpus-scanner-cross-process",
       ...censusOwners,
+      "corpus-cache-preflight",
     ]);
   });
 
   it("takes the union for a mixed but fully-owned PR", () => {
     const selection = selectHeavyWorkloads(registry, ["src/lighthouse.ts", "src/mutation-scan.ts"]);
     expect(selection.mode).toBe("scoped");
-    expect(selection.selected).toEqual(["run-audit", "mutation-scan", "lighthouse-scan", "corpus-scanner-cross-process", ...censusOwners]);
+    expect(selection.selected).toEqual(["run-audit", "mutation-scan", "lighthouse-scan", "corpus-scanner-cross-process", ...censusOwners, "corpus-cache-preflight"]);
   });
 
   it("runs mapped owners and reports unmapped paths without upgrading the PR to full", () => {
@@ -207,6 +223,7 @@ describe("heavy PR impact planner", () => {
     expect(plan.mode).toBe("scoped");
     expect(plan.matrix.include).toHaveLength(2);
     expect(plan.matrix.include.flatMap((group) => group.workloadIds).sort()).toEqual([
+      "corpus-cache-preflight",
       "corpus-scanner-cross-process",
       "mutation-scan",
       "run-audit",
@@ -239,7 +256,7 @@ describe("heavy PR impact planner", () => {
         "src/scan/supply-chain.ts", "src/unstructured-claims-baseline.ts", "targets/calibration/GROUND-TRUTH.md",
         "targets/calibration/package-lock.json",
       ],
-      selected: ["validate-calibration", ...censusOwners],
+      selected: ["validate-calibration", ...censusOwners, "corpus-cache-preflight"],
     },
     { name: "unrelated documentation", paths: ["docs/design/operator-notes.md"], selected: [] },
   ])("the shipped CLI routes $name from git into GITHUB_OUTPUT", ({ paths, selected }) => {

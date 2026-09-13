@@ -54,7 +54,7 @@ on:
         type: boolean
         default: false
       force_cold_cache:
-        description: "Run the executable cold-vs-restored equivalence control for every deterministic phase. Expensive; daily provider validation stays warm."
+        description: "Preflight matching seeds, then freshly compare every eligible cache consumer. Incompatible or absent seeds fail early; default live-provider validation remains unchanged."
         type: boolean
         default: false
   pull_request:
@@ -491,7 +491,10 @@ jobs:
           cold_flag=()
           if [ "${{ inputs.force_cold_cache }}" = "true" ]; then
             cold_flag=(--force-cold-cache)
-            echo "Explicit forced-cold cache equivalence is enabled: every deterministic phase must compare with a restored artifact. Daily live-provider validation is warm."
+            echo "Forced-cold preflight checks every target's mechanical/family seeds before scanning; eligible scanners are checked when their dependency-preparation inputs are available."
+            echo "Trusted transport alone is insufficient: source, target, runtime/tools, config, planned ownership and live-verify options must match. An absent or incompatible seed stops this optional run."
+            echo "For a local seed/fresh pair, use the same corpus-drift inputs and registry snapshot in reuse mode, first without --force-cold-cache, then with it. Another manual run is not an accepted hosted seed transport."
+            echo "Live provider checks and dependency installation are not cache-equivalence proof."
           fi
           # A single-shard run writes the CANONICAL name: it is the one whose artifact #1564's
           # prior-snapshot fetch consumes, and the aggregate job below reassembles the sharded case

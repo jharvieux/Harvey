@@ -7,6 +7,7 @@ import {
   CORPUS_CACHEABLE_SCANNERS,
   assertCorpusScannerCacheVerification,
   executeCorpusScanner,
+  inspectCorpusScannerSeed,
   type CorpusCacheableScanner,
   type CorpusScannerCacheOptions,
   type CorpusScannerObservation,
@@ -100,6 +101,28 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     expect(warm.findings).toEqual(cold.findings);
     expect(warm.findings.map((row) => row.category)).toEqual(["corpus-cache-test", "corpus-cache-test"]);
     expect(warm.scope).toEqual(cold.scope);
+  });
+
+  it.each(CORPUS_CACHEABLE_SCANNERS)("preflights %s through the same identity and artifact validator as execution (#2049)", async (scanner) => {
+    const cache = options(scanner);
+    const absent = inspectCorpusScannerSeed(cache);
+    expect(absent.status).toBe("missing");
+    const record = await executeCorpusScanner(cache, () => execute([scanner], scanner));
+    expect(record.cache).toBe("miss");
+    expect(inspectCorpusScannerSeed(cache)).toMatchObject({ status: "ready", key: record.key });
+    for (const [component, changed] of [
+      ["identity.implementation", { ...cache, implementation: "changed-source" }],
+      ["identity.targetTree", { ...cache, targetTree: "different-tree" }],
+      ["identity.externalInputs.targetConfig", { ...cache, externalInputs: { ...cache.externalInputs, targetConfig: "different-root" } }],
+    ] as const) {
+      expect(inspectCorpusScannerSeed(changed)).toMatchObject({ status: "incompatible", reason: expect.stringContaining(component) });
+    }
+    const artifact = JSON.parse(readFileSync(absent.path!, "utf8"));
+    artifact.scope.observation = {};
+    const invalid = JSON.stringify(artifact);
+    writeFileSync(absent.path!, invalid);
+    expect(inspectCorpusScannerSeed(cache)).toMatchObject({ status: "invalid", reason: expect.stringContaining("examined-scope metadata") });
+    expect(readFileSync(absent.path!, "utf8")).toBe(invalid);
   });
 
   it("rejects corrupt and wrong-schema artifacts visibly, then recomputes", async () => {

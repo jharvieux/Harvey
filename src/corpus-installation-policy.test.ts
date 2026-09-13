@@ -11,32 +11,35 @@ import type { CorpusScannerRecord } from "./corpus-scanner-cache.js";
 import { EXTERNAL_CORPUS, type CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 // Execute both shipping propagation boundaries without starting unrelated corpus scanners.
-function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult {
+function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> } {
   const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
   const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
-  const helper = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "installTargetDeps")!.getText(ast);
-  let declaration = "";
+  const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
+  const installer = functionText("installTargetDeps");
+  const scannerInvocation = functionText("scannerInvocation");
+  const rootScannerOptions = functionText("rootScannerOptions");
+  const runScanner = functionText("runScanner");
+  let preparation = "";
   let registration = "";
-  let collection = "";
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "dependencyPreparation" && node.initializer?.getText(ast).includes("installTargetDeps")) declaration = `const ${node.getText(ast)};`;
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "prepareDependencies" && node.initializer?.getText(ast).includes("installTargetDeps")) preparation = `const ${node.getText(ast)};`;
     if (ts.isExpressionStatement(node) && node.getText(ast).startsWith("dependencyPreparationsBySlug[target.slug] =")) registration = node.getText(ast);
-    if (ts.isIfStatement(node) && node.expression.getText(ast) === "dependencyPreparation") collection = node.getText(ast);
     ts.forEachChild(node, visit);
   };
   visit(ast);
-  expect(declaration).not.toBe("");
+  expect([installer, preparation, registration, rootScannerOptions, scannerInvocation, runScanner]).not.toContain("");
   const serializer = ast.statements.find((node) => ts.isIfStatement(node) && node.expression.getText(ast) === "jsonOut")!.getText(ast);
   const bindings = {
-    prepareCorpusDependencies, phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
+    prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
     target: { slug: policy.targetSlug, commit: policy.targetRevision, installationPolicy: policy },
-    targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true,
+    targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true, forceColdCache: false,
     timed: (_name: string, fn: () => unknown) => fn(),
     writeFileSync, jsonOut: join(targetDir, "corpus-policy.json"), rows: [], findingsBySlug: {},
     dependencyPreparationsBySlug: {}, detectorRecordsBySlug: {}, mechanicalContextBySlug: {}, currentExecution: undefined,
   };
-  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${helper}\n${declaration}\n${collection}\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  return new Function(...Object.keys(bindings), `${code}\nreturn dependencyPreparation;`)(...Object.values(bindings)) as DependencyPreparationResult;
+  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const handoff = new Function(...Object.keys(bindings), `${code}\nreturn { dependencyPreparation, runQualityScan };`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
+  return Object.assign(handoff.dependencyPreparation, { runQualityScan: handoff.runQualityScan });
 }
 
 describe("revision-bound corpus installation policy (#2047)", () => {
@@ -120,15 +123,14 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(existsSync(f.cacheDir)).toBe(false);
     expect(JSON.parse(readFileSync(join(f.targetDir, "corpus-policy.json"), "utf8")).dependencyPreparations[f.targetSlug][0]).toEqual(JSON.parse(JSON.stringify(second)));
     expect(JSON.parse(readFileSync(join(f.targetDir, "selector-args.json"), "utf8"))).toEqual(["pnpm@11.1.3", "--version"]);
-    const run = (dependencyPreparation: DependencyPreparationResult) => runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "operator policy consumer", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation, cache: { dir: f.cacheDir, mode: "read-write", targetRevision: f.targetRevision, targetTree: f.targetTree } });
-    const success = await run(second);
+    const success = await second.runQualityScan();
     expect(success.findings.some((row) => ["M5-98", "M5-00"].includes(row.id))).toBe(false);
     expect(success.cacheRecord).toBeUndefined();
     expect(readFileSync(join(f.targetDir, "provider-consumed"), "utf8")).toBe("yes");
     rmSync(join(f.targetDir, "provider-consumed"));
     writeFileSync(join(f.targetDir, "mode"), "install-fail");
     const failed = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(failed);
-    const failure = await run(failed);
+    const failure = await failed.runQualityScan();
     expect(failed).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("ERR_POLICY_INSTALL") });
     expect(failed.installation!.stages.at(-1)).toMatchObject({ stage: "frozen", outcome: "failed", exitCode: 42 });
     expect(JSON.parse(readFileSync(join(f.targetDir, "corpus-policy.json"), "utf8")).dependencyPreparations[f.targetSlug][0]).toEqual(JSON.parse(JSON.stringify(failed)));
@@ -143,17 +145,11 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     const dependencyPreparation = prepare({ ...f, installationPolicy: f.policy });
     expect(dependencyPreparation).toMatchObject({ complete: true, sourceTreeCacheable: false });
     const ast = ts.createSourceFile("corpus-drift.ts", readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8"), ts.ScriptTarget.Latest, true);
-    const helper = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "runScanner")!.getText(ast);
-    let call = "";
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && node.expression.getText(ast) === "runScanner" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
-        const kind = node.arguments[0].properties.find((property) => ts.isPropertyAssignment(property) && property.name.getText(ast) === "scanner");
-        if (kind && ts.isPropertyAssignment(kind) && ts.isStringLiteral(kind.initializer) && kind.initializer.text === scanner) call = node.getText(ast);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(ast);
-    expect(call).not.toBe("");
+    const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
+    const rootScannerOptions = functionText("rootScannerOptions");
+    const scannerInvocation = functionText("scannerInvocation");
+    const runScanner = functionText("runScanner");
+    expect([rootScannerOptions, scannerInvocation, runScanner]).not.toContain("");
     const records: CorpusScannerRecord[] = [];
     const events: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { events.push(args.map(String).join(" ")); });
@@ -164,7 +160,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
       targetTreeIdentity: f.targetTree, targetPhaseCacheDir: f.cacheDir,
       scannerRecords: records, dependencyPreparation,
     };
-    const code = ts.transpileModule(`${helper}\nreturn async () => ${call};`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+    const code = ts.transpileModule(`${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nreturn async () => { const invocation = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: scannerRecords, dependencyPreparation }).find((candidate) => candidate.scanner === ${JSON.stringify(scanner)}); if (!invocation) throw new Error("shipping scanner invocation is missing"); return runScanner(invocation); };`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const run = new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as () => Promise<unknown>;
     await run();
     writeFileSync(join(f.targetDir, "generated.ts"), "export const generatedDuringInstallation = true;\n");

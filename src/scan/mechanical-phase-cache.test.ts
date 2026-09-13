@@ -9,6 +9,7 @@ import {
   assertMechanicalCacheVerification,
   createMechanicalProducerRecord,
   executeMechanicalPhase,
+  inspectMechanicalPhaseSeeds,
   MECHANICAL_PHASES,
   mechanicalExaminedUnitDigest,
   mechanicalPhasePayloadDigest,
@@ -128,6 +129,27 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(warm.cache).toBe("hit");
     expect(execute).not.toHaveBeenCalled();
     expect({ findings: warm.findings, scope: warm.scope }).toEqual({ findings: cold.findings, scope: cold.scope });
+  });
+
+  it("preflights every verification phase with the execution validator and excludes live providers (#2049)", async () => {
+    const cache = options();
+    const absent = inspectMechanicalPhaseSeeds(cache);
+    expect(absent.map((seed) => seed.component)).toEqual(CACHEABLE_MECHANICAL_PHASES.map((phase) => `mechanical-phase:${phase}`));
+    expect(absent.every((seed) => seed.status === "missing")).toBe(true);
+    for (const phase of CACHEABLE_MECHANICAL_PHASES) expect((await run(phase, cache)).cache).toBe("miss");
+    expect(inspectMechanicalPhaseSeeds(cache).every((seed) => seed.status === "ready")).toBe(true);
+    const moved = inspectMechanicalPhaseSeeds({ ...cache, externalInputs: { ...cache.externalInputs, configuration: { runtime: "new-runtime" } } });
+    expect(moved.find((seed) => seed.component === "mechanical-phase:configuration"))
+      .toMatchObject({ status: "incompatible", reason: expect.stringContaining("identity.externalInputs.runtime") });
+    const path = absent.find((seed) => seed.component === "mechanical-phase:structural-ast")!.path!;
+    writeFileSync(path, "{broken");
+    expect(inspectMechanicalPhaseSeeds(cache).find((seed) => seed.path === path)).toMatchObject({ status: "invalid" });
+    expect(readFileSync(path, "utf8")).toBe("{broken");
+    expect(inspectMechanicalPhaseSeeds({ ...cache, disabled: { semgrep: "registry unavailable" } }).find((seed) => seed.component === "mechanical-phase:semgrep"))
+      .toMatchObject({ status: "unavailable", reason: "registry unavailable" });
+    const reproducible = inspectMechanicalPhaseSeeds({ ...cache, reproducible: { "secrets-history": "immutable candidate input", "dependency-advisory": "immutable advisory snapshot" } });
+    expect(reproducible.filter((seed) => seed.status === "missing").map((seed) => seed.component))
+      .toEqual(["mechanical-phase:secrets-history", "mechanical-phase:dependency-advisory"]);
   });
 
   it("conserves errors/skips but excludes raw timeout telemetry from the reusable phase store", async () => {

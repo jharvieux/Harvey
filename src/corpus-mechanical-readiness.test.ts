@@ -172,8 +172,9 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expect(workflow).toContain("NOT #1851.6/.7 historical manual→registry proof");
     expect(workflow).not.toContain("Old orchestrator → registry");
     expect(workflow).not.toContain("validate:mechanical-corpus-parity");
-    expect(producer).toContain("const scanDir = prepared!.scanDir");
-    expect(producer.match(/scriptArgs: \[scanDir(?:, "--detect-only")?\]/g)).toHaveLength(3);
+    expect(producer).toContain("const scanDir = prepared.scanDir");
+    expect(producer).toContain("targetMechanicalPlan(target, prepared!, targetPhaseCacheDir)");
+    expect(producer.match(/scriptArgs: \[options\.targetDir(?:, "--detect-only")?\]/g)).toHaveLength(3);
     expect(producer).toContain("installTargetDeps(scanDir, target.m8?.installFlags ?? [], {");
     expect(producer).toContain("targetTree: targetTreeIdentity");
     expect(producer).toContain("dependencyPreparation }");

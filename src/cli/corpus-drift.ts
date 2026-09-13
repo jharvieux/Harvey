@@ -61,7 +61,9 @@ import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
 import type { MechanicalContextMetrics } from "../scan/mechanical-context.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
-import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
+import { binaryVersion, digestFiles, digestParts, inspectMechanicalPhaseSeeds, type MechanicalPhaseCacheOptions } from "../scan/mechanical-phase-cache.js";
+import { inspectSemgrepFamilySeeds } from "../scan/semgrep.js";
+import { assertCorpusCachePreflight, type CorpusCacheSeedReadiness } from "../corpus-cache-preflight.js";
 import {
   loadCorpusAdvisorySnapshot,
   writeCorpusAdvisoryObservation,
@@ -89,8 +91,8 @@ import {
   type ExternalTarget,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
-import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
-import { runCorpusScanner } from "../corpus-scanner-runner.js";
+import { assertCorpusScannerCacheVerification, inspectCorpusScannerSeed, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
+import { planCorpusScannerRun, runCorpusScanner } from "../corpus-scanner-runner.js";
 import { installCorpusDependencyExtras, prepareCorpusDependencies, releaseCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
 import { corpusCacheNamespaceForTarget, shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
@@ -179,6 +181,10 @@ if (currentReadiness && (externalStateMode !== "snapshot" || !phaseCacheDir || !
 }
 if (forceColdCache && !phaseCacheDir) {
   console.error("--force-cold-cache requires HARVEY_CORPUS_PHASE_CACHE_DIR; a cold equivalence run with nowhere to read/write artifacts proves nothing");
+  process.exit(2);
+}
+if (forceColdCache && m8) {
+  console.error("--force-cold-cache verifies source-tier caches and cannot be combined with the --m8 mutation-only pass");
   process.exit(2);
 }
 if (!["live", "snapshot", "live-verify"].includes(externalStateMode)) {
@@ -378,7 +384,7 @@ type ScannerInvocation =
   | { script: "quality-scan"; scanner: "quality-scan" }
   | { script: "mutation-scan"; scanner: "mutation-detect-only" };
 
-async function runScanner(options: ScannerInvocation & {
+type ScannerOptions = ScannerInvocation & {
   scriptArgs: string[];
   targetDir: string;
   targetRevision: string;
@@ -387,7 +393,9 @@ async function runScanner(options: ScannerInvocation & {
   records: CorpusScannerRecord[];
   dependencyPreparation?: DependencyPreparationResult;
   cacheDir?: string;
-}): Promise<Finding[]> {
+};
+
+function scannerInvocation(options: ScannerOptions): Parameters<typeof runCorpusScanner>[0] {
   const common = {
     repoRoot,
     scriptArgs: options.scriptArgs,
@@ -402,13 +410,39 @@ async function runScanner(options: ScannerInvocation & {
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
   } : undefined;
-  const result = options.scanner === "quality-scan"
-    ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", cache })
+  return options.scanner === "quality-scan"
+    ? { ...common, script: "quality-scan", scanner: "quality-scan", cache }
     : options.scanner === "detect-static"
-      ? await runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", cache })
-      : await runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", cache });
+      ? { ...common, script: "detect-static", scanner: "detect-static", cache }
+      : { ...common, script: "mutation-scan", scanner: "mutation-detect-only", cache };
+}
+
+function inspectScannerSeed(options: ScannerOptions): CorpusCacheSeedReadiness[] {
+  const plan = planCorpusScannerRun(scannerInvocation(options));
+  if (!plan.cache) {
+    console.error(`  ${phaseTarget}: CACHE PREFLIGHT EXCLUDED ${options.scanner} ${options.targetConfig}: ${plan.reason}; fresh execution is not cache-equivalence proof`);
+    return [];
+  }
+  const seed = inspectCorpusScannerSeed(plan.cache);
+  return [{ ...seed, component: `${seed.component} ${options.targetConfig}` }];
+}
+
+async function runScanner(options: ScannerOptions): Promise<Finding[]> {
+  if (forceColdCache) {
+    const seeds = inspectScannerSeed(options);
+    if (seeds.length > 0) assertCorpusCachePreflight(phaseTarget, seeds);
+  }
+  const result = await runCorpusScanner(scannerInvocation(options));
   if (result.cacheRecord) options.records.push(result.cacheRecord);
   return result.findings;
+}
+
+function rootScannerOptions(options: Omit<ScannerOptions, "script" | "scanner" | "scriptArgs" | "targetConfig">): ScannerOptions[] {
+  return [
+    { ...options, script: "detect-static", scanner: "detect-static", scriptArgs: [options.targetDir], targetConfig: JSON.stringify({ root: ".", install }) },
+    { ...options, script: "quality-scan", scanner: "quality-scan", scriptArgs: [options.targetDir], targetConfig: JSON.stringify({ root: ".", install }) },
+    { ...options, script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [options.targetDir, "--detect-only"], targetConfig: JSON.stringify({ root: ".", detectOnly: true }) },
+  ];
 }
 
 // #300: installs Stryker + the target's runner plugin, writes the vendored config, and runs the M8
@@ -654,6 +688,81 @@ const persistAdvisoryObservation = (): void => {
 };
 persistAdvisoryObservation();
 
+function targetMechanicalPlan(target: ExternalTarget, prepared: PreparedMechanicalTarget, targetPhaseCacheDir: string | undefined) {
+  const targetTreeIdentity = `${prepared.checkoutTree}:${JSON.stringify(target.vendoredSubtrees ?? [])}:${prepared.preparedTreeSha256}`;
+  const scanDir = prepared.scanDir;
+  const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+  const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
+  const skipNetworkChecks = externalStateMode === "snapshot";
+  const secretCandidateIdentity = deterministicSnapshot ? digestParts([
+    targetTreeIdentity,
+    digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
+    binaryVersion("gitleaks"),
+  ]) : undefined;
+  const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
+    side: "hosted-producer",
+    repoRoot,
+    cacheDir: targetPhaseCacheDir!,
+    targetRevision: target.commit,
+    targetTree: targetTreeIdentity,
+    advisoryDigest: deterministicSnapshot.digest,
+    advisoryVersion: deterministicSnapshot.osvScannerVersion,
+    secretCandidateIdentity,
+    registry: { identity: sharedRegistry!.identity!, files: sharedRegistry!.files! },
+    producerMode: forceColdCache ? "verify" : "read-write",
+    onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+  }) : undefined;
+  const phaseCache = m8 ? undefined : currentPlan?.phaseCache ?? (targetPhaseCacheDir ? buildMechanicalPhaseCache({
+    repoRoot,
+    cacheDir: targetPhaseCacheDir,
+    mode: forceColdCache ? "verify" : "read-write",
+    targetRevision: target.commit,
+    targetTree: targetTreeIdentity,
+    optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: true, skipNetworkChecks, handrolledIndicators: false, authGuards: [], externalStateMode }),
+    deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
+      advisoryDigest: deterministicSnapshot.digest,
+      advisoryVersion: deterministicSnapshot.osvScannerVersion,
+      secretCandidateIdentity,
+    } : undefined,
+    registryPackIdentity: sharedRegistry,
+    registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
+    onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+  }) : undefined);
+  return { targetTreeIdentity, scanDir, snapshot, deterministicSnapshot, skipNetworkChecks, secretCandidateIdentity, currentPlan, phaseCache };
+}
+
+function mechanicalSeedReadiness(prepared: PreparedMechanicalTarget, phaseCache: MechanicalPhaseCacheOptions): CorpusCacheSeedReadiness[] {
+  const seeds = inspectMechanicalPhaseSeeds(phaseCache);
+  const configs = phaseCache.materializedInputs?.semgrep;
+  if (configs && phaseCache.semgrepFamilies) seeds.push(...inspectSemgrepFamilySeeds(prepared.preparedDir, configs, phaseCache.semgrepFamilies));
+  else seeds.push({ component: "semgrep-family:plan", status: "unavailable", reason: "no materialized registry configs and family cache identity are available for exact execution planning" });
+  return seeds;
+}
+
+// Plan the entire selected population before the first scan. Discard each planning checkout;
+// dependency installations stay per-target, and execution rebinds these exact content addresses.
+const coldMechanicalBindings = new Map<string, string>();
+if (forceColdCache) {
+  console.error("Forced-cold preflight: checking every selected target before scan execution. Live provider phases and dependency installation are not cache-equivalence proof.");
+  for (const target of targets) {
+    phaseTarget = target.slug;
+    const planningRoot = mkdtempSync(join(tmpdir(), `harvey-cache-preflight-${target.slug}-`));
+    try {
+      const prepared = prepareCurrentMechanicalTarget({ target, checkoutDir: join(planningRoot, "checkout"), preparedDir: join(planningRoot, "mechanical-prepared"), cloneCacheDir: process.env.HARVEY_CORPUS_CACHE_DIR });
+      const targetPhaseCacheDir = join(phaseCacheDir!, `shard${corpusCacheNamespaceForTarget(EXTERNAL_CORPUS.map((entry) => entry.slug), target.slug)}`);
+      const plan = targetMechanicalPlan(target, prepared, targetPhaseCacheDir);
+      coldMechanicalBindings.set(target.slug, assertCorpusCachePreflight(target.slug, mechanicalSeedReadiness(prepared, plan.phaseCache!)));
+      if (!install) {
+        const seeds = rootScannerOptions({ targetDir: plan.scanDir, targetRevision: target.commit, targetTree: plan.targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [] }).flatMap(inspectScannerSeed);
+        if (seeds.length > 0) assertCorpusCachePreflight(target.slug, seeds);
+      }
+      console.error(`  ${target.slug}: mechanical/family seed identities ready${install ? "; eligible scanner identities require real dependency preparation and are checked before that target scans" : "; eligible source-scanner seeds checked"}`);
+    } finally {
+      rmSync(planningRoot, { recursive: true, force: true });
+    }
+  }
+}
+
 for (const target of targets) {
   const targetRoot = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
   const dir = join(targetRoot, "checkout");
@@ -694,9 +803,7 @@ for (const target of targets) {
         cloneCacheDir: process.env.HARVEY_CORPUS_CACHE_DIR,
       });
     });
-    const targetTreeIdentity = `${prepared!.checkoutTree}:${JSON.stringify(target.vendoredSubtrees ?? [])}:${prepared!.preparedTreeSha256}`;
-    const scanDir = prepared!.scanDir;
-    const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+    const { targetTreeIdentity, scanDir, snapshot, deterministicSnapshot, skipNetworkChecks, secretCandidateIdentity, currentPlan, phaseCache } = targetMechanicalPlan(target, prepared!, targetPhaseCacheDir);
     if (advisoryObservation && snapshot) {
       advisoryObservation.targets[target.slug]!.snapshot = {
         artifactSha256: snapshot.digest,
@@ -706,26 +813,29 @@ for (const target of targets) {
       };
       persistAdvisoryObservation();
     }
-    const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
-    const skipNetworkChecks = externalStateMode === "snapshot";
-    const secretCandidateIdentity = deterministicSnapshot ? digestParts([
-      targetTreeIdentity,
-      digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
-      binaryVersion("gitleaks"),
-    ]) : undefined;
-    const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
-      side: "hosted-producer",
-      repoRoot,
-      cacheDir: targetPhaseCacheDir!,
-      targetRevision: target.commit,
-      targetTree: targetTreeIdentity,
-      advisoryDigest: deterministicSnapshot.digest,
-      advisoryVersion: deterministicSnapshot.osvScannerVersion,
-      secretCandidateIdentity,
-      registry: { identity: sharedRegistry!.identity!, files: sharedRegistry!.files! },
-      producerMode: forceColdCache ? "verify" : "read-write",
-      onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
-    }) : undefined;
+    if (forceColdCache) {
+      const binding = assertCorpusCachePreflight(target.slug, mechanicalSeedReadiness(prepared!, phaseCache!));
+      if (binding !== coldMechanicalBindings.get(target.slug)) throw new Error(`${target.slug}: forced-cold mechanical/family plan changed after population preflight; keep the same immutable source, target, runtime/tools, mode and registry snapshot`);
+    }
+    const prepareDependencies = (): DependencyPreparationResult | undefined => {
+      const preparation = install
+        ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
+          targetSlug: target.slug,
+          targetRevision: target.commit,
+          targetTree: targetTreeIdentity,
+          sourceRoot: ".",
+          installationPolicy: target.installationPolicy,
+        }, targetPhaseCacheDir))
+        : undefined;
+      if (preparation) dependencyPreparations.push(preparation);
+      return preparation;
+    };
+    let dependencyPreparation = forceColdCache ? prepareDependencies() : undefined;
+    const scannerRecords: CorpusScannerRecord[] = [];
+    if (forceColdCache) {
+      const seeds = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: scannerRecords, dependencyPreparation }).flatMap(inspectScannerSeed);
+      if (seeds.length > 0) assertCorpusCachePreflight(target.slug, seeds);
+    }
     const mechanicalRun = !m8 ? await runMechanicalScanDetailed({
       dir: preparedDir,
       skipNetworkChecks,
@@ -749,22 +859,7 @@ for (const target of targets) {
         }
       } : undefined,
       secretCandidateIdentity,
-      phaseCache: currentPlan?.phaseCache ?? (targetPhaseCacheDir ? buildMechanicalPhaseCache({
-        repoRoot,
-        cacheDir: targetPhaseCacheDir,
-        mode: forceColdCache ? "verify" : "read-write",
-        targetRevision: target.commit,
-        targetTree: targetTreeIdentity,
-        optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: true, skipNetworkChecks, handrolledIndicators: false, authGuards: [], externalStateMode }),
-        deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
-          advisoryDigest: deterministicSnapshot.digest,
-          advisoryVersion: deterministicSnapshot.osvScannerVersion,
-          secretCandidateIdentity,
-        } : undefined,
-        registryPackIdentity: sharedRegistry,
-        registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
-        onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
-      }) : undefined),
+      phaseCache,
     }) : undefined;
     if (mechanicalRun) {
       assertPreparedTargetUnchanged(prepared!);
@@ -806,21 +901,9 @@ for (const target of targets) {
       }
     }
 
-    // #251: before any scanner — knip needs these present to resolve the target's config. When the
-    // content-addressed phase transport is available, this returns the validated preparation key
-    // that is the installed-population identity for quality-scan; a failed/legacy install remains
-    // visible and keeps quality-scan fresh.
-    const dependencyPreparation = install
-      ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
-        targetSlug: target.slug,
-        targetRevision: target.commit,
-        targetTree: targetTreeIdentity,
-        sourceRoot: ".",
-        installationPolicy: target.installationPolicy,
-      }, targetPhaseCacheDir))
-      : undefined;
-    if (dependencyPreparation) dependencyPreparations.push(dependencyPreparation);
-    const scannerRecords: CorpusScannerRecord[] = [];
+    // The default path still installs after mechanical scanning. Forced-cold readiness needs the
+    // real preparation receipt before deciding which scanner comparisons are eligible.
+    if (!forceColdCache) dependencyPreparation = prepareDependencies();
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
     // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
@@ -860,11 +943,10 @@ for (const target of targets) {
     // mutation-scan runs --detect-only (#470): this job provisions no Stryker, so it must only
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
-    let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
-    ];
+    let findings: Finding[] = [];
+    for (const invocation of rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: scannerRecords, dependencyPreparation })) {
+      findings.push(...await timedAsync(invocation.script, () => runScanner(invocation)));
+    }
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
     // tree with the package.json), while every other module keeps the whole repo. The scoped
