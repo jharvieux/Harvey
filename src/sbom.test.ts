@@ -4,10 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 import { checkLicenseCompliance } from "./scan/supply-chain.js";
+import { buildHtml } from "../report-template/render.mjs";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
 const inventory = ({ components, unmatched }: ReturnType<typeof parsePackageLock>) => ({ components, unmatched });
+const unresolvedAlias = (name: string, targetName: string, range: string) => ({
+  name, direct: true, unresolvedAlias: { declared: `npm:${targetName}@${range}`, targetName, range },
+});
 
 describe("lockfile parsing", () => {
   it("reads resolved versions, the dev flag, and (#1079) the license and integrity hash from package-lock v2/v3", () => {
@@ -387,7 +391,7 @@ describe("licenseScope (#1213)", () => {
       { name: "root-real", version: "1.0.0", license: "MIT", direct: true },
       { name: "@actual/pkg", version: "2.0.0", license: "MIT", direct: true },
       { name: "unresolved-real", version: "1.0.0", license: "MIT", direct: false },
-      { name: "unresolved", direct: true },
+      unresolvedAlias("unresolved", "unresolved-real", "1.0.0"),
     ]);
   });
 
@@ -405,6 +409,48 @@ describe("licenseScope (#1213)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(findings.map((finding) => finding.id)).toEqual(ids);
     expect(findings.find((finding) => finding.id.startsWith("SUP-LICENSE-COPYLEFT"))?.evidence ?? "").not.toContain("reached only through the resolved dependency tree");
+  });
+
+  it.each(["MIT", "GPL-3.0"])("does not classify an unresolved npm alias from an unrelated %s registry package", async (license) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { ordinary: "1.0.0" }, optionalDependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/ordinary": { version: "1.0.0", license: "MIT" },
+    } }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ name: "alias", license }), { status: 200 })) as unknown as typeof fetch;
+    const scope = licenseScope(dir);
+    const online = await checkLicenseCompliance(scope, { fetchImpl });
+    const offline = await checkLicenseCompliance(scope, { skipRegistry: true });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(online.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(online).toEqual(offline);
+    expect(online[0]?.evidence).toContain("alias");
+    expect(online[0]?.evidence).toContain("npm:@actual/pkg@^2.0.0");
+    expect(online[0]?.evidence).toContain("installation");
+    const html = buildHtml({
+      meta: {
+        client: "ALIAS-REPRO", subtitle: "license", date: "2026-09-12", commit: "fixture", auditor: "Harvey",
+        confidential: false, overallHealth: 6, tenantIsolation: "Unverified", authModel: "Unknown",
+        headline: "Alias license assessment", scope: "synthetic", methodology: "ten modules", outOfScope: "infrastructure",
+      },
+      findings: online,
+    });
+    expect(html).toContain("SUP-LICENSE-00");
+    expect(html).toContain("npm:@actual/pkg@^2.0.0");
+    expect(html).toContain("declaration-to-installation resolution unproved");
+  });
+
+  it("keeps an npm alias unresolved when the inventory contains only manifest ranges", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@next" } }));
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toEqual([unresolvedAlias("alias", "@actual/pkg", "next")]);
+    expect(scope.completeness).toBe("incomplete");
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "MIT" }), { status: 200 })) as unknown as typeof fetch;
+    const online = await checkLicenseCompliance(scope, { fetchImpl });
+    const offline = await checkLicenseCompliance(scope, { skipRegistry: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(online).toEqual(offline);
+    expect(online[0]?.evidence).toContain("npm:@actual/pkg@next");
   });
 
   it("keeps escaped workspace manifests out of the exact declared license population", () => {
@@ -493,7 +539,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(scope.candidates).toEqual([
       { name: "parent", version: "1.0.0", license: "MIT", direct: true },
       { ...alias, direct: false },
-      { name: "alias", direct: true },
+      unresolvedAlias("alias", "real", "1.0.0"),
     ]);
     const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-real@1.0.0", "SUP-LICENSE-00"]);
@@ -535,7 +581,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     const scope = licenseScope(dir);
     expect(scope.candidates).toEqual([
       { name: "real-b", version: "2.0.0", license: "MIT", direct: true },
-      { name: "alias", direct: true },
+      unresolvedAlias("alias", target, range),
     ]);
     const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
@@ -555,7 +601,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     }, { "packages/a": { dependencies: { alias: "npm:real@^1.0.0" } } });
     const scope = licenseScope(dir);
     expect(scope.candidates).toContainEqual({ name: "real", version: "1.0.0", license: "MIT", direct: false });
-    expect(scope.candidates).toContainEqual({ name: "alias", direct: true });
+    expect(scope.candidates).toContainEqual(unresolvedAlias("alias", "real", "^1.0.0"));
     const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toContain("SUP-LICENSE-00");
     for (const finding of findings.filter((finding) => finding.id.startsWith("SUP-LICENSE-COPYLEFT"))) {
@@ -586,6 +632,25 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings.every((finding) => finding.evidence.includes("declared in a manifest"))).toBe(true);
   });
 
+  it("keeps two unresolved workspace declarations with the same alias key distinct", async () => {
+    write({ workspaces: ["packages/*"] }, { "node_modules/ordinary": { version: "1.0.0", license: "MIT" } }, {
+      "packages/a": { dependencies: { alias: "npm:real-a@1.0.0" } },
+      "packages/b": { dependencies: { alias: "npm:real-b@2.0.0" } },
+    });
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toEqual([
+      { name: "ordinary", version: "1.0.0", license: "MIT", direct: false },
+      unresolvedAlias("alias", "real-a", "1.0.0"),
+      unresolvedAlias("alias", "real-b", "2.0.0"),
+    ]);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(scope, { fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("npm:real-a@1.0.0");
+    expect(findings[0]?.evidence).toContain("npm:real-b@2.0.0");
+  });
+
   it.each(["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"])("reconciles a versionless scoped npm alias declared in %s", async (section) => {
     write({ [section]: { "@scope/alias": "npm:@actual/pkg" } }, {
       "node_modules/@scope/alias": { name: "@actual/pkg", version: "1.0.0", license: "MIT" },
@@ -604,7 +669,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({
       dependencies: { alias: "npm:old@1.0.0" }, peerDependencies: { alias: "npm:real@2.0.0" },
     }));
-    expect(licenseScope(dir).candidates).toEqual([{ name: "real", version: "2.0.0", license: "MIT", direct: true }, { name: "alias", direct: true }]);
+    expect(licenseScope(dir).candidates).toEqual([{ name: "real", version: "2.0.0", license: "MIT", direct: true }, unresolvedAlias("alias", "old", "1.0.0")]);
     expect((await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true })).map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
   });
 
@@ -614,7 +679,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     ["scoped basename collision", "node_modules/@scope/alias", "real"],
   ])("does not satisfy a root alias with an %s", async (_label, path, name) => {
     write({ optionalDependencies: { alias: "npm:real@1.0.0" } }, { [path]: { name, version: "1.0.0", license: "MIT" } });
-    expect(licenseScope(dir).candidates).toEqual([{ name, version: "1.0.0", license: "MIT", direct: false }, { name: "alias", direct: true }]);
+    expect(licenseScope(dir).candidates).toEqual([{ name, version: "1.0.0", license: "MIT", direct: false }, unresolvedAlias("alias", "real", "1.0.0")]);
     expect((await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true })).map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
   });
 
@@ -639,7 +704,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     write({ dependencies: { alias: `npm:real@${range}` } }, { "node_modules/alias": { name: "real", version, license: "GPL-3.0" } });
     expect(licenseScope(dir).candidates).toEqual([
       { name: "real", version, license: "GPL-3.0", direct: resolved },
-      ...resolved ? [] : [{ name: "alias", direct: true }],
+      ...resolved ? [] : [unresolvedAlias("alias", "real", range)],
     ]);
     const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toEqual([`SUP-LICENSE-COPYLEFT-real@${version}`, ...resolved ? [] : ["SUP-LICENSE-00"]]);
@@ -685,7 +750,7 @@ describe("npm alias provenance (#2046 B2)", () => {
       const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
       expect.soft(scope.candidates).toEqual([
         { name: "real", version, license, direct: resolved },
-        ...resolved ? [] : [{ name: "alias", direct: true }],
+        ...resolved ? [] : [unresolvedAlias("alias", "real", range)],
       ]);
       expect.soft(findings.map((finding) => finding.id)).toEqual([
         ...license === "GPL-3.0" ? [`SUP-LICENSE-COPYLEFT-real@${version}`] : [],
@@ -702,7 +767,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     });
     const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ license: "MIT" }), { status: String(url).endsWith("/missing") ? 404 : 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
-    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual(["https://registry.npmjs.org/%40actual%2Fpkg/1.0.0", "https://registry.npmjs.org/missing"]);
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual(["https://registry.npmjs.org/%40actual%2Fpkg/1.0.0"]);
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
     expect(findings[0]?.evidence).toContain("Not assessed: missing");
   });

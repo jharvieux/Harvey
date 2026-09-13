@@ -154,6 +154,8 @@ export function licenseCoverageFinding(names: readonly string[], reason: string,
       (scope.completeness === "complete" ? "" : ` The dependency inventory itself is ${scope.completeness}: ${scope.note}`)
     : undefined;
   const treeIncomplete = scope !== undefined && scope.completeness !== "complete";
+  const aliasUnresolved = scope?.candidates.some((candidate) => candidate.unresolvedAlias !== undefined);
+  const aliasFix = "Verify the alias installation, target name, selected version, and declared range in a supported npm lockfile, then re-run the license check.";
   return coverageFinding({
     id: "SUP-LICENSE-00",
     title:
@@ -164,9 +166,11 @@ export function licenseCoverageFinding(names: readonly string[], reason: string,
     evidence: [scopeSentence, reason, names.length > 0 ? `Not assessed: ${sampleNames(names)}.` : undefined].filter(Boolean).join(" "),
     impact:
       "License classification reads the license the lockfile or the registry records; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
-    fix: treeIncomplete
-      ? `Commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) so the transitive tree is in scope. ${REGISTRY_FIX}`
-      : REGISTRY_FIX,
+    fix: [
+      treeIncomplete ? "Commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) so the transitive tree is in scope." : undefined,
+      aliasUnresolved ? aliasFix : undefined,
+      aliasUnresolved ? `For other registry lookup gaps, ${REGISTRY_FIX.charAt(0).toLowerCase()}${REGISTRY_FIX.slice(1)}` : REGISTRY_FIX,
+    ].filter(Boolean).join(" "),
   });
 }
 
@@ -683,6 +687,12 @@ export async function checkLicenseCompliance(
   for (const candidate of ordered) {
     const { name, version } = candidate;
     const coordinate = version ? `${name}@${version}` : name;
+    if (candidate.unresolvedAlias) {
+      const { declared, targetName, range } = candidate.unresolvedAlias;
+      indeterminate.push(`${name} (declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}; declaration-to-installation resolution unproved)`);
+      reasons.add("the selected dependency inventory did not prove that the declared npm alias target and range resolve to a matching installed package/version; a registry response for the alias key cannot establish that identity");
+      continue;
+    }
     let licenseId = candidate.license;
     let source = "the lockfile";
     if (licenseId === undefined) {

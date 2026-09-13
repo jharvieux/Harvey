@@ -669,6 +669,10 @@ export function collectDependencies(dir: string): DependencySource {
 export interface LicenseCandidate {
   name: string;
   version?: string;
+  // A manifest's npm alias key is not a published-package identity until a matching
+  // installation proves the target and selected version. Keep the declaration intact
+  // so the license consumer can disclose this gap without querying the alias key.
+  unresolvedAlias?: { declared: string; targetName?: string; range?: string };
   // The license the lockfile records, when its format has the field. package-lock.json does;
   // pnpm-lock.yaml and yarn.lock do not, so for those every candidate needs a registry lookup.
   license?: string;
@@ -702,9 +706,9 @@ export interface LicenseScope {
 //
 // Keyed by name@version, so a tree holding two versions of one package under different licenses
 // yields both — the name-keyed map this replaced silently kept whichever entry parsed last.
-// A manifest-declared name the tree never resolved is still a candidate (no lockfile at all, or an
-// optionalDependency the lockfile skipped); it carries no version and no license, so it falls
-// through to the registry lookup exactly as it did before.
+// A manifest-declared ordinary name the tree never resolved is still a candidate (no lockfile at
+// all, or an optionalDependency the lockfile skipped); it carries no version and no license for
+// registry lookup. An unresolved npm alias instead retains its declaration for a coverage row.
 //
 // #1232: the DECLARED half now comes from every workspace member's manifest, not the root's alone.
 // That is not a coverage change — the root lockfile already resolves each member's packages, so
@@ -723,27 +727,32 @@ export function licenseScope(dir: string): LicenseScope {
     componentsByName.set(component.name, entries);
   }
   const npmTree = deps.source === "package-lock.json";
-  const unresolved = new Set<string>();
+  const unresolved = new Map<string, LicenseCandidate>();
   const directResolved = new Set<string>();
   for (const manifest of workspace.manifests) {
     for (const section of [...RANGE_SECTIONS, "peerDependencies"] as const) {
       for (const [name, specifier] of Object.entries(manifest[section] ?? {})) {
         // npm's optionalDependencies override the same key in dependencies.
         if (section === "dependencies" && Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
-        if (npmTree && typeof specifier === "string" && specifier.startsWith("npm:")) {
+        if (typeof specifier === "string" && specifier.startsWith("npm:")) {
           const target = npmAliasTarget(specifier);
-          const installation = visibleInstallation(installations, manifest.label, name);
+          const installation = npmTree ? visibleInstallation(installations, manifest.label, name) : undefined;
           if (target && installation?.version && installation.name === target.name && aliasVersionMatches(installation.version, target.range)) {
             directResolved.add(`${installation.name}\u0000${installation.version}`);
           } else {
             // Success in another manifest never erases this declaration's unresolved coverage.
-            unresolved.add(name);
+            unresolved.set(`alias\u0000${name}\u0000${specifier}`, {
+              name, direct: true,
+              unresolvedAlias: {
+                declared: specifier,
+                ...(target ? { targetName: target.name, range: target.range } : {}),
+              },
+            });
           }
         } else {
-          // Ordinary declarations retain their existing name-based reach. Other lockfile
-          // parsers also lack the installation provenance needed to reconcile npm aliases.
+          // Ordinary declarations retain their existing name-based reach.
           const matches = componentsByName.get(name) ?? [];
-          if (matches.length === 0) unresolved.add(name);
+          if (matches.length === 0) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
           for (const component of matches) directResolved.add(`${component.name}\u0000${component.version}`);
         }
       }
@@ -751,6 +760,9 @@ export function licenseScope(dir: string): LicenseScope {
   }
   const candidates: LicenseCandidate[] = [];
   for (const c of deps.components) {
+    // The manifest-only inventory records declaration specifiers in `version`; an npm:
+    // value is not an installed version or a license lookup coordinate.
+    if (deps.source === "package.json" && typeof c.version === "string" && c.version.startsWith("npm:")) continue;
     candidates.push({
       name: c.name,
       ...(c.version ? { version: c.version } : {}),
@@ -759,7 +771,7 @@ export function licenseScope(dir: string): LicenseScope {
       direct: directResolved.has(`${c.name}\u0000${c.version}`),
     });
   }
-  for (const name of unresolved) candidates.push({ name, direct: true });
+  candidates.push(...unresolved.values());
   return {
     candidates,
     source: deps.source,
