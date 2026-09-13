@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
 import { buildM8CorpusPlan, type M8TargetResult } from "../scan/m8-corpus-artifacts.js";
+import { describePreparationStages } from "../corpus-package-manager.js";
 
 const plan = buildM8CorpusPlan(EXTERNAL_CORPUS, M8_CORPUS_CONFIGS);
 const cli = join(import.meta.dirname, "corpus-m8.ts");
@@ -16,17 +17,31 @@ describe("M8 target failure evidence (#2057)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it("retains a bounded, redacted extra-install cause through target and aggregate artifacts", () => {
+  it.each(["separate streams", "multiline preparation detail"])("retains bounded, redacted %s through target and aggregate artifacts", (shape) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-wrapper-"));
     dirs.push(root);
     const bin = join(root, "bin");
     mkdirSync(bin);
+    const detail = describePreparationStages([{
+      stage: "tool-install", outcome: "failed", exitCode: 42, command: ["pnpm", "add"],
+      selected: {
+        executable: "/tools/pnpm", executableSha256: "a".repeat(64), version: "11.1.3",
+        launcher: "pnpm", launcherRealpath: "/tools/node", launcherSha256: "b".repeat(64),
+        nodeExecutable: process.execPath, nodeVersion: process.version,
+      },
+      reason: "ERR_PNPM_STDOUT_2057 Authorization: Bearer abcdefgh12345678 https://alice:passwordvalue@example.invalid/pkg?token=queryvalue\nERR_PNPM_STDERR_2057 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345\n" + "peer dependency detail\n".repeat(220),
+    }]);
+    const output = shape === "multiline preparation detail" ? [
+      `writeSync(2, ${JSON.stringify(`DEPENDENCY PREP TOOL ${detail}\nError: tool installation failed: ${detail}\n`)});`,
+    ] : [
+      `writeSync(1, "tool-install failed, exit 42: /tools/pnpm@11.1.3; ERR_PNPM_STDOUT_2057 Authorization: Bearer abcdefgh12345678 https://alice:passwordvalue@example.invalid/pkg?token=queryvalue\\n");`,
+      `writeSync(2, "ERR_PNPM_STDERR_2057 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345\\n");`,
+    ];
     writeFileSync(join(bin, "pnpm"), [
       `#!${process.execPath}`,
       `const { writeSync } = require("node:fs");`,
       `writeSync(1, "noise\\n".repeat(20000));`,
-      `writeSync(1, "tool-install failed, exit 42: /tools/pnpm@11.1.3; ERR_PNPM_STDOUT_2057 Authorization: Bearer abcdefgh12345678 https://alice:passwordvalue@example.invalid/pkg?token=queryvalue\\n");`,
-      `writeSync(2, "ERR_PNPM_STDERR_2057 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345\\n");`,
+      ...output,
       `writeSync(1, "traceback filler\\n".repeat(1000));`,
       `writeSync(2, "traceback filler\\n".repeat(1000));`,
       `process.exit(42);`,

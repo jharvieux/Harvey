@@ -31,9 +31,14 @@ function required(flag: string): string {
 
 function failureExcerpt(output: string): string {
   const safe = scrubSecrets(output).trim();
-  const marker = safe.split("\n").filter((line) => /tool-install|tool installation failed|ERR_PNPM_/i.test(line)).at(-1)?.slice(-500);
-  const tail = safe.slice(-2500);
-  return marker && !tail.includes(marker) ? `${marker}\n${tail}` : tail;
+  const lines = safe.split("\n");
+  // Preparation reports combine manager identity and multiline child causes. Bound these
+  // independently so the final error marker cannot displace the selected manager or first cause.
+  const stages = [...new Set(lines.filter((line) => /tool-install|tool installation failed/i.test(line)).map((line) => line.slice(0, 600)))];
+  const causes = [...new Set(lines.filter((line) => /\bERR_[A-Z0-9_]+|\berror\s*:/i.test(line)).map((line) => line.slice(0, 400)))];
+  const retained = [...new Set([...stages.slice(0, 1), ...stages.slice(-1), ...causes.slice(0, 2), ...causes.slice(-2)])];
+  const tail = safe.slice(-1000);
+  return [...retained.filter((line) => !tail.includes(line)), tail].join("\n");
 }
 
 if (mode === "plan") {

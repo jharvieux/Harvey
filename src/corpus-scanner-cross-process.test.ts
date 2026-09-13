@@ -1147,8 +1147,9 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
       expect(existsSync(store)).toBe(true);
       const manifest = readFileSync(join(directory, "package.json"));
       const lock = readFileSync(join(directory, "pnpm-lock.yaml"));
-      const memberManifest = appPath ? readFileSync(join(appDir, "package.json")) : undefined;
-      const memberLock = appPath ? join(appDir, "pnpm-lock.yaml") : undefined;
+      const currentAppDir = appPath ? join(directory, appPath) : directory;
+      const memberManifest = appPath ? readFileSync(join(currentAppDir, "package.json")) : undefined;
+      const memberLock = appPath ? join(currentAppDir, "pnpm-lock.yaml") : undefined;
       const memberLockBefore = memberLock && existsSync(memberLock) ? readFileSync(memberLock) : undefined;
       expect(runMutation("m8-local", directory, config, prepared)).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
       const extra = prepared.installation!.stages.at(-1)!;
@@ -1157,7 +1158,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
       expect(extra.command).not.toContain("--legacy-peer-deps");
       expect(readFileSync(join(directory, "package.json"))).toEqual(manifest);
       expect(readFileSync(join(directory, "pnpm-lock.yaml"))).toEqual(lock);
-      if (memberManifest) expect(readFileSync(join(appDir, "package.json"))).toEqual(memberManifest);
+      if (memberManifest) expect(readFileSync(join(currentAppDir, "package.json"))).toEqual(memberManifest);
       if (memberLock) {
         expect(existsSync(memberLock)).toBe(memberLockBefore !== undefined);
         if (memberLockBefore) expect(readFileSync(memberLock)).toEqual(memberLockBefore);
@@ -1182,7 +1183,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
           { path: "package.json", before: manifest, after: readFileSync(join(directory, "package.json")) },
           { path: "pnpm-lock.yaml", before: lock, after: readFileSync(join(directory, "pnpm-lock.yaml")) },
           ...(appPath ? [
-            { path: `${appPath}/package.json`, before: memberManifest, after: readFileSync(join(appDir, "package.json")) },
+            { path: `${appPath}/package.json`, before: memberManifest, after: readFileSync(join(currentAppDir, "package.json")) },
             { path: `${appPath}/pnpm-lock.yaml`, before: memberLockBefore, after: existsSync(memberLock!) ? readFileSync(memberLock!) : undefined },
           ] : []),
         ];
