@@ -36,7 +36,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   const inertOnly = (at: ts.Node): void => { if (mutationAllowed) fail(at, "native metadata cannot determine registry membership"); };
   const shadows = (name: string, file: CensusFile): boolean => file.source!.statements.some((s) => {
     if (ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s)) return s.name?.text === name;
-    if (ts.isVariableStatement(s)) return s.declarationList.declarations.some((d) => d.name.getText() === name);
+    if (ts.isVariableStatement(s)) return s.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name);
     if (!ts.isImportDeclaration(s) || s.importClause?.isTypeOnly) return false;
     const clause = s.importClause;
     return clause?.name?.text === name || !!clause?.namedBindings && (ts.isNamespaceImport(clause.namedBindings) ? clause.namedBindings.name.text === name : clause.namedBindings.elements.some((e) => !e.isTypeOnly && e.name.text === name));
@@ -80,6 +80,12 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     moduleOrder.push(scope);
     return scope;
   };
+  const propertyKey = (name: ts.Node): string => {
+    // AST text decodes escapes; numeric literals use JavaScript's canonical string key.
+    const key = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : ts.isNumericLiteral(name) ? String(Number(name.text)) : fail(name, `property name ${ts.SyntaxKind[name.kind]} is not modeled`);
+    if (["__proto__", "constructor", "prototype"].includes(key)) fail(name, "prototype property is outside the registry grammar");
+    return key;
+  };
   const own = (value: unknown, key: string, node: ts.Node): unknown => {
     if (key === "__proto__" || key === "constructor" || key === "prototype") return fail(node, "prototype access is outside the registry grammar");
     if (value instanceof Set) {
@@ -111,7 +117,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (ts.isObjectBindingPattern(name)) {
       for (const part of name.elements) {
         if (part.dotDotDotToken || part.initializer) fail(part, "rest/default binding is not modeled");
-        const key = part.propertyName?.getText().replace(/^["']|["']$/g, "") ?? part.name.getText();
+        const key = propertyKey(part.propertyName ?? part.name);
         bind(part.name, own(value, key, part), scope);
       }
       return;
@@ -257,9 +263,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
           if (!value || typeof value !== "object" || Array.isArray(value) || closures.has(value) || isOpaque(value)) fail(property, "object spread input must be registry data");
           Object.assign(data, value);
         } else if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
-          if (ts.isComputedPropertyName(property.name)) fail(property, "computed property is not modeled");
-          const key = property.name.getText().replace(/^["']|["']$/g, "");
-          if (["__proto__", "constructor", "prototype"].includes(key)) fail(property, "prototype property is outside the registry grammar");
+          const key = propertyKey(property.name);
           data[key] = ts.isPropertyAssignment(property) ? evaluate(property.initializer, scope) : lookup(property.name.text, scope, property);
         } else fail(property, "object method/accessor is not registry data");
       }
@@ -283,7 +287,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     }).join("");
     if (ts.isConditionalExpression(node)) return evaluate(known(evaluate(node.condition, scope), node.condition) ? node.whenTrue : node.whenFalse, scope);
     if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword && node.name.text === "url") { inertOnly(node); return snapshotPath(scope.file.path, "module-url"); }
-    if (ts.isPropertyAccessExpression(node)) return own(evaluate(node.expression, scope), node.name.text, node);
+    if (ts.isPropertyAccessExpression(node)) return own(evaluate(node.expression, scope), propertyKey(node.name), node);
     if (ts.isElementAccessExpression(node)) {
       const key = evaluate(node.argumentExpression, scope);
       if (typeof key !== "string" && typeof key !== "number") return fail(node, "element key must be scalar");
@@ -333,7 +337,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     }
     if (ts.isCallExpression(node)) {
       if (ts.isPropertyAccessExpression(node.expression)) {
-        const receiver = evaluate(node.expression.expression, scope); const method = node.expression.name.text;
+        const receiver = evaluate(node.expression.expression, scope); const method = propertyKey(node.expression.name);
         if (typeof receiver === "string" && method === "replace" && node.arguments.length === 2 && ts.isRegularExpressionLiteral(node.arguments[0]!)) {
           // The prefix is literal and anchored; native string replacement preserves $ substitutions.
           const prefix = node.arguments[0]!.getText().match(/^\/\^([A-Za-z0-9_-]+)\/$/)?.[1];
@@ -378,7 +382,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     for (const statement of module.file.source!.statements) {
       if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
         if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
-        constants.set(declaration.name.getText(), declaration); initializationPositions.set(declaration, position++);
+        constants.set((declaration.name as ts.Identifier).text, declaration); initializationPositions.set(declaration, position++);
       }
       if (ts.isIfStatement(statement)) initializationPositions.set(statement, position++);
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text.startsWith(".") && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
@@ -395,7 +399,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     for (const statement of module.file.source!.statements) {
       if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
         if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
-        lookup(declaration.name.getText(), module, declaration);
+        lookup((declaration.name as ts.Identifier).text, module, declaration);
       }
       if (ts.isIfStatement(statement) && !importGuards.has(statement)) {
         const previousPosition: number | null = initializing; initializing = initializationPositions.get(statement)!;

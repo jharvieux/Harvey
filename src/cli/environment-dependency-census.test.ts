@@ -43,13 +43,63 @@ function registryControl(source: string, siblings: Record<string, string | Uint8
   mkdirSync(join(p.root, "src/scan"), { recursive: true });
   writeFileSync(join(p.root, "package.json"), '{"type":"module"}\n');
   writeFileSync(join(p.root, "src/scan/calibration.ts"), source);
-  for (const [path, text] of Object.entries(siblings)) writeFileSync(join(p.root, "src/scan", path), text);
+  for (const [path, text] of Object.entries(siblings)) {
+    const file = join(p.root, "src/scan", path); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text);
+  }
   p.git(["add", "."]);
   p.git(["-c", "user.name=Census control", "-c", "user.email=census@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Add registry evaluation control"]);
   return p;
 }
 
 describe("environment dependency shipping CLI (#1906)", () => {
+  it.each([
+    ["Unicode string tier", "", "'\\u0065xpectedTier': 'local'"],
+    ["Unicode string module", "", "'\\u006dodule': 'M6'"],
+    ["hexadecimal string module", "", "'\\x6dodule': 'M6'"],
+    ["code-point string module", "", "'\\u{6d}odule': 'M6'"],
+    ["escaped identifier module", "", "\\u006dodule: 'M6'"],
+    ["escaped shorthand binding", "const \\u006dodule = 'M6';", "\\u006dodule"],
+    ["escaped destructuring property", "function make() { const { '\\u006dodule': tag } = { module: 'M6' }; return tag; }", "module: make()"],
+    ["escaped destructuring shorthand", "function make() { const { \\u006dodule } = { module: 'M6' }; return module; }", "module: make()"],
+    ["numeric destructuring property", "function make() { const { 0x10: tag } = { 16: 'M6' }; return tag; }", "module: make()"],
+    ["hexadecimal numeric key", "", "module: { 0x10: 'M6' }[16]"],
+    ["exponent numeric key", "", "module: { 1e2: 'M6' }[100]"],
+    ["separator numeric key", "", "module: { 1_000: 'M6' }[1000]"],
+    ["escaped numeric-looking string key", "", "module: { '\\x31e2': 'M6' }['1e2']"],
+    ["allowed prototype-like key", "", "module: { '\\u0063onstructorValue': 'M6' }.constructorValue"],
+  ])("decodes record keys for %s before assigning scorer ownership", async (_, declarations, properties) => {
+    const p = registryControl(`export const LIVE_TIERS = ['local', 'connected', 'hosted'];
+export function mechanicalCorpus(corpus) { return corpus.filter((e) => e.module === undefined); }
+${declarations}
+export const CORPUS = [{ id: 'OWNED', kind: 'positive', location: 'fixture', ${properties} }];\n`, {
+      "../cli/validate-calibration.ts": "import { CORPUS, mechanicalCorpus } from '../scan/calibration.ts'; const scoredCorpus = mechanicalCorpus(CORPUS);\n",
+    });
+    const oracle = await runNode(["--import", "tsx", "--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); const { mechanicalCorpus, buildCoverageMatrix } = await import(${JSON.stringify(pathToFileURL(join(ROOT, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify({ members: CORPUS.map(entry => entry.id), scored: buildCoverageMatrix([], mechanicalCorpus(CORPUS)).rows.filter(row => !row.notScored).map(row => row.id) }));`]);
+    expect(oracle.status, oracle.output).toBe(0);
+    expect(JSON.parse(oracle.output)).toEqual({ members: ["OWNED"], scored: [] });
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { rows: { id: string; assertionVenue: unknown }[] };
+    const members = inventory.rows.filter(row => row.id.includes("#CORPUS/"));
+    expect(members).toHaveLength(1);
+    expect(members[0]).toMatchObject({ assertionVenue: null });
+  });
+
+  it.each([
+    ["escaped prototype setter", "", "'\\u005f_proto__': {}"],
+    ["escaped constructor", "", "'\\u0063onstructor': {}"],
+    ["escaped prototype name", "", "\\u0070rototype: {}"],
+    ["escaped prototype shorthand", "const __proto__ = {};", "\\u005f_proto__"],
+    ["escaped binding prototype access", "function make() { const { '\\u0063onstructor': value } = {}; return value ? 'SIDE' : 'OWNED'; }", "id: make()"],
+    ["unmodeled computed property", "", "['module']: 'M6'"],
+    ["unmodeled bigint property", "", "1n: 'M6'"],
+  ])("rejects unsafe or unsupported record keys: %s", async (_, declarations, properties) => {
+    const p = registryControl(`${declarations} export const CORPUS = [{ id: 'OWNED', kind: 'positive', location: 'fixture', ${properties} }];\n`);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(/prototype (property|access)|property name .* is not modeled|computed property is not modeled/);
+  });
+
   it.each([
     ["forward module constant", "export const CORPUS = rows; const rows = [BASE];", {}],
     ["factory called before module constant", "function make() { return rows; } export const CORPUS = make(); const rows = [BASE];", {}],
