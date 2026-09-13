@@ -886,6 +886,30 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
+  it.each([false, true])("executes the manual shipping shell with force_cold_cache=%s and preserves full live verification", (forceCold) => {
+    const ctx = context("workflow_dispatch");
+    ctx.inputs.force_cold_cache = forceCold;
+    const dir = temporary("corpus-cold-workflow-");
+    const capture = join(dir, "invocation");
+    const result = shell(named(document, "shard", "Score the corpus against its baselines"), ctx, {
+      dir,
+      env: { CAPTURE: capture, pnpm_config_verify_deps_before_run: "false" },
+      prelude: 'pnpm() { printf "%s\\n" "$HARVEY_CORPUS_EXTERNAL_STATE_MODE" "$HARVEY_CURRENT_MECHANICAL_READINESS" "$HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE" "$@" > "$CAPTURE"; }',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(capture, "utf8").trim().split("\n")).toEqual([
+      "live-verify", "0", "reuse", "corpus-drift", "--install", "--shard", "1/1", "--json", "corpus-drift.json",
+      ...(forceCold ? ["--force-cold-cache"] : []),
+    ]);
+    if (forceCold) {
+      expect(result.stdout).toContain("mechanical/family seeds before scanning");
+      expect(result.stdout).toContain("Trusted transport alone is insufficient");
+      expect(result.stdout).toContain("first without --force-cold-cache, then with it");
+      expect(result.stdout).toContain("Another manual run is not an accepted hosted seed transport");
+      expect(result.stdout).toContain("Live provider checks and dependency installation are not cache-equivalence proof");
+    } else expect(result.stdout).toBe("");
+  });
+
   it("uses the shipping executable closure rather than a path approximation or blanket event no-op", () => {
     expect(workflow).not.toContain("git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD");
     expect(workflow).not.toContain("*) relevant=true ;;");

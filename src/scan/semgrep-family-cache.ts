@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { dirname, extname, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readRecursiveSafe } from "../fs-walk.js";
+import { inspectCorpusCacheSeed, type CorpusCacheSeedReadiness } from "../corpus-cache-preflight.js";
 import type { SemgrepOutput } from "./semgrep.js";
 import { canonicalizeSemgrepTime, SEMGREP_TIMEOUT_POLICY, SemgrepTimeoutTelemetryError, type SemgrepFixpointTimeout } from "./semgrep-time.js";
 import type { MechanicalCacheMode } from "./mechanical-phase-cache.js";
@@ -596,13 +597,11 @@ function writeTimeoutTelemetry(family: string, key: string, identity: FamilyIden
   }
 }
 
-export async function executeSemgrepFamily(
+function planSemgrepFamilyArtifact(
   family: SemgrepFamily,
   options: SemgrepFamilyCacheOptions,
-  execute: () => ({ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }) | Promise<{ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }>,
   planned?: SemgrepPlannedFamilyReceipt,
-): Promise<SemgrepFamilyRecord> {
-  mkdirSync(options.dir, { recursive: true });
+) {
   const identity: FamilyIdentity = {
     targetRevision: digest(options.targetRevision),
     targetTree: digest(options.targetTree),
@@ -616,6 +615,26 @@ export async function executeSemgrepFamily(
   const path = join(options.dir, "semgrep-families", familyDirectory(family.id), `${key}.json`);
   const configSha256 = createHash("sha256").update(readFileSync(family.configPath)).digest("hex");
   const expected = { family: family.id, key, identity, configSha256, ownedTaintRuleIds: configuredTaintRuleIds(family.configPath), ...(planned ? { planned } : {}) };
+  return { identity, key, path, configSha256, expected };
+}
+
+export function inspectSemgrepFamilySeed(family: SemgrepFamily, options: SemgrepFamilyCacheOptions, planned: SemgrepPlannedFamilyReceipt): CorpusCacheSeedReadiness {
+  const { key, path, identity, expected } = planSemgrepFamilyArtifact(family, options, planned);
+  return inspectCorpusCacheSeed({
+    component: `semgrep-family:${family.id}`, key, path, identity,
+    acceptsCandidate: (value) => value.schema === 8 && value.family === family.id,
+    validate: (text) => parseArtifact(JSON.parse(text), expected),
+  });
+}
+
+export async function executeSemgrepFamily(
+  family: SemgrepFamily,
+  options: SemgrepFamilyCacheOptions,
+  execute: () => ({ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }) | Promise<{ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }>,
+  planned?: SemgrepPlannedFamilyReceipt,
+): Promise<SemgrepFamilyRecord> {
+  mkdirSync(options.dir, { recursive: true });
+  const { identity, key, path, configSha256, expected } = planSemgrepFamilyArtifact(family, options, planned);
   let hit: FamilyArtifact | undefined;
   if (existsSync(path)) {
     try {
