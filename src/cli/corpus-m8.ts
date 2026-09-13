@@ -13,6 +13,7 @@ import {
 } from "../scan/m8-corpus-artifacts.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
 import { readRecursiveSafe } from "../fs-walk.js";
+import { scrubSecrets } from "../fix/verify.js";
 
 assertKnownFlags(["--github-output", "--target", "--out", "--artifacts"]);
 
@@ -26,6 +27,13 @@ function required(flag: string): string {
     process.exit(2);
   }
   return resolve(value);
+}
+
+function failureExcerpt(output: string): string {
+  const safe = scrubSecrets(output).trim();
+  const marker = safe.split("\n").filter((line) => /tool-install|tool installation failed|ERR_PNPM_/i.test(line)).at(-1)?.slice(-500);
+  const tail = safe.slice(-2500);
+  return marker && !tail.includes(marker) ? `${marker}\n${tail}` : tail;
 }
 
 if (mode === "plan") {
@@ -53,11 +61,13 @@ if (mode === "target") {
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
   );
   let output = "";
+  const streamOutput = { stdout: "", stderr: "" };
   let mutationCliStartedMs: number | undefined;
-  for (const stream of [run.stdout, run.stderr]) {
+  for (const [name, stream] of [["stdout", run.stdout], ["stderr", run.stderr]] as const) {
     stream.setEncoding("utf8");
     stream.on("data", (chunk: string) => {
       output += chunk;
+      streamOutput[name] += chunk;
       process.stderr.write(chunk);
       if (mutationCliStartedMs === undefined && output.includes("src/cli/mutation-scan.ts")) {
         mutationCliStartedMs = performance.now() - started;
@@ -81,6 +91,13 @@ if (mode === "target") {
     parseError = `scorecard unavailable or corrupt: ${(error as Error).message}`;
   }
   const status = exitCode === 0 && !parseError ? "passed" : "failed";
+  // The child can fail before scorecard creation. Its captured diagnostic is the only durable
+  // cause available to the uploaded target result; bound and scrub it before serialization.
+  const childEvidence = status === "failed"
+    ? (["stdout", "stderr"] as const).map((name) => streamOutput[name].trim()
+      ? `child ${name} (redacted excerpt): ${failureExcerpt(streamOutput[name])}`
+      : undefined).filter(Boolean).join("; ")
+    : undefined;
   const result: M8TargetResult = {
     schemaVersion: 1,
     target,
@@ -89,7 +106,7 @@ if (mode === "target") {
     durationMs,
     phases,
     scorecard,
-    ...(parseError || runError || signal ? { error: [parseError, runError, signal ? `terminated by ${signal}` : undefined].filter(Boolean).join("; ") } : {}),
+    ...(status === "failed" ? { error: [parseError, runError, signal ? `terminated by ${signal}` : undefined, `child exited ${exitCode}`, childEvidence].filter(Boolean).join("; ") } : {}),
   };
   writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
   console.error(`M8 TARGET ${status.toUpperCase()}: ${target} in ${(durationMs / 1000).toFixed(1)}s — verdict deferred to aggregate`);
