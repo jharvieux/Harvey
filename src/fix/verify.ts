@@ -47,15 +47,14 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /sk-[A-Za-z0-9]{16,}/g,
   /AKIA[0-9A-Z]{16}/g,
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWTs
-  /(bearer|token|api[_-]?key|password|secret)(["'\s:=]+)([A-Za-z0-9._\-/+]{8,})/gi,
 ];
 
 export function scrubSecrets(text: string): string {
-  let out = text;
-  for (const re of SECRET_PATTERNS) {
-    out = out.replace(re, (m, p1, p2) => (p2 !== undefined ? `${p1}${p2}[REDACTED]` : "[REDACTED]"));
-  }
-  return out;
+  let out = text
+    .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1?[REDACTED]");
+  for (const re of SECRET_PATTERNS) out = out.replace(re, "[REDACTED]");
+  return out.replace(/(bearer|token|api[_-]?key|password|secret)(["'\s:=]+)([A-Za-z0-9._\-/+]{8,})/gi, "$1$2[REDACTED]");
 }
 
 function tail(text: string, lines: number): string {

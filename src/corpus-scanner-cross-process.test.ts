@@ -1,4 +1,5 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -914,6 +915,10 @@ fs.writeFileSync("node_modules/partial-provider/package.json", '{"name":"partial
 fs.writeFileSync("node_modules/partial-provider/index.js", 'require("node:fs").writeFileSync("provider-consumed", "yes"); module.exports = {};');
 const frozen = process.argv.includes("ci") || process.argv.includes("--frozen-lockfile");
 const offline = process.argv.includes("--offline");
+if (mode === "fail-write" && process.argv.includes("add")) {
+  fs.writeFileSync("package.json", '{"name":"mutated-by-failed-add"}');
+  fs.writeFileSync("pnpm-lock.yaml", "mutated-by-failed-add\n");
+}
 if ((mode === "change" || mode === "change-same-version" || mode === "launcher-change") && frozen) fs.writeFileSync("selector-version", mode === "change-same-version" ? "alternate" : "full");
 if (mode === "success" || (mode === "offline-fail" && !offline) || ((mode === "fallback" || mode === "launcher-change" || mode.startsWith("change")) && !frozen)) process.exit(0);
 console.log("ERR_INSTALL_2047: rejected partial provider at " + process.cwd()); process.exit(42);
@@ -1140,15 +1145,24 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
       expect(prepared).toMatchObject({ complete: true, status: cached ? index === 0 ? "miss" : "hit" : "non-cacheable" });
       const store = prepared.installation!.dependencyStore;
       expect(existsSync(store)).toBe(true);
-      const manifest = readFileSync(join(directory, "package.json"), "utf8");
-      const lock = readFileSync(join(directory, "pnpm-lock.yaml"), "utf8");
+      const manifest = readFileSync(join(directory, "package.json"));
+      const lock = readFileSync(join(directory, "pnpm-lock.yaml"));
+      const currentAppDir = appPath ? join(directory, appPath) : directory;
+      const memberManifest = appPath ? readFileSync(join(currentAppDir, "package.json")) : undefined;
+      const memberLock = appPath ? join(currentAppDir, "pnpm-lock.yaml") : undefined;
+      const memberLockBefore = memberLock && existsSync(memberLock) ? readFileSync(memberLock) : undefined;
       expect(runMutation("m8-local", directory, config, prepared)).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
       const extra = prepared.installation!.stages.at(-1)!;
       expect(extra).toMatchObject({ stage: "tool-install", outcome: "completed", selected: { executable: prepared.installation!.stages[0]!.selected!.executable, nodeExecutable: prepared.installation!.stages[0]!.selected!.nodeExecutable, version } });
       expect(extra.command).toContain(store);
       expect(extra.command).not.toContain("--legacy-peer-deps");
-      expect(readFileSync(join(directory, "package.json"), "utf8")).toBe(manifest);
-      expect(readFileSync(join(directory, "pnpm-lock.yaml"), "utf8")).toBe(lock);
+      expect(readFileSync(join(directory, "package.json"))).toEqual(manifest);
+      expect(readFileSync(join(directory, "pnpm-lock.yaml"))).toEqual(lock);
+      if (memberManifest) expect(readFileSync(join(currentAppDir, "package.json"))).toEqual(memberManifest);
+      if (memberLock) {
+        expect(existsSync(memberLock)).toBe(memberLockBefore !== undefined);
+        if (memberLockBefore) expect(readFileSync(memberLock)).toEqual(memberLockBefore);
+      }
       expect(prepared.cacheable).toBe(false);
       expect(prepared.sourceTreeCacheable).toBe(false);
       expect(readFileSync(join(appPath ? join(directory, appPath) : directory, "node_modules/m8-local-dependency/index.js"), "utf8")).toContain("dependency-preserved");
@@ -1158,8 +1172,26 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
         expect(existsSync(join(store, storeVersion, "projects"))).toBe(false);
         expect(existsSync(join(store, storeVersion, "links"))).toBe(false);
       }
-      releaseCorpusDependencies(prepared);
-      expect(existsSync(store)).toBe(cached);
+      const keep = index === 1;
+      releaseCorpusDependencies(prepared, keep);
+      expect(existsSync(store)).toBe(cached || keep);
+      if (keep && !cached) dirs.push(join(store, "../../../.."));
+      const evidenceDir = process.env.HARVEY_2057_EVIDENCE_DIR;
+      if (evidenceDir) {
+        const sha256 = (bytes: Buffer | undefined) => bytes ? createHash("sha256").update(bytes).digest("hex") : null;
+        const inputs = [
+          { path: "package.json", before: manifest, after: readFileSync(join(directory, "package.json")) },
+          { path: "pnpm-lock.yaml", before: lock, after: readFileSync(join(directory, "pnpm-lock.yaml")) },
+          ...(appPath ? [
+            { path: `${appPath}/package.json`, before: memberManifest, after: readFileSync(join(currentAppDir, "package.json")) },
+            { path: `${appPath}/pnpm-lock.yaml`, before: memberLockBefore, after: existsSync(memberLock!) ? readFileSync(memberLock!) : undefined },
+          ] : []),
+        ];
+        writeFileSync(join(evidenceDir, `${workspace ? "nested" : "root"}-${cached ? "cached" : "uncached"}-${index}.json`), `${JSON.stringify({
+          manager: extra.selected?.version, cached, workspace, keep, toolInstall: extra.outcome,
+          inputs: inputs.map(({ path, before, after }) => ({ path, beforeSha256: sha256(before), afterSha256: sha256(after) })),
+        }, null, 2)}\n`);
+      }
       expect(() => installCorpusDependencyExtras(prepared, { appDir: directory, packages: [tool] })).toThrow(/active preparation/);
     }
     expect(consumed).toBe(2);
@@ -1209,6 +1241,35 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     const store = prepared.installation!.dependencyStore;
     releaseCorpusDependencies(prepared);
     expect(existsSync(store)).toBe(false);
+  });
+
+  it.each([{ workspace: false, keep: false }, { workspace: false, keep: true }, { workspace: true, keep: false }, { workspace: true, keep: true }])("restores root/member inputs after a failed tool add and respects keep=$keep workspace=$workspace", ({ workspace, keep }) => {
+    const root = rootFixture();
+    const bin = selectorFixture(root, "pnpm");
+    const target = join(root, "target");
+    const appDir = workspace ? join(target, "apps/web") : target;
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(join(target, "package.json"), '{"name":"original-root","private":true,"packageManager":"pnpm@9.9.9"}\n');
+    writeFileSync(join(target, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages: {}\n");
+    if (workspace) writeFileSync(join(appDir, "package.json"), '{"name":"original-member","private":true}\n');
+    writeFileSync(join(target, "control-mode"), "success");
+    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    expect(prepared.complete).toBe(true);
+    const rootManifest = readFileSync(join(target, "package.json"));
+    const rootLock = readFileSync(join(target, "pnpm-lock.yaml"));
+    const memberManifest = workspace ? readFileSync(join(appDir, "package.json")) : undefined;
+    writeFileSync(join(appDir, "control-mode"), "fail-write");
+    const runMutation = corpusMutationConsumer(() => { throw new Error("unexpected mutation launch"); });
+    expect(() => runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {}, ...(workspace ? { appPath: "apps/web" } : {}) }, prepared)).toThrow(/ERR_INSTALL_2047/);
+    expect(prepared.installation!.stages.at(-1)).toMatchObject({ stage: "tool-install", outcome: "failed", exitCode: 42, selected: { version: "9.9.9" } });
+    expect(readFileSync(join(target, "package.json"))).toEqual(rootManifest);
+    expect(readFileSync(join(target, "pnpm-lock.yaml"))).toEqual(rootLock);
+    if (memberManifest) expect(readFileSync(join(appDir, "package.json"))).toEqual(memberManifest);
+    if (workspace) expect(existsSync(join(appDir, "pnpm-lock.yaml"))).toBe(false);
+    expect(existsSync(join(appDir, "node_modules"))).toBe(false);
+    const store = prepared.installation!.dependencyStore;
+    releaseCorpusDependencies(prepared, keep);
+    expect(existsSync(store)).toBe(keep);
   });
 
   it("requires a live preparation and retains an explicitly kept diagnostic store", () => {

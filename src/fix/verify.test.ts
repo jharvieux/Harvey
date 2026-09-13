@@ -182,9 +182,32 @@ describe("runCommand", () => {
 
 describe("scrubSecrets", () => {
   it("redacts tokens, keys, and bearer values but leaves ordinary text", () => {
-    expect(scrubSecrets("using ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345")).toContain("[REDACTED]");
-    expect(scrubSecrets("Authorization: Bearer abcdefgh12345678")).toContain("[REDACTED]");
+    const githubToken = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+    const bearer = "abcdefgh12345678";
+    const original = `using ${githubToken}; Authorization: Bearer ${bearer}`;
+    const redacted = scrubSecrets(original);
+    expect(redacted).toContain("[REDACTED]");
+    expect(redacted).not.toContain(githubToken);
+    expect(redacted).not.toContain(bearer);
+    expect(redacted).not.toContain(original);
+    expect(redacted).toContain("Authorization: Bearer [REDACTED]");
+    const url = "https://alice:passwordvalue@example.invalid/pkg?auth=queryvalue";
+    expect(scrubSecrets(url)).toBe("https://[REDACTED]@example.invalid/pkg?[REDACTED]");
     expect(scrubSecrets("all tests passed in 4.2s")).toBe("all tests passed in 4.2s");
+  });
+
+  it("removes a synthetic token from the shipping command evidence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-redacted-command-"));
+    try {
+      const script = join(dir, "emit.cjs");
+      const token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+      writeFileSync(script, `console.log(${JSON.stringify(`command failed: ${token}`)});\n`);
+      const result = await runCommand(`${node} emit.cjs`, dir);
+      expect(result.outputTail).toContain("command failed: [REDACTED]");
+      expect(result.outputTail).not.toContain(token);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

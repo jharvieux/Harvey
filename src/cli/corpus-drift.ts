@@ -432,11 +432,9 @@ async function runScanner(options: ScannerInvocation & {
 function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig, preparation: DependencyPreparationResult | undefined): { mutationScore: number; killed: number; valid: number } {
   if (!preparation) throw new Error(`${slug}: M8 mutation scoring requires dependency preparation; run with --install`);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
-  // withRestoredManifest(dir, ...) restores the WORKSPACE lockfile (shared, lives at the clone
-  // root); a `pnpm add` run with cwd: appDir writes the extra packages into appDir's OWN
-  // package.json, which this does not restore — a no-op gap here since `dir` is a disposable temp
-  // clone discarded after this run, not the client's real repo (see mutation-scan.ts's --install
-  // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
+  // The extra-tool install snapshots both clone-root and member manifests/lockfiles before
+  // running in appDir. Mutation scoring therefore sees the provisioned tools while its declared
+  // target inputs retain their original bytes, including in a workspace member.
   installCorpusDependencyExtras(preparation, {
     appDir, packages: cfg.strykerPackages, installFlags: cfg.installFlags,
     onEvent: (message) => console.error(`  ${slug}: ${message}`),
