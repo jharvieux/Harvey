@@ -134,7 +134,7 @@ export function censusPopulation(venues: EvidenceVenue[], rows: EnvironmentDepen
   };
 }
 
-/** Validate the serialized boundary before comparing it; counts cannot hide missing rows. */
+/** Validate row membership and derived counts before comparing serialized inventories. */
 export function validateEnvironmentInventory(value: unknown): asserts value is EnvironmentInventory {
   const fail = (message: string): never => { throw new Error(`environment census: ${message}`); };
   const record = (v: unknown, name: string): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : fail(`${name} must be an object`);

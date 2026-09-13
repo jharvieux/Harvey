@@ -130,7 +130,7 @@ function genericRows(ctx: AdapterContext): void {
       evidence: censusLocation(file, "content-hint", text.match(hint)?.[0]),
       reason: "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
     }); }
-    // New explicitly declared environment classes cannot be hidden in extensionless data.
+    // Check explicit class declarations in decoded content, including extensionless data.
     const visited = new Set<unknown>();
     const checkDeclared = (value: unknown): void => {
       if (!value || typeof value !== "object" || visited.has(value)) return;
@@ -248,7 +248,7 @@ function capturedTools(ctx: AdapterContext): void {
       });
       authoritative(ctx, file, value.owner);
       members.push({ key: `${contract.name}:${path}`, evidence: value.evidence, rowIds: [value.id], reason: value.reason });
-      // A version pin cannot pin the browser, Git history, live service or advisory DB.
+      // Record browser, history, service and advisory identities separately from the tool pin.
       const extra: [EnvironmentClass, string][] = contract.name === "lighthouse" ? [["runtime", "browser"], ["hardware", "performance-environment"]]
         : contract.name === "vitals" ? [["tool", "git"], ["runtime", "python"], ["database", "vitals-provenance-db"], ["clock", "git-history-clock"]]
           : contract.name === "osv-scanner" ? [["mutable-data", "osv-advisory-database"]]
