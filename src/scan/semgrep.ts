@@ -37,6 +37,7 @@ import {
   comparePosixRelativePaths,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
+  inspectSemgrepFamilySeed,
   localSemgrepConfigYardstick,
   mergeSemgrepFamilyOutputs,
   rejectUnregisteredSemgrepFamilyArtifacts,
@@ -59,6 +60,7 @@ import {
   type SemgrepFamilyTimeoutTelemetry,
 } from "./semgrep-family-cache.js";
 import { canonicalizeSemgrepTime, SEMGREP_TIMEOUT_POLICY, SemgrepTimeoutTelemetryError } from "./semgrep-time.js";
+import type { CorpusCacheSeedReadiness } from "../corpus-cache-preflight.js";
 
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
@@ -1032,6 +1034,17 @@ export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[], 
   const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-plan-"));
   try {
     return plannedExecutionReceipt(prepareOwnedSemgrepFamilies(registryConfigs, root, targetRoot));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+export function inspectSemgrepFamilySeeds(dir: string, registryConfigs: readonly string[], cache: SemgrepFamilyCacheOptions): CorpusCacheSeedReadiness[] {
+  const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-seed-plan-"));
+  try {
+    const families = prepareOwnedSemgrepFamilies(registryConfigs, root, dir);
+    const planned = plannedExecutionReceipt(families);
+    return families.map((family, ordinal) => inspectSemgrepFamilySeed(family, { ...cache, pathRoot: dir }, planned.families[ordinal]!));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

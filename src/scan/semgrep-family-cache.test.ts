@@ -12,6 +12,7 @@ import {
   canonicalizeSemgrepOutput,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
+  inspectSemgrepFamilySeed,
   mergeSemgrepFamilyOutputs,
   localSemgrepConfigYardstick,
   rejectUnregisteredSemgrepFamilyArtifacts,
@@ -116,6 +117,39 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     expect(() => assertSemgrepFamilyPlan(families.slice(1), expected)).toThrow("omitted");
     expect(() => assertSemgrepFamilyPlan([...families, families[0]!], expected)).toThrow("duplicate ids");
     expect(() => assertSemgrepFamilyPlan([...families, { id: "unknown", configPath: "/unknown.yml" }], expected)).toThrow("unregistered");
+  });
+
+  it("preflights the exact consumer address, planned ownership, and complete payload without seeding a miss (#2049)", async () => {
+    const { families, options } = fixture();
+    const family = families[0]!;
+    const value = executed(family, output(family.id));
+    const plan = planned(value.execution);
+    const absent = inspectSemgrepFamilySeed(family, options, plan);
+    expect(absent).toMatchObject({ component: "semgrep-family:auth", status: "missing" });
+    const stored = await executeSemgrepFamily(family, options, () => value, plan);
+    expect(stored.cache).toBe("miss");
+    expect(inspectSemgrepFamilySeed(family, options, plan)).toMatchObject({ key: stored.key, status: "ready" });
+    for (const [component, changed] of [
+      ["identity.implementation", { ...options, implementation: "changed-source" }],
+      ["identity.targetRevision", { ...options, targetRevision: "another-pin" }],
+      ["identity.targetTree", { ...options, targetTree: "changed-tree" }],
+      ["identity.externalInputs.node", { ...options, externalInputs: { ...options.externalInputs, node: "another-runtime" } }],
+      ["identity.externalInputs.options", { ...options, externalInputs: { ...options.externalInputs, options: "live-verify" } }],
+    ] as const) {
+      expect(inspectSemgrepFamilySeed(family, changed, plan)).toMatchObject({ status: "incompatible", reason: expect.stringContaining(component) });
+    }
+    expect(inspectSemgrepFamilySeed(family, options, { ...plan, sourceConfigSha256: "f".repeat(64) }))
+      .toMatchObject({ status: "incompatible", reason: expect.stringContaining("identity.plannedExecution") });
+    const body = readFileSync(absent.path!, "utf8");
+    const artifact = JSON.parse(body);
+    artifact.payloadDigest = "corrupt";
+    writeFileSync(absent.path!, JSON.stringify(artifact));
+    expect(inspectSemgrepFamilySeed(family, options, plan)).toMatchObject({ status: "invalid", reason: "artifact payload checksum mismatch" });
+    expect(readFileSync(absent.path!, "utf8")).toBe(JSON.stringify(artifact));
+    writeFileSync(absent.path!, body);
+    const verified = await executeSemgrepFamily(family, { ...options, mode: "verify" }, () => value, plan);
+    expect(verified.cache).toBe("recomputed");
+    await expect(executeSemgrepFamily(family, { ...options, mode: "verify" }, () => executed(family, output(`${family.id}-changed`)), plan)).rejects.toThrow("forced-cold output differs");
   });
 
   it("discovers .yml and .yaml through an execution loader independent of the expected-set yardstick", () => {

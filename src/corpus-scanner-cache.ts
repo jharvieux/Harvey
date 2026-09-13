@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "./findings.js";
 import { readEntriesSafe } from "./fs-walk.js";
 import { isCorpusScannerOwnedScope } from "./corpus-scanner-scope.js";
+import { inspectCorpusCacheSeed, type CorpusCacheSeedReadiness } from "./corpus-cache-preflight.js";
 
 export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "quality-scan", "mutation-detect-only"] as const;
 export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
@@ -187,14 +188,7 @@ function closestChangedComponents(dir: string, scanner: CorpusCacheableScanner, 
   return closest?.changed.join(", ");
 }
 
-export async function executeCorpusScanner(
-  options: CorpusScannerCacheOptions | undefined,
-  execute: () => CorpusScannerExecution | Promise<CorpusScannerExecution>,
-): Promise<CorpusScannerRecord> {
-  if (!options || options.mode === "off") {
-    const value = await execute();
-    return { scanner: options?.scanner ?? "detect-static", findings: value.findings, scope: value.scope, cache: "non-cacheable", reason: value.failure ?? "corpus scanner cache disabled" };
-  }
+function planCorpusScannerArtifact(options: CorpusScannerCacheOptions) {
   if (Object.keys(options.externalInputs).length === 0) throw new Error(`${options.scanner}: no declared external-input identity`);
   const identity: ScannerIdentity = {
     targetRevision: digest(options.targetRevision),
@@ -205,6 +199,27 @@ export async function executeCorpusScanner(
   const key = digest({ scanner: options.scanner, identity });
   const path = join(options.dir, "corpus-scanners", options.scanner, `${key}.json`);
   const expected = { scanner: options.scanner, key, identity };
+  return { identity, key, path, expected };
+}
+
+export function inspectCorpusScannerSeed(options: CorpusScannerCacheOptions): CorpusCacheSeedReadiness {
+  const { identity, key, path, expected } = planCorpusScannerArtifact(options);
+  return inspectCorpusCacheSeed({
+    component: `corpus-scanner:${options.scanner}`, key, path, identity,
+    acceptsCandidate: (value) => value.schema === 2 && value.scanner === options.scanner,
+    validate: (text) => validateArtifact(JSON.parse(text), expected),
+  });
+}
+
+export async function executeCorpusScanner(
+  options: CorpusScannerCacheOptions | undefined,
+  execute: () => CorpusScannerExecution | Promise<CorpusScannerExecution>,
+): Promise<CorpusScannerRecord> {
+  if (!options || options.mode === "off") {
+    const value = await execute();
+    return { scanner: options?.scanner ?? "detect-static", findings: value.findings, scope: value.scope, cache: "non-cacheable", reason: value.failure ?? "corpus scanner cache disabled" };
+  }
+  const { identity, key, path, expected } = planCorpusScannerArtifact(options);
   let hit: ScannerArtifact | undefined;
   if (existsSync(path)) {
     try {

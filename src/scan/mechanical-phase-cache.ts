@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
+import { inspectCorpusCacheSeed, type CorpusCacheSeedReadiness } from "../corpus-cache-preflight.js";
 import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence, type SemgrepExecutionPlanReceipt, type SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
 
 export const MECHANICAL_PHASES = [
@@ -433,6 +434,41 @@ function equivalent(a: MechanicalPhaseValue, b: MechanicalPhaseValue): boolean {
   return stable(persistedPhaseValue(a)) === stable(persistedPhaseValue(b));
 }
 
+function verificationPhases(cache: MechanicalPhaseCacheOptions): MechanicalPhase[] {
+  return [...new Set([...CACHEABLE_MECHANICAL_PHASES, ...Object.keys(cache.reproducible ?? {}) as MechanicalPhase[]])];
+}
+
+function planMechanicalPhaseArtifact(phase: MechanicalPhase, cache: MechanicalPhaseCacheOptions) {
+  const implementation = cache.implementation[phase];
+  if (!implementation) throw new Error(`${phase}: cacheable phase has no implementation identity`);
+  const externalInputs = cache.externalInputs[phase];
+  if (!externalInputs || Object.keys(externalInputs).length === 0) throw new Error(`${phase}: cacheable phase has no declared external-input identity`);
+  const identity: MechanicalPhaseIdentityComponents = {
+    targetRevision: digestParts([cache.targetRevision]),
+    targetTree: digestParts([cache.targetTree]),
+    implementation: digestParts([implementation]),
+    externalInputs: Object.fromEntries(Object.entries(externalInputs).map(([name, value]) => [name, digestParts([value])])),
+  };
+  const key = digestParts([stable({ phase, identity })]);
+  const path = join(cache.dir, phase, `${key}.json`);
+  const expected = { schema: 5 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const requireSemgrepExecution = phase === "semgrep" && cache.semgrepFamilies !== undefined;
+  return { identity, key, path, expected, requireSemgrepExecution };
+}
+
+export function inspectMechanicalPhaseSeeds(cache: MechanicalPhaseCacheOptions): CorpusCacheSeedReadiness[] {
+  return verificationPhases(cache).map((phase) => {
+    const component = `mechanical-phase:${phase}`;
+    if (cache.disabled?.[phase]) return { component, status: "unavailable", reason: cache.disabled[phase]! };
+    const { key, path, identity, expected, requireSemgrepExecution } = planMechanicalPhaseArtifact(phase, cache);
+    return inspectCorpusCacheSeed({
+      component, key, path, identity,
+      acceptsCandidate: (value) => value.schema === 5 && value.phase === phase,
+      validate: (text) => parseArtifact(text, expected, requireSemgrepExecution),
+    });
+  });
+}
+
 export async function executeMechanicalPhase(
   phase: MechanicalPhase,
   cache: MechanicalPhaseCacheOptions | undefined,
@@ -450,20 +486,7 @@ export async function executeMechanicalPhase(
     cache?.onEvent?.(`CACHE BYPASS ${phase}: ${reason}`);
     return { phase, ...value, durationMs: Date.now() - started, cache: "non-cacheable", reason };
   }
-  const implementation = cache.implementation[phase];
-  if (!implementation) throw new Error(`${phase}: cacheable phase has no implementation identity`);
-  const externalInputs = cache.externalInputs[phase];
-  if (!externalInputs || Object.keys(externalInputs).length === 0) throw new Error(`${phase}: cacheable phase has no declared external-input identity`);
-  const identity: MechanicalPhaseIdentityComponents = {
-    targetRevision: digestParts([cache.targetRevision]),
-    targetTree: digestParts([cache.targetTree]),
-    implementation: digestParts([implementation]),
-    externalInputs: Object.fromEntries(Object.entries(externalInputs).map(([name, value]) => [name, digestParts([value])])),
-  };
-  const key = digestParts([stable({ phase, identity })]);
-  const path = join(cache.dir, phase, `${key}.json`);
-  const expected = { schema: 5 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
-  const requireSemgrepExecution = phase === "semgrep" && cache.semgrepFamilies !== undefined;
+  const { identity, key, path, expected, requireSemgrepExecution } = planMechanicalPhaseArtifact(phase, cache);
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
@@ -502,7 +525,7 @@ export function assertMechanicalCacheVerification(
   cache: MechanicalPhaseCacheOptions | undefined,
 ): void {
   if (cache?.mode !== "verify") return;
-  const expected = [...new Set([...CACHEABLE_MECHANICAL_PHASES, ...Object.keys(cache.reproducible ?? {}) as MechanicalPhase[]])];
+  const expected = verificationPhases(cache);
   const unverified = expected.flatMap((phase) => {
     const record = phases.find((candidate) => candidate.phase === phase);
     return record?.cache === "recomputed" ? [] : [`${phase}=${record?.cache ?? "missing"}`];
