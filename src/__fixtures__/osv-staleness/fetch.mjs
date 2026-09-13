@@ -20,14 +20,14 @@ function justBefore(fixed) {
 let requests = 0;
 globalThis.fetch = async (url) => {
   requests++;
-  const parsed = new URL(url);
+  const parsed = new globalThis.URL(url);
   if (parsed.origin !== "https://api.osv.dev" || !parsed.pathname.startsWith("/v1/vulns/")) {
     throw new Error(`Unexpected OSV request ${url}`);
   }
   const id = parsed.pathname.slice("/v1/vulns/".length);
   const claims = claimsByAdvisory.get(id);
   if (!claims) throw new Error(`Unexpected advisory ${id}`);
-  if (id === focus.advisory && scenario === "malformed_json") return new Response("{", { status: 200 });
+  if (id === focus.advisory && scenario === "malformed_json") return new globalThis.Response("{", { status: 200 });
   const affected = [...new Set(claims.map((claim) => claim.pkg))].map((name) => ({
     package: { name, ecosystem: "npm" },
     ranges: [...new Set(claims.filter((claim) => claim.pkg === name).map((claim) => claim.fixed))]
@@ -47,7 +47,7 @@ globalThis.fetch = async (url) => {
     if (scenario === "limit_excludes") target.ranges.push({ type: "SEMVER", events: [{ introduced: "0" }, { limit: "1.0.0" }] });
     if (scenario === "conflicting_events") target.ranges.push({ type: "SEMVER", events: [{ introduced: "0" }, { fixed: focus.fixed }, { introduced: focus.fixed }] });
   }
-  return Response.json({ id, affected });
+  return globalThis.Response.json({ id, affected });
 };
 
 process.on("exit", () => console.error(`OFFLINE_FETCH_REQUESTS=${requests}`));
