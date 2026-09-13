@@ -901,7 +901,13 @@ describe("#1864 corpus phase-cache workflow contract", () => {
       "live-verify", "0", "reuse", "corpus-drift", "--install", "--shard", "1/1", "--json", "corpus-drift.json",
       ...(forceCold ? ["--force-cold-cache"] : []),
     ]);
-    if (!forceCold) expect(result.stdout).toBe("");
+    if (forceCold) {
+      expect(result.stdout).toContain("mechanical/family seeds before scanning");
+      expect(result.stdout).toContain("Trusted transport alone is insufficient");
+      expect(result.stdout).toContain("first without --force-cold-cache, then with it");
+      expect(result.stdout).toContain("Another manual run is not an accepted hosted seed transport");
+      expect(result.stdout).toContain("Live provider checks and dependency installation are not cache-equivalence proof");
+    } else expect(result.stdout).toBe("");
   });
 
   it("uses the shipping executable closure rather than a path approximation or blanket event no-op", () => {

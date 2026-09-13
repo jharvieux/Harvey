@@ -89,11 +89,27 @@ identity. A miss searches prior same-phase provenance and names the moving compo
 Every cached finding is
 revalidated through the canonical `validateFindings` schema, not a smaller cache-local subset. A
 missing artifact is a miss and executes the phase. A malformed, partial, zero-scope, or
-wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A manual dispatch with
-the explicit `force_cold_cache` input executes every deterministic phase and compares the cold
-value with the restored artifact, failing on any findings or scope difference. A miss can seed the
-next run but fails the current equivalence assertion; scheduled/manual and main-push read/write
-runs are the distinct seeding mode. Pull requests and merge groups never enter that mode.
+wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed on the ordinary
+read/write path. The optional `force_cold_cache` input first validates matching seeds for every
+selected target's mechanical phases and Semgrep families, including planned rule ownership and
+routing. This population pass uses disposable pinned preparations and the execution consumers'
+identity builders and full artifact validators. It reads seeds without deleting or repairing them;
+an absent, incompatible, malformed, or disabled component names its target and exact missing or
+changed identity before any target scans. Execution replans and checks the same content addresses.
+
+Eligible scanner seeds use the scanner runner's own eligibility and identity plan. Without
+installation, source-scanner identities can also be checked in the population pass. With
+`--install`, eligibility and the quality preparation key require the real installation receipt:
+root scanners are checked after that preparation, before the target's mechanical scan; a scoped
+quality invocation is checked at its own later preparation boundary. Installations remain
+per-target and are not duplicated by the population pass. Non-cacheable scanners stay fresh and
+disclose why they cannot contribute cache-equivalence evidence.
+
+Only after readiness succeeds does fresh execution compare every eligible family, phase, and
+scanner. Changed findings, semantic diagnostics, examined scope, or producer receipts still fail
+the existing strict verification. A cache miss that writes an artifact remains a miss for that
+comparison; read/write execution is the seeding mode. Live provider checks and dependency
+installation are not cache-equivalence proof.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
@@ -118,8 +134,33 @@ compares the two executions. Pull requests and merge groups use the required agg
 declared-no-op path and read or write no corpus phase transport; this moves the external-app proof
 out of the merge critical path.
 Scheduled/manual validation remains single-shard for canonical scorecard and clone-cache lineage,
-but is warm by default; an explicit `force_cold_cache` dispatch input exercises
-cold-versus-restored equivalence without making daily provider validation pay that cost.
+but is warm by default; an explicit `force_cold_cache` dispatch input requests
+cold-versus-restored equivalence only if the preflight finds matching seeds. A trusted main
+transport proves its origin, not its compatibility: main's snapshot-mode options differ from
+manual `live-verify` options, and a source, runtime, target, rule/config, or planned-ownership change
+also invalidates affected keys. Such a transport is rejected by this optional preflight before
+scans. A separate manual run's warm artifact is not an accepted hosted seed transport; no new
+cross-run trust path is introduced here. Default full-population live verification, its canonical
+scorecard and raw OSV observations, liveness checks, and protected producer/replay remain unchanged.
+
+For a supported **local** seed/fresh pair, provision the existing pinned tools, keep one immutable
+Harvey checkout and target pin set, and materialize the registry snapshot once. From that checkout:
+
+```bash
+export HARVEY_CORPUS_PHASE_CACHE_DIR="$PWD/.harvey-local-cold-cache"
+export HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR="$PWD/.harvey-local-cold-registry"
+pnpm materialize:current-semgrep --dir "$HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR" --out "$HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR/receipt.json"
+export HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE=reuse
+export HARVEY_CORPUS_EXTERNAL_STATE_MODE=live-verify
+pnpm corpus-drift --install --target proposit --json local-seed.json
+pnpm corpus-drift --install --target proposit --json local-fresh.json --force-cold-cache
+```
+
+Keep the same source bytes, target selection/pins, runtime/tools, environment, effective options,
+installation policy and registry bytes for both commands. Omitting `--target proposit` from both
+commands uses the full population. Both commands still perform normal baseline and live-provider
+validation; a successful cache comparison does not excuse a separate failed observation. This
+local path does not establish hosted equivalence or authorize foreign-run artifact reuse.
 
 Every saved transport now carries a measured payload receipt. Authoring or restoring fails if the
 tree contains any symlink, if the remeasured byte count differs, or if the payload exceeds 6 GiB.
