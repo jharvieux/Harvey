@@ -3,9 +3,9 @@ import "./sync-stdio.js";
 // Only --update-baseline writes the baseline, after printing population/identity/review deltas.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { arg, assertKnownFlags } from "./args.js";
@@ -44,25 +44,31 @@ function writeJson(path: string, value: unknown): void {
 }
 
 function pathIdentity(path: string): string {
-  return resolvePathIdentity(resolve(path), new Set());
-}
-
-function resolvePathIdentity(path: string, seen: Set<string>): string {
-  if (seen.has(path)) throw new Error(`cyclic output path alias: ${path}`);
-  seen.add(path);
-  let ancestor = path;
-  const suffix: string[] = [];
-  while (true) {
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
+  let current = parse(absolute).root;
+  const remaining = absolute.slice(current.length).split(sep);
+  let links = 0;
+  // Follow each filesystem component before interpreting a later parent traversal.
+  // Lexically normalizing a symlink target first can select a different file.
+  while (remaining.length) {
+    const component = remaining.shift()!;
+    if (!component || component === ".") continue;
+    if (component === "..") { current = dirname(current); continue; }
+    const candidate = join(current, component);
     try {
-      const entry = lstatSync(ancestor);
-      if (entry.isSymbolicLink()) return resolve(resolvePathIdentity(resolve(dirname(ancestor), readlinkSync(ancestor)), seen), ...suffix);
-      return resolve(realpathSync(ancestor), ...suffix);
+      if (lstatSync(candidate).isSymbolicLink()) {
+        if (++links > 40) throw new Error(`cyclic or excessive output path alias: ${path}`);
+        const target = readlinkSync(candidate);
+        if (isAbsolute(target)) current = parse(target).root;
+        remaining.unshift(...target.slice(isAbsolute(target) ? current.length : 0).split(sep));
+        continue;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      suffix.unshift(relative(dirname(ancestor), ancestor));
-      ancestor = dirname(ancestor);
     }
+    current = candidate;
   }
+  return current;
 }
 
 function separateOutput(output: string, protectedPaths: string[]): void {

@@ -273,7 +273,7 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     expect(readFileSync(join(p.dir, "guard-mutation-baseline.json"))).toEqual(baselineBefore);
   });
 
-  it.each(["symlink", "hardlink", "symlink to hardlink", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
+  it.each(["symlink", "hardlink", "symlink to hardlink", "symlink before parent traversal", "directory alias", "reserved JSON"] as const)("rejects a %s probe-output alias before Stryker starts", async (kind) => {
     const p = freshProject(); const baseline = join(p.dir, "guard-mutation-baseline.json");
     const target = kind === "reserved JSON" ? probeOutput(p.dir, "json") : probeOutput(p.dir, "log");
     if (kind === "symlink" || kind === "reserved JSON") symlinkSync(baseline, target);
@@ -281,6 +281,11 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     if (kind === "symlink to hardlink") {
       const alias = join(p.dir, "reports", "guard-mutation", "baseline-hardlink.json");
       linkSync(baseline, alias); symlinkSync(alias, target);
+    }
+    if (kind === "symlink before parent traversal") {
+      const child = join(p.dir, "child"); mkdirSync(child);
+      symlinkSync(child, join(p.dir, "reports", "guard-mutation", "alias"));
+      symlinkSync("alias/../guard-mutation-baseline.json", target);
     }
     if (kind === "directory alias") {
       const alias = join(p.dir, "reports-alias"); symlinkSync(join(p.dir, "reports", "guard-mutation"), alias);
@@ -311,6 +316,17 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     expect(result.output).toContain("output would overwrite");
     expect(result.output).not.toContain("Running Stryker");
     expect(existsSync(join(p.dir, "reports", "guard-mutation", "calls.jsonl"))).toBe(false);
+  });
+
+  it("resolves a dangling probe alias after following a symlink before parent traversal", async () => {
+    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
+    mkdirSync(join(directory, "child")); symlinkSync(join(directory, "child"), join(p.dir, "alias"));
+    symlinkSync(`${p.dir}/alias/../src-recorded-reasons.ts.probe.config.json`, probeOutput(p.dir, "log"));
+    const result = await run([], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
+    expect(existsSync(probeOutput(p.dir, "config.json"))).toBe(false);
   });
 
   it("runs the configured guard set and fresh exclusion probe, then writes and compares a bound receipt", async () => {
