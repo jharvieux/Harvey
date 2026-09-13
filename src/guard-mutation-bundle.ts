@@ -61,7 +61,7 @@ interface GuardBundleSeal {
   conservation: { declared: number; terminal: number; completed: number; failed: number };
 }
 
-export const guardJsonBytes = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+const guardJsonBytes = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 export async function writeGuardJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
