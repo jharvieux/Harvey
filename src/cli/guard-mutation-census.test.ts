@@ -329,6 +329,29 @@ describe("guard mutation fresh-run production orchestration (#1890)", () => {
     expect(existsSync(probeOutput(p.dir, "config.json"))).toBe(false);
   });
 
+  it.each(["mutation.json", "mutation.receipt.json", "src-recorded-reasons.ts.probe.log"])("rejects prospective output aliases differing only in case: %s", async (name) => {
+    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
+    const before = existsSync(join(directory, name)) ? readFileSync(join(directory, name)) : undefined;
+    const result = await run(["--normalized-out", join(directory, name.toUpperCase())], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
+    if (before) expect(readFileSync(join(directory, name))).toEqual(before);
+    else expect(existsSync(join(directory, name))).toBe(false);
+  });
+
+  it.each([["straße", "STRASSE"], ["STRAẞE", "strasse"], ["Σ", "ς"], ["ſ", "s"], ["ﬃ", "ffi"]])("rejects Unicode case expansion between prospective report %s and normalized output %s", async (reportName, normalizedName) => {
+    const p = freshProject(); const directory = join(p.dir, "reports", "guard-mutation");
+    const config = JSON.parse(readFileSync(join(p.dir, "stryker.guards.config.json"), "utf8")) as { jsonReporter: { fileName: string } };
+    config.jsonReporter.fileName = join(directory, `${reportName}.json`);
+    const custom = join(directory, "custom.config.json"); writeFileSync(custom, JSON.stringify(config));
+    const result = await run(["--config", custom, "--normalized-out", join(directory, `${normalizedName}.JSON`)], process.env, p.cli, p.dir);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("output would overwrite");
+    expect(existsSync(join(directory, "calls.jsonl"))).toBe(false);
+    expect(existsSync(config.jsonReporter.fileName)).toBe(false);
+  });
+
   it("runs the configured guard set and fresh exclusion probe, then writes and compares a bound receipt", async () => {
     const p = freshProject(); const result = await run([], process.env, p.cli, p.dir);
     expect(result.status, result.output).toBe(0); expect(result.output).toContain("GUARD BASELINE PASS");

@@ -71,12 +71,21 @@ function pathIdentity(path: string): string {
   return current;
 }
 
+function portablePathIdentity(identity: string): string {
+  // Compatibility normalization and case expansion reject ambiguous destinations.
+  // Lowercasing first includes capital sharp S in the subsequent SS expansion.
+  return identity.normalize("NFKC").toLowerCase().toUpperCase().toLowerCase().normalize("NFKC");
+}
+
 function separateOutput(output: string, protectedPaths: string[]): void {
   const identity = pathIdentity(output);
+  // Prospective destinations stay distinct across case-insensitive filesystems too.
+  // Preserve the original identity for inode lookup on case-sensitive volumes.
+  const portableIdentity = portablePathIdentity(identity);
   const outputStat = existsSync(identity) ? lstatSync(identity) : undefined;
   if (protectedPaths.some((path) => {
     const protectedIdentity = pathIdentity(path);
-    if (protectedIdentity === identity) return true;
+    if (portablePathIdentity(protectedIdentity) === portableIdentity) return true;
     if (!outputStat || !existsSync(protectedIdentity)) return false;
     const protectedStat = lstatSync(protectedIdentity);
     return outputStat.dev === protectedStat.dev && outputStat.ino === protectedStat.ino;
