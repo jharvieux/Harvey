@@ -170,8 +170,16 @@ export function selectPackageManager(
   cwd: string,
   env: NodeJS.ProcessEnv,
   requestedVersion?: string,
+  source: "target-declaration" | "operator-policy" = "target-declaration",
 ): DependencyPreparationStage[] {
   const invocation = { bin: manager, args: ["--version"], cwd, env };
+  // A validated corpus policy selects an exact pnpm without changing either original lock or
+  // inventing a packageManager field. Its caller separately rejects a mismatched observation.
+  if (source === "operator-policy" && manager === "pnpm" && requestedVersion && /^\d+\.\d+\.\d+$/.test(requestedVersion)) {
+    return [observePackageManager(manager, "version-probe", {
+      ...invocation, bin: "corepack", launcherArgs: [`pnpm@${requestedVersion}`],
+    })];
+  }
   const native = observePackageManager(manager, "version-probe", invocation);
   const stages = [native];
   // npm shipped with Node ignores packageManager. Corepack's explicit npm launcher supports

@@ -86,6 +86,7 @@ import {
   scoreFreeTierExpectation,
   scoreMutationBaseline,
   type CountedBaselineDiagnostic,
+  type ExternalTarget,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
@@ -281,17 +282,21 @@ if (baselineFindingsPath) {
 //
 // Portable-store options belong in the install argv, not edits to the target's workspace policy.
 function installTargetDeps(dir: string, flags: readonly string[], identity: {
+  targetSlug?: string;
   targetRevision: string;
   targetTree: string;
   sourceRoot: string;
+  installationPolicy?: ExternalTarget["installationPolicy"];
 }, cacheDir = phaseCacheDir): DependencyPreparationResult {
   return prepareCorpusDependencies({
     targetDir: dir,
     sourceRoot: identity.sourceRoot,
     cacheDir,
+    targetSlug: identity.targetSlug,
     targetRevision: identity.targetRevision,
     targetTree: identity.targetTree,
     installFlags: flags,
+    installationPolicy: identity.installationPolicy,
     onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
   });
 }
@@ -632,6 +637,7 @@ const rows: Row[] = [];
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
 // as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
 const findingsBySlug: Record<string, Finding[]> = {};
+const dependencyPreparationsBySlug: Record<string, DependencyPreparationResult[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
 const advisoryObservation: CorpusAdvisoryObservationArtifact | undefined = advisoryObservationPath ? {
@@ -675,6 +681,7 @@ for (const target of targets) {
     ? join(phaseCacheDir, `shard${corpusCacheNamespaceForTarget(EXTERNAL_CORPUS.map((entry) => entry.slug), target.slug)}`)
     : undefined;
   const dependencyPreparations: DependencyPreparationResult[] = [];
+  dependencyPreparationsBySlug[target.slug] = dependencyPreparations;
   try {
     // One authoritative preparation boundary for hosted scoring and the independent replay: exact
     // pin, remove declared reference subtrees, then capture before dependency installation can
@@ -807,9 +814,11 @@ for (const target of targets) {
     // visible and keeps quality-scan fresh.
     const dependencyPreparation = install
       ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
+        targetSlug: target.slug,
         targetRevision: target.commit,
         targetTree: targetTreeIdentity,
         sourceRoot: ".",
+        installationPolicy: target.installationPolicy,
       }, targetPhaseCacheDir))
       : undefined;
     if (dependencyPreparation) dependencyPreparations.push(dependencyPreparation);
@@ -872,9 +881,11 @@ for (const target of targets) {
       }
       const scopedDependencyPreparation = install
         ? timed("install", () => installTargetDeps(rootDir, [], {
+          targetSlug: target.slug,
           targetRevision: target.commit,
           targetTree: targetTreeIdentity,
           sourceRoot: m5Root,
+          installationPolicy: target.installationPolicy,
         }, targetPhaseCacheDir))
         : undefined;
       if (scopedDependencyPreparation) dependencyPreparations.push(scopedDependencyPreparation);
@@ -1046,6 +1057,7 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
   rows,
   findings: findingsBySlug,
+  dependencyPreparations: dependencyPreparationsBySlug,
   detectors: detectorRecordsBySlug,
   mechanicalContexts: mechanicalContextBySlug,
   ...(currentExecution ? { currentMechanicalExecution: currentExecution } : {}),

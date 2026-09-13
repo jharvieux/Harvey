@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesLstatSafe, readEntriesSafe } from "./fs-walk.js";
-import { detectPackageManager, installExtraCommand, npmOnlyFlags, resolvePackageManagerEvidence, withRestoredManifest, type PackageManager } from "./package-manager.js";
+import { detectPackageManager, installExtraCommand, npmOnlyFlags, resolvePackageManagerEvidence, withRestoredManifest, type PackageManager, type PackageManagerResolution } from "./package-manager.js";
 import { describePreparationStages, matchesSelectedPackageManager, observePackageManager, selectPackageManager, type DependencyPreparationStage, type InstallInvocation, type SelectedPackageManager } from "./corpus-package-manager.js";
+import type { CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 3;
 
@@ -31,6 +32,13 @@ export interface DependencyPreparationResult {
     sourceRoot: string;
     stages: DependencyPreparationStage[];
     dependencyStore: string;
+    operatorPolicy?: {
+      policy: CorpusInstallationPolicy;
+      admission: "accepted" | "rejected";
+      sourceResolution: PackageManagerResolution;
+      installConfigurationSha256: string;
+      lockfiles: { path: string; sha256: string }[];
+    };
     managerProvisioning: {
       kind: "installation-setup";
       isolation: "not-guaranteed";
@@ -69,6 +77,7 @@ interface DependencyPreparationOptions {
   targetDir: string;
   sourceRoot?: string;
   cacheDir?: string;
+  targetSlug?: string;
   targetRevision: string;
   targetTree: string;
   installFlags?: readonly string[];
@@ -76,6 +85,7 @@ interface DependencyPreparationOptions {
   runInstall?: (invocation: InstallInvocation) => void;
   packageManagerVersion?: string;
   environment?: NodeJS.ProcessEnv;
+  installationPolicy?: CorpusInstallationPolicy;
 }
 
 interface DependencyInstallationSession {
@@ -733,10 +743,13 @@ function writeReceipt(path: string, key: string, identity: PreparationIdentity, 
 export function prepareCorpusDependencies(options: DependencyPreparationOptions): DependencyPreparationResult {
   // The content store remains live while a target consumer can add tools to its installed tree.
   // The caller releases it after its final consumer, including failure paths.
-  const scratch = options.cacheDir ? undefined : mkdtempSync(join(tmpdir(), "harvey-dependency-store-"));
+  const scratch = options.cacheDir && !options.installationPolicy ? undefined : mkdtempSync(join(tmpdir(), "harvey-dependency-store-"));
   const environment = preparationEnvironment(options.environment);
+  const originalInputs = options.installationPolicy
+    ? new Map(installInputs(options.targetDir).map((path) => [path, readFileSync(path)]))
+    : undefined;
   try {
-    const result = prepareDependencies(options, resolve(options.cacheDir ?? scratch!), environment);
+    const result = prepareDependencies(options, resolve(scratch ?? options.cacheDir!), environment);
     installationSessions.set(result, {
       targetDir: resolve(options.targetDir), environment, manager: result.packageManager,
       selected: result.installation?.stages.findLast((stage) => stage.stage === "version-probe")?.selected,
@@ -746,6 +759,16 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   } catch (error) {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     throw error;
+  } finally {
+    if (originalInputs) {
+      for (const path of installInputs(options.targetDir)) if (!originalInputs.has(path)) rmSync(path, { force: true });
+      for (const [path, content] of originalInputs) {
+        if (!existsSync(path) || !readFileSync(path).equals(content)) {
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, content);
+        }
+      }
+    }
   }
 }
 
@@ -798,23 +821,62 @@ export function installCorpusDependencyExtras(preparation: DependencyPreparation
   }
 }
 
+function operatorPolicyRejection(options: DependencyPreparationOptions, resolution: PackageManagerResolution, installConfiguration: string): string | undefined {
+  const policy = options.installationPolicy;
+  if (!policy) return undefined;
+  if (policy.kind !== "operator-selected" || policy.packageManager !== "pnpm" || policy.lockfile !== "pnpm-lock.yaml"
+    || !/^\d+\.\d+\.\d+$/.test(policy.packageManagerVersion) || !policy.provenance?.trim()
+    || !/^[a-f0-9]{40}$/.test(policy.targetRevision) || !/^[a-f0-9]{64}$/.test(policy.installConfigurationSha256)) {
+    return "operator installation policy has an unsupported manager, version, lockfile or identity";
+  }
+  if (options.targetSlug !== policy.targetSlug || options.targetRevision !== policy.targetRevision
+    || policy.sourceRoot !== "." || (options.sourceRoot ?? ".") !== policy.sourceRoot) {
+    return "operator installation policy does not match this target, revision or source root";
+  }
+  if (options.installFlags?.length) return "operator installation policy does not authorize additional install flags";
+  if (installConfiguration !== policy.installConfigurationSha256) return "operator installation policy does not match the original install-input identity";
+  if (resolution.status !== "not-assessed" || resolution.reason !== "conflicting-evidence"
+    || resolution.evidence.some((entry) => entry.kind !== "lockfile")
+    || resolution.evidence.map((entry) => entry.path).sort().join(",") !== "package-lock.json,pnpm-lock.yaml") {
+    return "operator installation policy applies only to undeclared, conflicting npm and pnpm locks";
+  }
+  try {
+    const manifest = JSON.parse(readFileSync(join(options.targetDir, "package.json"), "utf8")) as { packageManager?: unknown; devEngines?: { packageManager?: unknown } } | null;
+    if (!manifest || manifest.packageManager !== undefined || manifest.devEngines?.packageManager !== undefined) return "operator installation policy cannot override a target manager declaration";
+  } catch {
+    return "operator installation policy requires a readable root manifest";
+  }
+  return undefined;
+}
+
 function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string, environment: NodeJS.ProcessEnv): DependencyPreparationResult {
   const resolution = resolvePackageManagerEvidence(options.targetDir);
-  const manager = resolution.status === "selected" ? resolution.manager : detectPackageManager(options.targetDir);
   const originalInstallConfiguration = digestInstallInputs(options.targetDir);
-  const stages: DependencyPreparationStage[] = options.runInstall && options.packageManagerVersion
-    ? [{ stage: "version-probe", outcome: "completed", exitCode: 0, command: [manager, "--version"] }]
-    : selectPackageManager(manager, options.targetDir, environment, resolution.status === "selected" ? resolution.requestedVersion : undefined);
-  const probe = stages.at(-1)!;
-  const version = probe.selected?.version ?? (options.runInstall ? options.packageManagerVersion : undefined) ?? "unavailable";
+  const policy = options.installationPolicy;
+  const policyRejection = operatorPolicyRejection(options, resolution, originalInstallConfiguration);
+  const manager = policy && !policyRejection ? policy.packageManager : resolution.status === "selected" ? resolution.manager : detectPackageManager(options.targetDir);
   const lockPath = lockfilePath(options.targetDir, manager);
   const lockText = lockPath ? readFileSync(lockPath, "utf8") : undefined;
   const lockDigest = lockText ? digest(lockText) : undefined;
+  const originalLockfiles = policy ? resolution.evidence.filter((entry) => entry.kind === "lockfile")
+    .map((entry) => ({ path: entry.path, sha256: digest(readFileSync(join(options.targetDir, entry.path))) })) : [];
+  const stages: DependencyPreparationStage[] = policyRejection ? [] : options.runInstall && options.packageManagerVersion
+    ? [{ stage: "version-probe", outcome: "completed", exitCode: 0, command: [manager, "--version"] }]
+    : selectPackageManager(manager, options.targetDir, environment, policy?.packageManagerVersion ?? (resolution.status === "selected" ? resolution.requestedVersion : undefined), policy ? "operator-policy" : "target-declaration");
+  const probe = stages.at(-1);
+  const version = probe?.selected?.version ?? (options.runInstall ? options.packageManagerVersion : undefined) ?? "unavailable";
   const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
   const installation: NonNullable<DependencyPreparationResult["installation"]> = {
     sourceRoot: options.sourceRoot ?? ".",
     stages,
     dependencyStore: storeDir,
+    ...(policy ? { operatorPolicy: {
+      policy,
+      admission: policyRejection ? "rejected" as const : "accepted" as const,
+      sourceResolution: resolution,
+      installConfigurationSha256: originalInstallConfiguration,
+      lockfiles: originalLockfiles,
+    } } : {}),
     managerProvisioning: {
       kind: "installation-setup",
       isolation: "not-guaranteed",
@@ -826,7 +888,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
   const runInstall = (invocation: InstallInvocation, stage: DependencyPreparationStage["stage"]): void => {
     let observation: DependencyPreparationStage;
     if (options.runInstall) {
-      observation = { stage, outcome: "completed", exitCode: 0, command: [invocation.bin, ...invocation.args], selected: probe.selected };
+      observation = { stage, outcome: "completed", exitCode: 0, command: [invocation.bin, ...invocation.args], selected: probe?.selected };
       try {
         options.runInstall(invocation);
       } catch (error) {
@@ -835,12 +897,12 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
         observation.reason = error instanceof Error ? error.message : String(error);
       }
     } else {
-      observation = observePackageManager(manager, stage, invocation, probe.selected);
+      observation = observePackageManager(manager, stage, invocation, probe?.selected);
       const selected = observation.selected;
-      if (selected && !matchesSelectedPackageManager(selected, probe.selected)) {
+      if (selected && !matchesSelectedPackageManager(selected, probe?.selected)) {
         identityRejected = true;
         observation.outcome = "failed";
-        observation.reason = combineReasons(observation.reason, `selected package-manager identity changed after version-probe (${probe.selected?.executable}@${version}); this attempt cannot share its preparation receipt`);
+        observation.reason = combineReasons(observation.reason, `selected package-manager identity changed after version-probe (${probe?.selected?.executable}@${version}); this attempt cannot share its preparation receipt`);
       } else if (!observation.selected) identityRejected = true;
     }
     stages.push(observation);
@@ -850,7 +912,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
   options.onEvent?.(`DEPENDENCY PREP SETUP ${describePreparationStages(stages)}; ${installation.managerProvisioning.reason}`);
   const incomplete = (reason: string): DependencyPreparationResult => {
     removeInstalledTrees(options.targetDir);
-    const failure = `${reason}\n${describePreparationStages(stages)}`;
+    const failure = `${combineReasons(reason, policy ? `operator policy: ${policy.provenance}; original source resolution: ${resolution.status === "not-assessed" ? resolution.detail : resolution.status}` : undefined)}\n${describePreparationStages(stages)}`;
     options.onEvent?.(`DEPENDENCY PREP INCOMPLETE ${manager}: ${failure}; M5-knip will preserve its did-not-run/degraded semantics`);
     return {
       status: "incomplete", complete: false, cacheable: false, packageManager: manager,
@@ -858,7 +920,9 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
       sourceTreeCacheable: false, sourceTreeReason: `failed ${manager} preparation may have executed lifecycle code before rejection`,
     };
   };
-  if (probe.outcome === "failed") return incomplete("package-manager selection/provisioning failed");
+  if (policyRejection) return incomplete(policyRejection);
+  if (probe?.outcome !== "completed") return incomplete("package-manager selection/provisioning failed");
+  if (policy && (!probe.selected || version !== policy.packageManagerVersion)) return incomplete(`operator installation policy requires observed ${policy.packageManager}@${policy.packageManagerVersion}, but the executable is ${version}`);
   const installFlags = manager === "npm"
     ? [...(options.installFlags ?? [])]
     : manager === "pnpm"
@@ -867,6 +931,25 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
   const inputInspection = inspectCorpusDependencyInputs(options.targetDir, manager, version);
   if (inputInspection.installConfiguration !== originalInstallConfiguration) {
     return incomplete("package-manager selection/provisioning changed target-owned install inputs; the original input identity cannot be admitted");
+  }
+
+  if (policy) {
+    // A conflict was resolved by the operator, so no receipt, content store or scanner result may
+    // be reused. Frozen-only execution cannot turn a failed authorized install into a different
+    // dependency population via legacy fallback. Retain and enforce both original lock inputs.
+    removeInstalledTrees(options.targetDir);
+    try {
+      mkdirSync(storeDir, { recursive: true });
+      runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, false), cwd: options.targetDir, env: environment }, "frozen");
+      if (digestInstallInputs(options.targetDir) !== originalInstallConfiguration) return incomplete("operator-authorized installation changed original install inputs");
+      const reason = `operator-selected ${manager}@${version} using ${policy.lockfile}; ${policy.provenance}; original source conflict retained: ${resolution.status === "not-assessed" ? resolution.detail : resolution.status}; frozen installation completed; cache reuse disabled`;
+      options.onEvent?.(`DEPENDENCY PREP OPERATOR ${reason}`);
+      return { status: "non-cacheable", complete: true, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, installation, reason, sourceTreeCacheable: false, sourceTreeReason: "operator-selected mixed-lock installation is never cacheable" };
+    } catch (error) {
+      return incomplete(`operator-authorized frozen installation failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      sanitizePnpmStore(storeDir);
+    }
   }
 
   const legacyInstall = (reason: string): DependencyPreparationResult => {
