@@ -131,7 +131,7 @@ describe("parseDiffFacts", () => {
       "+hello",
       "",
     ].join("\n");
-    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4 });
+    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4, unsupportedMetadata: [] });
   });
 
   it("does not mistake a removed `--- ` content line for a file header", () => {
@@ -144,5 +144,18 @@ describe("parseDiffFacts", () => {
       "",
     ].join("\n");
     expect(parseDiffFacts(diff).files).toEqual(["db/seed.sql"]);
+  });
+
+  it("unions Git header and rename metadata endpoints so contradictory metadata cannot hide a protected path", () => {
+    const diff = [
+      "diff --git a/.env b/renamed-secret.txt",
+      "similarity index 100%",
+      "rename from harmless.txt",
+      "rename to renamed-secret.txt",
+      "",
+    ].join("\n");
+    const facts = parseDiffFacts(diff);
+    expect(facts.files).toEqual(["harmless.txt", ".env"]);
+    expect(facts.createdFiles).toEqual(["renamed-secret.txt"]);
   });
 });

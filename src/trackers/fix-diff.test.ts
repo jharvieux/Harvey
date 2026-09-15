@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -83,6 +83,32 @@ describe("verifySuggestedFix", () => {
     const res = await verifySuggestedFix(envDiff, { targetDir: dir });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("denylisted");
+  });
+
+  it("refuses a protected endpoint in a real Git rename before the unrelated effect check", async () => {
+    writeFileSync(join(dir, "calc.js"), "module.exports.add = (a, b) => a + b;\n");
+    renameSync(join(dir, ".env"), join(dir, "renamed-secret.txt"));
+    git(["add", "-A"]);
+    const patch = `${execFileSync("git", ["diff", "--cached", "--binary", "--find-renames=100%"], { cwd: dir, encoding: "utf8" }).trim()}\n`;
+    git(["reset", "--hard", "HEAD"]);
+    expect(patch).toContain("rename from .env");
+
+    const res = await verifySuggestedFix(patch, { targetDir: dir, effectCommand: EFFECT });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("denylisted");
+  });
+
+  it("refuses a real Git binary patch as unsupported metadata", async () => {
+    writeFileSync(join(dir, "image.bin"), "before\u0000bytes\n");
+    git(["add", "image.bin"]);
+    git(["commit", "-m", "add binary"]);
+    writeFileSync(join(dir, "image.bin"), "after\u0000bytes\n");
+    const patch = execFileSync("git", ["diff", "--binary"], { cwd: dir, encoding: "utf8" });
+    expect(patch).toContain("GIT binary patch");
+
+    const res = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("binary patch metadata is unsupported");
   });
 
   it("refuses a diff that exceeds the engagement diff cap", async () => {

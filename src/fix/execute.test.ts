@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +31,14 @@ function clientRepo(files: Record<string, string>): { dir: string; commit: strin
 
 function worktreeCount(dir: string): number {
   return git(dir, ["worktree", "list"]).split("\n").filter(Boolean).length;
+}
+
+function patchFromGit(dir: string, mutate: () => void): string {
+  mutate();
+  git(dir, ["add", "-A"]);
+  const patch = `${git(dir, ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"])}\n`;
+  git(dir, ["reset", "--hard", "-q", "HEAD"]);
+  return patch;
 }
 
 afterEach(() => {
@@ -69,6 +77,111 @@ describe("executeFixDiff", () => {
     expect(result.outcome).toBe("rails-blocked");
     expect(result.railViolations.join(" ")).toContain("denylisted path");
     expect(worktreeCount(dir)).toBe(1);
+  });
+
+  it("blocks both endpoints of a real Git rename before an unrelated passing effect can run", async () => {
+    const { dir, commit } = clientRepo({
+      "calc.js": "module.exports.add = (a, b) => a - b;\n",
+      ".env": "SECRET=1\n",
+    });
+    const patch = patchFromGit(dir, () => {
+      writeFileSync(join(dir, "calc.js"), "module.exports.add = (a, b) => a + b;\n");
+      renameSync(join(dir, ".env"), join(dir, "renamed-secret.txt"));
+    });
+    expect(patch).toContain("rename from .env");
+    expect(patch).toContain("rename to renamed-secret.txt");
+
+    const result = await executeFixDiff("F-rename-env", patch, {
+      targetDir: dir,
+      baselineCommit: commit,
+      allowlist: ["**"],
+      effectCommand: ["node", "-e", "process.exit(require('./calc.js').add(2, 3) === 5 ? 0 : 1)"],
+    });
+
+    expect(result.outcome).toBe("rails-blocked");
+    expect(result.files).toContain(".env");
+    expect(result.createdFiles).toContain("renamed-secret.txt");
+    expect(result.railViolations.join(" ")).toContain("denylisted path");
+    expect(worktreeCount(dir)).toBe(1);
+  });
+
+  it("blocks protected rename destinations and copy sources from real Git metadata", async () => {
+    const renameRepo = clientRepo({ "src/source.ts": "export const value = 1;\n" });
+    const renamePatch = patchFromGit(renameRepo.dir, () => renameSync(join(renameRepo.dir, "src/source.ts"), join(renameRepo.dir, ".env.local")));
+    const renamed = await executeFixDiff("F-rename-destination", renamePatch, {
+      targetDir: renameRepo.dir,
+      baselineCommit: renameRepo.commit,
+      allowlist: ["**"],
+    });
+    expect(renamed.outcome).toBe("rails-blocked");
+    expect(renamed.createdFiles).toContain(".env.local");
+
+    const copyRepo = clientRepo({ ".env": "SECRET=1\n" });
+    const copyPatch = patchFromGit(copyRepo.dir, () => copyFileSync(join(copyRepo.dir, ".env"), join(copyRepo.dir, "copied-secret.txt")));
+    expect(copyPatch).toContain("copy from .env");
+    const copied = await executeFixDiff("F-copy-source", copyPatch, {
+      targetDir: copyRepo.dir,
+      baselineCommit: copyRepo.commit,
+      allowlist: ["**"],
+    });
+    expect(copied.outcome).toBe("rails-blocked");
+    expect(copied.files).toContain(".env");
+    expect(copied.createdFiles).toContain("copied-secret.txt");
+  });
+
+  it("accepts real Git text rename, copy, and mode-only records inside the allowlist", async () => {
+    const renameRepo = clientRepo({ "src/old.ts": "export const value = 1;\n" });
+    const renamePatch = patchFromGit(renameRepo.dir, () => renameSync(join(renameRepo.dir, "src/old.ts"), join(renameRepo.dir, "src/new.ts")));
+    const renamed = await executeFixDiff("F-rename", renamePatch, { targetDir: renameRepo.dir, baselineCommit: renameRepo.commit, allowlist });
+    expect(renamed).toMatchObject({ outcome: "diff-verified", files: ["src/old.ts"], createdFiles: ["src/new.ts"] });
+
+    const copyRepo = clientRepo({ "src/source.ts": "export const value = 1;\n" });
+    const copyPatch = patchFromGit(copyRepo.dir, () => copyFileSync(join(copyRepo.dir, "src/source.ts"), join(copyRepo.dir, "src/copy.ts")));
+    expect(copyPatch).toContain("copy from src/source.ts");
+    expect(copyPatch).toContain("copy to src/copy.ts");
+    const copied = await executeFixDiff("F-copy", copyPatch, { targetDir: copyRepo.dir, baselineCommit: copyRepo.commit, allowlist });
+    expect(copied).toMatchObject({ outcome: "diff-verified", files: ["src/source.ts"], createdFiles: ["src/copy.ts"] });
+
+    const modeRepo = clientRepo({ "src/script.sh": "#!/bin/sh\nexit 0\n" });
+    const modePatch = patchFromGit(modeRepo.dir, () => chmodSync(join(modeRepo.dir, "src/script.sh"), 0o755));
+    expect(modePatch).toContain("old mode 100644");
+    expect(modePatch).toContain("new mode 100755");
+    const mode = await executeFixDiff("F-mode", modePatch, { targetDir: modeRepo.dir, baselineCommit: modeRepo.commit, allowlist });
+    expect(mode).toMatchObject({ outcome: "diff-verified", files: ["src/script.sh"], createdFiles: [] });
+  });
+
+  it("refuses real Git binary and symlink records explicitly before application", async () => {
+    const binaryRepo = clientRepo({ "src/image.bin": "before\u0000bytes\n" });
+    const binaryPatch = patchFromGit(binaryRepo.dir, () => writeFileSync(join(binaryRepo.dir, "src/image.bin"), "after\u0000bytes\n"));
+    expect(binaryPatch).toContain("GIT binary patch");
+    const binary = await executeFixDiff("F-binary", binaryPatch, { targetDir: binaryRepo.dir, baselineCommit: binaryRepo.commit, allowlist });
+    expect(binary.outcome).toBe("rails-blocked");
+    expect(binary.railViolations.join(" ")).toContain("binary patch metadata is unsupported");
+
+    const symlinkRepo = clientRepo({ "src/target.ts": "export const value = 1;\n" });
+    const symlinkPatch = patchFromGit(symlinkRepo.dir, () => symlinkSync("target.ts", join(symlinkRepo.dir, "src/link.ts")));
+    expect(symlinkPatch).toContain("new file mode 120000");
+    const symlink = await executeFixDiff("F-symlink", symlinkPatch, { targetDir: symlinkRepo.dir, baselineCommit: symlinkRepo.commit, allowlist });
+    expect(symlink.outcome).toBe("rails-blocked");
+    expect(symlink.railViolations.join(" ")).toContain("symlink patch metadata is unsupported");
+
+    const changedSymlinkRepo = clientRepo({ "src/first.ts": "first\n", "src/second.ts": "second\n" });
+    symlinkSync("first.ts", join(changedSymlinkRepo.dir, "src/existing-link.ts"));
+    git(changedSymlinkRepo.dir, ["add", "-A"]);
+    git(changedSymlinkRepo.dir, ["commit", "-qm", "add symlink"]);
+    changedSymlinkRepo.commit = git(changedSymlinkRepo.dir, ["rev-parse", "HEAD"]);
+    const changedSymlinkPatch = patchFromGit(changedSymlinkRepo.dir, () => {
+      rmSync(join(changedSymlinkRepo.dir, "src/existing-link.ts"));
+      symlinkSync("second.ts", join(changedSymlinkRepo.dir, "src/existing-link.ts"));
+    });
+    expect(changedSymlinkPatch).toMatch(/index \S+\.\.\S+ 120000/);
+    const changedSymlink = await executeFixDiff("F-symlink-change", changedSymlinkPatch, {
+      targetDir: changedSymlinkRepo.dir,
+      baselineCommit: changedSymlinkRepo.commit,
+      allowlist,
+    });
+    expect(changedSymlink.outcome).toBe("rails-blocked");
+    expect(changedSymlink.railViolations.join(" ")).toContain("symlink patch metadata is unsupported");
   });
 
   it("blocks a path outside the engagement allowlist", async () => {

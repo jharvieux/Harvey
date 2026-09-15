@@ -99,16 +99,54 @@ export function checkBlastRadius(blast: BlastRadius, allowlist: string[], cap: D
 // diff parser in the fix subsystem — both the executing path (execute.ts) and the ticket path
 // (trackers/fix-diff.ts) rail-check through it, so a denylisted or oversized diff is refused the same
 // way whether it is heading for a worktree or a client ticket body.
-interface DiffFacts {
+export interface DiffFacts {
   files: string[]; // paths the diff modifies or deletes
   createdFiles: string[]; // paths the diff adds
   changedLines: number; // added + removed body lines
+  unsupportedMetadata: string[]; // patch forms the fix pipeline refuses before git apply
+}
+
+function decodeGitPath(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value.startsWith('"')) return value;
+  if (!value.endsWith('"')) return undefined;
+  const bytes: number[] = [];
+  for (let i = 1; i < value.length - 1; i++) {
+    const char = value[i] as string;
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char));
+      continue;
+    }
+    const escaped = value[++i];
+    if (escaped === undefined) return undefined;
+    const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+    if (simple[escaped] !== undefined) {
+      bytes.push(simple[escaped]);
+      continue;
+    }
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(value[i + 1] ?? "")) octal += value[++i];
+      bytes.push(Number.parseInt(octal, 8));
+      continue;
+    }
+    return undefined;
+  }
+  return Buffer.from(bytes).toString("utf8");
 }
 
 function stripPrefix(raw: string): string | undefined {
-  const path = raw.split("\t")[0]?.trim() ?? "";
+  const path = decodeGitPath(raw.split("\t")[0] ?? "") ?? "";
   if (path === "" || path === "/dev/null") return undefined;
   return path.replace(/^[ab]\//, "");
+}
+
+function parseDiffGitPaths(line: string): { oldPath: string; newPath: string } | undefined {
+  const match = /^diff --git ("(?:\\.|[^"\\])*"|\S+) ("(?:\\.|[^"\\])*"|\S+)$/.exec(line);
+  if (!match) return undefined;
+  const oldPath = stripPrefix(match[1] as string);
+  const newPath = stripPrefix(match[2] as string);
+  return oldPath && newPath ? { oldPath, newPath } : undefined;
 }
 
 // Hunk headers carry exact old/new line counts, so the body is consumed by count rather than by
@@ -123,11 +161,21 @@ function parseHunkCounts(line: string): { oldLines: number; newLines: number } |
 export function parseDiffFacts(diff: string): DiffFacts {
   const files = new Set<string>();
   const createdFiles = new Set<string>();
+  const unsupportedMetadata = new Set<string>();
   let changedLines = 0;
   let oldPath: string | undefined;
   let oldIsDevNull = false;
+  let headerPaths: { oldPath: string; newPath: string } | undefined;
+  let headerAccounted = false;
   let remainingOld = 0;
   let remainingNew = 0;
+
+  const accountHeader = () => {
+    if (!headerPaths || headerAccounted) return;
+    files.add(headerPaths.oldPath);
+    if (headerPaths.newPath !== headerPaths.oldPath) createdFiles.add(headerPaths.newPath);
+    headerAccounted = true;
+  };
 
   for (const line of diff.split("\n")) {
     if (remainingOld > 0 || remainingNew > 0) {
@@ -144,10 +192,37 @@ export function parseDiffFacts(diff: string): DiffFacts {
       }
       continue;
     }
+    if (line.startsWith("diff --git ")) {
+      accountHeader();
+      headerPaths = parseDiffGitPaths(line);
+      headerAccounted = false;
+      oldPath = undefined;
+      oldIsDevNull = false;
+      if (!headerPaths) unsupportedMetadata.add("unparseable Git diff header is unsupported");
+      continue;
+    }
     const hunk = parseHunkCounts(line);
     if (hunk) {
       remainingOld = hunk.oldLines;
       remainingNew = hunk.newLines;
+      continue;
+    }
+    const endpoint = /^(rename|copy) (from|to) (.+)$/.exec(line);
+    if (endpoint) {
+      const path = decodeGitPath(endpoint[3] as string);
+      if (!path) unsupportedMetadata.add(`unparseable Git ${endpoint[1]} ${endpoint[2]} path is unsupported`);
+      else if (endpoint[2] === "from") files.add(path);
+      else createdFiles.add(path);
+      continue;
+    }
+    const mode = /^(?:old mode|new mode|new file mode|deleted file mode) (\d+)$/.exec(line)?.[1];
+    if (mode === "120000") unsupportedMetadata.add("symlink patch metadata is unsupported");
+    if (mode === "160000") unsupportedMetadata.add("gitlink patch metadata is unsupported");
+    const indexedMode = /^index \S+\.\.\S+ (\d+)$/.exec(line)?.[1];
+    if (indexedMode === "120000") unsupportedMetadata.add("symlink patch metadata is unsupported");
+    if (indexedMode === "160000") unsupportedMetadata.add("gitlink patch metadata is unsupported");
+    if (line === "GIT binary patch" || /^Binary files .+ differ$/.test(line)) {
+      unsupportedMetadata.add("binary patch metadata is unsupported");
       continue;
     }
     if (line.startsWith("--- ")) {
@@ -157,10 +232,19 @@ export function parseDiffFacts(diff: string): DiffFacts {
     }
     if (line.startsWith("+++ ")) {
       const path = stripPrefix(line.slice(4)) ?? oldPath;
-      if (path !== undefined) (oldIsDevNull ? createdFiles : files).add(path);
+      if (oldIsDevNull) {
+        if (path !== undefined) createdFiles.add(path);
+      } else if (path === oldPath) {
+        if (path !== undefined) files.add(path);
+      } else {
+        if (oldPath !== undefined) files.add(oldPath);
+        if (path !== undefined) createdFiles.add(path);
+      }
+      headerAccounted = true;
     }
   }
-  return { files: [...files], createdFiles: [...createdFiles], changedLines };
+  accountHeader();
+  return { files: [...files], createdFiles: [...createdFiles], changedLines, unsupportedMetadata: [...unsupportedMetadata] };
 }
 
 // behaviorPreserving is not knowable from a diff, so it is stated conservatively; the rail checks
