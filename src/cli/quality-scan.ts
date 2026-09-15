@@ -53,7 +53,6 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   matchesGlob,
-  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,

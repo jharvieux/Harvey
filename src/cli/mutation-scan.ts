@@ -334,7 +334,7 @@ function walkRelPaths(root: string): string[] {
   const paths: string[] = [];
   const inventory = productSourceInventory(root);
   const walk = (dir: string) => {
-    for (const { name, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+    for (const { path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
         const rel = relative(root, full).split(sep).join("/");
         if (!inventory.excludedDirectoryFor(rel)) walk(full);
