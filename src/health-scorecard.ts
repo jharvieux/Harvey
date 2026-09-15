@@ -258,10 +258,9 @@ function gradedDensityRow(
   };
 }
 
-// A whole-target unsupported-framework row means M9 ran no gradable check at all. The detector's
-// N/A finding is still carried into the scorecard, but it cannot be turned into an earned A merely
-// because the defect numerator is empty. Workspace-scoped disclosures take the graded path below:
-// the supported remainder was assessed and keeps its real density, alongside the disclosed gap.
+// Treat a whole-target unsupported-framework row as a disclosure rather than assessed work.
+// Workspace-scoped disclosures take the graded path below so the supported remainder keeps its
+// measured density alongside the disclosed gap.
 function whollyUnassessedM9Row(spec: { module: string; label: string }, findings: Finding[]): HealthDimension | undefined {
   const disclosures = findings.filter(isDisclosureRow);
   const unsupported = disclosures.find((f) => f.taxonomy === "M9 — Not assessed (framework unsupported)" && f.location === "(whole target)");
