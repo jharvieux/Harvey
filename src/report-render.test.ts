@@ -7,8 +7,8 @@
 // be imported here without driving the CLI.
 
 import { describe, expect, it } from "vitest";
-import { completenessBanner, coverageSection, healthGauge, limitationsSection, severityDonut } from "../report-template/render.mjs";
-import type { CoverageRow, ReportMeta } from "./findings.js";
+import { buildHtml, completenessBanner, coverageSection, healthGauge, limitationsSection, severityDonut } from "../report-template/render.mjs";
+import type { CoverageRow, Finding, ReportMeta } from "./findings.js";
 
 const meta = (over: Partial<ReportMeta> = {}): ReportMeta => ({
   client: "Acme", subtitle: "Q3 audit", date: "2026-07-25", commit: "abc1234", auditor: "Harvey",
@@ -18,6 +18,14 @@ const meta = (over: Partial<ReportMeta> = {}): ReportMeta => ({
 });
 
 const row = (over: Partial<CoverageRow> = {}): CoverageRow => ({ module: "M1", name: "Multi-tenant security", status: "ran", ...over });
+
+const reportFinding = (id: string, severity: Finding["severity"]): Finding => ({
+  id, title: `${severity} finding`, severity, confidence: "Confirmed", category: "Security",
+  taxonomy: `test-${severity}`, location: `${id}.ts:1`, status: "Open", evidence: "evidence",
+  impact: "impact", fix: "fix", value: 3, ease: 3, safety: 3,
+});
+
+const emptySeverityCases: Record<string, number>[] = [{}, { Critical: 0, High: 0 }];
 
 describe("healthGauge", () => {
   it("shows the numeric score and colors green at/above 7", () => {
@@ -38,9 +46,25 @@ describe("severityDonut", () => {
     expect(svg).toContain(">3<"); // 2 + 1, not 3 entries
   });
 
-  it("does not throw (divide-by-zero) when every count is zero or the map is empty", () => {
-    expect(() => severityDonut({})).not.toThrow();
-    expect(() => severityDonut({ Critical: 0 })).not.toThrow();
+  it.each(emptySeverityCases)("shows a real zero with no false segment or invalid geometry for %j", (counts) => {
+    const svg = severityDonut(counts);
+    expect(svg).toContain(">0</text>");
+    expect(svg).not.toContain(">1</text>");
+    expect(svg).not.toContain("<path");
+    expect(svg).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("keeps the visible zero and positive mixed total through generated HTML", () => {
+    const emptyHtml = buildHtml({ meta: meta(), findings: [] });
+    expect(emptyHtml).toMatch(/font-size="26"[^>]*>0<\/text>/);
+    expect(emptyHtml).not.toMatch(/font-size="26"[^>]*>1<\/text>/);
+    expect(emptyHtml).not.toMatch(/NaN|Infinity/);
+
+    const mixedHtml = buildHtml({ meta: meta(), findings: [reportFinding("critical", "Critical"), reportFinding("medium", "Medium")] });
+    expect(mixedHtml).toMatch(/font-size="26"[^>]*>2<\/text>/);
+    expect(mixedHtml).toContain("Critical 1");
+    expect(mixedHtml).toContain("Medium 1");
+    expect(mixedHtml).not.toMatch(/NaN|Infinity/);
   });
 });
 
