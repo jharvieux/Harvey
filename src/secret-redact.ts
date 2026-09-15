@@ -7,7 +7,10 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 ];
 
 function addSecretVariant(values: Set<string>, value: string): void {
-  if (!value) return;
+  // Provider credentials are materially longer than this. Ignoring shorter test placeholders
+  // prevents a one-character token (for example "t") from corrupting every matching character in
+  // otherwise valid tracker response fields while the complete Authorization value stays covered.
+  if (value.length < 8) return;
   values.add(value);
   values.add(encodeURIComponent(value));
   values.add(Buffer.from(value, "utf8").toString("base64"));
