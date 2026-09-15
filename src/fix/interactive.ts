@@ -198,7 +198,7 @@ export async function ingestFixDiff(input: IngestInput): Promise<IngestResult> {
     if (baselineRuns) return baselineRuns;
     const cache = input.baselineCache;
     const cacheKey = (c: DiscoveredCommand) => baselineCacheKey(input.targetDir, input.baselineCommit, c);
-    const runnableCommands = commands.filter((c) => !needsCi(c));
+    const runnableCommands = commands.filter((c) => !needsCi(c) && c.discoveryFailure === undefined);
     const missing = cache ? runnableCommands.filter((c) => !cache.has(cacheKey(c))) : runnableCommands;
     baselineRequested = commands.length;
     baselineExecuted = missing.length;

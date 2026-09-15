@@ -342,4 +342,31 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     expect(ingest.green).toBe(false);
     expect(ingest.rejectReason).toContain("node check.cjs (exit 7)");
   });
+
+  it("rejects an admitted malformed workflow while retaining the valid root check", async () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus({
+      ...clientRepo(src, "ok"),
+      ".github/workflows/broken.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    steps:",
+        "      - run: [node missing-close.cjs",
+      ].join("\n"),
+    });
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    expect(ingest.execution.outcome).toBe("diff-verified");
+    expect(ingest.evidence.detectorAfter.fired).toBe(false);
+    expect(ingest.evidence.clientChecks).toContainEqual(expect.objectContaining({ command: "npm run test", exitCode: 0 }));
+    expect(ingest.evidence.clientChecks).toContainEqual(expect.objectContaining({
+      command: "workflow discovery failed: broken.yml",
+      exitCode: 1,
+      outputTail: "workflow YAML could not be parsed; CI commands were not discovered",
+    }));
+    expect(ingest.green).toBe(false);
+    expect(ingest.rejectReason).toContain("workflow discovery failed: broken.yml (exit 1)");
+  });
 });

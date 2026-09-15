@@ -28,6 +28,7 @@ export interface DiscoveredCommand {
   workspace: string;
   source: string; // e.g. "package.json (root)", "package.json (apps/web)", "ci-workflow (ci.yml)"
   notRunnableLocally?: string; // explicit workflow semantics that require the Actions runtime
+  discoveryFailure?: string; // fail-closed evidence when an admitted workflow cannot be inspected
 }
 
 type Runner = (command: string, cwd: string) => Promise<CommandRun>;
@@ -45,8 +46,8 @@ function readScripts(dir: string): Record<string, string> | undefined {
   }
 }
 
-export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace" | "notRunnableLocally">) =>
-  `${c.workspace}\u0000${c.command}\u0000${c.notRunnableLocally ?? ""}`;
+export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace" | "notRunnableLocally" | "discoveryFailure">) =>
+  `${c.workspace}\u0000${c.command}\u0000${c.notRunnableLocally ?? ""}\u0000${c.discoveryFailure ?? ""}`;
 
 /**
  * A baseline result is a property of `(targetDir, baselineCommit, workspace, command)` and nothing
@@ -90,8 +91,14 @@ export function discoverClientCommands(
 ): DiscoveredCommand[] {
   const out: DiscoveredCommand[] = [];
   const seen = new Set<string>();
-  const add = (command: string, workspace: string, source: string, notRunnableLocally?: string) => {
-    const c: DiscoveredCommand = { command, workspace, source, ...(notRunnableLocally ? { notRunnableLocally } : {}) };
+  const add = (command: string, workspace: string, source: string, notRunnableLocally?: string, discoveryFailure?: string) => {
+    const c: DiscoveredCommand = {
+      command,
+      workspace,
+      source,
+      ...(notRunnableLocally ? { notRunnableLocally } : {}),
+      ...(discoveryFailure ? { discoveryFailure } : {}),
+    };
     if (seen.has(cmdKey(c))) return;
     seen.add(cmdKey(c));
     out.push(c);
@@ -102,7 +109,7 @@ export function discoverClientCommands(
     if (!scripts) continue;
     for (const cmd of discoverVerifyCommands(scripts, runner)) add(cmd, ws, `package.json (${ws})`);
   }
-  for (const step of ciSteps) add(step.command, step.workspace, step.source, step.notRunnableLocally);
+  for (const step of ciSteps) add(step.command, step.workspace, step.source, step.notRunnableLocally, step.discoveryFailure);
   return out;
 }
 
@@ -178,7 +185,12 @@ function extractRunCommands(yaml: string, file: string): DiscoveredCommand[] {
   try {
     document = parse(yaml);
   } catch {
-    return [];
+    return [{
+      command: `workflow discovery failed: ${file}`,
+      workspace: "",
+      source: `ci-workflow (${file})`,
+      discoveryFailure: "workflow YAML could not be parsed; CI commands were not discovered",
+    }];
   }
   if (!document || typeof document !== "object") return [];
   const root = document as { defaults?: { run?: WorkflowRunDefaults }; jobs?: unknown };
@@ -213,7 +225,10 @@ function extractRunCommands(yaml: string, file: string): DiscoveredCommand[] {
 // overlap is the scheduler's job (§4 maxClientChecks), not this loop's.
 export async function runBaseline(commands: DiscoveredCommand[], baselineRoot: string, run: Runner = runCommand): Promise<Map<string, CommandRun>> {
   const m = new Map<string, CommandRun>();
-  for (const c of commands) m.set(cmdKey(c), await run(c.command, join(baselineRoot, c.workspace)));
+  for (const c of commands) {
+    if (c.discoveryFailure) continue;
+    m.set(cmdKey(c), await run(c.command, join(baselineRoot, c.workspace)));
+  }
   return m;
 }
 
@@ -277,6 +292,10 @@ export async function buildVerificationEvidence(inputs: EvidenceInputs, fixedRoo
   const clientChecks: CommandRun[] = [];
   for (const c of inputs.commands) {
     const cwd = join(fixedRoot, c.workspace);
+    if (c.discoveryFailure) {
+      clientChecks.push({ command: c.command, cwd, exitCode: 1, durationMs: 0, outputTail: c.discoveryFailure });
+      continue;
+    }
     if (inputs.needsCi?.(c)) {
       clientChecks.push({
         command: c.command,

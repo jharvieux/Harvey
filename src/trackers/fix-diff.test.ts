@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -109,6 +109,45 @@ describe("verifySuggestedFix", () => {
     const res = await verifySuggestedFix(patch, { targetDir: dir });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("binary patch metadata is unsupported");
+  });
+
+  it("admits Git NUL-exact space, trailing-space, rename, copy, and quoted Unicode paths", async () => {
+    git(["config", "core.quotePath", "false"]);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    const ordinary = "src/two words.ts";
+    const renameSource = "src/trailing old.ts ";
+    const renameDestination = "src/trailing new.ts ";
+    const copySource = "src/😀\tfile.ts";
+    const copyDestination = "src/copy 😀\tfile.ts";
+    writeFileSync(join(dir, ordinary), "ordinary before\n");
+    writeFileSync(join(dir, renameSource), "rename source\n");
+    writeFileSync(join(dir, copySource), "unicode copy source\n");
+    git(["add", "-A"]);
+    git(["commit", "-m", "path baseline"]);
+
+    writeFileSync(join(dir, ordinary), "ordinary after\n");
+    renameSync(join(dir, renameSource), join(dir, renameDestination));
+    copyFileSync(join(dir, copySource), join(dir, copyDestination));
+    git(["add", "-A"]);
+    const status = execFileSync(
+      "git",
+      ["diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir },
+    ).toString("utf8").split("\0").filter(Boolean);
+    expect(status).toContain(ordinary);
+    expect(status).toContain(renameSource);
+    expect(status).toContain(renameDestination);
+    expect(status).toContain(copySource);
+    expect(status).toContain(copyDestination);
+    const patch = execFileSync(
+      "git",
+      ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    git(["reset", "--hard", "HEAD"]);
+
+    const result = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(result).toMatchObject({ verified: true, detail: "applies cleanly (git apply --check)" });
   });
 
   it("refuses a diff that exceeds the engagement diff cap", async () => {

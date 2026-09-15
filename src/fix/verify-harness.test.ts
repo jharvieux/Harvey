@@ -161,6 +161,26 @@ describe("extractCiRunSteps", () => {
     expect(ev.clientChecks[0]).toMatchObject({ skipped: "needs-ci", cwd: "/fixed" });
     expect(ev.clientChecks[0]!.outputTail).toContain("dynamic workflow working-directory");
   });
+
+  it("returns a blocking discovery record for an admitted malformed workflow", () => {
+    const dir = scratch({
+      ".github/workflows/broken.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    steps:",
+        "      - run: [node check.cjs",
+      ].join("\n"),
+    });
+    expect(extractCiRunSteps(join(dir, ".github/workflows"))).toEqual([
+      {
+        command: "workflow discovery failed: broken.yml",
+        workspace: "",
+        source: "ci-workflow (broken.yml)",
+        discoveryFailure: "workflow YAML could not be parsed; CI commands were not discovered",
+      },
+    ]);
+  });
 });
 
 describe("buildVerificationEvidence", () => {

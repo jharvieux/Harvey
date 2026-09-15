@@ -36,9 +36,33 @@ function worktreeCount(dir: string): number {
 function patchFromGit(dir: string, mutate: () => void): string {
   mutate();
   git(dir, ["add", "-A"]);
-  const patch = `${git(dir, ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"])}\n`;
+  const patch = execFileSync("git", ["-C", dir, "diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"], { encoding: "utf8" });
   git(dir, ["reset", "--hard", "-q", "HEAD"]);
   return patch;
+}
+
+function patchAndNamesFromGit(dir: string, mutate: () => void): { patch: string; names: string[] } {
+  mutate();
+  git(dir, ["add", "-A"]);
+  const names = execFileSync("git", ["-C", dir, "diff", "--cached", "--name-only", "-z"])
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean);
+  const patch = execFileSync("git", ["-C", dir, "diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"], { encoding: "utf8" });
+  git(dir, ["reset", "--hard", "-q", "HEAD"]);
+  return { patch, names };
+}
+
+function patchAndStatusFromGit(dir: string, mutate: () => void): { patch: string; status: string; paths: string[] } {
+  mutate();
+  git(dir, ["add", "-A"]);
+  const [status = "", ...paths] = execFileSync(
+    "git",
+    ["-C", dir, "diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--find-copies-harder"],
+  ).toString("utf8").split("\0").filter(Boolean);
+  const patch = execFileSync("git", ["-C", dir, "diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"], { encoding: "utf8" });
+  git(dir, ["reset", "--hard", "-q", "HEAD"]);
+  return { patch, status, paths };
 }
 
 afterEach(() => {
@@ -148,6 +172,61 @@ describe("executeFixDiff", () => {
     expect(modePatch).toContain("new mode 100755");
     const mode = await executeFixDiff("F-mode", modePatch, { targetDir: modeRepo.dir, baselineCommit: modeRepo.commit, allowlist });
     expect(mode).toMatchObject({ outcome: "diff-verified", files: ["src/script.sh"], createdFiles: [] });
+  });
+
+  it("preserves Git NUL paths for ordinary spaces, trailing spaces, and quoted supplementary Unicode", async () => {
+    const files = {
+      "src/two words.ts": "export const value = 1;\n",
+      "src/trailing.ts ": "export const value = 1;\n",
+      "src/😀\tfile.ts": "export const value = 1;\n",
+    };
+    const { dir, commit } = clientRepo(files);
+    git(dir, ["config", "core.quotePath", "false"]);
+    const { patch, names } = patchAndNamesFromGit(dir, () => {
+      for (const path of Object.keys(files)) writeFileSync(join(dir, path), "export const value = 2;\n");
+    });
+    expect(patch).toContain("diff --git a/src/two words.ts b/src/two words.ts");
+    expect(patch).toContain("diff --git a/src/trailing.ts  b/src/trailing.ts ");
+    expect(patch).toContain('diff --git "a/src/😀\\tfile.ts" "b/src/😀\\tfile.ts"');
+
+    const result = await executeFixDiff("F-path-bytes", patch, { targetDir: dir, baselineCommit: commit, allowlist });
+    expect(result.outcome).toBe("diff-verified");
+    expect([...result.files].sort()).toEqual([...names].sort());
+    expect(result.createdFiles).toEqual([]);
+  });
+
+  it("preserves real Git rename and copy endpoints with spaces exactly", async () => {
+    const renameRepo = clientRepo({ "src/old name.ts ": "export const value = 1;\n" });
+    git(renameRepo.dir, ["config", "core.quotePath", "false"]);
+    const renameSource = "src/old name.ts ";
+    const renameDestination = "src/new name.ts ";
+    const renamedGit = patchAndStatusFromGit(renameRepo.dir, () => renameSync(
+      join(renameRepo.dir, renameSource),
+      join(renameRepo.dir, renameDestination),
+    ));
+    expect(renamedGit.status).toBe("R100");
+    const renamed = await executeFixDiff("F-spaced-rename", renamedGit.patch, {
+      targetDir: renameRepo.dir,
+      baselineCommit: renameRepo.commit,
+      allowlist,
+    });
+    expect(renamed).toMatchObject({ outcome: "diff-verified", files: [renamedGit.paths[0]], createdFiles: [renamedGit.paths[1]] });
+
+    const copyRepo = clientRepo({ "src/source name.ts ": "export const value = 1;\n" });
+    git(copyRepo.dir, ["config", "core.quotePath", "false"]);
+    const copySource = "src/source name.ts ";
+    const copyDestination = "src/copy name.ts ";
+    const copiedGit = patchAndStatusFromGit(copyRepo.dir, () => copyFileSync(
+      join(copyRepo.dir, copySource),
+      join(copyRepo.dir, copyDestination),
+    ));
+    expect(copiedGit.status).toBe("C100");
+    const copied = await executeFixDiff("F-spaced-copy", copiedGit.patch, {
+      targetDir: copyRepo.dir,
+      baselineCommit: copyRepo.commit,
+      allowlist,
+    });
+    expect(copied).toMatchObject({ outcome: "diff-verified", files: [copiedGit.paths[0]], createdFiles: [copiedGit.paths[1]] });
   });
 
   it("refuses real Git binary and symlink records explicitly before application", async () => {

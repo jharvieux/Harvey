@@ -5,6 +5,7 @@ import {
   checkDiffCap,
   checkPath,
   checkPushRef,
+  blastRadiusOf,
   isAllowed,
   isDenied,
   isProtectedBranch,
@@ -157,5 +158,22 @@ describe("parseDiffFacts", () => {
     const facts = parseDiffFacts(diff);
     expect(facts.files).toEqual(["harmless.txt", ".env"]);
     expect(facts.createdFiles).toEqual(["renamed-secret.txt"]);
+  });
+
+  it("retains every plausible endpoint from an ambiguous header alongside contradictory metadata", () => {
+    const diff = [
+      "diff --git a/.env b/harmless b/renamed.txt",
+      "similarity index 100%",
+      "rename from harmless b/source.txt",
+      "rename to renamed.txt",
+      "",
+    ].join("\n");
+    const facts = parseDiffFacts(diff);
+    expect(facts.files).toContain(".env");
+    expect(facts.files).toContain(".env b/harmless");
+    expect(facts.files).toContain("harmless b/source.txt");
+    expect(facts.createdFiles).toContain("harmless b/renamed.txt");
+    expect(facts.createdFiles).toContain("renamed.txt");
+    expect(checkBlastRadius(blastRadiusOf(facts), ["**"]).ok).toBe(false);
   });
 });

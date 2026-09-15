@@ -107,14 +107,17 @@ export interface DiffFacts {
 }
 
 function decodeGitPath(raw: string): string | undefined {
-  const value = raw.trim();
+  const value = raw;
   if (!value.startsWith('"')) return value;
   if (!value.endsWith('"')) return undefined;
   const bytes: number[] = [];
   for (let i = 1; i < value.length - 1; i++) {
     const char = value[i] as string;
     if (char !== "\\") {
-      bytes.push(...Buffer.from(char));
+      const codePoint = value.codePointAt(i);
+      if (codePoint === undefined) return undefined;
+      bytes.push(...Buffer.from(String.fromCodePoint(codePoint)));
+      if (codePoint > 0xffff) i++;
       continue;
     }
     const escaped = value[++i];
@@ -135,18 +138,53 @@ function decodeGitPath(raw: string): string | undefined {
   return Buffer.from(bytes).toString("utf8");
 }
 
+function gitPathField(raw: string): string | undefined {
+  if (!raw.startsWith('"')) return raw.split("\t")[0];
+  let escaped = false;
+  for (let i = 1; i < raw.length; i++) {
+    const char = raw[i] as string;
+    if (escaped) escaped = false;
+    else if (char === "\\") escaped = true;
+    else if (char === '"') return raw.slice(0, i + 1);
+  }
+  return undefined;
+}
+
 function stripPrefix(raw: string): string | undefined {
-  const path = decodeGitPath(raw.split("\t")[0] ?? "") ?? "";
+  const field = gitPathField(raw);
+  const path = field === undefined ? "" : decodeGitPath(field) ?? "";
   if (path === "" || path === "/dev/null") return undefined;
   return path.replace(/^[ab]\//, "");
 }
 
-function parseDiffGitPaths(line: string): { oldPath: string; newPath: string } | undefined {
-  const match = /^diff --git ("(?:\\.|[^"\\])*"|\S+) ("(?:\\.|[^"\\])*"|\S+)$/.exec(line);
-  if (!match) return undefined;
-  const oldPath = stripPrefix(match[1] as string);
-  const newPath = stripPrefix(match[2] as string);
-  return oldPath && newPath ? { oldPath, newPath } : undefined;
+function parseDiffGitPaths(line: string): { oldPath: string; newPath: string }[] {
+  const payload = line.slice("diff --git ".length);
+  const candidates: { oldPath: string; newPath: string }[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload[i] as string;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char !== " " || quoted) continue;
+    const oldField = payload.slice(0, i);
+    const newField = payload.slice(i + 1);
+    const oldDecoded = decodeGitPath(oldField);
+    const newDecoded = decodeGitPath(newField);
+    if (!oldDecoded?.startsWith("a/") || !newDecoded?.startsWith("b/")) continue;
+    candidates.push({ oldPath: oldDecoded.slice(2), newPath: newDecoded.slice(2) });
+  }
+  return candidates;
 }
 
 // Hunk headers carry exact old/new line counts, so the body is consumed by count rather than by
@@ -165,16 +203,19 @@ export function parseDiffFacts(diff: string): DiffFacts {
   let changedLines = 0;
   let oldPath: string | undefined;
   let oldIsDevNull = false;
-  let headerPaths: { oldPath: string; newPath: string } | undefined;
-  let headerAccounted = false;
+  let headerPaths: { oldPath: string; newPath: string }[] = [];
   let remainingOld = 0;
   let remainingNew = 0;
 
   const accountHeader = () => {
-    if (!headerPaths || headerAccounted) return;
-    files.add(headerPaths.oldPath);
-    if (headerPaths.newPath !== headerPaths.oldPath) createdFiles.add(headerPaths.newPath);
-    headerAccounted = true;
+    for (const paths of headerPaths) {
+      if (paths.oldPath === paths.newPath) {
+        if (!createdFiles.has(paths.oldPath)) files.add(paths.oldPath);
+      } else {
+        files.add(paths.oldPath);
+        createdFiles.add(paths.newPath);
+      }
+    }
   };
 
   for (const line of diff.split("\n")) {
@@ -195,10 +236,9 @@ export function parseDiffFacts(diff: string): DiffFacts {
     if (line.startsWith("diff --git ")) {
       accountHeader();
       headerPaths = parseDiffGitPaths(line);
-      headerAccounted = false;
       oldPath = undefined;
       oldIsDevNull = false;
-      if (!headerPaths) unsupportedMetadata.add("unparseable Git diff header is unsupported");
+      if (headerPaths.length === 0) unsupportedMetadata.add("unparseable Git diff header is unsupported");
       continue;
     }
     const hunk = parseHunkCounts(line);
@@ -240,7 +280,6 @@ export function parseDiffFacts(diff: string): DiffFacts {
         if (oldPath !== undefined) files.add(oldPath);
         if (path !== undefined) createdFiles.add(path);
       }
-      headerAccounted = true;
     }
   }
   accountHeader();
