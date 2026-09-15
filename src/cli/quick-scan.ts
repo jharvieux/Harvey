@@ -35,6 +35,7 @@
 import "./sync-stdio.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
 import { loadSources } from "../detectors/load-sources.js";
@@ -251,7 +252,7 @@ function renderEvidence(d: HealthDimension): string[] {
   return lines;
 }
 
-function renderScorecard(s: HealthScorecard): string[] {
+export function renderScorecard(s: HealthScorecard): string[] {
   const lines: string[] = [];
   lines.push(`  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`);
   lines.push("  Ran 100% locally. No source code left your machine.");
@@ -501,7 +502,9 @@ async function main(): Promise<void> {
   else console.log(body);
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

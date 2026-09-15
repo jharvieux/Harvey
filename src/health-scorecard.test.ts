@@ -51,6 +51,45 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(withoutM4.composition).toContain(`${graded.length} graded dimension`);
   });
 
+  it("keeps a wholly unsupported M9 scope ungraded while a supported clean scope earns its grade", () => {
+    const unsupported = buildHealthScorecard(input({ framework: "astro", kloc: 1 }));
+    const unsupportedM9 = unsupported.dimensions.find((d) => d.module === "M9")!;
+
+    expect(unsupportedM9).toMatchObject({ status: "not-assessed", count: 0, notAssessedRows: 1 });
+    expect(unsupportedM9.reason).toContain("Astro");
+    expect(unsupportedM9.reason).toContain("not assessed");
+    expect(unsupportedM9.grade).toBeUndefined();
+    expect(unsupportedM9.score).toBeUndefined();
+    expect(unsupported.gradedModules).not.toContain("M9");
+    const independentlyGraded = unsupported.dimensions.filter((d) => d.status === "graded");
+    const independentMean = Math.round(independentlyGraded.reduce((sum, d) => sum + d.score!, 0) / independentlyGraded.length);
+    expect(unsupported.score).toBe(independentMean);
+
+    const supported = buildHealthScorecard(input({ framework: "next", kloc: 1 }));
+    expect(supported.dimensions.find((d) => d.module === "M9")).toMatchObject({ status: "graded", grade: "A", score: 100 });
+    expect(supported.gradedModules).toContain("M9");
+  });
+
+  it("keeps assessed M9 work in a mixed scope and separates real defects from its disclosure", () => {
+    const supportedDefects = Array.from({ length: 6 }, (_, i) => ({
+      path: `apps/api/app/p${i}/page.tsx`,
+      text: `export default function Page() { return <div>{window.innerWidth}</div>; }\n`,
+    }));
+    const mixed = buildHealthScorecard(input({
+      framework: "other",
+      nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }],
+      sources: [...supportedDefects, { path: "apps/site/src/main.ts", text: "export const value = 1;\n" }],
+      kloc: 2,
+    }));
+    const m9 = mixed.dimensions.find((d) => d.module === "M9")!;
+
+    expect(m9).toMatchObject({ status: "graded", count: 6, notAssessedRows: 1, score: densityScore(6, 2), grade: "C" });
+    expect(m9.measure).toBe("3.0 per 1,000 lines (6 in 2.0k lines)");
+    expect(m9.scope).toContain("Framework-boundary correctness");
+    expect(m9.evidence?.totalFindings).toBe(6);
+    expect(mixed.gradedModules).toContain("M9");
+  });
+
   it("weights every graded dimension equally — security is one dimension, not the subject", () => {
     // The correction's core claim. A catastrophic M1 must not be able to drive the whole health
     // grade to F on its own when four other dimensions are clean.
@@ -329,6 +368,38 @@ describe("the evidence cap is a DISCLOSED ROLLUP, not a truncation", () => {
       expect(d.evidence, `${m} must disclose its evidence rollup`).toBeDefined();
       expect(d.evidence!.examples.length).toBeLessThanOrEqual(EXAMPLES_SHOWN);
       expect(d.evidence!.totalFindings).toBe(d.count);
+    }
+  });
+
+  it("grades M5/M7/M9 on all seven real detector findings, never the displayed examples", () => {
+    const cases = [
+      {
+        module: "M5",
+        sources: Array.from({ length: 7 }, (_, i) => ({ path: `lib/f${i}.ts`, text: "export function g(a) { return 1; }\n" })),
+      },
+      {
+        module: "M7",
+        sources: Array.from({ length: 7 }, (_, i) => ({
+          path: `app/p${i}/page.tsx`,
+          text: `export default function Page() { return <img src="/${i}.png" alt="x" />; }\n`,
+        })),
+      },
+      {
+        module: "M9",
+        sources: Array.from({ length: 7 }, (_, i) => ({
+          path: `app/p${i}/page.tsx`,
+          text: "export default function Page() { return <div>{window.innerWidth}</div>; }\n",
+        })),
+      },
+    ];
+
+    for (const c of cases) {
+      const d = buildHealthScorecard(input({ sources: c.sources, framework: "next", kloc: 1 })).dimensions.find((row) => row.module === c.module)!;
+      expect(d.count, `${c.module} must use the seven actual findings`).toBe(7);
+      expect(d.evidence!.totalFindings).toBe(7);
+      expect(d.evidence!.examples.length).toBeLessThan(d.count!);
+      expect(d.score).toBe(densityScore(7, 1));
+      expect(d.score).not.toBe(densityScore(d.evidence!.examples.length, 1));
     }
   });
 });

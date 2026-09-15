@@ -258,6 +258,29 @@ function gradedDensityRow(
   };
 }
 
+// A whole-target unsupported-framework row means M9 ran no gradable check at all. The detector's
+// N/A finding is still carried into the scorecard, but it cannot be turned into an earned A merely
+// because the defect numerator is empty. Workspace-scoped disclosures take the graded path below:
+// the supported remainder was assessed and keeps its real density, alongside the disclosed gap.
+function whollyUnassessedM9Row(spec: { module: string; label: string }, findings: Finding[]): HealthDimension | undefined {
+  const disclosures = findings.filter(isDisclosureRow);
+  const unsupported = disclosures.find((f) => f.taxonomy === "M9 — Not assessed (framework unsupported)" && f.location === "(whole target)");
+  if (!unsupported) return undefined;
+  const defects = findings.filter((f) => !isDisclosureRow(f));
+  if (defects.length > 0) return undefined;
+  return {
+    module: spec.module,
+    label: spec.label,
+    status: "not-assessed",
+    count: 0,
+    scope: unsupported.impact,
+    reason: `${unsupported.title}. ${unsupported.impact}`,
+    needs: unsupported.fix,
+    notAssessedRows: disclosures.length,
+    evidence: rollupExamples(defects),
+  };
+}
+
 
 // One table's classification, exactly as tools/pii-classify.mjs already derives it from source. The
 // per-table Low/Medium/High/Critical scale is that module's own shipped `scoreToSeverity` (category
@@ -512,13 +535,15 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     });
   }
 
+  const m9Findings = detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm);
   dimensions.push(
-    gradedDensityRow(
-      spec("M9"),
-      detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm),
-      kloc,
-      "Framework-boundary correctness — server/client boundary, caching and route-segment configuration read straight from your source.",
-    ),
+    whollyUnassessedM9Row(spec("M9"), m9Findings) ??
+      gradedDensityRow(
+        spec("M9"),
+        m9Findings,
+        kloc,
+        "Framework-boundary correctness — server/client boundary, caching and route-segment configuration read straight from your source.",
+      ),
   );
 
   // M10 — a RISK BAND, not a letter and not a bare indicator (operator ruling 2026-07-28 on #1305).
