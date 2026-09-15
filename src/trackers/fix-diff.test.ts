@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -148,6 +148,48 @@ describe("verifySuggestedFix", () => {
 
     const result = await verifySuggestedFix(patch, { targetDir: dir });
     expect(result).toMatchObject({ verified: true, detail: "applies cleanly (git apply --check)" });
+  });
+
+  it("admits NUL-exact text, mode, rename, and copy paths whose component ends in b", async () => {
+    mkdirSync(join(dir, "src/job b"), { recursive: true });
+    mkdirSync(join(dir, "src/old b"), { recursive: true });
+    mkdirSync(join(dir, "src/source b"), { recursive: true });
+    writeFileSync(join(dir, "src/job b/config.ts"), "export const config = 1;\n");
+    writeFileSync(join(dir, "src/job b/script.sh"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(dir, "src/old b/file.ts"), "export const rename = 1;\n");
+    writeFileSync(join(dir, "src/source b/file.ts"), "export const copy = 1;\n");
+    git(["add", "-A"]);
+    git(["commit", "-m", "ambiguous path baseline"]);
+
+    writeFileSync(join(dir, "src/job b/config.ts"), "export const config = 2;\n");
+    chmodSync(join(dir, "src/job b/script.sh"), 0o755);
+    mkdirSync(join(dir, "src/new b"), { recursive: true });
+    mkdirSync(join(dir, "src/copy b"), { recursive: true });
+    renameSync(join(dir, "src/old b/file.ts"), join(dir, "src/new b/file.ts"));
+    copyFileSync(join(dir, "src/source b/file.ts"), join(dir, "src/copy b/file.ts"));
+    git(["add", "-A"]);
+    const status = execFileSync(
+      "git",
+      ["diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir },
+    ).toString("utf8").split("\0").filter(Boolean);
+    expect(status).toEqual([
+      "C100", "src/source b/file.ts", "src/copy b/file.ts",
+      "M", "src/job b/config.ts",
+      "M", "src/job b/script.sh",
+      "R100", "src/old b/file.ts", "src/new b/file.ts",
+    ]);
+    const patch = execFileSync(
+      "git",
+      ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    git(["reset", "--hard", "HEAD"]);
+
+    await expect(verifySuggestedFix(patch, { targetDir: dir })).resolves.toMatchObject({
+      verified: true,
+      detail: "applies cleanly (git apply --check)",
+    });
   });
 
   it("refuses a diff that exceeds the engagement diff cap", async () => {

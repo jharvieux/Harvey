@@ -174,6 +174,52 @@ describe("executeFixDiff", () => {
     expect(mode).toMatchObject({ outcome: "diff-verified", files: ["src/script.sh"], createdFiles: [] });
   });
 
+  it("matches NUL-exact Git paths when a component ends in b across all supported record forms", async () => {
+    const textRepo = clientRepo({ "src/job b/config.ts": "export const value = 1;\n" });
+    const textGit = patchAndStatusFromGit(textRepo.dir, () =>
+      writeFileSync(join(textRepo.dir, "src/job b/config.ts"), "export const value = 2;\n"),
+    );
+    expect([textGit.status, ...textGit.paths]).toEqual(["M", "src/job b/config.ts"]);
+    await expect(executeFixDiff("F-b-text", textGit.patch, {
+      targetDir: textRepo.dir,
+      baselineCommit: textRepo.commit,
+      allowlist,
+    })).resolves.toMatchObject({ outcome: "diff-verified", files: textGit.paths, createdFiles: [] });
+
+    const modeRepo = clientRepo({ "src/job b/script.sh": "#!/bin/sh\nexit 0\n" });
+    const modeGit = patchAndStatusFromGit(modeRepo.dir, () => chmodSync(join(modeRepo.dir, "src/job b/script.sh"), 0o755));
+    expect([modeGit.status, ...modeGit.paths]).toEqual(["M", "src/job b/script.sh"]);
+    await expect(executeFixDiff("F-b-mode", modeGit.patch, {
+      targetDir: modeRepo.dir,
+      baselineCommit: modeRepo.commit,
+      allowlist,
+    })).resolves.toMatchObject({ outcome: "diff-verified", files: modeGit.paths, createdFiles: [] });
+
+    const renameRepo = clientRepo({ "src/old b/file.ts": "export const value = 1;\n" });
+    const renameGit = patchAndStatusFromGit(renameRepo.dir, () => {
+      mkdirSync(join(renameRepo.dir, "src/new b"), { recursive: true });
+      renameSync(join(renameRepo.dir, "src/old b/file.ts"), join(renameRepo.dir, "src/new b/file.ts"));
+    });
+    expect([renameGit.status, ...renameGit.paths]).toEqual(["R100", "src/old b/file.ts", "src/new b/file.ts"]);
+    await expect(executeFixDiff("F-b-rename", renameGit.patch, {
+      targetDir: renameRepo.dir,
+      baselineCommit: renameRepo.commit,
+      allowlist,
+    })).resolves.toMatchObject({ outcome: "diff-verified", files: [renameGit.paths[0]], createdFiles: [renameGit.paths[1]] });
+
+    const copyRepo = clientRepo({ "src/source b/file.ts": "export const value = 1;\n" });
+    const copyGit = patchAndStatusFromGit(copyRepo.dir, () => {
+      mkdirSync(join(copyRepo.dir, "src/copy b"), { recursive: true });
+      copyFileSync(join(copyRepo.dir, "src/source b/file.ts"), join(copyRepo.dir, "src/copy b/file.ts"));
+    });
+    expect([copyGit.status, ...copyGit.paths]).toEqual(["C100", "src/source b/file.ts", "src/copy b/file.ts"]);
+    await expect(executeFixDiff("F-b-copy", copyGit.patch, {
+      targetDir: copyRepo.dir,
+      baselineCommit: copyRepo.commit,
+      allowlist,
+    })).resolves.toMatchObject({ outcome: "diff-verified", files: [copyGit.paths[0]], createdFiles: [copyGit.paths[1]] });
+  });
+
   it("preserves Git NUL paths for ordinary spaces, trailing spaces, and quoted supplementary Unicode", async () => {
     const files = {
       "src/two words.ts": "export const value = 1;\n",
