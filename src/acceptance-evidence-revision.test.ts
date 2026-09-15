@@ -50,6 +50,7 @@ interface SelectionOptions {
   pages?: Link[][];
   response?: (value: Record<string, unknown>, page: number) => unknown;
   compare?: (base: string, head: string) => Comparison;
+  compareTransport?: (args: string[], response: Comparison) => string;
 }
 
 async function select(options: SelectionOptions = {}) {
@@ -90,13 +91,13 @@ async function select(options: SelectionOptions = {}) {
       return JSON.stringify({ data: options.response ? options.response(value, page) : value });
     }
     expect(args[0]).toBe("api");
-    expect(args).toHaveLength(2);
     const prefix = `repos/${REPO}/compare/`;
     expect(args[1]?.startsWith(prefix)).toBe(true);
     const basehead = args[1]!.slice(prefix.length);
     comparisons.push(basehead);
     const [base, head] = basehead.split("...") as [string, string];
-    return JSON.stringify(options.compare?.(base, head) ?? { status: base === head ? "identical" : "ahead", base_commit: { sha: base }, merge_base_commit: { sha: base } });
+    const response = options.compare?.(base, head) ?? { status: base === head ? "identical" : "ahead", base_commit: { sha: base }, merge_base_commit: { sha: base } };
+    return options.compareTransport?.(args, response) ?? JSON.stringify(response);
   };
   runInNewContext(inline!, {
     require: (module: string) => {
@@ -171,6 +172,24 @@ describe("acceptance close selects authenticated landed evidence (#2068)", () =>
     expect(result.outputs.sha).toBe(TIP);
     expect(result.comparisons).toEqual([]);
     expect(result.receipt?.selectionReason).toBe("Authenticated default-branch tip; no linked merge into this default branch");
+  });
+
+  it("projects oversized comparisons before the real subprocess captures their output", async () => {
+    const result = await select({ compareTransport: (args, response) => {
+      // This child behaves like gh's output projection: without it, the real default
+      // execFileSync buffer overflows. The selector and its ancestry checks run unchanged.
+      return execFileSync(process.execPath, ["-e", `
+        const args = JSON.parse(process.argv[1]);
+        const ancestry = JSON.parse(process.argv[2]);
+        const full = { ...ancestry, files: [{ patch: "x".repeat(2 * 1024 * 1024) }] };
+        const projection = args[args.indexOf("--jq") + 1];
+        const expected = "{status, base_commit: {sha: .base_commit.sha}, merge_base_commit: {sha: .merge_base_commit.sha}}";
+        if (args.includes("--jq") && projection !== expected) throw new Error("Unexpected projection");
+        process.stdout.write(JSON.stringify(args.includes("--jq") ? ancestry : full));
+      `, JSON.stringify(args), JSON.stringify(response)], { encoding: "utf8" });
+    } });
+    expect(result.outputs.sha).toBe(TIP);
+    expect(result.receipt?.verifiedMerges).toEqual([{ number: 900, mergeCommit: MERGE }]);
   });
 
   it("reads all pages including merged PRs and checks every eligible merge", async () => {

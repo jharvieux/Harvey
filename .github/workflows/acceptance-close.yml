@@ -105,7 +105,7 @@ jobs:
             if (![owner, repo].every(part => /^[A-Za-z0-9_.-]+$/.test(part ?? ''))) throw new Error('Missing repository identity');
             const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
             const eventName = process.env.GITHUB_EVENT_NAME;
-            const api = (endpoint, body) => JSON.parse(execFileSync('gh', ['api', endpoint, ...(body ? ['--input', '-'] : [])], {
+            const api = (endpoint, body, projection) => JSON.parse(execFileSync('gh', ['api', endpoint, ...(body ? ['--input', '-'] : []), ...(projection ? ['--jq', projection] : [])], {
               encoding: 'utf8', input: body ? JSON.stringify(body) : undefined,
             }));
             const repository = `${owner}/${repo}`;
@@ -173,7 +173,10 @@ jobs:
               }
               const merge = pr.mergeCommit?.oid;
               if (!shaPattern.test(merge ?? '')) throw new Error(`Linked merged PR #${pr.number} has no merge commit`);
-              const data = api(`repos/${repository}/compare/${merge}...${selectedEvidenceSha}`);
+              // Compare responses include large patches and histories. Project inside gh before
+              // capturing stdout so valid older merges cannot exhaust the child-process buffer.
+              const data = api(`repos/${repository}/compare/${merge}...${selectedEvidenceSha}`, undefined,
+                '{status, base_commit: {sha: .base_commit.sha}, merge_base_commit: {sha: .merge_base_commit.sha}}');
               if (!['ahead', 'identical'].includes(data.status) || data.base_commit?.sha !== merge || data.merge_base_commit?.sha !== merge) {
                 throw new Error(`Default-branch revision ${selectedEvidenceSha} does not contain linked PR #${pr.number} merge ${merge}`);
               }
