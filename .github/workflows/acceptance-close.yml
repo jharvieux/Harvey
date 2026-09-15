@@ -91,7 +91,108 @@ jobs:
     env:
       HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
+      # The issues event can carry the pre-merge SHA (#2068). Resolve before checkout, so neither
+      # that stale tree nor a linked PR's head supplies the code this write-capable job executes.
+      - name: Bind evidence to authenticated default-branch history
+        id: evidence-revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node <<'NODE'
+            const { execFileSync } = require('node:child_process');
+            const { readFileSync, appendFileSync } = require('node:fs');
+            const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? '').split('/');
+            if (![owner, repo].every(part => /^[A-Za-z0-9_.-]+$/.test(part ?? ''))) throw new Error('Missing repository identity');
+            const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+            const eventName = process.env.GITHUB_EVENT_NAME;
+            const api = (endpoint, body) => JSON.parse(execFileSync('gh', ['api', endpoint, ...(body ? ['--input', '-'] : [])], {
+              encoding: 'utf8', input: body ? JSON.stringify(body) : undefined,
+            }));
+            const repository = `${owner}/${repo}`;
+            const drill = eventName === 'workflow_dispatch' && String(payload.inputs?.liveness_drill) === 'true';
+            if (!['issues', 'workflow_dispatch'].includes(eventName)) throw new Error('Unsupported close event');
+            const rawIssue = eventName === 'issues' ? payload.issue?.number : payload.inputs?.issue;
+            if (!drill && (!/^[1-9][0-9]*$/.test(String(rawIssue)) || !Number.isSafeInteger(Number(rawIssue)))) {
+              throw new Error('The close gate needs a positive issue number');
+            }
+            const issue = drill ? 1 : Number(rawIssue);
+            const shaPattern = /^[0-9a-f]{40}$/;
+            const workflowSourceSha = process.env.GITHUB_WORKFLOW_SHA;
+            if (!shaPattern.test(workflowSourceSha ?? '')) throw new Error('Missing workflow source SHA');
+            const query = `query($owner: String!, $repo: String!, $issue: Int!, $after: String, $drill: Boolean!) {
+              repository(owner: $owner, name: $repo) {
+                nameWithOwner
+                defaultBranchRef { name target { __typename oid } }
+                issue(number: $issue) @skip(if: $drill) {
+                  number
+                  closedByPullRequestsReferences(first: 100, after: $after, includeClosedPrs: true) {
+                    nodes { number merged baseRefName repository { nameWithOwner } mergeCommit { oid } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }`;
+            let after = null;
+            let selected;
+            const links = [];
+            const cursors = new Set();
+            do {
+              const response = api('graphql', { query, variables: { owner, repo, issue, after, drill } });
+              if (response.errors?.length) throw new Error('Linked-PR GraphQL query failed');
+              const record = response.data?.repository;
+              if (record?.nameWithOwner?.toLowerCase() !== repository.toLowerCase()) throw new Error('Repository identity mismatch');
+              selected = record.defaultBranchRef;
+              if (!selected?.name || selected.target?.__typename !== 'Commit' || !shaPattern.test(selected.target.oid)) {
+                throw new Error('Authenticated default branch did not resolve to a commit');
+              }
+              if (drill) break;
+              const connection = record.issue?.closedByPullRequestsReferences;
+              if (record.issue?.number !== issue || !Array.isArray(connection?.nodes) || typeof connection.pageInfo?.hasNextPage !== 'boolean') {
+                throw new Error('Could not read the complete linked-PR set for the issue');
+              }
+              links.push(...connection.nodes);
+              if (!connection.pageInfo.hasNextPage) break;
+              after = connection.pageInfo.endCursor;
+              if (typeof after !== 'string' || !after || cursors.has(after)) throw new Error('Linked-PR pagination did not advance');
+              cursors.add(after);
+            } while (true);
+
+            const selectedEvidenceSha = selected.target.oid;
+            const verifiedMerges = [];
+            const otherLinks = [];
+            for (const pr of links) {
+              if (!Number.isSafeInteger(pr?.number) || pr.number < 1 || !pr.repository?.nameWithOwner || typeof pr.merged !== 'boolean' || !pr.baseRefName) {
+                throw new Error('Incomplete linked-PR identity');
+              }
+              // These remain disposition venues in validate-acceptance; they never choose code.
+              const reason = pr.repository.nameWithOwner.toLowerCase() !== repository.toLowerCase() ? 'different repository'
+                : !pr.merged ? 'not merged' : pr.baseRefName !== selected.name ? 'different base branch' : null;
+              if (reason) {
+                otherLinks.push({ number: pr.number, repository: pr.repository.nameWithOwner, reason });
+                continue;
+              }
+              const merge = pr.mergeCommit?.oid;
+              if (!shaPattern.test(merge ?? '')) throw new Error(`Linked merged PR #${pr.number} has no merge commit`);
+              const data = api(`repos/${repository}/compare/${merge}...${selectedEvidenceSha}`);
+              if (!['ahead', 'identical'].includes(data.status) || data.base_commit?.sha !== merge || data.merge_base_commit?.sha !== merge) {
+                throw new Error(`Default-branch revision ${selectedEvidenceSha} does not contain linked PR #${pr.number} merge ${merge}`);
+              }
+              verifiedMerges.push({ number: pr.number, mergeCommit: merge });
+            }
+            const selectionReason = drill ? 'Authenticated default-branch tip for liveness drill; no issue read'
+              : verifiedMerges.length ? 'Authenticated default-branch tip contains every linked merge into this default branch'
+              : 'Authenticated default-branch tip; no linked merge into this default branch';
+            const receipt = { repository, issue: drill ? null : issue, event: eventName,
+              workflowSourceSha, suppliedEventSha: process.env.GITHUB_SHA, selectedEvidenceSha,
+              defaultBranch: selected.name, selectionReason, verifiedMerges, otherLinks };
+            console.log(`Acceptance evidence revision: ${JSON.stringify(receipt)}`);
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Acceptance evidence revision\n\n\`\`\`json\n${JSON.stringify(receipt, null, 2)}\n\`\`\`\n`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `sha=${selectedEvidenceSha}\nissue=${drill ? '' : issue}\n`);
+          NODE
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.evidence-revision.outputs.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -111,10 +212,12 @@ jobs:
         if: ${{ !inputs.liveness_drill }}
         env:
           GH_TOKEN: ${{ github.token }}
+          CLOSED_ISSUE: ${{ steps.evidence-revision.outputs.issue }}
+          ACCEPTANCE_REPOSITORY: ${{ github.repository }}
         run: >
           pnpm exec tsx src/cli/validate-acceptance.ts
-          --closed-issue ${{ github.event.issue.number || inputs.issue }}
-          --repo ${{ github.repository }}
+          --closed-issue "$CLOSED_ISSUE"
+          --repo "$ACCEPTANCE_REPOSITORY"
           --act
 
       # #1568: this job answers to no PR and raises no alarm — it runs on `issues: [closed]`, so a
