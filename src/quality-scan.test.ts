@@ -21,7 +21,6 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   matchesGlob,
-  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
@@ -421,10 +420,10 @@ describe("JSCPD_IGNORE_GLOBS", () => {
 
 // #1080: the ignore globs are never disclosed to the reader — this exercises the glob matcher and
 // the M4-SCOPE-00 disclosure row built from it.
-describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
+describe("matchesGlob (#1080)", () => {
   it("matches a build-artifact path via a leading **/ + trailing /** glob", () => {
-    expect(matchesJscpdIgnoreGlob("apps/main/node_modules/foo/bar.ts")).toBe(true);
-    expect(matchesJscpdIgnoreGlob("src/normal/file.ts")).toBe(false);
+    expect(matchesGlob("**/node_modules/**", "apps/main/node_modules/foo/bar.ts")).toBe(true);
+    expect(matchesGlob("**/node_modules/**", "src/normal/file.ts")).toBe(false);
   });
 
   it("requires an exact basename match for a literal glob, not a substring", () => {
@@ -432,9 +431,9 @@ describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
     expect(matchesGlob("**/database.types.ts", "src/foodatabase.types.ts")).toBe(false);
   });
 
-  it("does not carry a substring directory exclusion for authored demos or reports", () => {
-    expect(matchesJscpdIgnoreGlob("apps/demos/product-tour.tsx")).toBe(false);
-    expect(matchesJscpdIgnoreGlob("apps/main/src/app/api/reports/route.ts")).toBe(false);
+  it("shows why generic demo globs cannot define product scope", () => {
+    expect(matchesGlob("**/*demo*/**", "apps/demos/product-tour.tsx")).toBe(true);
+    expect(matchesGlob("**/*demo*/**", "apps/main/src/app/api/reports/route.ts")).toBe(false);
   });
 });
 

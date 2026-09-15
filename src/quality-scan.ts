@@ -170,11 +170,6 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${prefix}${body}${suffix}$`);
 }
 
-/** Does `relPath` (POSIX-relative to the scan root) match one of jscpd's own ignore globs? */
-export function matchesJscpdIgnoreGlob(relPath: string): boolean {
-  return JSCPD_IGNORE_GLOBS.some((g) => globToRegExp(g).test(relPath));
-}
-
 /** Does `relPath` match this specific glob? For per-glob tallying (jscpdIgnoreScopeFinding). */
 export function matchesGlob(glob: string, relPath: string): boolean {
   return globToRegExp(glob).test(relPath);
