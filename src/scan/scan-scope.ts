@@ -23,12 +23,10 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
+import { productSourceInventory, type ProductSourceInventory } from "../source-inventory.js";
 
-const NON_GIT_EXCLUDE_DIRS = new Set([
-  "node_modules", ".git", ".claude", ".next", "dist", "build", "coverage",
-]);
 const NON_GIT_EXCLUDE_FILE = /\.log$/;
 const WORKTREE_DIR = /worktrees?$/i;
 
@@ -62,8 +60,9 @@ function copyFile(src: string, dest: string): void {
   cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
 }
 
-function copyTracked(dir: string, dest: string): void {
+function copyTracked(dir: string, dest: string, inventory: ProductSourceInventory): void {
   for (const rel of trackedFiles(dir)) {
+    if (inventory.excludedDirectoryFor(rel)) continue;
     const src = join(dir, rel);
     // Staged deletion, submodule gitlink — or, MEASURED 2026-07-28 (#1451), a committed symlink
     // whose target does not resolve: `existsSync` follows the link, so a tracked dangling link is
@@ -75,10 +74,11 @@ function copyTracked(dir: string, dest: string): void {
   }
 }
 
-function copyExcluding(dir: string, dest: string): void {
+function copyExcluding(dir: string, dest: string, root: string, inventory: ProductSourceInventory): void {
   for (const { name: entry, path: src, isDirectory } of readEntriesSafe(dir).entries) {
-    if (NON_GIT_EXCLUDE_DIRS.has(entry) || WORKTREE_DIR.test(entry) || NON_GIT_EXCLUDE_FILE.test(entry)) continue;
-    if (isDirectory) copyExcluding(src, join(dest, entry));
+    const rel = relative(root, src).split(sep).join("/");
+    if (inventory.excludedDirectoryFor(rel) || WORKTREE_DIR.test(entry) || NON_GIT_EXCLUDE_FILE.test(entry)) continue;
+    if (isDirectory) copyExcluding(src, join(dest, entry), root, inventory);
     else copyFile(src, join(dest, entry));
   }
 }
@@ -87,8 +87,9 @@ function copyExcluding(dir: string, dest: string): void {
 // (e.g. in a finally block) once scanning is done.
 export function resolveScanScope(dir: string): ScanScope {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-scan-scope-"));
-  if (isGitWorkTree(dir)) copyTracked(dir, scratch);
-  else copyExcluding(dir, scratch);
+  const inventory = productSourceInventory(dir);
+  if (isGitWorkTree(dir)) copyTracked(dir, scratch, inventory);
+  else copyExcluding(dir, scratch, dir, inventory);
   return { scanDir: scratch, cleanup: () => rmSync(scratch, { recursive: true, force: true }) };
 }
 

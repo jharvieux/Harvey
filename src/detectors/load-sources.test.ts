@@ -30,6 +30,20 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("loadSources extension coverage (#1065)", () => {
+  it("keeps authored reports/dist paths while excluding a pnpm store from every loader consumer (#2132/#2125)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0" }),
+      "src/app/api/reports/route.ts": "export const GET = () => null;\n",
+      "src/dist/handwritten.ts": "export const authored = true;\n",
+      ".pnpm-store/v3/pkg/index.ts": "export const dependency = true;\n",
+    });
+    expect(loadSources(dir).map((file) => file.path).sort()).toEqual([
+      "package.json",
+      "src/app/api/reports/route.ts",
+      "src/dist/handwritten.ts",
+    ]);
+  });
+
   it("loads the whole JS/TS family, not just the TypeScript half", () => {
     const dir = makeTarget({
       "app/route.js": "export const GET = () => null;\n",

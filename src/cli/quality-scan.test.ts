@@ -108,6 +108,29 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
   }, 30000);
 });
 
+describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
+  it("excludes a pnpm store clone, retains a real reports-route clone, and discloses the exact store population", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-store-cli-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "store-fixture", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/app/api/reports/one/route.ts", CLONED_BLOCK);
+    write("src/app/api/reports/two/route.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/a/index.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/b/index.ts", CLONED_BLOCK);
+    const findings = await runCli(repo);
+    const productClone = findings.find((finding) => finding.taxonomy.startsWith("M4 —") && finding.location.includes("reports/one") && finding.location.includes("reports/two"));
+    expect(productClone).toBeDefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("**/.pnpm-store/**");
+    expect(scope?.evidence).toContain("2 files");
+  }, 30000);
+});
+
 // #580: MEASURED against a real knip run (2026-07-18) — a Vite target where `vite` is declared in
 // no dependency at all (the issue's "vite not in deps" cause) leaves knip unable to activate its
 // Vite plugin. It falls back to default index.*-only entry resolution: main.ts and its one real

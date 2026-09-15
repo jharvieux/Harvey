@@ -914,6 +914,15 @@ interface MutationScope {
   missingCount?: number;
   // Sample (max 5) of files the configured globs match but the report never covered.
   missing?: string[];
+  /** Every configured file is retained so a report cannot collapse an absence into a count. */
+  files?: Array<{
+    path: string;
+    configured: true;
+    staged: "present in the authored-source inventory";
+    instrumented: "not emitted by the Stryker JSON reporter";
+    reported: boolean;
+    absenceReason?: string;
+  }>;
   // False when the configured scope could not be statically read (non-JSON config, no mutate
   // array, unsupported glob syntax) — the run is not KNOWN scoped, but full coverage is unproven.
   verified: boolean;
@@ -939,6 +948,17 @@ export function verifyMutationScope(
   const expected = sourceFiles.filter((f) => !f.endsWith(".d.ts") && matchesMutateGlobs(f, mutateGlobs));
   const covered = new Set(reportFiles);
   const missing = expected.filter((f) => !covered.has(f));
+  const files = expected.map((path) => ({
+    path,
+    configured: true as const,
+    staged: "present in the authored-source inventory" as const,
+    // Stryker's JSON report identifies only files with report entries. The terminal can state an
+    // aggregate instrumented count, but not a per-file identity; retain that uncertainty instead
+    // of pretending an absent report row was never configured or staged.
+    instrumented: "not emitted by the Stryker JSON reporter" as const,
+    reported: covered.has(path),
+    ...(covered.has(path) ? {} : { absenceReason: "configured and staged but absent from the Stryker JSON report" }),
+  }));
   if (missing.length > 0) {
     return {
       ...base,
@@ -946,12 +966,13 @@ export function verifyMutationScope(
       expectedFileCount: expected.length,
       missingCount: missing.length,
       missing: missing.slice(0, 5),
+      files,
       verified: true,
       scoped: true,
       note: `run covered ${reportFiles.length} file(s) but the configured mutate globs match ${expected.length} — ${missing.length} file(s) were never mutated (e.g. ${missing.slice(0, 3).join(", ")})`,
     };
   }
-  return { ...base, configuredGlobs: [...mutateGlobs], expectedFileCount: expected.length, verified: true, scoped: false, note: `run covered all ${expected.length} file(s) matched by the configured mutate globs` };
+  return { ...base, configuredGlobs: [...mutateGlobs], expectedFileCount: expected.length, files, verified: true, scoped: false, note: `run covered all ${expected.length} file(s) matched by the configured mutate globs` };
 }
 
 export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"; note: string } {

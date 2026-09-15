@@ -33,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
+import { productSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -138,6 +139,7 @@ if (degradedKnipReasonStdin) {
 const TIMEOUT_MS = timeoutSeconds * 1000;
 
 const targetDir = resolve(targetArg);
+const sourceInventory = productSourceInventory(targetDir);
 
 // #505: one scope per workspace. discoverTargets' app enumeration already falls back to the
 // target's own root as a single app when there's no workspace manifest, so `scopes` is always
@@ -193,7 +195,7 @@ function gapReason(err: unknown): string {
 function runJscpd(dir: string): JscpdReport {
   // #1305: the invocation itself now lives in src/scan/duplication.ts so the free-tier health
   // scorecard can run the same pass. This wrapper keeps the CLI's own timeout and file-count walk.
-  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir), jscpdBin });
+  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir), jscpdBin, ignoreGlobs: sourceInventory.jscpdIgnoreGlobs });
 }
 
 // #693/AoP#566: knip's `ignoreExportsUsedInFile` has no CLI flag (config-file only, verified on
@@ -257,6 +259,15 @@ function execKnip(dir: string, config: Record<string, unknown> | undefined): Kni
   }
 }
 
+function withProductInventoryIgnore(dir: string, config: Record<string, unknown>): Record<string, unknown> {
+  const configured = config.ignore;
+  const existing = Array.isArray(configured) ? configured.filter((value): value is string => typeof value === "string") : [];
+  const generated = productSourceInventory(dir).excludedDirectories
+    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
+    .map((entry) => `${entry.path}/**`);
+  return { ...config, ignore: [...new Set([...existing, ...generated])] };
+}
+
 // #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
 // so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
 // that supplied its own config keeps confirmed file findings.
@@ -286,7 +297,10 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     entriesInferred = false;
   }
   try {
-    return { report: execKnip(dir, config), entriesInferred, pluginsDisabled: false };
+    // Knip's `ignore` setting consumes the same configuration-derived product boundary as M4.
+    // If a target owns an executable/unmergeable Knip config, its output cannot be safely
+    // rewritten; leave that invocation intact rather than silently replacing its entry graph.
+    return { report: execKnip(dir, config ? withProductInventoryIgnore(dir, config) : undefined), entriesInferred, pluginsDisabled: false };
   } catch (err) {
     // #810: knip most often fails here because it tried to LOAD the target's own knip config or a
     // framework plugin config (vite.config.ts, next.config.ts, ...) whose imports don't resolve —
@@ -296,7 +310,7 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     // second full timeout; and with no plugin list we can't build the retry config. Either way, let
     // the original error propagate to the M5-00 gap disclosure — fail loud, never a silent degrade.
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
-    const report = execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES));
+    const report = execKnip(dir, withProductInventoryIgnore(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)));
     return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
   }
 }
@@ -309,7 +323,7 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
 function runKnipDegraded(dir: string, reason: string): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
-    report: execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)),
+    report: execKnip(dir, withProductInventoryIgnore(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES))),
     entriesInferred: true,
     pluginsDisabled: true,
     reducedReason: reason,
@@ -334,16 +348,19 @@ function lineCount(dir: string, relPath: string): number | undefined {
 // #505: this pass is an in-process directory walk (already excluding node_modules/dist/etc via
 // SKIP_DIRS), not an external tool invocation — it isn't what the issue found hanging, so it stays
 // whole-target rather than per-workspace.
-const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "generated", "vendor", "patches", "__tests__", "e2e"]);
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
+
+function excludedProductDirectory(relPath: string): boolean {
+  return sourceInventory.excludedDirectoryFor(relPath) !== undefined;
+}
 
 function securityPathFiles(dir: string, rel = "", observed?: Set<string>): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath, observed));
+      if (!excludedProductDirectory(relPath)) files.push(...securityPathFiles(dir, relPath, observed));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       observed?.add(relPath);
       if (touchesSecurityPath(relPath)) {
@@ -366,7 +383,7 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...allSourceFiles(dir, relPath));
+      if (!excludedProductDirectory(relPath)) files.push(...allSourceFiles(dir, relPath));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
     }
@@ -383,7 +400,7 @@ function countSourceFiles(dir: string, rel = ""): number {
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) count += countSourceFiles(dir, relPath);
+      if (!excludedProductDirectory(relPath)) count += countSourceFiles(dir, relPath);
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       count += 1;
     }
@@ -396,28 +413,33 @@ function countSourceFiles(dir: string, rel = ""): number {
 // one of JSCPD_DISCLOSED_GLOBS's counts read as zero. This walk only skips the build-artifact dirs
 // (node_modules/dist/.next/.git — the ones deliberately NOT in JSCPD_DISCLOSED_GLOBS, see its header)
 // so it actually visits the files the disclosed globs are about.
-const GLOB_TALLY_SKIP_DIRS = new Set(["node_modules", "dist", ".next", ".git"]);
-
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
-  const counts = new Map<string, { count: number; example?: string }>(JSCPD_DISCLOSED_GLOBS.map((g) => [g, { count: 0 }]));
+  const configured = sourceInventory.excludedDirectories
+    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
+    .map((entry) => ({ glob: `**/${entry.path}/**`, reason: entry.reason }));
+  const entries: Array<{ glob: string; reason?: string }> = [...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob })), ...configured];
+  const counts = new Map<string, { count: number; example?: string; reason?: string }>(entries.map((entry) => [entry.glob, { count: 0, reason: entry.reason }]));
   const walk = (curRel: string): void => {
     for (const entry of readEntriesSafe(join(dir, curRel)).entries) {
       const relPath = curRel ? `${curRel}/${entry.name}` : entry.name;
       if (entry.isDirectory) {
-        if (!GLOB_TALLY_SKIP_DIRS.has(entry.name)) walk(relPath);
+        // The M4 run skips configured output/store directories, but this disclosure walk must
+        // enter them to count the exact omitted population. Git metadata and installed dependency
+        // trees are universal exclusions and intentionally have no client-facing denominator.
+        if (relPath !== ".git" && relPath !== "node_modules") walk(relPath);
         continue;
       }
-      if (!matchesJscpdIgnoreGlob(relPath)) continue;
-      for (const g of JSCPD_DISCLOSED_GLOBS) {
-        if (!matchesGlob(g, relPath)) continue;
-        const hit = counts.get(g)!;
+      if (!entries.some(({ glob }) => matchesGlob(glob, relPath))) continue;
+      for (const { glob } of entries) {
+        if (!matchesGlob(glob, relPath)) continue;
+        const hit = counts.get(glob)!;
         hit.count += 1;
         if (!hit.example) hit.example = relPath;
       }
     }
   };
   walk(rel);
-  return [...counts.entries()].map(([glob, { count, example }]) => ({ glob, count, example }));
+  return [...counts.entries()].map(([glob, { count, example, reason }]) => ({ glob, count, example, reason }));
 }
 
 const VITE_CONFIG_NAMES = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.mts", "vite.config.cts"];

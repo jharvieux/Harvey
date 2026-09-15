@@ -266,6 +266,31 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     // pulled straight from a real --out, instead of the raw Stryker JSON being discarded after parse.
     expect(parsed.rawReport.config).toEqual({ mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" });
   });
+
+  it("keeps all six ATC-shaped product reports routes in configured scope; dropping one is partial (#2125)", async () => {
+    const routes = [
+      "bookings-by-source", "campaigns", "cancellations", "first-vs-last-touch", "leads-by-source", "source-funnel",
+    ].map((name) => `apps/main/src/app/api/reports/${name}/route.ts`);
+    const repo = fixtureRepo(Object.fromEntries(routes.map((path) => [path, "export const GET = () => new Response();\n"])));
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ mutate: ["apps/main/src/**/*.ts"] }));
+    const full = join(repo, "six-routes-full.json");
+    writeFileSync(full, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.map((path) => [path, { mutants: [killed] }])) }));
+    const fullRun = await runCli(repo, ["--report", full]);
+    expect(fullRun.status).toBe(0);
+    const fullScope = JSON.parse(fullRun.out).scope as { expectedFileCount: number; files: Array<{ path: string; reported: boolean }> };
+    expect(fullScope).toMatchObject({ expectedFileCount: 6, verified: true, scoped: false });
+    expect(fullScope.files).toHaveLength(6);
+    expect(fullScope.files.every((file) => file.reported)).toBe(true);
+
+    const dropped = join(repo, "six-routes-dropped.json");
+    writeFileSync(dropped, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.slice(0, -1).map((path) => [path, { mutants: [killed] }])) }));
+    const droppedRun = await runCli(repo, ["--report", dropped]);
+    expect(droppedRun.status).toBe(0);
+    const parsed = JSON.parse(droppedRun.out) as { scope: { expectedFileCount: number; missingCount: number; missing: string[]; files: Array<{ path: string; reported: boolean; absenceReason?: string }> }; moduleRecord?: { status: string } };
+    expect(parsed.scope).toMatchObject({ expectedFileCount: 6, missingCount: 1, missing: [routes[5]] });
+    expect(parsed.scope.files.find((file) => file.path === routes[5])).toMatchObject({ reported: false, absenceReason: "configured and staged but absent from the Stryker JSON report" });
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via

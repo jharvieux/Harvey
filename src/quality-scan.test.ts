@@ -412,11 +412,10 @@ describe("duplicationSummary", () => {
 });
 
 describe("JSCPD_IGNORE_GLOBS", () => {
-  it("excludes the #232-evidenced generated/vendored/demo FP shapes on top of the standard build dirs", () => {
-    expect(JSCPD_IGNORE_GLOBS).toEqual(expect.arrayContaining(["**/node_modules/**", "**/dist/**", "**/.next/**", "**/generated/**"]));
+  it("keeps only stable generated-file and dependency exclusions; directory output is contextual", () => {
+    expect(JSCPD_IGNORE_GLOBS).toEqual(expect.arrayContaining(["**/node_modules/**", "**/.git/**"]));
     expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("database.types.ts"))).toBe(true);
-    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("vendor"))).toBe(true);
-    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("demo"))).toBe(true);
+    expect(JSCPD_IGNORE_GLOBS.some((g) => /(?:dist|vendor|demo|generated)/.test(g))).toBe(false);
   });
 });
 
@@ -433,8 +432,9 @@ describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
     expect(matchesGlob("**/database.types.ts", "src/foodatabase.types.ts")).toBe(false);
   });
 
-  it("the demo glob is a SUBSTRING match — a shipped demos/ directory is excluded by it too", () => {
-    expect(matchesGlob("**/*demo*/**", "apps/demos/product-tour.tsx")).toBe(true);
+  it("does not carry a substring directory exclusion for authored demos or reports", () => {
+    expect(matchesJscpdIgnoreGlob("apps/demos/product-tour.tsx")).toBe(false);
+    expect(matchesJscpdIgnoreGlob("apps/main/src/app/api/reports/route.ts")).toBe(false);
   });
 });
 
@@ -444,16 +444,14 @@ describe("jscpdIgnoreScopeFinding (#1080)", () => {
     expect(jscpdIgnoreScopeFinding(matches)).toBeUndefined();
   });
 
-  it("names the matched globs, their counts, and an example, naming the demos/ substring risk", () => {
+  it("names the matched configured path, count, example, and exclusion reason", () => {
     const matches: JscpdGlobMatch[] = JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob, count: 0 }));
-    const demoGlob = matches.find((m) => m.glob === "**/*demo*/**")!;
-    demoGlob.count = 3;
-    demoGlob.example = "apps/demos/tour.tsx";
+    matches.push({ glob: "**/.pnpm-store/**", count: 3, example: ".pnpm-store/v3/pkg/index.js", reason: "pnpm package store declared by workspace/package-manager metadata" });
     const finding = jscpdIgnoreScopeFinding(matches);
     expect(finding?.id).toBe("M4-SCOPE-00");
-    expect(finding?.evidence).toContain("apps/demos/tour.tsx");
+    expect(finding?.evidence).toContain(".pnpm-store/v3/pkg/index.js");
     expect(finding?.evidence).toContain("3 files");
-    expect(finding?.evidence).toContain("SUBSTRING match");
+    expect(finding?.evidence).toContain("pnpm package store");
   });
 });
 

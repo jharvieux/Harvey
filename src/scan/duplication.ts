@@ -23,6 +23,8 @@ interface JscpdRunOptions {
   // are indistinguishable from jscpd's output alone (#931).
   sourceFileCount: () => number;
   jscpdBin?: string;
+  /** Context-derived output/store paths in addition to the stable file-level exclusions. */
+  ignoreGlobs?: readonly string[];
 }
 
 export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
@@ -60,7 +62,7 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
     //     scanned tree, never an ancestor directory of wherever that tree happens to be checked out.
     execFileSync(
       bin,
-      [".", "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+      [".", "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips", "--ignore", [...new Set([...JSCPD_IGNORE_GLOBS, ...(opts.ignoreGlobs ?? [])])].join(",")],
       { cwd: dir, stdio: ["ignore", "ignore", "pipe"], timeout: opts.timeoutMs, killSignal: "SIGKILL" },
     );
     const reportPath = join(outDir, "jscpd-report.json");

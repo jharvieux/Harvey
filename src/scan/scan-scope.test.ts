@@ -98,20 +98,29 @@ describe("resolveScanScope — git repo target", () => {
 });
 
 describe("resolveScanScope — non-git target (zip export fallback)", () => {
-  it("applies the hard exclude list (node_modules, .claude, .next, dist, build, coverage)", () => {
+  it("excludes only dependency and configured output directories, retaining authored output-like paths", () => {
     const dir = tmp("harvey-scope-plain-");
     writeFileSync(join(dir, "app.ts"), "export const a = 1;");
-    for (const excluded of ["node_modules", ".claude", ".next", "dist", "build", "coverage"]) {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ devDependencies: { vite: "1" }, scripts: { test: "vitest --coverage" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    for (const excluded of ["node_modules", "dist", "coverage", ".pnpm-store"]) {
       mkdirSync(join(dir, excluded, "nested"), { recursive: true });
       writeFileSync(join(dir, excluded, "nested", "f.ts"), "noise");
+    }
+    for (const retained of ["reports", "build", "generated", "vendor"]) {
+      mkdirSync(join(dir, retained, "nested"), { recursive: true });
+      writeFileSync(join(dir, retained, "nested", "f.ts"), "export const authored = true;");
     }
 
     const { scanDir, cleanup } = resolveScanScope(dir);
     scratches.push(scanDir);
     try {
       expect(existsSync(join(scanDir, "app.ts"))).toBe(true);
-      for (const excluded of ["node_modules", ".claude", ".next", "dist", "build", "coverage"]) {
+      for (const excluded of ["node_modules", "dist", "coverage", ".pnpm-store"]) {
         expect(existsSync(join(scanDir, excluded))).toBe(false);
+      }
+      for (const retained of ["reports", "build", "generated", "vendor"]) {
+        expect(existsSync(join(scanDir, retained, "nested", "f.ts"))).toBe(true);
       }
     } finally {
       cleanup();

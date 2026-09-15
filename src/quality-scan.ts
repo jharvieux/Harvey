@@ -133,16 +133,10 @@ const FRAGMENT_PREVIEW_LEN = 240;
 // evidence; extend as new FP shapes surface.
 export const JSCPD_IGNORE_GLOBS = [
   "**/node_modules/**",
-  "**/dist/**",
-  "**/.next/**",
-  "**/generated/**",
   "**/*.gen.ts",
   "**/database.types.ts",
   "**/types_db.ts",
-  "**/vendor/**",
-  "**/patches/**",
-  "**/*demo*/**",
-  "**/*-demo-*.*",
+  "**/.git/**",
 ];
 
 // #1080: the project-scope subset of JSCPD_IGNORE_GLOBS worth a disclosed file count. The
@@ -152,7 +146,7 @@ export const JSCPD_IGNORE_GLOBS = [
 // DECISIONS that silently narrow what "M4 duplication" means for the repo, which is exactly what
 // read as a whole-repo figure with no disclosure (#1080) — most notably `**/*demo*/**`, a SUBSTRING
 // glob that also excludes a shipped `demos/` product directory, not just mock/test-labeled paths.
-export const JSCPD_DISCLOSED_GLOBS = JSCPD_IGNORE_GLOBS.filter((g) => !["**/node_modules/**", "**/dist/**", "**/.next/**"].includes(g));
+export const JSCPD_DISCLOSED_GLOBS = JSCPD_IGNORE_GLOBS.filter((g) => !["**/node_modules/**", "**/.git/**"].includes(g));
 
 // Minimal glob→RegExp translator scoped to the shapes JSCPD_IGNORE_GLOBS actually uses: a leading
 // "**/" (zero or more leading path segments), a trailing "/**" (zero or more trailing path segments),
@@ -190,6 +184,7 @@ export interface JscpdGlobMatch {
   glob: string;
   count: number;
   example?: string;
+  reason?: string;
 }
 
 // #1080: one Info row naming the exclusion globs and the file count each matched, per the
@@ -200,7 +195,7 @@ export function jscpdIgnoreScopeFinding(matches: JscpdGlobMatch[]): Finding | un
   const withHits = matches.filter((m) => m.count > 0);
   if (withHits.length === 0) return undefined;
   const total = withHits.reduce((sum, m) => sum + m.count, 0);
-  const summary = withHits.map((m) => `\`${m.glob}\`: ${m.count} file${m.count === 1 ? "" : "s"}${m.example ? ` (e.g. ${m.example})` : ""}`).join("; ");
+  const summary = withHits.map((m) => `\`${m.glob}\`: ${m.count} file${m.count === 1 ? "" : "s"}${m.example ? ` (e.g. ${m.example})` : ""}${m.reason ? ` — ${m.reason}` : ""}`).join("; ");
   return {
     // Same collision-avoidance reasoning as M4-SELF-00 above — outside jscpdToFindings' sequential
     // per-clone id space.
@@ -212,10 +207,10 @@ export function jscpdIgnoreScopeFinding(matches: JscpdGlobMatch[]): Finding | un
     taxonomy: "M4 — Duplication",
     location: "(repo-wide)",
     status: "Open",
-    evidence: `M4's jscpd pass excludes files matching these globs, on top of the standard node_modules/dist/.next build-artifact exclusion (not counted here): ${summary}. \`**/*demo*/**\` is a SUBSTRING match — it excludes a shipped \`demos/\` product directory just as readily as a mock/test-labeled path.`,
+    evidence: `M4's jscpd pass excludes files matching these exact configured/store paths: ${summary}. Directory names alone do not narrow the product population.`,
     impact:
-      "The M4 duplication percentage and clone findings elsewhere in this report are computed over this narrowed file set, not the whole repo — a reader who assumes 'whole-repo' over- or under-trusts the percentage depending on how much of the excluded set is real product code (most often a demos/ directory) versus genuinely generated/vendored output.",
-    fix: "If any excluded path above is real, hand-maintained product code, re-run jscpd directly over it with a narrower --ignore to get its own duplication figure.",
+      "The M4 duplication percentage and clone findings elsewhere in this report are computed over the listed product inventory. Each excluded directory is tied to package-manager or build configuration so product code under similarly named directories remains measured.",
+    fix: "If an exclusion no longer matches the target's package or build configuration, remove that configuration or rerun M4 after correcting it.",
     value: 1,
     ease: 3,
     safety: 5,
