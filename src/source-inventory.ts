@@ -17,10 +17,10 @@ export interface ProductSourceInventory {
   jscpdIgnoreGlobs: readonly string[];
 }
 
-const alwaysExcluded = new Map<string, string>([
-  [".git", "Git metadata is repository history, not product source"],
-  ["node_modules", "installed package dependencies are not product source"],
-]);
+const alwaysExcluded: Record<string, string> = {
+  ".git": "Git metadata is repository history, not product source",
+  node_modules: "installed package dependencies are not product source",
+};
 
 function readJson(path: string): Record<string, unknown> | undefined {
   try {
@@ -39,29 +39,29 @@ function hasDependency(pkg: Record<string, unknown> | undefined, name: string): 
   });
 }
 
-function addRelativeDirectory(exclusions: Map<string, string>, value: unknown, reason: string): void {
+function addRelativeDirectory(exclusions: Record<string, string>, value: unknown, reason: string): void {
   if (typeof value !== "string" || value.length === 0) return;
   const normalized = normalize(value).split(sep).join("/").replace(/^\.\//, "").replace(/\/$/, "");
   if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.startsWith("/")) return;
-  exclusions.set(normalized, reason);
+  exclusions[normalized] = reason;
 }
 
-function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): Map<string, string> {
-  const exclusions = new Map<string, string>();
+function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): Record<string, string> {
+  const exclusions: Record<string, string> = {};
   const pnpm = existsSync(join(root, "pnpm-lock.yaml")) || existsSync(join(root, "pnpm-workspace.yaml"))
     || (typeof pkg?.packageManager === "string" && pkg.packageManager.startsWith("pnpm@"));
   if (pnpm) {
-    exclusions.set(".pnpm-store", "pnpm package store declared by workspace/package-manager metadata");
-    exclusions.set(".pnpm", "pnpm package store declared by workspace/package-manager metadata");
+    exclusions[".pnpm-store"] = "pnpm package store declared by workspace/package-manager metadata";
+    exclusions[".pnpm"] = "pnpm package store declared by workspace/package-manager metadata";
   }
 
-  if (existsSync(join(root, "composer.json"))) exclusions.set("vendor", "Composer dependency directory declared by composer.json");
-  if (existsSync(join(root, "go.mod"))) exclusions.set("vendor", "Go dependency vendor directory declared by go.mod");
+  if (existsSync(join(root, "composer.json"))) exclusions.vendor = "Composer dependency directory declared by composer.json";
+  if (existsSync(join(root, "go.mod"))) exclusions.vendor = "Go dependency vendor directory declared by go.mod";
 
   const scripts = pkg?.scripts;
   const scriptText = typeof scripts === "object" && scripts !== null ? Object.values(scripts).filter((v): v is string => typeof v === "string").join("\n") : "";
   if (/\b(?:vitest|jest|c8|nyc)\b[^\n]*\s--coverage\b/.test(scriptText)) {
-    exclusions.set("coverage", "test coverage output declared by package scripts");
+    exclusions.coverage = "test coverage output declared by package scripts";
   }
 
   const viteConfig = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.mts", "vite.config.cts"]
@@ -83,7 +83,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
   const collectConfigs = (dir: string): void => {
     for (const entry of readEntriesSafe(dir).entries) {
       if (entry.isDirectory) {
-        if (!alwaysExcluded.has(entry.name) && !exclusions.has(entry.name)) collectConfigs(entry.path);
+        if (!Object.hasOwn(alwaysExcluded, entry.name) && !Object.hasOwn(exclusions, entry.name)) collectConfigs(entry.path);
       } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
         tsconfigs.push(entry.path);
       } else if (entry.name === "package.json" && entry.path !== join(root, "package.json")) {
@@ -147,9 +147,8 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
 /** Build the explicit product boundary from package and tool configuration. */
 export function productSourceInventory(root: string): ProductSourceInventory {
   const pkg = readJson(join(root, "package.json"));
-  const exclusions = new Map(alwaysExcluded);
-  for (const [path, reason] of configuredOutputDirectories(root, pkg)) exclusions.set(path, reason);
-  const entries = [...exclusions.entries()]
+  const exclusions = { ...alwaysExcluded, ...configuredOutputDirectories(root, pkg) };
+  const entries = Object.entries(exclusions)
     .map(([path, reason]) => ({ path, reason }))
     .sort((a, b) => a.path.localeCompare(b.path));
   const ordered = [...entries].sort((a, b) => b.path.length - a.path.length);
