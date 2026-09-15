@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AzureDevOpsTracker } from "./azure-devops.js";
 import { GitHubTracker } from "./github.js";
 import { GitLabTracker } from "./gitlab.js";
-import { TrackerError } from "./http.js";
+import { TrackerError, trackerFetch } from "./http.js";
 import { JiraTracker } from "./jira.js";
 import { LinearTracker } from "./linear.js";
 import type { Tracker } from "./types.js";
@@ -234,4 +234,57 @@ it("redacts configured credentials echoed by a successful GraphQL error response
     expect(surface).not.toContain(echoedAuthorization);
   }
   expect((err as Error).message).toContain("team lookup denied");
+});
+
+describe("short configured credential redaction", () => {
+  const shortToken = "abc123";
+  const headers = { "x-api-key": shortToken };
+
+  it("redacts a short token echoed by an HTTP error", async () => {
+    const fetchImpl = vi.fn(async () => new Response(`proxy echoed ${shortToken}`, { status: 401 })) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await trackerFetch(fetchImpl, "https://example.invalid", { method: "GET", headers });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(TrackerError);
+    expect((err as TrackerError).status).toBe(401);
+    expect((err as Error).message).toContain("proxy echoed");
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+  });
+
+  it("redacts a short token echoed by a thrown fetch exception", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error(`proxy threw ${shortToken}`);
+    }) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await trackerFetch(fetchImpl, "https://example.invalid", { method: "GET", headers });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("proxy threw");
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+  });
+
+  it("redacts a short token echoed by a GraphQL error", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ errors: [{ message: `team lookup denied for ${shortToken}` }] }))) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await new LinearTracker({ apiKey: shortToken, teamId: "team-1", fetchImpl }).createEpic({ title: "t", description: "d" });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+    expect((err as Error).message).toContain("team lookup denied");
+  });
 });
