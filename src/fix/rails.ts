@@ -99,7 +99,7 @@ export function checkBlastRadius(blast: BlastRadius, allowlist: string[], cap: D
 // diff parser in the fix subsystem — both the executing path (execute.ts) and the ticket path
 // (trackers/fix-diff.ts) rail-check through it, so a denylisted or oversized diff is refused the same
 // way whether it is heading for a worktree or a client ticket body.
-export interface DiffFacts {
+interface DiffFacts {
   files: string[]; // paths the diff modifies or deletes
   createdFiles: string[]; // paths the diff adds
   changedLines: number; // added + removed body lines
