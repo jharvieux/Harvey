@@ -107,6 +107,8 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const stderrSecret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
     const longLineSecret = "longlinecredential2060";
     const finalSecret = "finalpartialcredential2060";
+    const crossLineSecret = "reviewercredential2060";
+    const blankFinalSecret = "blankfinalcredential2060";
     writeFileSync(join(bin, "pnpm"), [
       `#!${process.execPath}`,
       `const { writeFileSync, writeSync } = require("node:fs");`,
@@ -114,6 +116,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
       `(async () => {`,
       `  writeSync(1, "selected manager pnpm@11.1.3; live progress 1/3\\n");`,
       `  writeSync(1, "Authorization: Bea"); await wait(10); writeSync(1, "rer ${stdoutSecret}\\n");`,
+      `  writeSync(1, "password:\\n"); await wait(10); writeSync(1, "${crossLineSecret}\\n");`,
       `  writeSync(2, "stderr diagnostic ghp_ABCDEFGHIJ"); await wait(10); writeSync(2, "KLMNOPQRSTUVWXYZ012345\\n");`,
       `  writeSync(1, "password: ${longLineSecret} " + "x".repeat(70 * 1024) + "\\n");`,
       `  writeSync(1, "${target}: 1s — clone 0.1s\\n");`,
@@ -121,6 +124,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
       `  writeSync(2, "M8 PHASES: test baseline 0.1s, mutation 0.2s, line coverage 0.1s\\n");`,
       `  writeSync(2, "tool-install ${outcome === "success" ? "complete" : "failed"}, selected manager pnpm@11.1.3\\n");`,
       `  writeSync(2, "secret: finalpartial"); await wait(10); writeSync(2, "credential2060");`,
+      `  writeSync(1, "secret:\\n\\n"); await wait(10); writeSync(1, "${blankFinalSecret}");`,
       ...(outcome === "success" ? [
         `  const scorecard = process.argv[process.argv.length - 1];`,
         `  writeFileSync(scorecard, JSON.stringify({ rows: [{ slug: "${target}", check: "M8 mutation baseline", pass: true }], findings: {} }));`,
@@ -146,13 +150,19 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(targetRun.stderr).toContain("diagnostic line exceeded 65536 characters; content suppressed");
     expect(targetRun.stderr).toContain("M8 PHASES: test baseline 0.1s, mutation 0.2s");
     expect(targetRun.stderr).toContain(`M8 TARGET ${outcome === "success" ? "PASSED" : "FAILED"}`);
-    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret]) expect(targetRun.stderr).not.toContain(secret);
-    expect(targetRun.stderr.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(3);
+    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret]) {
+      expect(targetRun.stderr).not.toContain(secret);
+    }
+    expect(targetRun.stderr).toContain("password:\n[REDACTED]\n");
+    expect(targetRun.stderr).toContain("secret:\n\n[REDACTED]");
+    expect(targetRun.stderr.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(5);
 
     const targetArtifact = readFileSync(resultPath, "utf8");
     const result = JSON.parse(targetArtifact) as M8TargetResult;
     expect(result.status).toBe(outcome === "success" ? "passed" : "failed");
-    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret]) expect(targetArtifact).not.toContain(secret);
+    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret]) {
+      expect(targetArtifact).not.toContain(secret);
+    }
     if (outcome === "success") {
       expect(result.phases).not.toBeNull();
     } else {
@@ -213,5 +223,30 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const aggregateArtifact = readFileSync(reportPath, "utf8");
     expect(aggregateArtifact).not.toContain(aggregateSecret);
     expect(aggregateArtifact).toContain("Authorization: Bearer [REDACTED]");
+  });
+
+  it("redacts credential-shaped schema values from aggregate validation failures", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-invalid-aggregate-"));
+    dirs.push(root);
+    const artifacts = join(root, "artifacts");
+    const target = "proposit";
+    const targetDir = join(artifacts, target);
+    mkdirSync(targetDir, { recursive: true });
+    const schemaSecret = "ghp_1234567890ABCDEF";
+    writeFileSync(join(targetDir, "result.json"), `${JSON.stringify({ schemaVersion: schemaSecret })}\n`);
+
+    const reportPath = join(root, "aggregate.json");
+    const aggregateRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+
+    expect(aggregateRun.status).toBe(1);
+    expect(aggregateRun.stderr).toContain("M8 AGGREGATE INPUT INVALID: proposit");
+    expect(aggregateRun.stderr).toContain("schemaVersion");
+    expect(aggregateRun.stderr).toContain("[REDACTED]");
+    expect(aggregateRun.stderr).not.toContain(schemaSecret);
+    expect(existsSync(reportPath)).toBe(false);
   });
 });

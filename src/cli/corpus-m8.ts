@@ -163,10 +163,17 @@ if (mode === "aggregate") {
     .filter((path) => basename(path) === "result.json")
     .map((path) => join(artifactsDir, path))
     .sort();
-  const results = paths.map((path) => {
-    const result = parseM8TargetResult(readFileSync(path, "utf8"), basename(resolve(path, "..")));
-    return result.error === undefined ? result : { ...result, error: redactSecrets(result.error) };
-  });
+  let results: M8TargetResult[];
+  try {
+    results = paths.map((path) => {
+      const result = parseM8TargetResult(readFileSync(path, "utf8"), basename(resolve(path, "..")));
+      return result.error === undefined ? result : { ...result, error: redactSecrets(result.error) };
+    });
+  } catch (error) {
+    const detail = redactSecrets(error instanceof Error ? error.message : String(error));
+    console.error(`M8 AGGREGATE INPUT INVALID: ${detail}`);
+    process.exit(1);
+  }
   const report = aggregateM8TargetResults(plan, results);
   writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
   for (const target of report.targets) {

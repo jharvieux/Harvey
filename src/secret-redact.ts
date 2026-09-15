@@ -72,6 +72,9 @@ export function createBoundedLineRedactor(options: {
   if (!Number.isSafeInteger(maxLineChars) || maxLineChars < 1) throw new Error("maxLineChars must be a positive safe integer");
   let buffered = "";
   let discardingLongLine = false;
+  let pendingSecretLabel = "";
+  let pendingBlankLines = 0;
+  let suppressedBlankLines = false;
 
   const emit = (value: string): void => {
     options.write(value);
@@ -79,6 +82,44 @@ export function createBoundedLineRedactor(options: {
   };
   const suppressLongLine = (): void => {
     emit(`[diagnostic line exceeded ${maxLineChars} characters; content suppressed]\n`);
+  };
+  const pendingPrefix = (): string => `${pendingSecretLabel}${"\n".repeat(Math.min(pendingBlankLines, 8))}`;
+  const clearPending = (): void => {
+    pendingSecretLabel = "";
+    pendingBlankLines = 0;
+    suppressedBlankLines = false;
+  };
+  const emitSuppressedBlankLines = (): void => {
+    if (suppressedBlankLines) emit("[diagnostic blank continuation exceeded 8 lines; extra blank lines suppressed]\n");
+  };
+  const flushPending = (): void => {
+    if (!pendingSecretLabel) return;
+    emit(redactSecrets(pendingPrefix()));
+    emitSuppressedBlankLines();
+    clearPending();
+  };
+  const emitCompleteLine = (line: string): void => {
+    if (!pendingSecretLabel && /\b(?:bearer|token|api[_-]?key|password|secret)\s*["':=]\s*\n$/i.test(line)) {
+      pendingSecretLabel = line;
+      return;
+    }
+    if (!pendingSecretLabel) {
+      emit(redactSecrets(line));
+      return;
+    }
+    if (/^\s*$/.test(line)) {
+      pendingBlankLines += 1;
+      if (pendingBlankLines > 8) suppressedBlankLines = true;
+      return;
+    }
+    if (/^\s*[A-Za-z0-9._\-/+=]{8,}\s*(?:\n)?$/.test(line)) {
+      emit(redactSecrets(`${pendingPrefix()}${line}`));
+      emitSuppressedBlankLines();
+      clearPending();
+      return;
+    }
+    flushPending();
+    emit(redactSecrets(line));
   };
 
   return {
@@ -92,20 +133,22 @@ export function createBoundedLineRedactor(options: {
           if (buffered.length + segment.length > maxLineChars) {
             buffered = "";
             discardingLongLine = true;
+            flushPending();
             suppressLongLine();
           } else {
             buffered += segment;
           }
         }
         if (newline === -1) return;
-        if (!discardingLongLine) emit(redactSecrets(`${buffered}\n`));
+        if (!discardingLongLine) emitCompleteLine(`${buffered}\n`);
         buffered = "";
         discardingLongLine = false;
         offset = newline + 1;
       }
     },
     end(): void {
-      if (buffered) emit(redactSecrets(buffered));
+      if (buffered) emitCompleteLine(buffered);
+      flushPending();
       buffered = "";
       discardingLongLine = false;
     },
