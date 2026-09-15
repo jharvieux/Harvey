@@ -13,7 +13,7 @@ import {
 } from "../scan/m8-corpus-artifacts.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
 import { readRecursiveSafe } from "../fs-walk.js";
-import { scrubSecrets } from "../fix/verify.js";
+import { createBoundedLineRedactor, redactSecrets } from "../secret-redact.js";
 
 assertKnownFlags(["--github-output", "--target", "--out", "--artifacts"]);
 
@@ -30,7 +30,7 @@ function required(flag: string): string {
 }
 
 function failureExcerpt(output: string): string {
-  const safe = scrubSecrets(output).trim();
+  const safe = redactSecrets(output).trim();
   const lines = safe.split("\n");
   // Preparation reports combine manager identity and multiline child causes. Bound these
   // independently to retain the selected manager and first cause alongside the final error marker.
@@ -39,6 +39,25 @@ function failureExcerpt(output: string): string {
   const retained = [...new Set([...stages.slice(0, 1), ...stages.slice(-1), ...causes.slice(0, 2), ...causes.slice(-2)])];
   const tail = safe.slice(-1000);
   return [...retained.filter((line) => !tail.includes(line)), tail].join("\n");
+}
+
+const MAX_FORWARDED_LINE_CHARS = 64 * 1024;
+const MAX_CAPTURED_TAIL_CHARS = 32 * 1024;
+
+interface DiagnosticCapture {
+  tail: string;
+  noteworthy: string[];
+}
+
+function captureDiagnostic(capture: DiagnosticCapture, redacted: string): void {
+  capture.tail = `${capture.tail}${redacted}`.slice(-MAX_CAPTURED_TAIL_CHARS);
+  if (!/tool-install|tool installation failed|\bERR_[A-Z0-9_]+|\berror\s*:/i.test(redacted)) return;
+  const bounded = redacted.slice(0, 1000);
+  if (!capture.noteworthy.includes(bounded)) capture.noteworthy = [...capture.noteworthy.slice(-7), bounded];
+}
+
+function capturedDiagnostic(capture: DiagnosticCapture): string {
+  return `${capture.noteworthy.join("\n")}\n${capture.tail}`;
 }
 
 if (mode === "plan") {
@@ -65,19 +84,38 @@ if (mode === "target") {
     ["corpus-drift", "--target", target, "--install", "--m8", "--json", scorecardPath],
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
   );
-  let output = "";
-  const streamOutput = { stdout: "", stderr: "" };
+  let timingOutput = "";
+  const streamCapture: Record<"stdout" | "stderr", DiagnosticCapture> = {
+    stdout: { tail: "", noteworthy: [] },
+    stderr: { tail: "", noteworthy: [] },
+  };
+  const markerTail = { stdout: "", stderr: "" };
+  const mutationMarker = "src/cli/mutation-scan.ts";
   let mutationCliStartedMs: number | undefined;
   for (const [name, stream] of [["stdout", run.stdout], ["stderr", run.stderr]] as const) {
+    // Complete lines are held until they can be scrubbed as one unit, so a credential split across
+    // arbitrary pipe chunks never reaches CI output. Lines over the fixed cap are replaced with a
+    // progress marker and discarded through their newline; final partial lines are scrubbed at EOF.
+    const forwarder = createBoundedLineRedactor({
+      maxLineChars: MAX_FORWARDED_LINE_CHARS,
+      write: (redacted) => process.stderr.write(redacted),
+      onRedacted: (redacted) => {
+        captureDiagnostic(streamCapture[name], redacted);
+        if (redacted.includes(`${target}:`) || redacted.includes("M8 PHASES:")) {
+          timingOutput = `${timingOutput}${redacted}`.slice(-8 * 1024);
+        }
+      },
+    });
     stream.setEncoding("utf8");
     stream.on("data", (chunk: string) => {
-      output += chunk;
-      streamOutput[name] += chunk;
-      process.stderr.write(chunk);
-      if (mutationCliStartedMs === undefined && output.includes("src/cli/mutation-scan.ts")) {
+      const markerProbe = markerTail[name] + chunk;
+      if (mutationCliStartedMs === undefined && markerProbe.includes(mutationMarker)) {
         mutationCliStartedMs = performance.now() - started;
       }
+      markerTail[name] = markerProbe.slice(-(mutationMarker.length - 1));
+      forwarder.write(chunk);
     });
+    stream.once("end", () => forwarder.end());
   }
   const { exitCode, signal, error: runError } = await new Promise<{ exitCode: number; signal: string | null; error?: string }>((done) => {
     let error: string | undefined;
@@ -91,7 +129,7 @@ if (mode === "target") {
   try {
     scorecard = JSON.parse(readFileSync(scorecardPath, "utf8")) as NonNullable<M8TargetResult["scorecard"]>;
     if (mutationCliStartedMs === undefined) throw new Error("mutation CLI start marker was not emitted");
-    phases = m8PhasesFromOutput(output, target, durationMs, mutationCliStartedMs);
+    phases = m8PhasesFromOutput(timingOutput, target, durationMs, mutationCliStartedMs);
   } catch (error) {
     parseError = `scorecard unavailable or corrupt: ${(error as Error).message}`;
   }
@@ -99,8 +137,8 @@ if (mode === "target") {
   // The child can fail before scorecard creation. Its captured diagnostic is the only durable
   // cause available to the uploaded target result; bound and scrub it before serialization.
   const childEvidence = status === "failed"
-    ? (["stdout", "stderr"] as const).map((name) => streamOutput[name].trim()
-      ? `child ${name} (redacted excerpt): ${failureExcerpt(streamOutput[name])}`
+    ? (["stdout", "stderr"] as const).map((name) => capturedDiagnostic(streamCapture[name]).trim()
+      ? `child ${name} (redacted excerpt): ${failureExcerpt(capturedDiagnostic(streamCapture[name]))}`
       : undefined).filter(Boolean).join("; ")
     : undefined;
   const result: M8TargetResult = {
@@ -111,7 +149,7 @@ if (mode === "target") {
     durationMs,
     phases,
     scorecard,
-    ...(status === "failed" ? { error: [parseError, runError, signal ? `terminated by ${signal}` : undefined, `child exited ${exitCode}`, childEvidence].filter(Boolean).join("; ") } : {}),
+    ...(status === "failed" ? { error: redactSecrets([parseError, runError, signal ? `terminated by ${signal}` : undefined, `child exited ${exitCode}`, childEvidence].filter(Boolean).join("; ")) } : {}),
   };
   writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
   console.error(`M8 TARGET ${status.toUpperCase()}: ${target} in ${(durationMs / 1000).toFixed(1)}s — verdict deferred to aggregate`);
@@ -125,7 +163,10 @@ if (mode === "aggregate") {
     .filter((path) => basename(path) === "result.json")
     .map((path) => join(artifactsDir, path))
     .sort();
-  const results = paths.map((path) => parseM8TargetResult(readFileSync(path, "utf8"), basename(resolve(path, ".."))));
+  const results = paths.map((path) => {
+    const result = parseM8TargetResult(readFileSync(path, "utf8"), basename(resolve(path, "..")));
+    return result.error === undefined ? result : { ...result, error: redactSecrets(result.error) };
+  });
   const report = aggregateM8TargetResults(plan, results);
   writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
   for (const target of report.targets) {

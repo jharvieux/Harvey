@@ -1,8 +1,9 @@
-// Shared HTTP helper for the tracker adapters. Kept small on purpose: it makes the request and,
-// on a non-2xx response, throws a TrackerError carrying only method/url/status and the RESPONSE
-// body — never the request headers. The injected credential lives in an Authorization header, so
-// keeping headers out of the error (and out of every log line) is what stops the token from
-// leaking into an error message or a caught-and-logged failure (credentials.test.ts asserts this).
+import { credentialSecretsFromHeaders, redactConfiguredSecrets, redactJsonStrings } from "../secret-redact.js";
+
+// Shared HTTP helper for the tracker adapters. Upstreams and proxies sometimes echo request
+// credentials, so omitting request headers from our own error shape is insufficient. Derive the
+// sensitive values from the request headers at this boundary and scrub response bodies, successful
+// JSON payloads, and transport exceptions before any adapter or persistence consumer sees them.
 
 export class TrackerError extends Error {
   constructor(
@@ -16,6 +17,17 @@ export class TrackerError extends Error {
   ) {
     super(`${method} ${url} -> ${status}: ${responseBody.slice(0, 500)}`);
     this.name = "TrackerError";
+  }
+}
+
+class TrackerTransportError extends Error {
+  constructor(
+    readonly method: string,
+    readonly url: string,
+    readonly detail: string,
+  ) {
+    super(`${method} ${url} transport error: ${detail}`);
+    this.name = "TrackerTransportError";
   }
 }
 
@@ -37,15 +49,29 @@ interface TrackerRequest {
 }
 
 export async function trackerFetch(fetchImpl: typeof fetch, url: string, req: TrackerRequest): Promise<Response> {
-  const res = await fetchImpl(url, req);
+  const secrets = credentialSecretsFromHeaders(req.headers);
+  const safeUrl = redactConfiguredSecrets(url, secrets);
+  let res: Response;
+  try {
+    res = await fetchImpl(url, req);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new TrackerTransportError(req.method, safeUrl, redactConfiguredSecrets(detail, secrets));
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new TrackerError(req.method, url, res.status, body, parseRetryAfter(res));
+    throw new TrackerError(req.method, safeUrl, res.status, redactConfiguredSecrets(body, secrets), parseRetryAfter(res));
   }
   return res;
 }
 
 export async function trackerFetchJson<T>(fetchImpl: typeof fetch, url: string, req: TrackerRequest): Promise<T> {
   const res = await trackerFetch(fetchImpl, url, req);
-  return (await res.json()) as T;
+  const secrets = credentialSecretsFromHeaders(req.headers);
+  try {
+    return redactJsonStrings(await res.json(), secrets) as T;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new TrackerTransportError(req.method, redactConfiguredSecrets(url, secrets), redactConfiguredSecrets(`invalid JSON response: ${detail}`, secrets));
+  }
 }
