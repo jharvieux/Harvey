@@ -107,7 +107,7 @@ if (!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESE
 // of how long the child itself takes.
 function runGate(args: string[]): Promise<{ code: number; output: string }> {
   return new Promise((res, rej) => {
-    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     // setEncoding, never `output += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
     // Buffer decodes THAT CHUNK in isolation, so a multi-byte character straddling a chunk boundary
@@ -122,6 +122,15 @@ function runGate(args: string[]): Promise<{ code: number; output: string }> {
 }
 
 describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESENT)("validate-conservation CLI — end-to-end against targets/calibration", () => {
+  it("exits non-zero with an exclusive ledger failure after a real assembled finding is dropped", async () => {
+    const { code, output } = await runGate(["--seed-unaccounted"]);
+    expect(code).toBe(1);
+    expect(output).toContain("SEEDED UNACCOUNTED LOSS");
+    expect(output).toContain("LEDGER FAIL");
+    expect(output).not.toMatch(/(?:^|\n)LEDGER PASS/);
+    expect(output).toContain("BASELINE LEDGER PASS");
+  }, 240000);
+
   // 240s: a full ten-module run of the real orchestrator as a child process.
   it("FAILS on a seeded loss and only on it — every unseeded module still delivers its plant", async () => {
     const { code, output } = await runGate(["--seed-loss", "M7"]);

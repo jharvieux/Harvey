@@ -12,6 +12,15 @@ const finding = (id: string, over: Partial<Finding> = {}): Finding => ({
   ...over,
 });
 
+function expectExclusiveFailure(ledger: ReturnType<typeof conservationLedger>, reason: RegExp): string {
+  expect(ledger.ok).toBe(false);
+  const output = formatLedger(ledger);
+  expect(output).toMatch(reason);
+  expect(output).toContain("LEDGER FAIL");
+  expect(output).not.toContain("LEDGER PASS");
+  return output;
+}
+
 describe("conservation ledger — the healthy shape", () => {
   it("balances when every produced finding is delivered", () => {
     const produced = [finding("A"), finding("B")];
@@ -47,6 +56,28 @@ describe("conservation ledger — the healthy shape", () => {
 });
 
 describe("conservation ledger — SEEDED violations, each proven to fail", () => {
+  it.each([
+    [
+      "unaccounted loss",
+      () => conservationLedger([finding("LOST")], []),
+      /PRODUCED and are not in the deliverable/,
+    ],
+    [
+      "undeclared gain",
+      () => conservationLedger([], [finding("GHOST")]),
+      /NO probe produced and no synthesizer declares/,
+    ],
+    [
+      "misdeclared disposition",
+      () => conservationLedger([finding("SHIPPED")], [finding("SHIPPED")], {}, [
+        { id: "SHIPPED", disposition: "suppressed", reason: "seed", by: "test" },
+      ]),
+      /declared suppressed\/capped\/not-applicable but did not actually go missing/,
+    ],
+  ] as const)("prints one unambiguous failure verdict for %s", (_name, makeLedger, reason) => {
+    expectExclusiveFailure(makeLedger(), reason);
+  });
+
   // SEED: the #1040/#1061 shape — the probe produced it, the deliverable does not carry it, and
   // nothing in the pipeline declared a reason.
   it("FAILS on a produced finding that is not delivered and carries no disposition", () => {
@@ -54,8 +85,7 @@ describe("conservation ledger — SEEDED violations, each proven to fail", () =>
     const ledger = conservationLedger(produced, [produced[0]!], { M9: produced });
     expect(ledger.ok).toBe(false);
     expect(ledger.unaccounted).toBe(1);
-    const out = formatLedger(ledger);
-    expect(out).toContain("LEDGER FAIL");
+    const out = expectExclusiveFailure(ledger, /PRODUCED and are not in the deliverable/);
     expect(out).toContain("LOST  B (produced by M9)");
   });
 
