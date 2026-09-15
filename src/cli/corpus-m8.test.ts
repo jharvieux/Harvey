@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
 import { buildM8CorpusPlan, type M8TargetResult } from "../scan/m8-corpus-artifacts.js";
+import { createBoundedLineRedactor, redactSecrets } from "../secret-redact.js";
 import { describePreparationStages } from "../corpus-package-manager.js";
 
 const plan = buildM8CorpusPlan(EXTERNAL_CORPUS, M8_CORPUS_CONFIGS);
@@ -109,6 +110,8 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const finalSecret = "finalpartialcredential2060";
     const crossLineSecret = "reviewercredential2060";
     const blankFinalSecret = "blankfinalcredential2060";
+    const wrappedBearerSecret = "wrappedbearercredential2060";
+    const contextSecret = "contextcredential2060";
     writeFileSync(join(bin, "pnpm"), [
       `#!${process.execPath}`,
       `const { writeFileSync, writeSync } = require("node:fs");`,
@@ -117,6 +120,8 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
       `  writeSync(1, "selected manager pnpm@11.1.3; live progress 1/3\\n");`,
       `  writeSync(1, "Authorization: Bea"); await wait(10); writeSync(1, "rer ${stdoutSecret}\\n");`,
       `  writeSync(1, "password:\\n"); await wait(10); writeSync(1, "${crossLineSecret}\\n");`,
+      `  writeSync(1, "Authorization: Bearer\\n"); await wait(10); writeSync(1, "${wrappedBearerSecret}\\n");`,
+      `  writeSync(2, "password:\\n"); await wait(10); writeSync(2, "${contextSecret} (loaded)\\n");`,
       `  writeSync(2, "stderr diagnostic ghp_ABCDEFGHIJ"); await wait(10); writeSync(2, "KLMNOPQRSTUVWXYZ012345\\n");`,
       `  writeSync(1, "password: ${longLineSecret} " + "x".repeat(70 * 1024) + "\\n");`,
       `  writeSync(1, "${target}: 1s — clone 0.1s\\n");`,
@@ -150,17 +155,19 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(targetRun.stderr).toContain("diagnostic line exceeded 65536 characters; content suppressed");
     expect(targetRun.stderr).toContain("M8 PHASES: test baseline 0.1s, mutation 0.2s");
     expect(targetRun.stderr).toContain(`M8 TARGET ${outcome === "success" ? "PASSED" : "FAILED"}`);
-    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret]) {
+    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret, wrappedBearerSecret, contextSecret]) {
       expect(targetRun.stderr).not.toContain(secret);
     }
     expect(targetRun.stderr).toContain("password:\n[REDACTED]\n");
+    expect(targetRun.stderr).toContain("Authorization: Bearer\n[REDACTED]\n");
+    expect(targetRun.stderr).toContain("password:\n[REDACTED] (loaded)\n");
     expect(targetRun.stderr).toContain("secret:\n\n[REDACTED]");
     expect(targetRun.stderr.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(5);
 
     const targetArtifact = readFileSync(resultPath, "utf8");
     const result = JSON.parse(targetArtifact) as M8TargetResult;
     expect(result.status).toBe(outcome === "success" ? "passed" : "failed");
-    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret]) {
+    for (const secret of [stdoutSecret, stderrSecret, longLineSecret, finalSecret, crossLineSecret, blankFinalSecret, wrappedBearerSecret, contextSecret]) {
       expect(targetArtifact).not.toContain(secret);
     }
     if (outcome === "success") {
@@ -225,7 +232,37 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(aggregateArtifact).toContain("Authorization: Bearer [REDACTED]");
   });
 
-  it("redacts credential-shaped schema values from aggregate validation failures", () => {
+  it.each(["plan", "target", "aggregate"])("sanitizes %s filesystem failures at the terminal boundary", (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-io-boundary-"));
+    dirs.push(root);
+    const secret = "ghp_1234567890ABCDEF";
+    const blocker = join(root, secret);
+    writeFileSync(blocker, "not a directory");
+    const out = join(blocker, "result.json");
+    const artifacts = join(root, "artifacts");
+    mkdirSync(artifacts);
+    if (mode === "aggregate") writePassingPeerArtifacts(artifacts, "");
+    const args = mode === "plan" ? ["--github-output", out]
+      : mode === "target" ? ["--target", "proposit", "--out", out]
+        : ["--artifacts", artifacts, "--out", out];
+    const result = spawnSync(process.execPath, ["--import", tsxLoader, cli, mode, ...args], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("M8 CORPUS FAILED:");
+    expect(result.stderr).toContain("[REDACTED]");
+    expect(result.stderr).not.toContain(secret);
+    expect(result.stderr).not.toContain("at Object.");
+  });
+
+  it("sanitizes rejected flags without changing exit status or accepted flag context", () => {
+    const secret = "ghp_1234567890ABCDEF";
+    const result = spawnSync(process.execPath, ["--import", tsxLoader, cli, "plan", `--${secret}`], { encoding: "utf8" });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Unrecognized flag: --[REDACTED]");
+    expect(result.stderr).toContain("--github-output");
+    expect(result.stderr).not.toContain(secret);
+  });
+
+  it.each(["schemaVersion", "target"])("redacts credential-shaped %s values from aggregate validation failures", (field) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-invalid-aggregate-"));
     dirs.push(root);
     const artifacts = join(root, "artifacts");
@@ -233,7 +270,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const targetDir = join(artifacts, target);
     mkdirSync(targetDir, { recursive: true });
     const schemaSecret = "ghp_1234567890ABCDEF";
-    writeFileSync(join(targetDir, "result.json"), `${JSON.stringify({ schemaVersion: schemaSecret })}\n`);
+    writeFileSync(join(targetDir, "result.json"), `${JSON.stringify(field === "schemaVersion" ? { schemaVersion: schemaSecret } : { schemaVersion: 1, target: schemaSecret, status: "failed", exitCode: 42, durationMs: 1, phases: null, scorecard: null })}\n`);
 
     const reportPath = join(root, "aggregate.json");
     const aggregateRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], {
@@ -243,10 +280,44 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     });
 
     expect(aggregateRun.status).toBe(1);
-    expect(aggregateRun.stderr).toContain("M8 AGGREGATE INPUT INVALID: proposit");
-    expect(aggregateRun.stderr).toContain("schemaVersion");
+    expect(aggregateRun.stderr).toContain(field === "schemaVersion" ? "M8 AGGREGATE INPUT INVALID: proposit" : "M8 CORPUS FAILED:");
+    expect(aggregateRun.stderr).toContain(field === "schemaVersion" ? "schemaVersion" : "configured M8 target set");
     expect(aggregateRun.stderr).toContain("[REDACTED]");
     expect(aggregateRun.stderr).not.toContain(schemaSecret);
     expect(existsSync(reportPath)).toBe(false);
+  });
+});
+
+
+describe("M8 bounded credential grammar", () => {
+  it.each(["Bearer", "token", "api_key", "api-key", "apikey", "password", "secret"])("preserves whole-text policy for split %s diagnostics", (label) => {
+    for (const separator of ["\n", ":\r\n", " = \"\n\n", ":\n : '\n"]) {
+      for (const suffix of ["\n", " (loaded)\n", "", "; next stage\nsecret:\nsecondcredential2060\n"]) {
+        const input = `stage ready\n${label}${separator}reviewercredential2060${suffix}`;
+        const expected = redactSecrets(input);
+        expect(expected).not.toContain("reviewercredential2060");
+        for (let split = 0; split <= input.length; split += 1) {
+          let actual = "";
+          const stream = createBoundedLineRedactor({ write: (value) => { actual += value; } });
+          stream.write(input.slice(0, split));
+          stream.write(input.slice(split));
+          stream.end();
+          expect(actual).toBe(expected);
+        }
+      }
+    }
+  });
+
+  it("bounds continued separators and retains final-token redaction", () => {
+    let actual = "";
+    const stream = createBoundedLineRedactor({ maxLineChars: 32, write: (value) => { actual += value; } });
+    stream.write("password:\n");
+    for (let i = 0; i < 1000; i += 1) stream.write(" ' : \"\n");
+    stream.write("reviewercredential2060 (loaded)");
+    stream.end();
+    expect(actual).not.toContain("reviewercredential2060");
+    expect(actual).toContain("[REDACTED] (loaded)");
+    expect(actual).toContain("suppressed");
+    expect(actual.length).toBeLessThan(300);
   });
 });

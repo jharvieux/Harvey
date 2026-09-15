@@ -1,3 +1,6 @@
+const CREDENTIAL_PREFIX = String.raw`(bearer|token|api[_-]?key|password|secret)(["'\s:=]+)`;
+const CREDENTIAL_VALUE = String.raw`([A-Za-z0-9._\-/+]{8,})`;
+
 const SECRET_PATTERNS: readonly RegExp[] = [
   /gh[pousr]_[A-Za-z0-9]{16,}/g,
   /github_pat_[A-Za-z0-9_]{20,}/g,
@@ -48,7 +51,7 @@ export function redactSecrets(text: string, configuredSecrets: readonly string[]
     .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1?[REDACTED]");
   for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[REDACTED]");
-  return out.replace(/(bearer|token|api[_-]?key|password|secret)(["'\s:=]+)([A-Za-z0-9._\-/+]{8,})/gi, "$1$2[REDACTED]");
+  return out.replace(new RegExp(CREDENTIAL_PREFIX + CREDENTIAL_VALUE, "gi"), "$1$2[REDACTED]");
 }
 
 export function redactJsonStrings(value: unknown, configuredSecrets: readonly string[]): unknown {
@@ -74,6 +77,7 @@ export function createBoundedLineRedactor(options: {
   let discardingLongLine = false;
   let pendingSecretLabel = "";
   let pendingBlankLines = 0;
+  let pendingContinuations = "";
   let suppressedBlankLines = false;
 
   const emit = (value: string): void => {
@@ -83,10 +87,11 @@ export function createBoundedLineRedactor(options: {
   const suppressLongLine = (): void => {
     emit(`[diagnostic line exceeded ${maxLineChars} characters; content suppressed]\n`);
   };
-  const pendingPrefix = (): string => `${pendingSecretLabel}${"\n".repeat(Math.min(pendingBlankLines, 8))}`;
+  const pendingPrefix = (): string => pendingSecretLabel + pendingContinuations;
   const clearPending = (): void => {
     pendingSecretLabel = "";
     pendingBlankLines = 0;
+    pendingContinuations = "";
     suppressedBlankLines = false;
   };
   const emitSuppressedBlankLines = (): void => {
@@ -99,27 +104,28 @@ export function createBoundedLineRedactor(options: {
     clearPending();
   };
   const emitCompleteLine = (line: string): void => {
-    if (!pendingSecretLabel && /\b(?:bearer|token|api[_-]?key|password|secret)\s*["':=]\s*\n$/i.test(line)) {
-      pendingSecretLabel = line;
+    if (pendingSecretLabel && /^["'\s:=]*$/.test(line)) {
+      pendingBlankLines = Math.min(pendingBlankLines + 1, 9);
+      if (pendingBlankLines <= 8 && pendingContinuations.length + line.length <= maxLineChars) {
+        pendingContinuations += line;
+      } else {
+        suppressedBlankLines = true;
+      }
       return;
     }
-    if (!pendingSecretLabel) {
-      emit(redactSecrets(line));
-      return;
+    // Use the same credential grammar as artifact redaction. Only its unfinished prefix
+    // crosses line boundaries; the next line may contain ordinary diagnostic context.
+    const safe = redactSecrets(pendingPrefix() + line);
+    const suppressed = suppressedBlankLines;
+    clearPending();
+    const unfinished = new RegExp(CREDENTIAL_PREFIX + "$", "i").exec(safe);
+    if (unfinished) {
+      emit(safe.slice(0, unfinished.index));
+      pendingSecretLabel = unfinished[0];
+    } else {
+      emit(safe);
     }
-    if (/^\s*$/.test(line)) {
-      pendingBlankLines += 1;
-      if (pendingBlankLines > 8) suppressedBlankLines = true;
-      return;
-    }
-    if (/^\s*[A-Za-z0-9._\-/+=]{8,}\s*(?:\n)?$/.test(line)) {
-      emit(redactSecrets(`${pendingPrefix()}${line}`));
-      emitSuppressedBlankLines();
-      clearPending();
-      return;
-    }
-    flushPending();
-    emit(redactSecrets(line));
+    if (suppressed) emit("[diagnostic blank continuation exceeded retained bounds; extra continuation lines suppressed]\n");
   };
 
   return {
