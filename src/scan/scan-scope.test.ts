@@ -141,6 +141,25 @@ describe("resolveScanScope — non-git target (zip export fallback)", () => {
       cleanup();
     }
   });
+
+  it("copies no flat or nested artifacts when an ancestor config excludes the whole workspace", () => {
+    const root = tmp("harvey-scope-whole-workspace-");
+    mkdirSync(join(root, "apps/web/src"), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    writeFileSync(join(root, "apps/web/package.json"), JSON.stringify({ name: "web", private: true }));
+    writeFileSync(join(root, "apps/web/generated.ts"), "export const direct = true;\n");
+    writeFileSync(join(root, "apps/web/src/generated.ts"), "export const nested = true;\n");
+
+    const { scanDir, cleanup } = resolveScanScope(join(root, "apps/web"));
+    scratches.push(scanDir);
+    try {
+      expect(existsSync(join(scanDir, "generated.ts"))).toBe(false);
+      expect(existsSync(join(scanDir, "src/generated.ts"))).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("relativizeScanScope", () => {

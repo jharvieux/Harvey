@@ -102,11 +102,11 @@ function loadTree(root: string, include: (entry: string) => boolean): SourceInpu
   const inventory = productSourceInventoryForTarget(root);
   const walk = (dir: string) => {
     for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      const path = relative(root, full).split(sep).join("/");
       if (isDirectory) {
-        const path = relative(root, full).split(sep).join("/");
         if (!inventory.excludedDirectoryFor(path)) walk(full);
       } else if (include(entry)) {
-        const path = relative(root, full).split(sep).join("/");
+        if (inventory.excludedDirectoryFor(path)) continue;
         const text = readFileSync(full, "utf8");
         if (SOURCE_FILE.test(entry) && !CONFIG_FILE.test(entry) && isGeneratedSource(entry, text)) continue;
         files.push({ path, text });

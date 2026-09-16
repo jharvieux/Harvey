@@ -56,4 +56,20 @@ fs.writeFileSync(path.join(output, "jscpd-report.json"), JSON.stringify({ statis
       jscpdBin: "/must/not/be/invoked",
     })).toThrow(/Invalid \.jscpd\.json/);
   });
+
+  it.each([
+    ["scalar", "src/one.ts"],
+    ["number", 3],
+    ["mixed array", [{}, "src/one.ts"]],
+  ])("rejects a %s jscpd ignore instead of silently coercing it", (_label, ignore) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-jscpd-ignore-shape-"));
+    dirs.push(root);
+    writeFileSync(join(root, "package.json"), "{}\n");
+    writeFileSync(join(root, ".jscpd.json"), JSON.stringify({ ignore }));
+    expect(() => runJscpd(root, {
+      timeoutMs: 5_000,
+      sourceFileCount: () => 2,
+      jscpdBin: "/must/not/be/invoked",
+    })).toThrow(/Invalid jscpd ignore configuration/);
+  });
 });

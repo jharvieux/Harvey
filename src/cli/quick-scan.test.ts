@@ -88,6 +88,37 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
 });
 
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved product inventory (#2132)", () => {
+  it("inherits root stores and output directories for a direct workspace target", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quick-workspace-inventory-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, path: string, text: string) => {
+      const full = join(base, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, text);
+    };
+    write(root, "package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write(root, "pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(root, ".npmrc", "store-dir=apps/web/package-cache\n");
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    for (const path of ["src/index.ts", "src/live.ts", "src/app/reports/authored.ts", "src/app/dist/authored.ts"]) {
+      write(app, path, "export const authored = true;\n");
+    }
+    for (const path of [".pnpm-store/v3/pkg/dead.ts", "package-cache/v3/pkg/dead.ts", "compiled/dead.ts"]) {
+      write(app, path, "export const generated = true;\n");
+    }
+
+    const out = join(app, "quick.json");
+    await run([CLI, "--dir", app, "--json", "--out", out]);
+    const report = JSON.parse(readFileSync(out, "utf8")) as {
+      size: { files: number; excludedFiles: number };
+      scorecard: { dimensions: Array<{ module: string; measure?: string }> };
+    };
+    expect(report.size).toMatchObject({ files: 4, excludedFiles: 3 });
+    expect(report.scorecard.dimensions.find((row) => row.module === "M8")?.measure).toContain("across 5 source file(s)");
+  }, 120000);
+
   it("keeps the full authored population but does not grade M4 through an unresolved Vite output", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quick-unresolved-inventory-"));
     dirs.push(repo);

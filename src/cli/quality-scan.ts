@@ -33,7 +33,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventory, productSourceInventoryForScope, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -138,7 +138,7 @@ if (degradedKnipReasonStdin) {
 const TIMEOUT_MS = timeoutSeconds * 1000;
 
 const targetDir = resolve(targetArg);
-const sourceInventory = productSourceInventory(targetDir);
+const sourceInventory = productSourceInventoryForTarget(targetDir);
 
 // #505: one scope per workspace. discoverTargets' app enumeration already falls back to the
 // target's own root as a single app when there's no workspace manifest, so `scopes` is always
@@ -254,7 +254,7 @@ function execKnip(
   config: Record<string, unknown> | undefined,
   executablePath?: string,
   packageConfig: Record<string, unknown> = {},
-  inventory: ProductSourceInventory = productSourceInventory(dir),
+  inventory: ProductSourceInventory = productSourceInventoryForTarget(dir),
 ): KnipReport {
   const plainArgs = ["--reporter", "json", "--no-exit-code"];
   let args = plainArgs;
@@ -298,7 +298,7 @@ function execKnip(
 function productInventoryKnipIgnore(inventory: ProductSourceInventory): string[] {
   return inventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
+    .map((entry) => entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
 }
 
 function withProductInventoryIgnore(config: Record<string, unknown>, inventory: ProductSourceInventory): Record<string, unknown> {

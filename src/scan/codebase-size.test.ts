@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 import { measureCodebaseSize } from "./codebase-size.js";
 
 const dirs: string[] = [];
@@ -88,6 +89,18 @@ describe("measureCodebaseSize (#1044)", () => {
       ".pnpm-store/v3/pkg/index.ts": body(500),
     });
     expect(measureCodebaseSize(root)).toMatchObject({ loc: 4, files: 1, excludedFiles: 1 });
+  });
+
+  it("counts flat and nested files as excluded when the whole workspace is configured output", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/generated.ts": body(2),
+      "apps/web/src/generated.ts": body(3),
+    });
+    const app = join(root, "apps/web");
+    expect(measureCodebaseSize(app, productSourceInventoryForTarget(app))).toMatchObject({ loc: 0, files: 0, excludedFiles: 2 });
   });
 
   // Found by the 2026-07-28 #899 breadth sweep, on 3 of 15 wild repos (liam, dub, cal-diy). This

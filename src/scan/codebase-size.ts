@@ -70,14 +70,14 @@ export function measureCodebaseSize(root: string, inventory: ProductSourceInvent
   const walk = (dir: string, excluded: boolean): void => {
     for (const { name: entry, path: full, isDirectory: isDir } of readEntriesSafe(dir).entries) {
       const rel = relative(root, full).split(sep).join("/");
-      const directoryExclusions = isDir ? inventory.exclusionsFor(rel) : [];
+      const inventoryExclusions = inventory.exclusionsFor(rel);
       // VCS metadata and installed node_modules can be skipped without opening them: they are
       // universal dependencies, not a measured contextual population. Package stores and other
       // configuration-derived directories must still be walked so `excludedFiles` is the physical
       // population disclosed to the client rather than a count of matched directory names.
-      if (isDir && directoryExclusions.some((exclusion) => exclusion.path === ".git" || exclusion.path === "node_modules")) continue;
+      if (isDir && inventoryExclusions.some((exclusion) => exclusion.path === ".git" || exclusion.path === "node_modules")) continue;
       const skip = excluded
-        || directoryExclusions.length > 0
+        || inventoryExclusions.length > 0
         || (!isDir && JSCPD_IGNORE_GLOBS.some((glob) => matchesGlob(glob, rel)));
       if (isDir) {
         walk(full, skip);

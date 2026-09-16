@@ -150,7 +150,7 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
   }, 30000);
 
-  it("rebases root-declared stores and generated output into each Knip workspace", async () => {
+  it("retains root-declared stores and generated output for root and direct workspace entry points", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-workspace-inventory-"));
     dirs.push(repo);
     const write = (rel: string, text: string) => {
@@ -181,6 +181,18 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
     expect(scope?.evidence).toContain("apps/web/package-cache/**");
     expect(scope?.evidence).toContain("apps/web/compiled/**");
+
+    const directFindings = await runCli(join(repo, "apps/web"));
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(directFindings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.location.includes(excluded)), `direct ${excluded}`).toEqual([]);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(directFindings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: authored }));
+    }
+    const directScope = directFindings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(directScope?.evidence).toContain("`**/.pnpm-store/**`: 1 file");
+    expect(directScope?.evidence).toContain("`package-cache/**`: 1 file");
+    expect(directScope?.evidence).toContain("`compiled/**`: 1 file");
   }, 30000);
 
   it("discloses an existing malformed jscpd config instead of replacing it", async () => {
@@ -201,6 +213,13 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       evidence: expect.stringMatching(/Invalid \.jscpd\.json/),
     }));
     expect(findings.some((finding) => finding.id === "M4-01")).toBe(false);
+
+    write(".jscpd.json", JSON.stringify({ ignore: "src/one.ts" }));
+    const invalidShapeFindings = await runCli(repo);
+    expect(invalidShapeFindings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid jscpd ignore configuration/),
+    }));
   }, 30000);
 });
 

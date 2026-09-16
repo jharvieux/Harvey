@@ -89,6 +89,20 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(productSourceInventoryForTarget(join(root, "apps/web")).excludedDirectories).toEqual(workspaceInventory.excludedDirectories);
   });
 
+  it("marks direct and nested files excluded when a root output contains the whole workspace", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/generated.ts": "export const direct = true;\n",
+      "apps/web/src/generated.ts": "export const nested = true;\n",
+    });
+    const inventory = productSourceInventoryForTarget(join(root, "apps/web"));
+    expect(inventory.excludedDirectoryFor("generated.ts")).toMatchObject({ path: ".", reason: expect.stringContaining("tsconfig.json") });
+    expect(inventory.excludedDirectoryFor("src/generated.ts")).toMatchObject({ path: ".", reason: expect.stringContaining("tsconfig.json") });
+    expect(inventory.jscpdIgnoreGlobs).toContain("**/*");
+  });
+
   it("keeps fixed dependency boundaries at any depth and contextual outputs at their authored coordinate", () => {
     const root = fixture({
       "package.json": JSON.stringify({ devDependencies: { vite: "1" } }),

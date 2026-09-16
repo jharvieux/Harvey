@@ -386,7 +386,10 @@ function configurationGaps(root: string): SourceInventoryGap[] {
 
 function matchesExclusion(exclusion: SourceExclusion, path: string): boolean {
   const normalized = posix(path);
-  if (exclusion.match === "anchored") return normalized === exclusion.path || normalized.startsWith(`${exclusion.path}/`);
+  if (exclusion.match === "anchored") {
+    if (exclusion.path === ".") return true;
+    return normalized === exclusion.path || normalized.startsWith(`${exclusion.path}/`);
+  }
   return normalized.split("/").includes(exclusion.path);
 }
 
@@ -400,7 +403,7 @@ function inventoryFrom(
     unresolvedConfigurations,
     exclusionsFor,
     excludedDirectoryFor: (path: string) => exclusionsFor(path)[0],
-    jscpdIgnoreGlobs: entries.map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`),
+    jscpdIgnoreGlobs: entries.map((entry) => entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`),
   };
 }
 
@@ -427,8 +430,9 @@ export function productSourceInventoryForScope(
 ): ProductSourceInventory {
   const absoluteRoot = resolve(root);
   const absoluteScope = resolve(scope);
-  const scopePath = posix(relative(absoluteRoot, absoluteScope));
-  if (scopePath === "") return rootInventory;
+  const relativeScope = relative(absoluteRoot, absoluteScope);
+  if (relativeScope === "") return rootInventory;
+  const scopePath = posix(relativeScope);
   if (scopePath === ".." || scopePath.startsWith("../") || resolve(absoluteRoot, scopePath) !== absoluteScope) {
     throw new Error(`Source inventory scope must be inside its root: ${absoluteScope}`);
   }
@@ -436,6 +440,7 @@ export function productSourceInventoryForScope(
   const local = productSourceInventory(absoluteScope);
   const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
     if (entry.match === "any-depth") return [entry];
+    if (entry.path === scopePath || scopePath.startsWith(`${entry.path}/`)) return [{ ...entry, path: "." }];
     if (!entry.path.startsWith(`${scopePath}/`)) return [];
     return [{ ...entry, path: entry.path.slice(scopePath.length + 1) }];
   });

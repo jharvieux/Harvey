@@ -339,6 +339,39 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     }
     expect(parsed.scope.files.filter((file) => file.reported).map((file) => file.path).sort()).toEqual([...authored].sort());
   });
+
+  it("records flat and nested files as excluded when root output contains the whole app workspace (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const generated = ["generated.ts", "src/generated.ts"];
+    for (const path of generated) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "whole-workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(generated.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: { configuredFileCount: number; expectedFileCount: number; verified: boolean; files: Array<{ path: string; inventory: string; inventoryReason?: string }> };
+      moduleRecord?: { status: string };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 2, expectedFileCount: 0, verified: false });
+    for (const path of generated) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.stringContaining("tsconfig.json"),
+      });
+    }
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via

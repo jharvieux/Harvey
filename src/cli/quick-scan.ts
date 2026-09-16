@@ -48,7 +48,7 @@ import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
 import { buildSbom } from "../sbom.js";
 import { buildHealthScorecard, type HealthDimension, type HealthScorecard, type PiiTableBand, type ScorecardInput } from "../health-scorecard.js";
 import { duplicationSummary, jscpdToFindings } from "../quality-scan.js";
-import { productSourceInventory } from "../source-inventory.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
@@ -453,7 +453,7 @@ async function main(): Promise<void> {
     location: relativizeScanScope(f.location),
   }));
   const absDir = resolve(dir);
-  const sourceInventory = productSourceInventory(absDir);
+  const sourceInventory = productSourceInventoryForTarget(absDir);
   const size = measureCodebaseSize(absDir, sourceInventory);
   const report = buildQuickScanReport(rawFindings, { size });
   const inventoryGap = sourceInventory.unresolvedConfigurations.length > 0

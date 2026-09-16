@@ -62,9 +62,11 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
   const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
   try {
     const targetConfig = readJscpdConfig(dir);
-    const targetIgnore = Array.isArray(targetConfig.ignore)
-      ? targetConfig.ignore.filter((value): value is string => typeof value === "string")
-      : [];
+    const configuredIgnore = targetConfig.ignore;
+    if (configuredIgnore !== undefined && (!Array.isArray(configuredIgnore) || configuredIgnore.some((value) => typeof value !== "string"))) {
+      throw new Error("Invalid jscpd ignore configuration: expected an array of strings");
+    }
+    const targetIgnore = configuredIgnore as string[] | undefined ?? [];
     const configPath = join(outDir, "jscpd.harvey.json");
     writeFileSync(configPath, JSON.stringify({
       ...targetConfig,

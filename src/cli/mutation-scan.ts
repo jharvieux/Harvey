@@ -341,7 +341,8 @@ function walkRelPaths(root: string, includeContextExcluded = false): string[] {
         if (exclusions.some((exclusion) => exclusion.path === "node_modules" || exclusion.path === ".git")) continue;
         if (includeContextExcluded || exclusions.length === 0) walk(full);
       } else {
-        paths.push(relative(root, full).split(sep).join("/"));
+        const rel = relative(root, full).split(sep).join("/");
+        if (includeContextExcluded || inventory.exclusionsFor(rel).length === 0) paths.push(rel);
       }
     }
   };
