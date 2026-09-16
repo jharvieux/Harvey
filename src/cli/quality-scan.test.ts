@@ -129,6 +129,24 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(scope?.evidence).toContain("**/.pnpm-store/**");
     expect(scope?.evidence).toContain("2 files");
   }, 30000);
+
+  it("preserves executable Knip config imports while applying package-store exclusions", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "executable-knip", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/index.ts", "export const live = true;\n");
+    write(".pnpm-store/v3/pkg/unused.ts", "export const dependencyArtifact = true;\n");
+    write("knip-provider.ts", 'import { writeFileSync } from "node:fs"; writeFileSync("provider-consumed", "yes");\n');
+    write("knip.config.ts", 'import "./knip-provider.ts"; export default { entry: ["src/index.ts"], project: ["src/**/*.ts", ".pnpm-store/**/*.ts"] };\n');
+    const findings = await runCli(repo);
+    expect(readFileSync(join(repo, "provider-consumed"), "utf8")).toBe("yes");
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
+  }, 30000);
 });
 
 // #580: MEASURED against a real knip run (2026-07-18) — a Vite target where `vite` is declared in

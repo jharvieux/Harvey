@@ -455,13 +455,14 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
   });
 
   it("counts each M1 owner's actual input when loadedSources excludes an admitted path", () => {
+    const generated = (text: string) => `${text}\n//${"x".repeat(1_500)}\n`;
     const fixtures = [
-      ["leftover-auth", "out/app/admin/route.ts", "export function GET() { return Response.json({ok:true}); }"],
-      ["env-schema", "out/env.mts", "export const schema = { TOKEN: true };"],
-      ["idempotency", "out/jobs/send.ts", 'export async function send() { await fetch("https://example.invalid"); }'],
-      ["bola-cross-file", "out/app/api/route.ts", "export function GET() { return Response.json({ok:true}); }"],
-      ["job-tenant-scope", "out/jobs/send.ts", "export const value = 1;"],
-      ["bola-owner", "out/pages/api/get.ts", "export const value = 1;"],
+      ["leftover-auth", "out/app/admin/route.ts", generated("export function GET() { return Response.json({ok:true}); }")],
+      ["env-schema", "out/env.mts", generated("export const schema = { TOKEN: true };")],
+      ["idempotency", "out/jobs/send.ts", generated('export async function send() { await fetch("https://example.invalid"); }')],
+      ["bola-cross-file", "out/app/api/route.ts", generated("export function GET() { return Response.json({ok:true}); }")],
+      ["job-tenant-scope", "out/jobs/send.ts", generated("export const value = 1;")],
+      ["bola-owner", "out/pages/api/get.ts", generated("export const value = 1;")],
     ] as const;
     for (const [detector, path, text] of fixtures) {
       withProductionContext([source(path, text)], undefined, (context) => {
@@ -484,6 +485,9 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
         if (detector === "env-schema") expect(produced.some((finding) => finding.id.startsWith("ENV-unused-declaration-TOKEN"))).toBe(true);
       });
     }
+    withProductionContext([source("out/app/admin/route.ts", "export function GET() { return Response.json({ok:true}); }")], undefined, (context) => {
+      expect(context.loadedSources.map((file) => file.path)).toEqual(["out/app/admin/route.ts"]);
+    });
   });
 
   it("matches the static CLI's product-only M7 input for stories, tests, and the product twin", async () => {

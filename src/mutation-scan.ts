@@ -915,7 +915,6 @@ interface MutationScope {
   missingCount?: number;
   // Sample (max 5) of files the configured globs match but the report never covered.
   missing?: string[];
-  /** Every configured file is retained so a report cannot collapse an absence into a count. */
   files?: Array<{
     path: string;
     configured: true;

@@ -67,7 +67,12 @@ function unwrapExpression(node: ts.Expression): ts.Expression {
     || ts.isSatisfiesExpression(current)
     || ts.isTypeAssertionExpression(current)
   ) current = current.expression;
-  if (ts.isCallExpression(current) && current.arguments.length === 1) return unwrapExpression(current.arguments[0]!);
+  if (
+    ts.isCallExpression(current)
+    && current.arguments.length === 1
+    && ((ts.isIdentifier(current.expression) && current.expression.text === "defineConfig")
+      || (ts.isPropertyAccessExpression(current.expression) && current.expression.name.text === "defineConfig"))
+  ) return unwrapExpression(current.arguments[0]!);
   return current;
 }
 
@@ -104,25 +109,36 @@ function staticValue(node: ts.Expression): unknown | undefined {
 }
 
 /** Read only a literal exported object. Imports, spreads, identifiers and computed values stay unresolved. */
-export function readStaticConfigObject(path: string): { value?: Record<string, unknown>; error?: string } {
-  if ([".json", ".jsonc"].includes(extname(path))) return readJsonc(path);
+export function readStaticConfigObject(path: string): { value?: Record<string, unknown>; error?: string; executable?: boolean } {
+  if ([".json", ".jsonc"].includes(extname(path))) return { ...readJsonc(path), executable: false };
   try {
     const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true,
       path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
     let expression: ts.Expression | undefined;
+    let executable = false;
     for (const statement of source.statements) {
-      if (ts.isExportAssignment(statement) && !statement.isExportEquals) expression = statement.expression;
+      if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+        expression = statement.expression;
+        continue;
+      }
       if (
         ts.isExpressionStatement(statement)
         && ts.isBinaryExpression(statement.expression)
         && statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
         && statement.expression.left.getText(source) === "module.exports"
-      ) expression = statement.expression.right;
+      ) {
+        expression = statement.expression.right;
+        continue;
+      }
+      // Even an import used only to wrap the object can execute module initialization. Consumers
+      // that replace a JS/TS config must preserve that behavior through a wrapper rather than
+      // serializing the literal object and silently dropping the import.
+      if (!(ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly)) executable = true;
     }
     if (!expression) return { error: "no static default/module.exports object" };
     const value = staticValue(expression);
     return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? { value: value as Record<string, unknown> }
+      ? { value: value as Record<string, unknown>, executable }
       : { error: "export is not a fully static object" };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
