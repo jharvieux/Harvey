@@ -70,6 +70,44 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(supported.gradedModules).toContain("M9");
   });
 
+  it("leaves source covered entirely by unsupported workspaces out of the M9 mean", () => {
+    const scorecard = buildHealthScorecard(input({
+      framework: "other",
+      nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }, { rel: "apps/docs", framework: "nuxt" }],
+      sources: [{ path: "package.json", text: "{}" }, { path: "apps/site/package.json", text: "{}" }, { path: "apps/site/src/main.ts", text: "export const site = 1;" }, { path: "apps/docs/src/main.ts", text: "export const docs = 1;" }],
+    }));
+    const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;
+    expect(m9).toMatchObject({ status: "not-assessed", count: 0, notAssessedRows: 2 });
+    expect(m9.grade).toBeUndefined();
+    expect(m9.score).toBeUndefined();
+    for (const context of ["Astro", "Nuxt", "apps/site", "apps/docs", "was not analysed"]) expect(m9.reason).toContain(context);
+    expect(scorecard.gradedModules).not.toContain("M9");
+    const others = scorecard.dimensions.filter((d) => d.status === "graded" && d.module !== "M9");
+    expect(scorecard.score).toBe(Math.round(others.reduce((sum, d) => sum + d.score!, 0) / others.length));
+  });
+
+  it("requires eligible source before assigning an M9 grade", () => {
+    const scorecard = buildHealthScorecard(input({ framework: "other", sources: [], nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }] }));
+    const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;
+    expect(m9.status).toBe("not-assessed");
+    expect(m9.reason).toContain("No product source files");
+    expect(m9.reason).toContain("apps/site (Astro)");
+    expect(m9.grade).toBeUndefined();
+    expect(m9.score).toBeUndefined();
+    expect(scorecard.gradedModules).not.toContain("M9");
+  });
+
+  it("keeps a clean supported remainder gradable across workspace prefix boundaries", () => {
+    const scorecard = buildHealthScorecard(input({
+      framework: "other", nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }],
+      sources: [{ path: "apps/site/main.ts", text: "export const value = 1;" }, { path: "apps/site-next/app/page.tsx", text: "export default function Page() { return null; }" }],
+    }));
+    const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;
+    expect(m9).toMatchObject({ status: "graded", grade: "A", score: 100, count: 0, notAssessedRows: 1 });
+    expect(m9.reason).toContain("apps/site");
+    expect(m9.reason).toContain("Astro");
+  });
+
   it("keeps assessed M9 work in a mixed scope and separates real defects from its disclosure", () => {
     const supportedDefects = Array.from({ length: 6 }, (_, i) => ({
       path: `apps/api/app/p${i}/page.tsx`,
@@ -86,6 +124,9 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(m9).toMatchObject({ status: "graded", count: 6, notAssessedRows: 1, score: densityScore(6, 2), grade: "C" });
     expect(m9.measure).toBe("3.0 per 1,000 lines (6 in 2.0k lines)");
     expect(m9.scope).toContain("Framework-boundary correctness");
+    expect(m9.reason).toContain("apps/site");
+    expect(m9.reason).toContain("Astro");
+    expect(m9.reason).toContain("was not analysed");
     expect(m9.evidence?.totalFindings).toBe(6);
     expect(mixed.gradedModules).toContain("M9");
   });

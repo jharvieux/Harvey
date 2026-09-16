@@ -34,12 +34,12 @@
 
 import type { Finding } from "./findings.js";
 import type { SourceInput } from "./detectors/common.js";
-import type { TargetFramework, WorkspaceFramework } from "./scan/framework-detect.js";
+import { FRAMEWORK_LABELS, type TargetFramework, type WorkspaceFramework } from "./scan/framework-detect.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 import { detectAppRouterFindings } from "./detectors/app-router.js";
 import { detectPerfCodeFindings } from "./detectors/perf-code.js";
 import { detectSlopFindings } from "./detectors/slop.js";
-import { NON_PRODUCT } from "./detectors/load-sources.js";
+import { NON_PRODUCT, SOURCE_FILE } from "./detectors/load-sources.js";
 import { gradeOf, type Grade } from "./quick-scan.js";
 
 type DimensionStatus =
@@ -63,8 +63,8 @@ export interface HealthDimension {
   measure?: string; // the raw fact behind the grade ("3.2 findings per 1k lines"), always shown
   count?: number; // findings/indicators this dimension actually produced
   scope: string; // what this row does and does not cover — travels WITH the number, never separately
-  reason?: string; // not-assessed rows only: why this tier could not answer it
-  needs?: string; // not-assessed rows only: the tier that would
+  reason?: string; // why this tier could not answer all or part of the scope
+  needs?: string; // how the unassessed scope can be answered
   notAssessedRows?: number; // in-dimension disclosure rows (confidence "N/A") the detector emitted
   band?: RiskBand; // risk-band rows only
   bandDerivation?: string; // risk-band rows only: the inputs and the rule that produced the band
@@ -254,17 +254,21 @@ function gradedDensityRow(
     measure: kloc > 0 ? `${round1(defects.length / kloc)} per 1,000 lines (${defects.length} in ${round1(kloc)}k lines)` : `${defects.length} finding(s)`,
     scope: `${scopeTail} Banding: ${DENSITY_BAND_TEXT}.`,
     evidence: rollupExamples(defects),
-    ...(disclosures.length ? { notAssessedRows: disclosures.length } : {}),
+    ...(disclosures.length ? {
+      notAssessedRows: disclosures.length,
+      reason: disclosures.map((f) => `${f.location}: ${f.title}. ${f.impact}`).join("\n"),
+      needs: [...new Set(disclosures.map((f) => f.fix))].join("\n"),
+    } : {}),
   };
 }
 
-// Treat a whole-target unsupported-framework row as a disclosure rather than assessed work.
-// Workspace-scoped disclosures take the graded path below so the supported remainder keeps its
-// measured density alongside the disclosed gap.
-function whollyUnassessedM9Row(spec: { module: string; label: string }, findings: Finding[]): HealthDimension | undefined {
+// Workspace disclosures can collectively cover the target. Grade a supported remainder only
+// when source exists outside those scopes; zero findings alone does not establish assessment.
+function whollyUnassessedM9Row(spec: { module: string; label: string }, findings: Finding[], sources: SourceInput[]): HealthDimension | undefined {
   const disclosures = findings.filter(isDisclosureRow);
-  const unsupported = disclosures.find((f) => f.taxonomy === "M9 — Not assessed (framework unsupported)" && f.location === "(whole target)");
-  if (!unsupported) return undefined;
+  const unsupported = disclosures.filter((f) => f.taxonomy === "M9 — Not assessed (framework unsupported)");
+  const covers = (f: Finding, path: string): boolean => f.location === "(whole target)" || path === f.location || path.startsWith(`${f.location}/`);
+  if (!unsupported.length || !sources.every((source) => unsupported.some((row) => covers(row, source.path)))) return undefined;
   const defects = findings.filter((f) => !isDisclosureRow(f));
   if (defects.length > 0) return undefined;
   return {
@@ -272,9 +276,9 @@ function whollyUnassessedM9Row(spec: { module: string; label: string }, findings
     label: spec.label,
     status: "not-assessed",
     count: 0,
-    scope: unsupported.impact,
-    reason: `${unsupported.title}. ${unsupported.impact}`,
-    needs: unsupported.fix,
+    scope: unsupported.map((f) => `${f.location}: ${f.impact}`).join("\n"),
+    reason: disclosures.map((f) => `${f.title}. ${f.location}: ${f.impact}`).join("\n"),
+    needs: [...new Set(disclosures.map((f) => f.fix))].join("\n"),
     notAssessedRows: disclosures.length,
     evidence: rollupExamples(defects),
   };
@@ -535,8 +539,15 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   }
 
   const m9Findings = detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm);
+  const m9Sources = sources.filter((source) => SOURCE_FILE.test(source.path));
   dimensions.push(
-    whollyUnassessedM9Row(spec("M9"), m9Findings) ??
+    whollyUnassessedM9Row(spec("M9"), m9Findings, m9Sources) ??
+      (m9Sources.length === 0 ? { ...notAssessedRow(
+        spec("M9"),
+        "No product source files were available for M9 examination in this scan." +
+          (input.nonNextWorkspaces?.length ? ` Workspace configurations: ${input.nonNextWorkspaces.map((w) => `${w.rel} (${FRAMEWORK_LABELS[w.framework]})`).join(", ")}.` : ""),
+        "Supply product source in a supported format or review the framework boundary and rendering behavior directly.",
+      ), count: 0 } : undefined) ??
       gradedDensityRow(
         spec("M9"),
         m9Findings,
