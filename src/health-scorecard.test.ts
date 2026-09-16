@@ -86,6 +86,38 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(scorecard.score).toBe(Math.round(others.reduce((sum, d) => sum + d.score!, 0) / others.length));
   });
 
+  it.each(["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts", "babel.config.js", "babel.config.mjs", "babel.config.cjs",
+    "package.json", "tsconfig.json", "tsconfig.base.json", "jsconfig.app.json", ".babelrc", ".babelrc.json", "babel.config.json"])(
+    "keeps clean configuration %s from earning product-source assessment", (name) => {
+      for (const prefix of ["", "tools/"]) {
+        for (const unsupported of [false, true]) {
+          const scorecard = buildHealthScorecard(input({ framework: "other",
+            nonNextWorkspaces: unsupported ? [{ rel: "apps/site", framework: "astro" }] : [],
+            sources: [{ path: prefix + name, text: name.endsWith("json") || name.startsWith(".") ? "{}" : "export default {};" },
+              ...(unsupported ? [{ path: "apps/site/src/main.ts", text: "export const value = 1;" }] : [])],
+          }));
+          const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;
+          expect(m9.status, `${prefix}${name}, unsupported=${unsupported}`).toBe("not-assessed");
+          expect(m9.grade).toBeUndefined();
+          expect(m9.score).toBeUndefined();
+          expect(scorecard.gradedModules).not.toContain("M9");
+          const others = scorecard.dimensions.filter((d) => d.status === "graded" && d.module !== "M9");
+          expect(scorecard.score).toBe(Math.round(others.reduce((sum, d) => sum + d.score!, 0) / others.length));
+        }
+      }
+    },
+  );
+
+  it("retains real M9 configuration findings without other product source", () => {
+    const card = buildHealthScorecard(input({ framework: "next", sources: [
+      { path: "next.config.mjs", text: "export default { env: { screen: window.innerWidth } };" },
+    ] }));
+    const m9 = card.dimensions.find((d) => d.module === "M9")!;
+    expect(m9).toMatchObject({ status: "graded", count: 1 });
+    expect(m9.evidence?.examples).toEqual(expect.arrayContaining([expect.objectContaining({ location: "next.config.mjs:1", shape: "M9 — SSR-only API misuse" })]));
+    expect(card.gradedModules).toContain("M9");
+  });
+
   it("requires eligible source before assigning an M9 grade", () => {
     const scorecard = buildHealthScorecard(input({ framework: "other", sources: [], nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }] }));
     const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;

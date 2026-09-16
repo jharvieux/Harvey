@@ -137,6 +137,9 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("M9 workspace assessment at quick-
     dirs.push(target);
     mkdirSync(join(target, "apps/site/src"), { recursive: true });
     writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m9-scope-fixture", private: true, workspaces: ["apps/*"] }));
+    for (const config of ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts", "babel.config.js", "babel.config.mjs", "babel.config.cjs"]) {
+      writeFileSync(join(target, config), "export default {};");
+    }
     writeFileSync(join(target, "apps/site/package.json"), JSON.stringify({ name: "site", dependencies: { astro: "5.0.0" } }));
     writeFileSync(join(target, "apps/site/src", shape === "native-astro-only" ? "page.astro" : "main.ts"), shape === "native-astro-only" ? "<h1>Site</h1>" : "export const site = 1;");
     if (shape.startsWith("mixed")) {

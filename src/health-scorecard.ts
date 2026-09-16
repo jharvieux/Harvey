@@ -32,6 +32,7 @@
 // that needs no exploitability judgment, which is exactly why the correction put them in the free
 // tier's "real strength" bucket.
 
+import { basename } from "node:path";
 import type { Finding } from "./findings.js";
 import type { SourceInput } from "./detectors/common.js";
 import { FRAMEWORK_LABELS, type TargetFramework, type WorkspaceFramework } from "./scan/framework-detect.js";
@@ -39,7 +40,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 import { detectAppRouterFindings } from "./detectors/app-router.js";
 import { detectPerfCodeFindings } from "./detectors/perf-code.js";
 import { detectSlopFindings } from "./detectors/slop.js";
-import { NON_PRODUCT, SOURCE_FILE } from "./detectors/load-sources.js";
+import { CONFIG_FILE, NON_PRODUCT, SOURCE_FILE } from "./detectors/load-sources.js";
 import { gradeOf, type Grade } from "./quick-scan.js";
 
 type DimensionStatus =
@@ -539,10 +540,10 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   }
 
   const m9Findings = detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm);
-  const m9Sources = sources.filter((source) => SOURCE_FILE.test(source.path));
+  const m9Sources = sources.filter((source) => SOURCE_FILE.test(source.path) && !CONFIG_FILE.test(basename(source.path)));
   dimensions.push(
     whollyUnassessedM9Row(spec("M9"), m9Findings, m9Sources) ??
-      (m9Sources.length === 0 ? { ...notAssessedRow(
+      (m9Sources.length === 0 && m9Findings.every(isDisclosureRow) ? { ...notAssessedRow(
         spec("M9"),
         "No product source files were available for M9 examination in this scan." +
           (input.nonNextWorkspaces?.length ? ` Workspace configurations: ${input.nonNextWorkspaces.map((w) => `${w.rel} (${FRAMEWORK_LABELS[w.framework]})`).join(", ")}.` : ""),
