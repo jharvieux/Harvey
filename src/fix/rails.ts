@@ -364,7 +364,6 @@ export function parseDiffFacts(diff: string): DiffFacts {
     }
     if (line.startsWith("--- ")) {
       // A completed plain unified file may be followed by another without a diff --git header.
-      // Hunk bodies have already been consumed above, so removed content cannot split a section.
       if (section.sawHunk && section.sawUnifiedOld && section.sawUnifiedNew) finishSection();
       const parsed = parseUnifiedPath(line.slice(4));
       if (!parsed.valid) unsupportedMetadata.add("unparseable Git old path is unsupported");
