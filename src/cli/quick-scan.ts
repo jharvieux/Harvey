@@ -67,18 +67,25 @@ import { toSarif } from "../sarif.js";
 // Falsifier: `run-audit targets/calibration --sarif-out a.sarif` and check the printed result count
 // against the same run with --findings-out (src/cli/run-audit.test.ts asserts they match).
 function quickScanSarifScope(scorecard: HealthScorecard): string {
+  const m1 = scorecard.dimensions.find((dimension) => dimension.module === "M1");
+  const graded = scorecard.gradedModules.filter((module) => module !== "M1");
+  const indicators = scorecard.dimensions.filter((dimension) => dimension.status === "indicator-only").map((dimension) => dimension.module);
+  const banded = scorecard.dimensions.filter((dimension) => dimension.status === "risk-band");
+  const additional = [
+    ...(graded.length ? [`graded ${graded.join(", ")}`] : []),
+    ...(indicators.length ? [`produced indicators for ${indicators.join(", ")}`] : []),
+    ...banded.map((dimension) => `produced a ${dimension.band} data-exposure rating for ${dimension.module}`),
+  ];
+  const m1Scope = m1?.status === "not-assessed"
+    ? `This export carries any configuration-only M1 mechanical results, but M1 product-source hygiene was not assessed: ${m1.reason} `
+    : "This export carries the M1 mechanical results only (dependency, secret and dangerous-config hygiene plus static indicators). ";
+  const additionalScope = additional.length
+    ? `The free scan also ${additional.join("; ")}; those results are in the report (` + "`--json` / terminal output), NOT in this SARIF file. "
+    : "No additional health dimension earned a grade, indicator, or data-exposure rating in this run. ";
   return (
-    "This is a free quick-scan, not a Harvey audit, and THIS EXPORT carries the M1 mechanical " +
-    "results only (dependency, secret and dangerous-config hygiene plus static indicators). " +
-    `The free scan also graded ${scorecard.gradedModules.filter((m) => m !== "M1").join(", ")} and produced indicators for ` +
-    `${scorecard.dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module).join(", ")}` +
-    // The risk band is a rating, not an indicator: naming it separately keeps the export's own scope
-    // note from under-reporting what the scan actually established about the target's data surface.
-    `${scorecard.dimensions
-      .filter((d) => d.status === "risk-band")
-      .map((d) => `, plus a ${d.band} data-exposure rating for ${d.module}`)
-      .join("")}; ` +
-    "those results are in the report (`--json` / terminal output), NOT in this SARIF file. " +
+    "This is a free quick-scan, not a Harvey audit. " +
+    m1Scope +
+    additionalScope +
     `${scorecard.unassessedModules.join(", ")} were not run at all. ` +
     "Absence of a result here is not evidence of absence of a problem. " +
     "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger."
@@ -254,7 +261,9 @@ function renderEvidence(d: HealthDimension): string[] {
 
 function renderScorecard(s: HealthScorecard): string[] {
   const lines: string[] = [];
-  lines.push(`  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`);
+  lines.push(s.grade && s.score !== undefined
+    ? `  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`
+    : "  Harvey Quick Scan — Codebase Health NOT ASSESSED");
   lines.push("  Ran 100% locally. No source code left your machine.");
   lines.push("");
   lines.push(...wrap(s.scopeSentence, "  "));
@@ -285,7 +294,11 @@ function renderScorecard(s: HealthScorecard): string[] {
   return lines;
 }
 
-function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
+const M1_NOT_ASSESSED_DISCLOSURE =
+  "No M1 hygiene grade was assigned because configured boundaries excluded every discovered " +
+  "product source file. Configuration-only informational results remain visible below and do not establish that product source is clean.";
+
+function render(r: QuickScanReport, scorecard?: HealthScorecard, m1AssessmentGap?: string): string {
   const lines: string[] = [];
   lines.push("");
   if (scorecard) lines.push(...renderScorecard(scorecard));
@@ -293,10 +306,12 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
   // disclosure sits directly under it — a hygiene grade read as a security verdict is the
   // failure mode this tier exists to avoid. Under #1305 this is M1's own dimension rather than the
   // whole report's headline, so it is labelled as such.
-  lines.push(`  ── M1 security & multi-tenant isolation — Hygiene Grade ${r.grade}  (${r.score}/100) ─────────────`);
-  lines.push(`  Scope: ${r.gradeScope}`);
+  lines.push(m1AssessmentGap
+    ? "  ── M1 security & multi-tenant isolation — NOT ASSESSED ─────────────"
+    : `  ── M1 security & multi-tenant isolation — Hygiene Grade ${r.grade}  (${r.score}/100) ─────────────`);
+  lines.push(`  Scope: ${m1AssessmentGap ?? r.gradeScope}`);
   lines.push("");
-  lines.push(...wrap(r.riskDisclosure, "  "));
+  lines.push(...wrap(m1AssessmentGap ? M1_NOT_ASSESSED_DISCLOSURE : r.riskDisclosure, "  "));
   lines.push("");
 
   // #1044: the size and its band, printed with the definition that produced them. The pricing page
@@ -310,7 +325,9 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
     lines.push("");
   }
 
-  if (r.total === 0) {
+  if (m1AssessmentGap) {
+    lines.push(`  M1 hygiene was not assessed: ${m1AssessmentGap}`);
+  } else if (r.total === 0) {
     lines.push("  No hygiene issues found — nothing mechanically verifiable to fix.");
   } else {
     const counts = SEVERITY_ORDER.filter((s) => r.countsBySeverity[s] > 0)
@@ -429,7 +446,9 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
     lines.push("");
     lines.push(
       `  (${r.reviewTierExcluded} lower-confidence signal${r.reviewTierExcluded === 1 ? "" : "s"} were found and ` +
-        "deliberately left out of your grade — triaged in the deep scan, never counted here.)",
+        (m1AssessmentGap
+          ? "deliberately left out of grading — triaged in the deep scan, never counted here.)"
+          : "deliberately left out of your grade — triaged in the deep scan, never counted here.)"),
     );
   }
   lines.push("");
@@ -455,7 +474,16 @@ async function main(): Promise<void> {
   const absDir = resolve(dir);
   const sourceInventory = productSourceInventoryForTarget(absDir);
   const size = measureCodebaseSize(absDir, sourceInventory);
+  const configuredExclusions = sourceInventory.excludedDirectories.filter((entry) => ![".git", "node_modules"].includes(entry.path));
+  const sourcePopulationGap = size.files === 0 && size.excludedFiles > 0
+    ? `All ${size.excludedFiles} discovered JS/TS source file(s) were excluded from product input by configuration-derived boundaries: ${
+        (configuredExclusions.length ? configuredExclusions : sourceInventory.excludedDirectories)
+          .map((entry) => `${entry.path} (${entry.reason})`)
+          .join("; ")
+      }. No product source was inspected.`
+    : undefined;
   const report = buildQuickScanReport(rawFindings, { size });
+  const m1AssessmentGap = sourcePopulationGap && report.total === 0 ? sourcePopulationGap : undefined;
   const inventoryGap = sourceInventory.unresolvedConfigurations.length > 0
     ? sourceInventory.unresolvedConfigurations
       .map((gap) => `${gap.path}: ${gap.reason}`)
@@ -483,6 +511,7 @@ async function main(): Promise<void> {
     handrolledClasses: report.handrolled.length,
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
     testRunnerDeclared: declaresTestScript(absDir),
+    ...(sourcePopulationGap ? { sourcePopulationGap } : {}),
     ...("gap" in pii ? { piiGap: pii.gap } : { pii }),
   });
 
@@ -505,7 +534,18 @@ async function main(): Promise<void> {
   }
 
   const out = arg("--out");
-  const body = process.argv.includes("--json") ? JSON.stringify({ ...report, scorecard }, null, 2) : render(report, scorecard);
+  const serializableReport = m1AssessmentGap
+    ? {
+        ...report,
+        grade: undefined,
+        score: undefined,
+        gradeScope: `NOT ASSESSED — ${m1AssessmentGap}`,
+        riskDisclosure: M1_NOT_ASSESSED_DISCLOSURE,
+      }
+    : report;
+  const body = process.argv.includes("--json")
+    ? JSON.stringify({ ...serializableReport, scorecard }, null, 2)
+    : render(report, scorecard, m1AssessmentGap);
   if (out) writeFileSync(out, body);
   else console.log(body);
 }

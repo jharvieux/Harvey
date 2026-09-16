@@ -103,6 +103,52 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.jscpdIgnoreGlobs).toContain("**/*");
   });
 
+  it("preserves root inventory decisions through nested workspace scopes", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, packageManager: "pnpm@9", workspaces: ["apps/*"] }),
+      "pnpm-workspace.yaml": "packages:\n  - apps/*\n",
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf/generated" } }),
+      "tsconfig.whole.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/whole" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }),
+      "apps/web/packages/leaf/package.json": JSON.stringify({ name: "leaf", private: true }),
+      "apps/web/packages/leaf/generated/out.ts": "export const generated = true;\n",
+      "apps/web/packages/leaf/nested/.pnpm-store/v3/pkg/out.ts": "export const cached = true;\n",
+      "apps/web/packages/leaf/src/index.ts": "export const authored = true;\n",
+      "apps/web/packages/whole/package.json": JSON.stringify({ name: "whole", private: true }),
+      "apps/web/packages/whole/root-artifact.ts": "export const generated = true;\n",
+    });
+    const workspace = join(root, "apps/web");
+    const leaf = join(workspace, "packages/leaf");
+    const whole = join(workspace, "packages/whole");
+    const rootInventory = productSourceInventory(root);
+    const workspaceInventory = productSourceInventoryForScope(root, workspace, rootInventory);
+    const composedLeaf = productSourceInventoryForScope(workspace, leaf, workspaceInventory);
+    const directLeaf = productSourceInventoryForScope(root, leaf, rootInventory);
+    const composedWhole = productSourceInventoryForScope(workspace, whole, workspaceInventory);
+    const directWhole = productSourceInventoryForScope(root, whole, rootInventory);
+
+    for (const path of ["generated/out.ts", "nested/.pnpm-store/v3/pkg/out.ts", "src/index.ts"]) {
+      expect(composedLeaf.exclusionsFor(path)).toEqual(directLeaf.exclusionsFor(path));
+      expect(productSourceInventoryForTarget(leaf).exclusionsFor(path)).toEqual(directLeaf.exclusionsFor(path));
+    }
+    expect(directLeaf.excludedDirectoryFor("generated/out.ts")).toMatchObject({ path: "generated", match: "anchored" });
+    expect(directLeaf.excludedDirectoryFor("nested/.pnpm-store/v3/pkg/out.ts")).toMatchObject({ path: ".pnpm-store", match: "any-depth" });
+    expect(directLeaf.excludedDirectoryFor("src/index.ts")).toBeUndefined();
+    expect(composedWhole.exclusionsFor("root-artifact.ts")).toEqual(directWhole.exclusionsFor("root-artifact.ts"));
+    expect(productSourceInventoryForTarget(whole).excludedDirectoryFor("root-artifact.ts")).toMatchObject({ path: "." });
+  });
+
+  it("stops inherited inventory at a separate repository root", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps" } }),
+      "apps/web/.git/config": "[core]\n",
+      "apps/web/package.json": JSON.stringify({ name: "separate", private: true }),
+      "apps/web/src/index.ts": "export const authored = true;\n",
+    });
+    expect(productSourceInventoryForTarget(join(root, "apps/web")).excludedDirectoryFor("src/index.ts")).toBeUndefined();
+  });
+
   it("keeps fixed dependency boundaries at any depth and contextual outputs at their authored coordinate", () => {
     const root = fixture({
       "package.json": JSON.stringify({ devDependencies: { vite: "1" } }),

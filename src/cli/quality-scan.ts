@@ -432,7 +432,7 @@ function lineCount(dir: string, relPath: string): number | undefined {
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
 
-function excludedProductDirectory(relPath: string): boolean {
+function excludedProductPath(relPath: string): boolean {
   return sourceInventory.excludedDirectoryFor(relPath) !== undefined;
 }
 
@@ -441,8 +441,8 @@ function securityPathFiles(dir: string, rel = "", observed?: Set<string>): Secur
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!excludedProductDirectory(relPath)) files.push(...securityPathFiles(dir, relPath, observed));
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (!excludedProductPath(relPath)) files.push(...securityPathFiles(dir, relPath, observed));
+    } else if (!excludedProductPath(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       observed?.add(relPath);
       if (touchesSecurityPath(relPath)) {
         files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
@@ -464,8 +464,8 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!excludedProductDirectory(relPath)) files.push(...allSourceFiles(dir, relPath));
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (!excludedProductPath(relPath)) files.push(...allSourceFiles(dir, relPath));
+    } else if (!excludedProductPath(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
     }
   }
@@ -482,7 +482,7 @@ function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInvento
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
       if (!inventory.excludedDirectoryFor(relPath)) count += countSourceFiles(dir, relPath, inventory);
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+    } else if (!inventory.excludedDirectoryFor(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       count += 1;
     }
   }
@@ -497,7 +497,7 @@ function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInvento
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
   const configured = sourceInventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => ({ glob: entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`, reason: entry.reason }));
+    .map((entry) => ({ glob: entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`, reason: entry.reason }));
   // Configured directories are the primary allocation. A generated filename inside a package store
   // is one physical exclusion, so it contributes once here while the configured reason remains visible.
   const entries: Array<{ glob: string; reason?: string }> = [...configured, ...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob }))]
@@ -663,7 +663,9 @@ if (wholeRepoDiverged) {
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
 const eligibleFileCount = observedProductSources.size;
-const divergedScopeDisclosure = wholeRepoDiverged ? undefined : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
+const divergedScopeDisclosure = wholeRepoDiverged || eligibleFileCount === 0
+  ? undefined
+  : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
 
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
 

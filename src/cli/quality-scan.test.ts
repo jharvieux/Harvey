@@ -195,6 +195,60 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(directScope?.evidence).toContain("`compiled/**`: 1 file");
   }, 30000);
 
+  it("excludes an entire generated workspace from every M4 source consumer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "generated", private: true }));
+    write("apps/web/auth-one.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantOne"));
+    write("apps/web/auth-two.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantTwo").replace("itemCount", "rowCount"));
+    write("apps/web/plain-one.ts", CLONED_BLOCK.replace("summarizeOrder", "buildOne"));
+    write("apps/web/plain-two.ts", CLONED_BLOCK.replace("summarizeOrder", "buildTwo").replace("itemCount", "rowCount"));
+
+    for (const args of [[], ["--whole-repo-diverged"]]) {
+      rmSync(join(app, "quality-out.json"), { force: true });
+      const findings = await runCli(app, args);
+      expect(findings.some((finding) => finding.id.startsWith("M4-DIV"))).toBe(false);
+      expect(findings.some((finding) => finding.id === "M4-99")).toBe(false);
+      expect(findings.some((finding) => finding.id === "M4-97")).toBe(false);
+      expect(findings.some((finding) => finding.taxonomy === "M5 — Slop / dead code")).toBe(false);
+      expect(findings).toContainEqual(expect.objectContaining({
+        id: "M4-SCOPE-00",
+        evidence: expect.stringMatching(/`\*\*\/\*`: 5 files.*TypeScript compiler output declared by tsconfig\.json/),
+      }));
+    }
+  }, 30000);
+
+  it("retains outer exclusions through a nested workspace owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-nested-workspace-"));
+    dirs.push(root);
+    const workspace = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }));
+    write("apps/web/packages/leaf/package.json", JSON.stringify({ name: "leaf", private: true }));
+    write("apps/web/packages/leaf/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/leaf/unused.ts", "export const generated = true;\n");
+    write("apps/web/packages/authored/package.json", JSON.stringify({ name: "authored", private: true }));
+    write("apps/web/packages/authored/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/authored/unused.ts", "export const authored = true;\n");
+
+    const findings = await runCli(workspace);
+    expect(findings.some((finding) => finding.location.includes("packages/leaf/unused.ts"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "packages/authored/unused.ts" }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M4-SCOPE-00", evidence: expect.stringContaining("`packages/leaf/**`: 3 files") }));
+  }, 30000);
+
   it("discloses an existing malformed jscpd config instead of replacing it", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-malformed-jscpd-"));
     dirs.push(repo);

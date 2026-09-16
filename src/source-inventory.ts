@@ -440,6 +440,7 @@ export function productSourceInventoryForScope(
   const local = productSourceInventory(absoluteScope);
   const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
     if (entry.match === "any-depth") return [entry];
+    if (entry.path === ".") return [entry];
     if (entry.path === scopePath || scopePath.startsWith(`${entry.path}/`)) return [{ ...entry, path: "." }];
     if (!entry.path.startsWith(`${scopePath}/`)) return [];
     return [{ ...entry, path: entry.path.slice(scopePath.length + 1) }];
@@ -478,7 +479,7 @@ export function productSourceInventoryForTarget(scope: string): ProductSourceInv
       const ownsScope = inventory.packages.some((workspace) => workspace.dir !== "."
         && resolve(candidate, ...workspace.dir.split("/")) === absoluteScope);
       if (ownsScope) {
-        const rootInventory = productSourceInventory(candidate);
+        const rootInventory = productSourceInventoryForTarget(candidate);
         return productSourceInventoryForScope(candidate, absoluteScope, rootInventory);
       }
     }

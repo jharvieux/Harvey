@@ -51,6 +51,37 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(withoutM4.composition).toContain(`${graded.length} graded dimension`);
   });
 
+  it("does not fabricate source grades when configured boundaries exclude the whole product population", () => {
+    const reason = "All 4 discovered JS/TS source files were excluded by root tsconfig.json output.";
+    const scorecard = buildHealthScorecard(input({
+      m1: { grade: "A", score: 100, gradedCount: 0, indicatorCount: 0 },
+      sources: [],
+      kloc: 0,
+      duplication: { percentage: 0, duplicatedLines: 0, totalLines: 0 },
+      sourcePopulationGap: reason,
+    }));
+    for (const module of ["M1", "M4", "M5", "M6", "M7", "M8", "M9"]) {
+      expect(scorecard.dimensions.find((row) => row.module === module)).toMatchObject({
+        status: "not-assessed",
+        reason,
+      });
+    }
+    expect(scorecard.grade).toBeUndefined();
+    expect(scorecard.score).toBeUndefined();
+    expect(scorecard.composition).toContain("there is no health grade");
+  });
+
+  it("retains an M1 grade when a config-only defect was actually assessed", () => {
+    const scorecard = buildHealthScorecard(input({
+      m1: { grade: "B", score: 80, gradedCount: 1, indicatorCount: 0 },
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: "Every discovered source file was configured output.",
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M1")).toMatchObject({ status: "graded", grade: "B", score: 80 });
+    expect(scorecard.grade).toBe("B");
+  });
+
   it("weights every graded dimension equally — security is one dimension, not the subject", () => {
     // The correction's core claim. A catastrophic M1 must not be able to drive the whole health
     // grade to F on its own when four other dimensions are clean.
