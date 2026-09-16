@@ -218,6 +218,7 @@ export function parseDiffFacts(diff: string): DiffFacts {
     extendedFrom?: string;
     extendedTo?: string;
     sawMode: boolean;
+    sawHunk: boolean;
   }
 
   const emptySection = (): Section => ({
@@ -227,6 +228,7 @@ export function parseDiffFacts(diff: string): DiffFacts {
     oldIsDevNull: false,
     newIsDevNull: false,
     sawMode: false,
+    sawHunk: false,
   });
   let section = emptySection();
 
@@ -257,6 +259,14 @@ export function parseDiffFacts(diff: string): DiffFacts {
     const hasUnified = section.sawUnifiedOld || section.sawUnifiedNew;
     const incompleteUnified = hasUnified
       && (!section.sawUnifiedOld || !section.sawUnifiedNew);
+
+    if (contradictory) {
+      unsupportedMetadata.add("ambiguous or contradictory Git diff path metadata is unsupported");
+      accountPair(section.unifiedOld, section.unifiedNew, section.oldIsDevNull, section.newIsDevNull);
+    }
+    if (section.oldIsDevNull && section.newIsDevNull) {
+      unsupportedMetadata.add("dual-null Git unified path metadata is unsupported");
+    }
 
     let selected: { oldPath: string; newPath: string } | undefined;
     if (!contradictory && !incompleteExtended && !incompleteUnified && candidates.length > 0) {
@@ -312,6 +322,7 @@ export function parseDiffFacts(diff: string): DiffFacts {
     }
     const hunk = parseHunkCounts(line);
     if (hunk) {
+      section.sawHunk = true;
       remainingOld = hunk.oldLines;
       remainingNew = hunk.newLines;
       continue;
@@ -352,6 +363,9 @@ export function parseDiffFacts(diff: string): DiffFacts {
       continue;
     }
     if (line.startsWith("--- ")) {
+      // A completed plain unified file may be followed by another without a diff --git header.
+      // Hunk bodies have already been consumed above, so removed content cannot split a section.
+      if (section.sawHunk && section.sawUnifiedOld && section.sawUnifiedNew) finishSection();
       const parsed = parseUnifiedPath(line.slice(4));
       if (!parsed.valid) unsupportedMetadata.add("unparseable Git old path is unsupported");
       if (section.sawUnifiedOld && (section.unifiedOld !== parsed.path || section.oldIsDevNull !== parsed.devNull)) {

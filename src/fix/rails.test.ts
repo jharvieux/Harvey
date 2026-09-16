@@ -114,6 +114,31 @@ describe("checkBlastRadius", () => {
 });
 
 describe("parseDiffFacts", () => {
+  it.each(["rename", "copy"])("refuses headerless contradictory %s endpoints and retains the actual protected path", (kind) => {
+    const facts = parseDiffFacts([`${kind} from src/safe.txt`, `${kind} to src/destination.txt`,
+      "--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-DUMMY=before", "+DUMMY=after", ""].join("\n"));
+    expect(facts.files).toContain(".env");
+    expect(facts.unsupportedMetadata).toContain("ambiguous or contradictory Git diff path metadata is unsupported");
+  });
+
+  it.each(["", "rename", "copy"])("refuses dual-null unified endpoints with %s metadata", (kind) => {
+    const prefix = kind ? [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`] : [];
+    const facts = parseDiffFacts([...prefix, "--- /dev/null", "+++ /dev/null", "@@ -0,0 +1 @@", "+created", ""].join("\n"));
+    expect(facts.unsupportedMetadata).toContain("dual-null Git unified path metadata is unsupported");
+  });
+
+  it("separates completed plain unified files while preserving multiple hunks", () => {
+    const facts = parseDiffFacts(["--- a/src/a.txt", "+++ b/src/a.txt", "@@ -1 +1 @@", "-a", "+A",
+      "@@ -3 +3 @@", "-c", "+C", "--- /dev/null", "+++ b/src/b.txt", "@@ -0,0 +1 @@", "+B", ""].join("\n"));
+    expect(facts).toEqual({ files: ["src/a.txt"], createdFiles: ["src/b.txt"], changedLines: 5, unsupportedMetadata: [] });
+  });
+
+  it("still refuses conflicting plain unified headers before a hunk", () => {
+    const facts = parseDiffFacts(["--- a/src/a.txt", "+++ b/src/a.txt", "--- a/src/b.txt", "+++ b/src/b.txt",
+      "@@ -1 +1 @@", "-a", "+A", ""].join("\n"));
+    expect(facts.unsupportedMetadata.join(" ")).toContain("contradictory");
+  });
+
   it("separates modified from created files and counts changed body lines", () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",

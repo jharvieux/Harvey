@@ -44,6 +44,35 @@ const CORRECT_DIFF = [
 const EFFECT = ["node", "-e", "process.exit(require('./calc.js').add(2, 3) === 5 ? 0 : 1)"];
 
 describe("verifySuggestedFix", () => {
+  it.each(["rename", "copy"])("refuses Git-applicable headerless %s metadata hiding a protected path", async (kind) => {
+    const patch = [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`, "--- a/.env", "+++ b/.env",
+      "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await verifySuggestedFix(patch, { targetDir: dir, effectCommand: ["node", "-e", "process.exit(0)"] });
+    expect(result.verified).toBe(false);
+    expect(result.detail).toContain("unsupported");
+  });
+
+  it.each(["", "rename", "copy"])("refuses Git-applicable dual-null endpoints with %s metadata", async (kind) => {
+    const prefix = kind ? [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`] : [];
+    const patch = [...prefix, "--- /dev/null", "+++ /dev/null", "@@ -0,0 +1 @@", "+created", ""].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(result.verified).toBe(false);
+    expect(result.detail).toContain("dual-null");
+  });
+
+  it("verifies both completed files in a plain unified patch", async () => {
+    writeFileSync(join(dir, "other.txt"), "before\n");
+    git(["add", "other.txt"]);
+    git(["commit", "-m", "add other file"]);
+    const patch = CORRECT_DIFF + ["--- a/other.txt", "+++ b/other.txt", "@@ -1 +1 @@", "-before", "+after", ""].join("\n");
+    const result = await verifySuggestedFix(patch, { targetDir: dir,
+      effectCommand: ["node", "-e", "process.exit(require('./calc.js').add(2,3)===5&&require('fs').readFileSync('other.txt','utf8')==='after\\n'?0:1)"] });
+    expect(result.verified).toBe(true);
+    expect(result.detail).toContain("effect confirmed");
+  });
+
   it("verifies a diff that applies cleanly and achieves its stated effect (mutant killed)", async () => {
     const res = await verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
     expect(res.verified).toBe(true);

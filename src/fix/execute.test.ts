@@ -76,6 +76,38 @@ describe("executeFixDiff", () => {
     return [`--- a/${file}`, `+++ b/${file}`, "@@ -1 +1 @@", `-${from}`, `+${to}`, ""].join("\n");
   }
 
+  it.each(["rename", "copy"])("blocks Git-applicable headerless %s metadata hiding .env", async (kind) => {
+    const { dir, commit } = clientRepo({ ".env": "DUMMY=before\n", "src/a.txt": "a\n" });
+    const patch = [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`, diffFor(".env", "DUMMY=before", "DUMMY=after")].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await executeFixDiff("F-headerless", patch, { targetDir: dir, baselineCommit: commit, allowlist,
+      effectCommand: ["node", "-e", "process.exit(0)"] });
+    expect(result.outcome).toBe("rails-blocked");
+    expect(result.files).toContain(".env");
+    expect(worktreeCount(dir)).toBe(1);
+  });
+
+  it.each(["", "rename", "copy"])("blocks Git-applicable dual-null writes with %s metadata", async (kind) => {
+    const { dir, commit } = clientRepo({ "src/a.txt": "a\n" });
+    const prefix = kind ? [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`] : [];
+    const patch = [...prefix, "--- /dev/null", "+++ /dev/null", "@@ -0,0 +1 @@", "+created", ""].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await executeFixDiff("F-dual-null", patch, { targetDir: dir, baselineCommit: commit, allowlist });
+    expect(result.outcome).toBe("rails-blocked");
+    expect(result.railViolations.join(" ")).toContain("dual-null");
+    expect(worktreeCount(dir)).toBe(1);
+  });
+
+  it("verifies both files of a concatenated plain unified patch", async () => {
+    const { dir, commit } = clientRepo({ "src/a.txt": "a\n", "src/b.txt": "b\n" });
+    const patch = diffFor("src/a.txt", "a", "A") + diffFor("src/b.txt", "b", "B");
+    const result = await executeFixDiff("F-plain-pair", patch, { targetDir: dir, baselineCommit: commit, allowlist,
+      effectCommand: ["node", "-e", "const fs=require('fs');process.exit(fs.readFileSync('src/a.txt','utf8')==='A\\n'&&fs.readFileSync('src/b.txt','utf8')==='B\\n'?0:1)"] });
+    expect(result.outcome).toBe("diff-verified");
+    expect(result.files).toEqual(["src/a.txt", "src/b.txt"]);
+    expect(worktreeCount(dir)).toBe(1);
+  });
+
   it("verifies a diff against a disposable worktree and leaves the client tree untouched", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "export const a = 1;\n" });
     const result = await executeFixDiff("F-1", diffFor("src/a.ts", "export const a = 1;", "export const a = 2;"), {
