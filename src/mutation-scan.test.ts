@@ -894,6 +894,32 @@ describe("verifyMutationScope (#504)", () => {
     expect(scope.note).toContain("!(*.spec)");
   });
 
+  it("refuses a vacuous whole-repo verdict when configured globs match no source files", () => {
+    const scope = verifyMutationScope([], ["src/**/*.ts"], []);
+    expect(scope).toMatchObject({ verified: false, scoped: false, configuredFileCount: 0, expectedFileCount: 0 });
+    expect(scope.note).toContain("matched zero source files");
+  });
+
+  it("conserves configured exclusions and imported staging uncertainty per file", () => {
+    const scope = verifyMutationScope(
+      ["src/auth.ts"],
+      ["**/*.ts"],
+      ["src/auth.ts", ".pnpm-store/pkg/cached.ts"],
+      { excludedReasons: { ".pnpm-store/pkg/cached.ts": "pnpm package store" } },
+    );
+    expect(scope).toMatchObject({ verified: true, configuredFileCount: 2, expectedFileCount: 1 });
+    expect(scope.files).toEqual([
+      expect.objectContaining({ path: "src/auth.ts", inventory: "included", staged: "unknown for imported report", instrumented: "confirmed by report row", reported: true }),
+      expect.objectContaining({ path: ".pnpm-store/pkg/cached.ts", inventory: "excluded", inventoryReason: "pnpm package store", staged: "unknown for imported report", reported: false, absenceReason: expect.stringContaining("excluded from the product inventory") }),
+    ]);
+  });
+
+  it("keeps an unresolved inventory partial even when every visible file has a report row", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], GLOBS, SOURCES, { inventoryGaps: ["vite.config.ts: dynamic outDir"] });
+    expect(scope).toMatchObject({ verified: false, scoped: false, expectedFileCount: 3 });
+    expect(scope.note).toContain("dynamic outDir");
+  });
+
   // #1309: the branch #504's own tests skipped — verified: false is neither a proven full run nor
   // a proven subset, so it needs its OWN moduleRecord (the caller in src/cli/mutation-scan.ts wires
   // this in whenever scope.verified is false), never silence that lets a full `ran` stand.

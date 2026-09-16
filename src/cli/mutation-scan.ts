@@ -108,7 +108,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
-import { productSourceInventory } from "../source-inventory.js";
+import { productSourceInventory, readStaticConfigObject } from "../source-inventory.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
@@ -330,14 +330,16 @@ const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
 // tells dangling from resolvable. A dangling link is skipped outright — there is nothing to read.
 // A resolvable symlink keeps the pre-#944 behavior (recurse if it resolves to a directory, else
 // treat as a file) via one more `statSync`, now only reached once existence is confirmed.
-function walkRelPaths(root: string): string[] {
+function walkRelPaths(root: string, includeContextExcluded = false): string[] {
   const paths: string[] = [];
   const inventory = productSourceInventory(root);
   const walk = (dir: string) => {
     for (const { path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
         const rel = relative(root, full).split(sep).join("/");
-        if (!inventory.excludedDirectoryFor(rel)) walk(full);
+        const exclusions = inventory.exclusionsFor(rel);
+        if (exclusions.some((exclusion) => exclusion.path === "node_modules" || exclusion.path === ".git")) continue;
+        if (includeContextExcluded || exclusions.length === 0) walk(full);
       } else {
         paths.push(relative(root, full).split(sep).join("/"));
       }
@@ -1179,6 +1181,7 @@ let strykerScratchUsed: string | undefined;
 let pristine: PristineSnapshot | undefined;
 let strykerPhases: { testBaselineMs: number; mutationMs: number } | undefined;
 let strykerInstrumentedFileCount: number | undefined;
+let mutationInvocationRoot: string | undefined;
 
 let resolvedReportPath: string;
 if (reportPath) {
@@ -1198,6 +1201,7 @@ if (reportPath) {
   // a disposable copy BEFORE Stryker runs (stageTs7TsconfigFix) — falls back to targetDir itself
   // (the ordinary in-place invocation) when there's nothing to rewrite.
   const runCwd = (isIncompatibleTypeScript7(readStrykerTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
+  mutationInvocationRoot = runCwd;
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
   const run = runStryker(redirect.cfgPath, runCwd);
@@ -1263,13 +1267,9 @@ for (const b of summary.mutatorBreakdown.filter((x) => x.denialBoundaryConcentra
 // default config when one exists (the "configured" scope even when this run used --config or a
 // scaffolded config); statically readable only from a JSON config's mutate array.
 function readMutateGlobs(cfgPath: string | undefined): string[] | undefined {
-  if (!cfgPath || !cfgPath.endsWith(".json")) return undefined;
-  try {
-    const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as { mutate?: unknown };
-    return Array.isArray(cfg.mutate) && cfg.mutate.every((g) => typeof g === "string") ? (cfg.mutate as string[]) : undefined;
-  } catch {
-    return undefined;
-  }
+  if (!cfgPath) return undefined;
+  const cfg = readStaticConfigObject(cfgPath).value;
+  return Array.isArray(cfg?.mutate) && cfg.mutate.every((g) => typeof g === "string") ? (cfg.mutate as string[]) : undefined;
 }
 
 // #1076: the report's own `config` (the EFFECTIVE resolved config Stryker ran with, MEASURED
@@ -1285,11 +1285,25 @@ function configMutateGlobs(cfg: Record<string, unknown> | undefined): string[] |
 const toTargetRelative = (file: string): string => (isAbsolute(file) ? relative(targetDir, file) : file).split(sep).join("/");
 
 const referenceConfigPath = defaultConfigPath ?? effectiveConfigPath;
+const scopeInventory = productSourceInventory(targetDir);
+const configuredSourcePopulation = walkRelPaths(targetDir, true).filter((path) => SOURCE_PATH.test(path));
+const excludedReasons = Object.fromEntries(configuredSourcePopulation.flatMap((path) => {
+  const reasons = scopeInventory.exclusionsFor(path).map((exclusion) => exclusion.reason);
+  return reasons.length > 0 ? [[path, reasons.join("; ")]] : [];
+}));
+const stagedPaths = mutationInvocationRoot === undefined
+  ? undefined
+  : new Set(configuredSourcePopulation.filter((path) => existsSync(join(mutationInvocationRoot, ...path.split("/")))));
 const scope = {
   ...verifyMutationScope(
-  Object.keys(report.files).map(toTargetRelative),
-  configMutateGlobs(report.config) ?? readMutateGlobs(referenceConfigPath),
-  walkRelPaths(targetDir).filter((p) => SOURCE_PATH.test(p)),
+    Object.keys(report.files).map(toTargetRelative),
+    configMutateGlobs(report.config) ?? readMutateGlobs(referenceConfigPath),
+    configuredSourcePopulation,
+    {
+      excludedReasons,
+      stagedPaths,
+      inventoryGaps: scopeInventory.unresolvedConfigurations.map((gap) => `${gap.path}: ${gap.reason}`),
+    },
   ),
   ...(strykerInstrumentedFileCount === undefined ? {} : { instrumentedFileCount: strykerInstrumentedFileCount }),
 };

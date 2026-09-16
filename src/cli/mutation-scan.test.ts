@@ -288,7 +288,11 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     expect(droppedRun.status).toBe(0);
     const parsed = JSON.parse(droppedRun.out) as { scope: { expectedFileCount: number; missingCount: number; missing: string[]; files: Array<{ path: string; reported: boolean; absenceReason?: string }> }; moduleRecord?: { status: string } };
     expect(parsed.scope).toMatchObject({ expectedFileCount: 6, missingCount: 1, missing: [routes[5]] });
-    expect(parsed.scope.files.find((file) => file.path === routes[5])).toMatchObject({ reported: false, absenceReason: "configured and staged but absent from the Stryker JSON report" });
+    expect(parsed.scope.files.find((file) => file.path === routes[5])).toMatchObject({
+      reported: false,
+      staged: "unknown for imported report",
+      absenceReason: "configured and inventory-included; staging is unknown for this imported report; absent from the Stryker JSON report",
+    });
     expect(parsed.moduleRecord?.status).toBe("partial");
   });
 });
@@ -947,8 +951,23 @@ if (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {
 
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    const parsed = JSON.parse(out) as {
+      summary?: { overall: { totalMutants: number } };
+      scope?: {
+        files: Array<{
+          path: string;
+          staged: string;
+          instrumented: string;
+          reported: boolean;
+        }>;
+      };
+    };
     expect(parsed.summary?.overall.totalMutants).toBe(1); // a real run, not a degrade
+    expect(parsed.scope?.files.find((file) => file.path === "src/add.ts")).toMatchObject({
+      staged: "present in invoked tree",
+      instrumented: "confirmed by report row",
+      reported: true,
+    });
 
     const marked = JSON.parse(readFileSync(marker, "utf8")) as { cwd: string; extends: string };
     expect(marked.cwd).not.toBe(repo); // staged into a disposable copy, not run in-place

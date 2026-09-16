@@ -48,6 +48,7 @@ import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
 import { buildSbom } from "../sbom.js";
 import { buildHealthScorecard, type HealthDimension, type HealthScorecard, type PiiTableBand, type ScorecardInput } from "../health-scorecard.js";
 import { duplicationSummary, jscpdToFindings } from "../quality-scan.js";
+import { productSourceInventory } from "../source-inventory.js";
 import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
@@ -182,9 +183,9 @@ function declaresTestScript(dir: string): boolean {
   }
 }
 
-function measureDuplication(dir: string, sourceFileCount: number): Pick<ScorecardInput, "duplication" | "duplicationGap" | "duplicationFindings"> {
+function measureDuplication(dir: string, sourceFileCount: number, ignoreGlobs: readonly string[]): Pick<ScorecardInput, "duplication" | "duplicationGap" | "duplicationFindings"> {
   try {
-    const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount });
+    const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount, ignoreGlobs });
     const { percentage, duplicatedLines, totalLines } = duplicationSummary(report);
     return { duplication: { percentage, duplicatedLines, totalLines }, duplicationFindings: jscpdToFindings(report) };
   } catch (err) {
@@ -452,7 +453,8 @@ async function main(): Promise<void> {
     location: relativizeScanScope(f.location),
   }));
   const absDir = resolve(dir);
-  const size = measureCodebaseSize(absDir);
+  const sourceInventory = productSourceInventory(absDir);
+  const size = measureCodebaseSize(absDir, sourceInventory);
   const report = buildQuickScanReport(rawFindings, { size });
 
   // #1305 — the per-dimension health scorecard. Deliberately built from its OWN detector runs rather
@@ -470,7 +472,7 @@ async function main(): Promise<void> {
     framework: detectTargetFramework(absDir),
     nonNextWorkspaces: nonNextWorkspaces(absDir),
     orm: detectOrm(absDir),
-    ...measureDuplication(absDir, size.files),
+    ...measureDuplication(absDir, size.files, sourceInventory.jscpdIgnoreGlobs),
     handrolledClasses: report.handrolled.length,
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
     testRunnerDeclared: declaresTestScript(absDir),

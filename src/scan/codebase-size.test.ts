@@ -34,6 +34,8 @@ describe("measureCodebaseSize (#1044)", () => {
       "src/app.ts": body(10),
       "src/util.tsx": body(5),
       "src/app.test.ts": body(3), // tests are the client's code and M8 assesses them — counted
+      "package.json": JSON.stringify({ devDependencies: { vite: "1" }, scripts: { test: "vitest --coverage" } }),
+      "composer.json": "{}",
       "node_modules/dep/index.js": body(500),
       "dist/bundle.js": body(500),
       "src/generated/client.ts": body(400),
@@ -44,19 +46,18 @@ describe("measureCodebaseSize (#1044)", () => {
       "README.md": "# not source\n",
     });
 
-  it("counts non-blank application source lines only", () => {
-    expect(measureCodebaseSize(target()).loc).toBe(18);
+  it("counts non-blank application source lines, including authored output-like directories", () => {
+    expect(measureCodebaseSize(target()).loc).toBe(418);
   });
 
   it("counts the application source files, not the excluded or non-source ones", () => {
-    expect(measureCodebaseSize(target()).files).toBe(3);
+    expect(measureCodebaseSize(target()).files).toBe(4);
   });
 
   // The exclusions are the commercial claim. Reporting HOW MANY files were left out is what makes
-  // "you are not quoted on generated code" checkable instead of a promise. Build output (coverage/)
-  // is dropped entirely rather than counted as excluded — it is not the client's code at all.
+  // "you are not quoted on generated code" checkable instead of a promise.
   it("reports the generated/vendored files it excluded from the quote", () => {
-    expect(measureCodebaseSize(target()).excludedFiles).toBe(6);
+    expect(measureCodebaseSize(target()).excludedFiles).toBe(5);
   });
 
   it("bands the result in the pricing table's own words", () => {
@@ -78,6 +79,15 @@ describe("measureCodebaseSize (#1044)", () => {
     // The site routes monorepo/regulated apps to Enterprise regardless of size; that is an operator
     // judgement, and saying so is what stops a small-LOC regulated app reading as a settled quote.
     expect(definition).toMatch(/operator judgement/);
+  });
+
+  it("shares the configured package-store boundary while retaining authored same-name directories", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ packageManager: "pnpm@10" }),
+      "src/app/dist/authored.ts": body(4),
+      ".pnpm-store/v3/pkg/index.ts": body(500),
+    });
+    expect(measureCodebaseSize(root)).toMatchObject({ loc: 4, files: 1, excludedFiles: 1 });
   });
 
   // Found by the 2026-07-28 #899 breadth sweep, on 3 of 15 wild repos (liam, dub, cal-diy). This

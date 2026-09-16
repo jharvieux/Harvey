@@ -31,9 +31,9 @@
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventory } from "../source-inventory.js";
+import { productSourceInventory, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -194,7 +194,8 @@ function gapReason(err: unknown): string {
 function runJscpd(dir: string): JscpdReport {
   // #1305: the invocation itself now lives in src/scan/duplication.ts so the free-tier health
   // scorecard can run the same pass. This wrapper keeps the CLI's own timeout and file-count walk.
-  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir), jscpdBin, ignoreGlobs: sourceInventory.jscpdIgnoreGlobs });
+  const inventory = dir === targetDir ? sourceInventory : productSourceInventory(dir);
+  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir, "", inventory), jscpdBin, ignoreGlobs: inventory.jscpdIgnoreGlobs });
 }
 
 // #693/AoP#566: knip's `ignoreExportsUsedInFile` has no CLI flag (config-file only, verified on
@@ -208,28 +209,23 @@ const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 // config we won't risk re-serializing, or undefined when there is none. A root config in an
 // ANCESTOR dir is deliberately not consulted: knip run per-workspace treats the scope dir as its
 // own root and auto-detects entries, so there is nothing there to preserve.
-function scopeKnipConfig(dir: string): Record<string, unknown> | "unmergeable" | undefined {
-  const jsonPath = join(dir, "knip.json");
-  if (existsSync(jsonPath)) {
-    try {
-      return JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
-    } catch {
-      return "unmergeable";
-    }
-  }
-  if (["knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"].some((n) => existsSync(join(dir, n)))) {
-    return "unmergeable";
-  }
+function scopeKnipConfig(dir: string): Record<string, unknown> | { unresolved: string } | undefined {
   const pkgPath = join(dir, "package.json");
+  let packageConfig: Record<string, unknown> | undefined;
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { knip?: Record<string, unknown> };
-      if (pkg.knip) return pkg.knip;
+      if (pkg.knip) packageConfig = pkg.knip;
     } catch {
       // a malformed package.json is knip's own error to report, not ours to merge
     }
   }
-  return undefined;
+  const configNames = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"];
+  const configPath = configNames.map((name) => join(dir, name)).find(existsSync);
+  if (!configPath) return packageConfig;
+  const parsed = readStaticConfigObject(configPath);
+  if (!parsed.value) return { unresolved: `${basename(configPath)}: ${parsed.error}` };
+  return { ...(packageConfig ?? {}), ...parsed.value };
 }
 
 // One knip invocation against `dir`. `config`, when given, is written as HARVEY_KNIP_CONFIG and
@@ -280,15 +276,19 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
   let config: Record<string, unknown> | undefined;
   let entriesInferred = false;
   try {
-    if (existing === undefined) {
+    if (existing && "unresolved" in existing) {
+      throw new Error(`Knip config is not a fully static object, so Harvey's product-source exclusions were not applied: ${existing.unresolved}`);
+    } else if (existing === undefined) {
       // No config of its own: knip can't infer non-app entries (tests above all) and floods the
       // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
       config = buildInferredKnipConfig(detectTargetFramework(dir));
       entriesInferred = true;
-    } else if (existing !== "unmergeable" && !("ignoreExportsUsedInFile" in existing)) {
+    } else if (!("ignoreExportsUsedInFile" in existing)) {
       // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
       // its entries — they know their app (#695).
       config = { ...existing, ignoreExportsUsedInFile: { interface: true, type: true } };
+    } else {
+      config = existing;
     }
   } catch {
     // a config read/detect failure falls back to an unmodified, non-inferred run
@@ -394,12 +394,12 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
 // reuses the same SKIP_DIRS/SOURCE_EXT/SKIP_FILE walk shape as securityPathFiles above (total
 // count instead of a security-relevant subset) so the ratio denominator matches what knip could
 // plausibly have scanned.
-function countSourceFiles(dir: string, rel = ""): number {
+function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInventory = sourceInventory): number {
   let count = 0;
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!excludedProductDirectory(relPath)) count += countSourceFiles(dir, relPath);
+      if (!inventory.excludedDirectoryFor(relPath)) count += countSourceFiles(dir, relPath, inventory);
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       count += 1;
     }
@@ -415,8 +415,11 @@ function countSourceFiles(dir: string, rel = ""): number {
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
   const configured = sourceInventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => ({ glob: `**/${entry.path}/**`, reason: entry.reason }));
-  const entries: Array<{ glob: string; reason?: string }> = [...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob })), ...configured];
+    .map((entry) => ({ glob: entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`, reason: entry.reason }));
+  // Configured directories are the primary allocation. A generated filename inside a package store
+  // is one physical exclusion, so it contributes once here while the configured reason remains visible.
+  const entries: Array<{ glob: string; reason?: string }> = [...configured, ...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob }))]
+    .filter((entry, index, all) => all.findIndex((candidate) => candidate.glob === entry.glob) === index);
   const counts = new Map<string, { count: number; example?: string; reason?: string }>(entries.map((entry) => [entry.glob, { count: 0, reason: entry.reason }]));
   const walk = (curRel: string): void => {
     for (const entry of readEntriesSafe(join(dir, curRel)).entries) {
@@ -425,16 +428,14 @@ function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
         // The M4 run skips configured output/store directories, but this disclosure walk must
         // enter them to count the exact omitted population. Git metadata and installed dependency
         // trees are universal exclusions and intentionally have no client-facing denominator.
-        if (relPath !== ".git" && relPath !== "node_modules") walk(relPath);
+        if (!sourceInventory.exclusionsFor(relPath).some((exclusion) => exclusion.path === "node_modules" || exclusion.path === ".git")) walk(relPath);
         continue;
       }
-      if (!entries.some(({ glob }) => matchesGlob(glob, relPath))) continue;
-      for (const { glob } of entries) {
-        if (!matchesGlob(glob, relPath)) continue;
-        const hit = counts.get(glob)!;
-        hit.count += 1;
-        if (!hit.example) hit.example = relPath;
-      }
+      const primary = entries.find(({ glob }) => matchesGlob(glob, relPath));
+      if (!primary) continue;
+      const hit = counts.get(primary.glob)!;
+      hit.count += 1;
+      if (!hit.example) hit.example = relPath;
     }
   };
   walk(rel);
@@ -466,6 +467,11 @@ const jscpdReports: JscpdReport[] = [];
 const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
+for (const gap of sourceInventory.unresolvedConfigurations) {
+  const reason = `${gap.path}: ${gap.reason}`;
+  jscpdGaps.push({ scope: "(whole repo product inventory)", reason });
+  knipGaps.push({ scope: "(whole repo product inventory)", reason });
+}
 const knipUncertainScopes: ScanGap[] = [];
 // #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
 const knipReducedScopes: ScanGap[] = [];
@@ -530,7 +536,7 @@ for (const scope of scopes) {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
       // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
       // operate on the real scope dir, not the merged-report-relative path.
-      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope), hasViteEntryMarkers(scope), isViteResolvable(scope));
+      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope, "", productSourceInventory(scope)), hasViteEntryMarkers(scope), isViteResolvable(scope));
       if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));

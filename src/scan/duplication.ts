@@ -6,7 +6,7 @@
 // #931 and are load-bearing, so they travel with the code rather than being summarised.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,10 +27,37 @@ interface JscpdRunOptions {
   ignoreGlobs?: readonly string[];
 }
 
+function readJscpdConfig(dir: string): Record<string, unknown> {
+  let packageConfig: Record<string, unknown> = {};
+  let fileConfig: Record<string, unknown> = {};
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { jscpd?: unknown };
+    if (typeof pkg.jscpd === "object" && pkg.jscpd !== null) packageConfig = pkg.jscpd as Record<string, unknown>;
+  } catch { /* jscpd reports malformed target configuration itself */ }
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, ".jscpd.json"), "utf8"));
+    if (typeof parsed === "object" && parsed !== null) fileConfig = parsed as Record<string, unknown>;
+  } catch { /* absence is the ordinary path; malformed content remains jscpd's failure */ }
+  return { ...packageConfig, ...fileConfig };
+}
+
+function absoluteIgnore(dir: string, pattern: string): string {
+  return pattern.startsWith("**/") || pattern.startsWith("/") ? pattern : join(dir, pattern).split("\\").join("/");
+}
+
 export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
   const bin = opts.jscpdBin ?? JSCPD_BIN;
   const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
   try {
+    const targetConfig = readJscpdConfig(dir);
+    const targetIgnore = Array.isArray(targetConfig.ignore)
+      ? targetConfig.ignore.filter((value): value is string => typeof value === "string")
+      : [];
+    const configPath = join(outDir, "jscpd.harvey.json");
+    writeFileSync(configPath, JSON.stringify({
+      ...targetConfig,
+      ignore: [...new Set([...targetIgnore, ...JSCPD_IGNORE_GLOBS, ...(opts.ignoreGlobs ?? [])])].map((glob) => absoluteIgnore(dir, glob)),
+    }));
     // --threshold 100 overrides any client .jscpd.json so the scan never exits
     // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
     // JSCPD_IGNORE_GLOBS excludes generated/vendored/demo paths (M4-N-GENERATED, issue #72;
@@ -62,7 +89,7 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
     //     scanned tree, never an ancestor directory of wherever that tree happens to be checked out.
     execFileSync(
       bin,
-      [".", "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips", "--ignore", [...new Set([...JSCPD_IGNORE_GLOBS, ...(opts.ignoreGlobs ?? [])])].join(",")],
+      [".", "--config", configPath, "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips"],
       { cwd: dir, stdio: ["ignore", "ignore", "pipe"], timeout: opts.timeoutMs, killSignal: "SIGKILL" },
     );
     const reportPath = join(outDir, "jscpd-report.json");

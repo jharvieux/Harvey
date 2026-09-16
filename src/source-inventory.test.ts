@@ -62,4 +62,61 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("apps/web/dist")).toMatchObject({ path: "apps/web/dist" });
     expect(inventory.excludedDirectoryFor("apps/web/src/dist")).toBeUndefined();
   });
+
+  it("keeps fixed dependency boundaries at any depth and contextual outputs at their authored coordinate", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ devDependencies: { vite: "1" } }),
+      "dist/generated.js": "export const generated = true;\n",
+      "src/app/dist/one.ts": "export const one = true;\n",
+      "src/app/dist/two.ts": "export const two = true;\n",
+      "apps/web/node_modules/pkg/index.ts": "export const dependency = true;\n",
+      "apps/web/nested/.git/config": "metadata\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("apps/web/node_modules/pkg")).toMatchObject({ path: "node_modules", match: "any-depth" });
+    expect(inventory.excludedDirectoryFor("apps/web/nested/.git")).toMatchObject({ path: ".git", match: "any-depth" });
+    expect(inventory.excludedDirectoryFor("dist")).toMatchObject({ path: "dist", match: "anchored" });
+    expect(inventory.excludedDirectoryFor("src/app/dist")).toBeUndefined();
+    expect(inventory.jscpdIgnoreGlobs).toContain("dist/**");
+    expect(inventory.jscpdIgnoreGlobs).not.toContain("**/dist/**");
+  });
+
+  it("reads JSONC inheritance and workspace package-manager configuration without substring guesses", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "tsconfig.base.json": `{\n // generated output\n "compilerOptions": { "outDir": "compiled", },\n}`,
+      "tsconfig.json": `{ "extends": "./tsconfig.base.json" }`,
+      "apps/pnpm/package.json": JSON.stringify({ packageManager: "pnpm@9" }),
+      "apps/pnpm/.npmrc": "store-dir=.cache/pnpm-store\n",
+      "apps/pnpm/.cache/pnpm-store/pkg/index.ts": "export const cached = true;\n",
+      "apps/php/composer.json": "{}",
+      "apps/php/vendor/pkg/index.ts": "export const vendored = true;\n",
+      "apps/go/go.mod": "module example.test/app\n",
+      "apps/go/vendor/pkg/index.ts": "export const vendored = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("compiled/a.js")).toMatchObject({ path: "compiled" });
+    expect(inventory.excludedDirectoryFor("apps/pnpm/.cache/pnpm-store/pkg")).toMatchObject({ path: "apps/pnpm/.cache/pnpm-store" });
+    expect(inventory.excludedDirectoryFor("apps/php/vendor/pkg")).toMatchObject({ path: "apps/php/vendor" });
+    expect(inventory.excludedDirectoryFor("apps/go/vendor/pkg")).toMatchObject({ path: "apps/go/vendor" });
+  });
+
+  it("parses literal JS tool outputs and discloses dynamic values without reading comments or strings", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "vite.config.ts": `const out = "secret-shaped-dir";\n// outDir: "comment-only"\nexport default defineConfig({ build: { outDir: out }, note: "outDir: string-only" });\n`,
+      "stryker.config.js": `module.exports = { tempDirName: "mutation-tmp", jsonReporter: { fileName: "reports/mutation/result.json" } };\n`,
+      "src/comment-only/app.ts": "export const app = true;\n",
+      "mutation-tmp/generated.ts": "export const generated = true;\n",
+      "reports/mutation/result.json": "{}",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("comment-only")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("secret-shaped-dir")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("mutation-tmp/generated.ts")).toMatchObject({ path: "mutation-tmp" });
+    expect(inventory.excludedDirectoryFor("reports/mutation")).toMatchObject({ path: "reports/mutation" });
+    expect(inventory.unresolvedConfigurations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "vite.config.ts", reason: expect.stringContaining("unresolved") }),
+    ]));
+  });
 });
