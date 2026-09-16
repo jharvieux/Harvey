@@ -31,7 +31,7 @@
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { productSourceInventory, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
@@ -210,8 +210,8 @@ const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 // ANCESTOR dir is deliberately not consulted: knip run per-workspace treats the scope dir as its
 // own root and auto-detects entries, so there is nothing there to preserve.
 type ScopeKnipConfig =
-  | { value: Record<string, unknown>; executablePath?: string }
-  | { unresolved: string };
+  | { value: Record<string, unknown>; executablePath?: string; packageConfig?: Record<string, unknown> }
+  | { unresolved: string; executablePath?: string; packageConfig?: Record<string, unknown> };
 
 function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   const pkgPath = join(dir, "package.json");
@@ -228,17 +228,33 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   const configPath = configNames.map((name) => join(dir, name)).find(existsSync);
   if (!configPath) return packageConfig ? { value: packageConfig } : undefined;
   const parsed = readStaticConfigObject(configPath);
-  if (!parsed.value) return { unresolved: `${basename(configPath)}: ${parsed.error}` };
-  // Knip's installed precedence is file config first, package.json#knip only when no file exists.
-  // Keep the file's exact semantics instead of combining two configs Knip would never combine.
-  return { value: parsed.value, ...(parsed.executable ? { executablePath: configPath } : {}) };
+  if (!parsed.value) {
+    const executablePath = [".js", ".ts"].includes(extname(configPath)) ? configPath : undefined;
+    return {
+      unresolved: `${basename(configPath)}: ${parsed.error}`,
+      ...(executablePath ? { executablePath } : {}),
+      ...(packageConfig ? { packageConfig } : {}),
+    };
+  }
+  // Installed Knip shallow-merges package.json#knip first and the config file second. Preserve that
+  // exact precedence before Harvey adds its product-inventory ignores.
+  return {
+    value: { ...packageConfig, ...parsed.value },
+    ...(parsed.executable ? { executablePath: configPath } : {}),
+    ...(packageConfig ? { packageConfig } : {}),
+  };
 }
 
 // One knip invocation against `dir`. `config`, when given, is written as HARVEY_KNIP_CONFIG and
 // forced with `-c`; when undefined, knip runs against the scope's own config untouched. Throws on
 // timeout, a non-zero exit (knip aborts with exit 2 when it can't LOAD a config it needs to resolve
 // — the #810 missing-deps case), or non-JSON stdout.
-function execKnip(dir: string, config: Record<string, unknown> | undefined, executablePath?: string): KnipReport {
+function execKnip(
+  dir: string,
+  config: Record<string, unknown> | undefined,
+  executablePath?: string,
+  packageConfig: Record<string, unknown> = {},
+): KnipReport {
   const plainArgs = ["--reporter", "json", "--no-exit-code"];
   let args = plainArgs;
   let cleanup: (() => void) | undefined;
@@ -247,13 +263,18 @@ function execKnip(dir: string, config: Record<string, unknown> | undefined, exec
     const configPath = join(dir, configName);
     if (executablePath) {
       const importPath = `./${basename(executablePath)}`;
-      const inventoryIgnore = Array.isArray(config.ignore) ? config.ignore : [];
+      const inventoryIgnore = productInventoryKnipIgnore(dir);
       writeFileSync(configPath, [
         `import original from ${JSON.stringify(importPath)};`,
-        "if (!original || typeof original !== \"object\" || Array.isArray(original)) throw new Error(\"Knip config did not export an object\");",
+        `const packageConfig = ${JSON.stringify(packageConfig)};`,
         `const inventoryIgnore = ${JSON.stringify(inventoryIgnore)};`,
-        "const existingIgnore = Array.isArray(original.ignore) ? original.ignore.filter((value): value is string => typeof value === \"string\") : [];",
-        "export default { ...original, ignoreExportsUsedInFile: original.ignoreExportsUsedInFile ?? { interface: true, type: true }, ignore: [...new Set([...existingIgnore, ...inventoryIgnore])] };",
+        "export default async function harveyKnipConfig(options: unknown) {",
+        "  const resolved = typeof original === \"function\" ? await original(options) : await original;",
+        "  if (!resolved || typeof resolved !== \"object\" || Array.isArray(resolved)) throw new Error(\"Knip config did not resolve to an object\");",
+        "  const merged = { ...packageConfig, ...resolved };",
+        "  const existingIgnore = typeof merged.ignore === \"string\" ? [merged.ignore] : Array.isArray(merged.ignore) ? merged.ignore.filter((value): value is string => typeof value === \"string\") : [];",
+        "  return { ...merged, ignoreExportsUsedInFile: merged.ignoreExportsUsedInFile ?? { interface: true, type: true }, ignore: [...new Set([...existingIgnore, ...inventoryIgnore])] };",
+        "}",
         "",
       ].join("\n"));
     } else writeFileSync(configPath, JSON.stringify(config));
@@ -273,12 +294,18 @@ function execKnip(dir: string, config: Record<string, unknown> | undefined, exec
   }
 }
 
+function productInventoryKnipIgnore(dir: string): string[] {
+  return productSourceInventory(dir).excludedDirectories
+    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
+    .map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
+}
+
 function withProductInventoryIgnore(dir: string, config: Record<string, unknown>): Record<string, unknown> {
   const configured = config.ignore;
-  const existing = Array.isArray(configured) ? configured.filter((value): value is string => typeof value === "string") : [];
-  const generated = productSourceInventory(dir).excludedDirectories
-    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => `${entry.path}/**`);
+  const existing = typeof configured === "string"
+    ? [configured]
+    : Array.isArray(configured) ? configured.filter((value): value is string => typeof value === "string") : [];
+  const generated = productInventoryKnipIgnore(dir);
   return { ...config, ignore: [...new Set([...existing, ...generated])] };
 }
 
@@ -293,10 +320,16 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
   // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
   const existing = scopeKnipConfig(dir);
   let config: Record<string, unknown> | undefined;
+  let configurationError: unknown;
   let entriesInferred = false;
   try {
     if (existing && "unresolved" in existing) {
-      throw new Error(`Knip config is not a fully static object, so Harvey's product-source exclusions were not applied: ${existing.unresolved}`);
+      if (!existing.executablePath) {
+        throw new Error(`Knip config is not a fully static object, so Harvey's product-source exclusions were not applied: ${existing.unresolved}`);
+      }
+      // Executable configs are merged at runtime by a wrapper. That preserves provider imports and
+      // dynamic values while still applying the same product inventory as every static config.
+      config = {};
     } else if (existing === undefined) {
       // No config of its own: knip can't infer non-app entries (tests above all) and floods the
       // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
@@ -309,13 +342,25 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     } else {
       config = existing.value;
     }
-  } catch {
-    // a config read/detect failure falls back to an unmodified, non-inferred run
+  } catch (err) {
+    // Preserve the failure for the existing source-only retry. Running the target config without
+    // inventory exclusions could succeed while silently restoring generated or vendored files.
+    configurationError = err;
     config = undefined;
     entriesInferred = false;
   }
   try {
-    return { report: execKnip(dir, config ? withProductInventoryIgnore(dir, config) : undefined, existing && "value" in existing ? existing.executablePath : undefined), entriesInferred, pluginsDisabled: false };
+    if (configurationError) throw configurationError;
+    return {
+      report: execKnip(
+        dir,
+        config ? withProductInventoryIgnore(dir, config) : undefined,
+        existing?.executablePath,
+        existing?.packageConfig,
+      ),
+      entriesInferred,
+      pluginsDisabled: false,
+    };
   } catch (err) {
     // #810: knip most often fails here because it tried to LOAD the target's own knip config or a
     // framework plugin config (vite.config.ts, next.config.ts, ...) whose imports don't resolve —

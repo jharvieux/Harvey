@@ -139,12 +139,14 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     };
     write("package.json", JSON.stringify({ name: "executable-knip", private: true, packageManager: "pnpm@9.0.0" }));
     write("src/index.ts", "export const live = true;\n");
-    write(".pnpm-store/v3/pkg/unused.ts", "export const dependencyArtifact = true;\n");
+    write("src/authored-ignore/dead.ts", "export const intentionallyIgnored = true;\n");
+    write("src/cache/.pnpm-store/v3/pkg/unused.ts", "export const dependencyArtifact = true;\n");
     write("knip-provider.ts", 'import { writeFileSync } from "node:fs"; writeFileSync("provider-consumed", "yes");\n');
-    write("knip.config.ts", 'import "./knip-provider.ts"; export default { entry: ["src/index.ts"], project: ["src/**/*.ts", ".pnpm-store/**/*.ts"] };\n');
+    write("knip.config.ts", 'import "./knip-provider.ts"; const project = ["src/**/*.ts"]; export default () => ({ entry: ["src/index.ts"], project, ignore: "src/authored-ignore/**" });\n');
     const findings = await runCli(repo);
     expect(readFileSync(join(repo, "provider-consumed"), "utf8")).toBe("yes");
     expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes("authored-ignore"))).toBe(false);
     expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
   }, 30000);
 });
@@ -296,7 +298,14 @@ describe("quality-scan CLI — M5 resolves Vite entries (index.html/main/vite.co
 function ownKnipConfigFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-ownknip-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "ownknip", private: true, version: "0.0.0", type: "module" }));
+  write(repo, "package.json", JSON.stringify({
+    name: "ownknip",
+    private: true,
+    version: "0.0.0",
+    type: "module",
+    packageManager: "pnpm@9.0.0",
+    knip: { ignore: "src/package-ignored/**" },
+  }));
   // The target's OWN knip config names a NON-standard entry Harvey's inferred globs would never
   // declare. If Harvey overrode entries, custom-entry.ts (and reachable.ts) would show unused.
   write(repo, "knip.json", JSON.stringify({ entry: ["custom-entry.ts"] }));
@@ -305,6 +314,8 @@ function ownKnipConfigFixture(): string {
   // happens even though entries are the target's own.
   write(repo, "reachable.ts", "export interface LocalProps {\n  x: number;\n}\nexport const thing: LocalProps = { x: 1 };\n");
   write(repo, "dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/package-ignored/dead.ts", 'export const packageIgnored = "ignored";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -315,6 +326,8 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 
     // reachable via the TARGET's own custom entry — proves Harvey did not override entries.
     expect(unusedFile("reachable.ts")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes("package-ignored"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
 
     // dead file surfaces at Confirmed tier — the target supplied its own entry graph, so its file
     // findings are NOT the review-tier inferred kind.
@@ -338,13 +351,14 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 function noNodeModulesViteFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-noinstall-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
+  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", packageManager: "pnpm@9.0.0", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
   // Imports an uninstalled plugin → knip can't load this config without the target's node_modules.
   write(repo, "vite.config.cjs", 'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("@vitejs/plugin-react");\nmodule.exports = {};\n');
   write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
   write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
   write(repo, "src/used.ts", 'export const used = "u";\n');
   write(repo, "src/dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -436,6 +450,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(reduced?.taxonomy).toContain("M5");
     expect(reduced?.fix).toContain("dependencies");
     expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("starts directly in the source-only tier when dependency preparation rejected the installed tree", async () => {
@@ -446,6 +461,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
     expect(findings.find((finding) => finding.id === "M5-98")?.evidence).not.toContain("canary-quality-unrequested-stdin");
     expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("preserves an explicit stdin reason byte-for-byte in M5-98 without executing the target provider (#1778)", async () => {
