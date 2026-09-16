@@ -30,14 +30,26 @@ interface JscpdRunOptions {
 function readJscpdConfig(dir: string): Record<string, unknown> {
   let packageConfig: Record<string, unknown> = {};
   let fileConfig: Record<string, unknown> = {};
+  const packagePath = join(dir, "package.json");
   try {
-    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { jscpd?: unknown };
-    if (typeof pkg.jscpd === "object" && pkg.jscpd !== null) packageConfig = pkg.jscpd as Record<string, unknown>;
-  } catch { /* jscpd reports malformed target configuration itself */ }
-  try {
-    const parsed = JSON.parse(readFileSync(join(dir, ".jscpd.json"), "utf8"));
-    if (typeof parsed === "object" && parsed !== null) fileConfig = parsed as Record<string, unknown>;
-  } catch { /* absence is the ordinary path; malformed content remains jscpd's failure */ }
+    const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as { jscpd?: unknown };
+    if (pkg.jscpd !== undefined) {
+      if (typeof pkg.jscpd !== "object" || pkg.jscpd === null || Array.isArray(pkg.jscpd)) throw new Error("package.json#jscpd is not an object");
+      packageConfig = pkg.jscpd as Record<string, unknown>;
+    }
+  } catch (err) {
+    if (existsSync(packagePath)) throw new Error(`Invalid package.json while reading jscpd configuration: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const filePath = join(dir, ".jscpd.json");
+  if (existsSync(filePath)) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("configuration root is not an object");
+      fileConfig = parsed as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`Invalid .jscpd.json: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return { ...packageConfig, ...fileConfig };
 }
 

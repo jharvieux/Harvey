@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { readEntriesSafe } from "./fs-walk.js";
+import { discoverWorkspaceInventory } from "./workspaces.js";
 
 export interface SourceExclusion {
   path: string;
@@ -389,6 +390,20 @@ function matchesExclusion(exclusion: SourceExclusion, path: string): boolean {
   return normalized.split("/").includes(exclusion.path);
 }
 
+function inventoryFrom(
+  entries: readonly SourceExclusion[],
+  unresolvedConfigurations: readonly SourceInventoryGap[],
+): ProductSourceInventory {
+  const exclusionsFor = (path: string): readonly SourceExclusion[] => entries.filter((entry) => matchesExclusion(entry, path));
+  return {
+    excludedDirectories: entries,
+    unresolvedConfigurations,
+    exclusionsFor,
+    excludedDirectoryFor: (path: string) => exclusionsFor(path)[0],
+    jscpdIgnoreGlobs: entries.map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`),
+  };
+}
+
 /** Build the explicit product boundary from package and tool configuration. */
 export function productSourceInventory(root: string): ProductSourceInventory {
   const pkg = readJson(join(root, "package.json"));
@@ -401,12 +416,71 @@ export function productSourceInventory(root: string): ProductSourceInventory {
       match: path === ".pnpm-store" || path === ".pnpm" ? "any-depth" : "anchored",
     })),
   ].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
-  const exclusionsFor = (path: string): readonly SourceExclusion[] => entries.filter((entry) => matchesExclusion(entry, path));
-  return {
-    excludedDirectories: entries,
-    unresolvedConfigurations: configurationGaps(root),
-    exclusionsFor,
-    excludedDirectoryFor: (path: string) => exclusionsFor(path)[0],
-    jscpdIgnoreGlobs: entries.map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`),
-  };
+  return inventoryFrom(entries, configurationGaps(root));
+}
+
+/** Rebase the authoritative root inventory for a workspace-scoped scanner invocation. */
+export function productSourceInventoryForScope(
+  root: string,
+  scope: string,
+  rootInventory: ProductSourceInventory = productSourceInventory(root),
+): ProductSourceInventory {
+  const absoluteRoot = resolve(root);
+  const absoluteScope = resolve(scope);
+  const scopePath = posix(relative(absoluteRoot, absoluteScope));
+  if (scopePath === "") return rootInventory;
+  if (scopePath === ".." || scopePath.startsWith("../") || resolve(absoluteRoot, scopePath) !== absoluteScope) {
+    throw new Error(`Source inventory scope must be inside its root: ${absoluteScope}`);
+  }
+
+  const local = productSourceInventory(absoluteScope);
+  const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
+    if (entry.match === "any-depth") return [entry];
+    if (!entry.path.startsWith(`${scopePath}/`)) return [];
+    return [{ ...entry, path: entry.path.slice(scopePath.length + 1) }];
+  });
+  const byPath = new Map<string, SourceExclusion>();
+  for (const entry of [...local.excludedDirectories, ...inherited]) {
+    const prior = byPath.get(entry.path);
+    if (!prior || prior.match === entry.match || entry.match === "any-depth") byPath.set(entry.path, entry);
+  }
+  const entries = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
+
+  const rootGaps = rootInventory.unresolvedConfigurations.map((gap): SourceInventoryGap => ({
+    ...gap,
+    path: posix(relative(absoluteScope, resolve(absoluteRoot, ...gap.path.split("/")))),
+  }));
+  const gaps = [...new Map([...local.unresolvedConfigurations, ...rootGaps]
+    .map((gap) => [`${gap.path}\0${gap.reason}`, gap])).values()]
+    .sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));
+  return inventoryFrom(entries, gaps);
+}
+
+/** Find an explicitly declared workspace root and retain its inventory when scanning one member. */
+export function productSourceInventoryForTarget(scope: string): ProductSourceInventory {
+  const absoluteScope = resolve(scope);
+  if (existsSync(join(absoluteScope, ".git"))) return productSourceInventory(absoluteScope);
+  let candidate = dirname(absoluteScope);
+  for (;;) {
+    const hasWorkspaceDeclaration = existsSync(join(candidate, "pnpm-workspace.yaml"))
+      || existsSync(join(candidate, "pnpm-workspace.yml"))
+      || (() => {
+        const pkg = readJson(join(candidate, "package.json"));
+        return pkg?.workspaces !== undefined;
+      })();
+    if (hasWorkspaceDeclaration) {
+      const inventory = discoverWorkspaceInventory(candidate);
+      const ownsScope = inventory.packages.some((workspace) => workspace.dir !== "."
+        && resolve(candidate, ...workspace.dir.split("/")) === absoluteScope);
+      if (ownsScope) {
+        const rootInventory = productSourceInventory(candidate);
+        return productSourceInventoryForScope(candidate, absoluteScope, rootInventory);
+      }
+    }
+    if (existsSync(join(candidate, ".git"))) break;
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  return productSourceInventory(absoluteScope);
 }

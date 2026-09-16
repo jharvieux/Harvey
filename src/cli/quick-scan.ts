@@ -456,6 +456,11 @@ async function main(): Promise<void> {
   const sourceInventory = productSourceInventory(absDir);
   const size = measureCodebaseSize(absDir, sourceInventory);
   const report = buildQuickScanReport(rawFindings, { size });
+  const inventoryGap = sourceInventory.unresolvedConfigurations.length > 0
+    ? sourceInventory.unresolvedConfigurations
+      .map((gap) => `${gap.path}: ${gap.reason}`)
+      .join("; ")
+    : undefined;
 
   // #1305 — the per-dimension health scorecard. Deliberately built from its OWN detector runs rather
   // than from `rawFindings`: that array is the M1 mechanical feed the orchestrator's probe reads
@@ -472,7 +477,9 @@ async function main(): Promise<void> {
     framework: detectTargetFramework(absDir),
     nonNextWorkspaces: nonNextWorkspaces(absDir),
     orm: detectOrm(absDir),
-    ...measureDuplication(absDir, size.files, sourceInventory.jscpdIgnoreGlobs),
+    ...(inventoryGap
+      ? { duplicationGap: `Product-source configuration is unresolved: ${inventoryGap}. M4 was not graded because configured output cannot be separated from authored source without guessing.` }
+      : measureDuplication(absDir, size.files, sourceInventory.jscpdIgnoreGlobs)),
     handrolledClasses: report.handrolled.length,
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
     testRunnerDeclared: declaresTestScript(absDir),

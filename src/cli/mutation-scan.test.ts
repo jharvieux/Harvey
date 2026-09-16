@@ -295,6 +295,50 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     });
     expect(parsed.moduleRecord?.status).toBe("partial");
   });
+
+  it("inherits root product boundaries when an app workspace is scanned directly (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-workspace-inventory-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write(root, "pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(root, ".npmrc", "store-dir=apps/web/package-cache\n");
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const authored = ["src/index.ts", "src/live.ts", "src/app/reports/dead.ts", "src/app/dist/dead.ts"];
+    for (const path of authored) write(app, path, "export const authored = true;\n");
+    const excluded = [".pnpm-store/v3/pkg/dead.ts", "package-cache/v3/pkg/dead.ts", "compiled/dead.ts"];
+    for (const path of excluded) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(authored.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: {
+        configuredFileCount: number;
+        expectedFileCount: number;
+        missing?: string[];
+        scoped: boolean;
+        files: Array<{ path: string; inventory: string; inventoryReason?: string; reported: boolean }>;
+      };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 7, expectedFileCount: 4, verified: true, scoped: false });
+    expect(parsed.scope.missing).toBeUndefined();
+    for (const path of excluded) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.any(String),
+        reported: false,
+      });
+    }
+    expect(parsed.scope.files.filter((file) => file.reported).map((file) => file.path).sort()).toEqual([...authored].sort());
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via

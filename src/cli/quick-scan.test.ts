@@ -7,7 +7,7 @@
 // --out/console, --findings-out, and --json alike, not just SARIF.
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,51 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
     const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { location: string }[];
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.some((f) => SCRATCH_PREFIX.test(f.location))).toBe(false);
+  }, 120000);
+});
+
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved product inventory (#2132)", () => {
+  it("keeps the full authored population but does not grade M4 through an unresolved Vite output", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quick-unresolved-inventory-"));
+    dirs.push(repo);
+    const write = (path: string, text: string) => {
+      const full = join(repo, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, text);
+    };
+    const cloned = [
+      "export function summarizeOrder(order: { items: { price: number; qty: number }[]; tax: number }) {",
+      "  let subtotal = 0;",
+      "  for (const item of order.items) subtotal += item.price * item.qty;",
+      "  const taxAmount = subtotal * order.tax;",
+      "  return { subtotal, taxAmount, total: subtotal + taxAmount };",
+      "}",
+      "",
+    ].join("\n");
+    write("package.json", JSON.stringify({ name: "dynamic-vite-output", private: true }));
+    write("vite.config.ts", "const output = 'compiled'; export default { build: { outDir: output } };\n");
+    write("compiled/a.ts", cloned);
+    write("dist/authored.ts", cloned);
+    write("src/one.ts", cloned);
+    write("src/two.ts", cloned);
+    const out = join(repo, "quick.json");
+
+    await run([CLI, "--dir", repo, "--json", "--out", out]);
+    const report = JSON.parse(readFileSync(out, "utf8")) as {
+      size: { files: number };
+      scorecard: { dimensions: Array<{ module: string; status: string; reason?: string }> };
+    };
+    expect(report.size.files).toBe(5);
+    expect(report.scorecard.dimensions.find((row) => row.module === "M4")).toMatchObject({
+      status: "not-assessed",
+      reason: expect.stringContaining("vite.config.ts: configuration output paths are unresolved"),
+    });
+    const renderedOut = join(repo, "quick.txt");
+    await run([CLI, "--dir", repo, "--out", renderedOut]);
+    const rendered = readFileSync(renderedOut, "utf8");
+    expect(rendered).toContain("M4   Duplication — NOT ASSESSED by this scan");
+    expect(rendered).toContain("Product-source configuration is unresolved");
+    expect(rendered).toContain("export is not a fully static object");
   }, 120000);
 });
 

@@ -108,7 +108,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
-import { productSourceInventory, readStaticConfigObject } from "../source-inventory.js";
+import { productSourceInventoryForTarget, readStaticConfigObject } from "../source-inventory.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
@@ -332,7 +332,7 @@ const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
 // treat as a file) via one more `statSync`, now only reached once existence is confirmed.
 function walkRelPaths(root: string, includeContextExcluded = false): string[] {
   const paths: string[] = [];
-  const inventory = productSourceInventory(root);
+  const inventory = productSourceInventoryForTarget(root);
   const walk = (dir: string) => {
     for (const { path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
@@ -355,7 +355,7 @@ const readRel = (root: string, rel: string): { path: string; text: string } => (
 // pass): skip the same heavy/irrelevant directories walkRelPaths already skips. `existsSync` first
 // because statSync throws on a dangling symlink, which real repos commit (#944).
 const excludeHeavyDirs = (root: string) => {
-  const inventory = productSourceInventory(root);
+  const inventory = productSourceInventoryForTarget(root);
   return (src: string): boolean => {
     if (!isDirectorySafe(src)) return true;
     return !inventory.excludedDirectoryFor(relative(root, src).split(sep).join("/"));
@@ -1285,7 +1285,7 @@ function configMutateGlobs(cfg: Record<string, unknown> | undefined): string[] |
 const toTargetRelative = (file: string): string => (isAbsolute(file) ? relative(targetDir, file) : file).split(sep).join("/");
 
 const referenceConfigPath = defaultConfigPath ?? effectiveConfigPath;
-const scopeInventory = productSourceInventory(targetDir);
+const scopeInventory = productSourceInventoryForTarget(targetDir);
 const configuredSourcePopulation = walkRelPaths(targetDir, true).filter((path) => SOURCE_PATH.test(path));
 const excludedReasons = Object.fromEntries(configuredSourcePopulation.flatMap((path) => {
   const reasons = scopeInventory.exclusionsFor(path).map((exclusion) => exclusion.reason);

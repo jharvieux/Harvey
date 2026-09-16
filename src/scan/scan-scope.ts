@@ -25,7 +25,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventory, type ProductSourceInventory } from "../source-inventory.js";
+import { productSourceInventoryForTarget, type ProductSourceInventory } from "../source-inventory.js";
 
 const NON_GIT_EXCLUDE_FILE = /\.log$/;
 const WORKTREE_DIR = /worktrees?$/i;
@@ -87,7 +87,7 @@ function copyExcluding(dir: string, dest: string, root: string, inventory: Produ
 // (e.g. in a finally block) once scanning is done.
 export function resolveScanScope(dir: string): ScanScope {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-scan-scope-"));
-  const inventory = productSourceInventory(dir);
+  const inventory = productSourceInventoryForTarget(dir);
   if (isGitWorkTree(dir)) copyTracked(dir, scratch, inventory);
   else copyExcluding(dir, scratch, dir, inventory);
   return { scanDir: scratch, cleanup: () => rmSync(scratch, { recursive: true, force: true }) };

@@ -149,6 +149,59 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(findings.some((finding) => finding.location.includes("authored-ignore"))).toBe(false);
     expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
   }, 30000);
+
+  it("rebases root-declared stores and generated output into each Knip workspace", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-workspace-inventory-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write("pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(".npmrc", "store-dir=apps/web/package-cache\n");
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write("apps/web/knip.json", JSON.stringify({ entry: ["src/index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/src/index.ts", 'import { live } from "./live.js"; console.log(live);\n');
+    write("apps/web/src/live.ts", "export const live = true;\n");
+    write("apps/web/src/app/reports/dead.ts", "export const authoredReport = true;\n");
+    write("apps/web/src/app/dist/dead.ts", "export const authoredDist = true;\n");
+    write("apps/web/.pnpm-store/v3/pkg/dead.ts", "export const dependencyArtifact = true;\n");
+    write("apps/web/package-cache/v3/pkg/dead.ts", "export const cachedArtifact = true;\n");
+    write("apps/web/compiled/dead.ts", "export const generatedArtifact = true;\n");
+
+    const findings = await runCli(repo);
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(findings.some((finding) => finding.location.includes(excluded)), excluded).toBe(false);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: `apps/web/${authored}` }));
+    }
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("apps/web/package-cache/**");
+    expect(scope?.evidence).toContain("apps/web/compiled/**");
+  }, 30000);
+
+  it("discloses an existing malformed jscpd config instead of replacing it", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-malformed-jscpd-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "malformed-jscpd", private: true }));
+    write(".jscpd.json", '{"ignore": [ BROKEN }\n');
+    write("src/one.ts", CLONED_BLOCK);
+    write("src/two.ts", CLONED_BLOCK);
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid \.jscpd\.json/),
+    }));
+    expect(findings.some((finding) => finding.id === "M4-01")).toBe(false);
+  }, 30000);
 });
 
 // #580: MEASURED against a real knip run (2026-07-18) — a Vite target where `vite` is declared in

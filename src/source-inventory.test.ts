@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { productSourceInventory } from "./source-inventory.js";
+import { productSourceInventory, productSourceInventoryForScope, productSourceInventoryForTarget } from "./source-inventory.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -61,6 +61,32 @@ describe("productSourceInventory (#2132/#2125)", () => {
     const inventory = productSourceInventory(root);
     expect(inventory.excludedDirectoryFor("apps/web/dist")).toMatchObject({ path: "apps/web/dist" });
     expect(inventory.excludedDirectoryFor("apps/web/src/dist")).toBeUndefined();
+  });
+
+  it("rebases root-declared output and store coordinates for a workspace scanner", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }),
+      ".npmrc": "store-dir=apps/web/package-cache\n",
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }),
+      "vite.config.ts": "const outDir = 'apps/web/vite-output'; export default { build: { outDir } };\n",
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/src/app/reports/authored.ts": "export const authored = true;\n",
+      "apps/web/.pnpm-store/v3/pkg/index.ts": "export const dependency = true;\n",
+      "apps/web/package-cache/v3/pkg/index.ts": "export const cached = true;\n",
+      "apps/web/compiled/index.ts": "export const generated = true;\n",
+    });
+    const rootInventory = productSourceInventory(root);
+    const workspaceInventory = productSourceInventoryForScope(root, join(root, "apps/web"), rootInventory);
+    expect(workspaceInventory.excludedDirectoryFor(".pnpm-store/v3/pkg")).toMatchObject({ path: ".pnpm-store", match: "any-depth" });
+    expect(workspaceInventory.excludedDirectoryFor("package-cache/v3/pkg")).toMatchObject({ path: "package-cache", reason: expect.stringContaining(".npmrc") });
+    expect(workspaceInventory.excludedDirectoryFor("compiled/index.ts")).toMatchObject({ path: "compiled", reason: expect.stringContaining("tsconfig.json") });
+    expect(workspaceInventory.excludedDirectoryFor("src/app/reports/authored.ts")).toBeUndefined();
+    expect(workspaceInventory.jscpdIgnoreGlobs).toEqual(expect.arrayContaining(["**/.pnpm-store/**", "package-cache/**", "compiled/**"]));
+    expect(workspaceInventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "../../vite.config.ts",
+      reason: expect.stringContaining("not a fully static object"),
+    }));
+    expect(productSourceInventoryForTarget(join(root, "apps/web")).excludedDirectories).toEqual(workspaceInventory.excludedDirectories);
   });
 
   it("keeps fixed dependency boundaries at any depth and contextual outputs at their authored coordinate", () => {

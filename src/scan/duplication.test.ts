@@ -44,4 +44,16 @@ fs.writeFileSync(path.join(output, "jscpd-report.json"), JSON.stringify({ statis
     expect(observed.args.join(" ")).not.toContain("credential-shaped-output");
     expect(observed.config.ignore.some((glob) => glob.includes("credential-shaped-output"))).toBe(true);
   });
+
+  it("rejects an existing malformed jscpd config instead of replacing it with a valid generated config", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-jscpd-malformed-"));
+    dirs.push(root);
+    writeFileSync(join(root, "package.json"), "{}\n");
+    writeFileSync(join(root, ".jscpd.json"), '{"ignore": [ BROKEN }\n');
+    expect(() => runJscpd(root, {
+      timeoutMs: 5_000,
+      sourceFileCount: () => 2,
+      jscpdBin: "/must/not/be/invoked",
+    })).toThrow(/Invalid \.jscpd\.json/);
+  });
 });

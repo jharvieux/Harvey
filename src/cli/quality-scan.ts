@@ -33,7 +33,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventory, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
+import { productSourceInventory, productSourceInventoryForScope, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -194,7 +194,7 @@ function gapReason(err: unknown): string {
 function runJscpd(dir: string): JscpdReport {
   // #1305: the invocation itself now lives in src/scan/duplication.ts so the free-tier health
   // scorecard can run the same pass. This wrapper keeps the CLI's own timeout and file-count walk.
-  const inventory = dir === targetDir ? sourceInventory : productSourceInventory(dir);
+  const inventory = productSourceInventoryForScope(targetDir, dir, sourceInventory);
   return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir, "", inventory), jscpdBin, ignoreGlobs: inventory.jscpdIgnoreGlobs });
 }
 
@@ -254,6 +254,7 @@ function execKnip(
   config: Record<string, unknown> | undefined,
   executablePath?: string,
   packageConfig: Record<string, unknown> = {},
+  inventory: ProductSourceInventory = productSourceInventory(dir),
 ): KnipReport {
   const plainArgs = ["--reporter", "json", "--no-exit-code"];
   let args = plainArgs;
@@ -263,7 +264,7 @@ function execKnip(
     const configPath = join(dir, configName);
     if (executablePath) {
       const importPath = `./${basename(executablePath)}`;
-      const inventoryIgnore = productInventoryKnipIgnore(dir);
+      const inventoryIgnore = productInventoryKnipIgnore(inventory);
       writeFileSync(configPath, [
         `import original from ${JSON.stringify(importPath)};`,
         `const packageConfig = ${JSON.stringify(packageConfig)};`,
@@ -294,18 +295,18 @@ function execKnip(
   }
 }
 
-function productInventoryKnipIgnore(dir: string): string[] {
-  return productSourceInventory(dir).excludedDirectories
+function productInventoryKnipIgnore(inventory: ProductSourceInventory): string[] {
+  return inventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
     .map((entry) => entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
 }
 
-function withProductInventoryIgnore(dir: string, config: Record<string, unknown>): Record<string, unknown> {
+function withProductInventoryIgnore(config: Record<string, unknown>, inventory: ProductSourceInventory): Record<string, unknown> {
   const configured = config.ignore;
   const existing = typeof configured === "string"
     ? [configured]
     : Array.isArray(configured) ? configured.filter((value): value is string => typeof value === "string") : [];
-  const generated = productInventoryKnipIgnore(dir);
+  const generated = productInventoryKnipIgnore(inventory);
   return { ...config, ignore: [...new Set([...existing, ...generated])] };
 }
 
@@ -314,7 +315,10 @@ function withProductInventoryIgnore(dir: string, config: Record<string, unknown>
 // that supplied its own config keeps confirmed file findings.
 // #810: `pluginsDisabled`/`reducedReason` mark a scope that only ran after the degraded retry
 // (knip couldn't load the target's config/plugin configs — the missing-node_modules case).
-function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
+function runKnip(
+  dir: string,
+  inventory: ProductSourceInventory,
+): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
   // First-attempt config: an inferred config for a config-less scope (#696), the
   // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
   // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
@@ -354,9 +358,10 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     return {
       report: execKnip(
         dir,
-        config ? withProductInventoryIgnore(dir, config) : undefined,
+        config ? withProductInventoryIgnore(config, inventory) : undefined,
         existing?.executablePath,
         existing?.packageConfig,
+        inventory,
       ),
       entriesInferred,
       pluginsDisabled: false,
@@ -370,7 +375,13 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     // second full timeout; and with no plugin list we can't build the retry config. Either way, let
     // the original error propagate to the M5-00 gap disclosure — fail loud, never a silent degrade.
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
-    const report = execKnip(dir, withProductInventoryIgnore(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)));
+    const report = execKnip(
+      dir,
+      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      undefined,
+      {},
+      inventory,
+    );
     return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
   }
 }
@@ -380,10 +391,20 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
 // framework/provider config against that partial tree. Start directly in the same source-only tier
 // as #810's retry, with every plugin disabled and Harvey-inferred entries. An empty live plugin
 // catalog leaves no complete disable list; abort into M5-00 before starting Knip.
-function runKnipDegraded(dir: string, reason: string): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+function runKnipDegraded(
+  dir: string,
+  reason: string,
+  inventory: ProductSourceInventory,
+): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
-    report: execKnip(dir, withProductInventoryIgnore(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES))),
+    report: execKnip(
+      dir,
+      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      undefined,
+      {},
+      inventory,
+    ),
     entriesInferred: true,
     pluginsDisabled: true,
     reducedReason: reason,
@@ -565,10 +586,11 @@ try {
 for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
+  const scopeInventory = productSourceInventoryForScope(targetDir, scope, sourceInventory);
   try {
     const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
-      ? runKnipDegraded(scope, degradedKnipReason)
-      : runKnip(scope);
+      ? runKnipDegraded(scope, degradedKnipReason, scopeInventory)
+      : runKnip(scope, scopeInventory);
     if (pluginsDisabled) {
       for (const issue of report.issues) {
         let source: string | undefined;
@@ -597,7 +619,7 @@ for (const scope of scopes) {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
       // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
       // operate on the real scope dir, not the merged-report-relative path.
-      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope, "", productSourceInventory(scope)), hasViteEntryMarkers(scope), isViteResolvable(scope));
+      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope, "", scopeInventory), hasViteEntryMarkers(scope), isViteResolvable(scope));
       if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));

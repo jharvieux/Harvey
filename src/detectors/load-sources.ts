@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventory } from "../source-inventory.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 import type { SourceInput } from "./common.js";
 
 // #1065: plain .js/.cjs (and .mts/.cts) were absent here until 2026-07-25, so every
@@ -99,7 +99,7 @@ export function isTestSourcePath(path: string): boolean {
 
 function loadTree(root: string, include: (entry: string) => boolean): SourceInput[] {
   const files: SourceInput[] = [];
-  const inventory = productSourceInventory(root);
+  const inventory = productSourceInventoryForTarget(root);
   const walk = (dir: string) => {
     for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
