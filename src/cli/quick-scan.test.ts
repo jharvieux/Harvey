@@ -49,7 +49,7 @@ const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks"].every(
 // CLI test — awaiting a spawned child leaves the loop free regardless of how slow the call gets.
 function run(args: string[]): Promise<{ stdout: string }> {
   return new Promise((res, rej) => {
-    const child = spawn("node_modules/.bin/tsx", args, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(process.execPath, ["--import", "tsx", ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"] });
     let stdout = "";
     // setEncoding, never `stdout += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
     // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
@@ -214,6 +214,45 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
     expect(rendered).toContain("TypeScript compiler output declared by tsconfig.json");
     expect(rendered).not.toContain("M4   Duplication — A");
     expect(rendered).not.toContain("M1 security & multi-tenant isolation — Hygiene Grade A");
+  }, 120000);
+
+  it("reports a producer-backed Python M5 assessment beside an excluded JS/TS population", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quick-polyglot-assessment-"));
+    dirs.push(repo);
+    const write = (path: string, text: string) => {
+      const full = join(repo, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, text);
+    };
+    write("package.json", JSON.stringify({ name: "polyglot-assessment", private: true }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "compiled" } }));
+    write("compiled/output.ts", "export const generated = true;\n");
+    write("worker.py", "def work():\n    try:\n        run()\n    except Exception:\n        pass\n");
+
+    const jsonOut = join(repo, "quick.json");
+    const sarifOut = join(repo, "quick.sarif");
+    await run([CLI, "--dir", repo, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const report = JSON.parse(readFileSync(jsonOut, "utf8")) as {
+      scorecard: { dimensions: Array<{ module: string; status: string; grade?: string; count?: number; scope: string }> };
+    };
+    expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
+      status: "graded",
+      grade: "F",
+      count: 1,
+      scope: expect.stringMatching(/examined 1 authored source file.*No JS\/TS product source was inspected/),
+    });
+    for (const module of ["M4", "M6", "M7", "M8", "M9"]) {
+      expect(report.scorecard.dimensions.find((row) => row.module === module)?.status).toBe("not-assessed");
+    }
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as { runs: Array<{ properties: { harveyCoverageAbsent: string } }> };
+    expect(sarif.runs[0]?.properties.harveyCoverageAbsent).toContain("graded M5");
+    expect(sarif.runs[0]?.properties.harveyCoverageAbsent).not.toContain("M4, M5, M6");
+
+    const textOut = join(repo, "quick.txt");
+    await run([CLI, "--dir", repo, "--out", textOut]);
+    const rendered = readFileSync(textOut, "utf8");
+    expect(rendered).toContain("M5   Dead code & slop — F");
+    expect(rendered).toContain("No JS/TS product source was inspected");
   }, 120000);
 });
 

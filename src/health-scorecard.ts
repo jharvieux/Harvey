@@ -353,6 +353,13 @@ export interface DuplicationMeasure {
   totalLines: number;
 }
 
+export interface SourceDimensionAssessment {
+  findings: Finding[];
+  kloc: number;
+  examinedFiles: number;
+  scope: string;
+}
+
 export interface ScorecardInput {
   // M1's hygiene grade, computed by src/quick-scan.ts on its own severity-weighted curve and passed
   // in verbatim — this module never re-grades M1, so the #244/#996 pinned promises stay pinned.
@@ -385,6 +392,8 @@ export interface ScorecardInput {
   piiGap?: string;
   /** Positive evidence that configured exclusions removed every discovered product source file. */
   sourcePopulationGap?: string;
+  /** A producer-backed M5 assessment that remains valid when the JS/TS pricing population is empty. */
+  m5SourceAssessment?: SourceDimensionAssessment;
 }
 
 export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
@@ -456,13 +465,14 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     );
   }
 
-  dimensions.push(input.sourcePopulationGap
+  dimensions.push(input.sourcePopulationGap && !input.m5SourceAssessment
     ? notAssessedRow(spec("M5"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary")
     : gradedDensityRow(
         spec("M5"),
-        detectSlopFindings(sources),
-        kloc,
-        "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.",
+        input.m5SourceAssessment?.findings ?? detectSlopFindings(sources),
+        input.m5SourceAssessment?.kloc ?? kloc,
+        input.m5SourceAssessment?.scope
+          ?? "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.",
       ));
 
   // M6 — indicator-only by the correction's own framing: a hand-rolled shape may be a deliberate

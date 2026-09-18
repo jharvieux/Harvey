@@ -37,7 +37,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
-import { loadSources } from "../detectors/load-sources.js";
+import { loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runJscpd } from "../scan/duplication.js";
@@ -49,6 +49,7 @@ import { buildSbom } from "../sbom.js";
 import { buildHealthScorecard, type HealthDimension, type HealthScorecard, type PiiTableBand, type ScorecardInput } from "../health-scorecard.js";
 import { duplicationSummary, jscpdToFindings } from "../quality-scan.js";
 import { productSourceInventoryForTarget } from "../source-inventory.js";
+import { sourcePopulationReceipt } from "../scan/polyglot-quality.js";
 import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
@@ -480,7 +481,7 @@ async function main(): Promise<void> {
         (configuredExclusions.length ? configuredExclusions : sourceInventory.excludedDirectories)
           .map((entry) => `${entry.path} (${entry.reason})`)
           .join("; ")
-      }. No product source was inspected.`
+      }. No JS/TS product source was inspected.`
     : undefined;
   const report = buildQuickScanReport(rawFindings, { size });
   const m1AssessmentGap = sourcePopulationGap && report.total === 0 ? sourcePopulationGap : undefined;
@@ -497,6 +498,28 @@ async function main(): Promise<void> {
   // The FULL set, tests included: buildHealthScorecard splits it (product code for M5/M7/M9, test
   // files for M8's census), so the split lives in one place rather than at each call site.
   const sources = loadSources(absDir);
+  const identifiedSources = loadSourceInventory(absDir);
+  const m5Receipt = sourcePopulationReceipt("M5", identifiedSources);
+  const m5ExaminedLanguages = new Set(
+    m5Receipt.populations.filter((population) => population.examined.count > 0).map((population) => population.language),
+  );
+  const m5ExaminedSources = identifiedSources.filter((source) => {
+    const language = sourceLanguage(source.path);
+    return language !== undefined && m5ExaminedLanguages.has(language);
+  });
+  const m5SourceAssessment = sourcePopulationGap && m5ExaminedSources.length > 0
+    ? {
+        findings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
+        kloc: m5ExaminedSources.reduce(
+          (lines, source) => lines + source.text.split("\n").filter((line) => line.trim() !== "").length,
+          0,
+        ) / 1000,
+        examinedFiles: m5ExaminedSources.length,
+        scope:
+          `Bounded M5 source rules examined ${m5ExaminedSources.length} authored source file(s), with per-language coverage disclosures kept alongside the result. `
+          + sourcePopulationGap,
+      }
+    : undefined;
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
     m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length, findings: selectGradedFindings(rawFindings) },
@@ -512,6 +535,7 @@ async function main(): Promise<void> {
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
     testRunnerDeclared: declaresTestScript(absDir),
     ...(sourcePopulationGap ? { sourcePopulationGap } : {}),
+    ...(m5SourceAssessment ? { m5SourceAssessment } : {}),
     ...("gap" in pii ? { piiGap: pii.gap } : { pii }),
   });
 

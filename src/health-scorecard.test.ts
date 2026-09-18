@@ -82,6 +82,44 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(scorecard.grade).toBe("B");
   });
 
+  it("keeps a producer-backed M5 assessment when configured boundaries excluded only JS/TS", () => {
+    const reason = "All 1 discovered JS/TS source file was excluded. No JS/TS product source was inspected.";
+    const finding = f("M5 — Python empty/pass exception handler", "worker.py:4");
+    const scorecard = buildHealthScorecard(input({
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: reason,
+      m5SourceAssessment: {
+        findings: [finding],
+        kloc: 0.004,
+        examinedFiles: 1,
+        scope: `Bounded M5 source rules examined 1 authored source file. ${reason}`,
+      },
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
+      status: "graded",
+      grade: "F",
+      count: 1,
+      scope: expect.stringContaining(reason),
+    });
+    expect(scorecard.dimensions.find((row) => row.module === "M4")).toMatchObject({ status: "not-assessed", reason });
+  });
+
+  it("represents a producer-backed zero-finding M5 assessment as examined", () => {
+    const scorecard = buildHealthScorecard(input({
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: "The JS/TS population was excluded.",
+      m5SourceAssessment: {
+        findings: [],
+        kloc: 0.004,
+        examinedFiles: 1,
+        scope: "A bounded M5 rule set examined one Python file.",
+      },
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "graded", grade: "A", count: 0 });
+  });
+
   it("weights every graded dimension equally — security is one dimension, not the subject", () => {
     // The correction's core claim. A catastrophic M1 must not be able to drive the whole health
     // grade to F on its own when four other dimensions are clean.
