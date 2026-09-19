@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { GateReport, GateResult } from "../fix/gate.js";
+import { GitHubTracker } from "./github.js";
 import type { CreatedRef, TicketState, TicketWriteback } from "./types.js";
 import { writeBackVerification } from "./verify-writeback.js";
 
@@ -107,5 +108,24 @@ describe("writeBackVerification", () => {
     expect(res.closed).toBe(1);
     expect(res.records[0]?.error).toContain("no workflow transition");
     expect(res.records[1]?.action).toBe("closed"); // the batch went on
+  });
+
+  it("persists a redacted tracker error when an upstream response echoes the configured token", async () => {
+    const token = "WRITEBACK-SECRET-0xDEADBEEF";
+    let authorization = "";
+    const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+      authorization = (init?.headers as Record<string, string>)?.Authorization ?? "";
+      return new Response(`proxy rejected ${token}; header ${authorization}`, { status: 502 });
+    }) as typeof fetch;
+    const tracker = new GitHubTracker({ token, owner: "acme", repo: "app", fetchImpl });
+
+    const res = await writeBackVerification(tracker, report([result({ status: "resolved" })]));
+    const saved = JSON.stringify(res);
+
+    expect(res.failed).toBe(1);
+    expect(saved).not.toContain(token);
+    expect(saved).not.toContain(authorization);
+    expect(res.records[0]?.error).toContain("proxy rejected");
+    expect(res.records[0]?.error).toContain("502");
   });
 });
