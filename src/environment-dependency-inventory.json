@@ -43,12 +43,12 @@
   ],
   "population": {
     "authoritativeDeclaredIdentities": 280,
-    "authoritativeDynamic": 456,
+    "authoritativeDynamic": 457,
     "authoritativeObservedIdentities": 272,
-    "authoritativeRecords": 2221,
+    "authoritativeRecords": 2222,
     "authoritativeUnresolved": 1515,
     "authoritativeVenues": 108,
-    "candidateVenues": 2513,
+    "candidateVenues": 2514,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 237,
-        "candidateRows": 785,
+        "candidateRows": 786,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1022,
-        "unresolved": 1016,
-        "whollyUnbound": 1017
+        "rows": 1023,
+        "unresolved": 1017,
+        "whollyUnbound": 1018
       },
       {
         "accepted": 0,
@@ -117,16 +117,16 @@
       },
       {
         "accepted": 0,
-        "authoritativeRecords": 156,
+        "authoritativeRecords": 157,
         "candidateRows": 129,
         "dependencyClass": "shell",
-        "dynamic": 156,
+        "dynamic": 157,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 13,
-        "rows": 285,
+        "rows": 286,
         "unresolved": 129,
-        "whollyUnbound": 272
+        "whollyUnbound": 273
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2624,
+        "candidateRows": 2625,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3740,
-        "unresolved": 3740,
-        "whollyUnbound": 3740
+        "rows": 3741,
+        "unresolved": 3741,
+        "whollyUnbound": 3741
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7165,
+    "noAssertions": 7168,
     "opaqueVenues": 3,
-    "residualRows": 2624,
-    "rows": 8316,
+    "residualRows": 2625,
+    "rows": 8319,
     "schemaAssertions": 10,
-    "venues": 2624,
-    "vocabularyCandidates": 3471
+    "venues": 2625,
+    "vocabularyCandidates": 3472
   },
   "reconciliations": [
     {
@@ -20534,7 +20534,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 95,
+        "line": 199,
         "path": ".github/workflows/acceptance-close.yml"
       },
       "freshness": {
@@ -20608,7 +20608,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 96,
+        "line": 101,
         "path": ".github/workflows/acceptance-close.yml"
       },
       "freshness": {
@@ -20726,14 +20726,10 @@
         "resolution": "authoritative"
       },
       "decision": null,
-      "declarationSource": {
-        "anchor": "jobs/acceptance-close",
-        "line": 67,
-        "path": ".github/workflows/acceptance-close.yml"
-      },
-      "declaredIdentity": "actions/checkout@v4",
-      "dependency": "workflow-action",
-      "dependencyClass": "tool",
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "command-shell",
+      "dependencyClass": "shell",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/acceptance-close",
@@ -20746,7 +20742,7 @@
         "observedAt": null,
         "requirement": "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence."
       },
-      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/0/uses:tool:workflow-action",
+      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/0/shell:shell:command-shell",
       "identitySource": null,
       "links": [
         "#1909"
@@ -20754,10 +20750,10 @@
       "observedIdentity": null,
       "owner": ".github/workflows/acceptance-close.yml",
       "pinSource": null,
-      "reason": "An action ref (including a content SHA) identifies action source, not the executing action's OS/runtime or mutable downloads.",
+      "reason": "Shell command and flags may be declared; shell binary version and runner-default behavior remain unresolved without a run receipt.",
       "resolution": "dynamic",
       "schemaOwner": null,
-      "state": "recorded",
+      "state": "wholly-unbound",
       "venue": ".github/workflows/acceptance-close.yml"
     },
     {
@@ -20778,7 +20774,7 @@
         "line": 67,
         "path": ".github/workflows/acceptance-close.yml"
       },
-      "declaredIdentity": "pnpm/action-setup@v4",
+      "declaredIdentity": "actions/checkout@v4",
       "dependency": "workflow-action",
       "dependencyClass": "tool",
       "environmentOwner": "#1909 stability evidence",
@@ -20825,7 +20821,7 @@
         "line": 67,
         "path": ".github/workflows/acceptance-close.yml"
       },
-      "declaredIdentity": "actions/setup-node@v4",
+      "declaredIdentity": "pnpm/action-setup@v4",
       "dependency": "workflow-action",
       "dependencyClass": "tool",
       "environmentOwner": "#1909 stability evidence",
@@ -20867,10 +20863,14 @@
         "resolution": "authoritative"
       },
       "decision": null,
-      "declarationSource": null,
-      "declaredIdentity": null,
-      "dependency": "command-shell",
-      "dependencyClass": "shell",
+      "declarationSource": {
+        "anchor": "jobs/acceptance-close",
+        "line": 67,
+        "path": ".github/workflows/acceptance-close.yml"
+      },
+      "declaredIdentity": "actions/setup-node@v4",
+      "dependency": "workflow-action",
+      "dependencyClass": "tool",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/acceptance-close",
@@ -20883,7 +20883,7 @@
         "observedAt": null,
         "requirement": "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence."
       },
-      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/3/shell:shell:command-shell",
+      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/3/uses:tool:workflow-action",
       "identitySource": null,
       "links": [
         "#1909"
@@ -20891,10 +20891,10 @@
       "observedIdentity": null,
       "owner": ".github/workflows/acceptance-close.yml",
       "pinSource": null,
-      "reason": "Shell command and flags may be declared; shell binary version and runner-default behavior remain unresolved without a run receipt.",
+      "reason": "An action ref (including a content SHA) identifies action source, not the executing action's OS/runtime or mutable downloads.",
       "resolution": "dynamic",
       "schemaOwner": null,
-      "state": "wholly-unbound",
+      "state": "recorded",
       "venue": ".github/workflows/acceptance-close.yml"
     },
     {
@@ -20996,6 +20996,49 @@
         "resolution": "authoritative"
       },
       "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "command-shell",
+      "dependencyClass": "shell",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "jobs/acceptance-close",
+        "line": 67,
+        "path": ".github/workflows/acceptance-close.yml"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence."
+      },
+      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/6/shell:shell:command-shell",
+      "identitySource": null,
+      "links": [
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": ".github/workflows/acceptance-close.yml",
+      "pinSource": null,
+      "reason": "Shell command and flags may be declared; shell binary version and runner-default behavior remain unresolved without a run receipt.",
+      "resolution": "dynamic",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": ".github/workflows/acceptance-close.yml"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "jobs/acceptance-close",
+          "line": 67,
+          "path": ".github/workflows/acceptance-close.yml"
+        },
+        "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
       "declarationSource": {
         "anchor": "jobs/acceptance-close",
         "line": 67,
@@ -21016,7 +21059,7 @@
         "observedAt": null,
         "requirement": "Bind each actual run to resolved runner/image/runtime/shell identity before using its environment behavior as stable evidence."
       },
-      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/6/uses:tool:workflow-action",
+      "id": ".github/workflows/acceptance-close.yml#jobs/acceptance-close/steps/7/uses:tool:workflow-action",
       "identitySource": null,
       "links": [
         "#1909"
@@ -89695,6 +89738,80 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/acceptance-conservation.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 3,
+        "path": "src/acceptance-evidence-revision.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/acceptance-evidence-revision.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/acceptance-evidence-revision.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/acceptance-evidence-revision.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/acceptance-evidence-revision.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/acceptance-evidence-revision.test.ts"
     },
     {
       "assertionVenue": null,
@@ -356824,23 +356941,23 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "c261a63db72d3b326799b51a44e419216ebc00e7",
-    "commitPayload": "dHJlZSA0ZTE0MzljYTE5MzM2MmFhYTQ2MjQ3YzYyY2I0YTE3YzcxY2I4NTVhCnBhcmVudCBjZTg0NmM0NjBmZWVhNWU4ODMxOWI1MzBkOTEwNDRmYmU0NDAxMmQ0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5MzE1Mjg1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5MzE1MzA4IC0wNTAwCgpFcmFzZSBjZW5zdXMgdGhpcyBwYXJhbWV0ZXJzIGJlZm9yZSBhcmd1bWVudCBiaW5kaW5nICgjMTkwNikK",
+    "commit": "d70d8bcd055c798f4e2147200ea268689ba8ed88",
+    "commitPayload": "dHJlZSAxMTZiY2MwOTlmYzdlOGZiY2ExZWI0ZTdhNDVmZDAyYWM3ZDA4YTFlCnBhcmVudCAxZWRlMGQ5ZGZiYmU4NTg3MTgwNGM4YTRiNDBmN2ZjYzk3ZTgxMjgwCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5NTEyNjIxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5NTEyNjIxIC0wNTAwCgpCb3VuZCBhY2NlcHRhbmNlIGNvbXBhcmlzb24gb3V0cHV0ICgjMjA2OCkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
-        "gitOid": "dffc852f4fb48a4af408d86b901e322e9421f3b7",
+        "gitOid": "204bc7a39cf1a2a424a7c0783123d37f0d5896df",
         "path": "docs/design/environment-dependency-census.md"
       },
       {
         "gitMode": "100644",
-        "gitOid": "5d93144e05da2002d7d72ef1e4dcc23513e4e618",
+        "gitOid": "580482573028d4007d4e4a52ecb5ea222d884b90",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "27297dc78560d4c14d912cced7536c97b9dabc4684f24600d98974f13dd284dc",
-    "tree": "4e1439ca193362aaa46247c62cb4a17c71cb855a"
+    "populationSha256": "bab8507e8eaf5ee5b1106e41b9cb13be2feaf492e9720fa8d857e3bc71430b83",
+    "tree": "116bcc099fc7e8fbca1eb4e7a45fd02ac7d08a1e"
   },
   "venues": [
     {
@@ -357189,11 +357306,11 @@
       "sha256": "d0ca6d737fcbe4ca236bfe6310effcc940b1136d7e840185ce4011b337b9dfa3"
     },
     {
-      "bytes": 7318,
+      "bytes": 14675,
       "disposition": "authoritative-adapter",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "b2ad7df9acd8a6d0a4417133b0f26acb2699bb98",
+      "gitOid": "a9c66332501658a6c5f4861a64556574a6721c2b",
       "id": ".github/workflows/acceptance-close.yml",
       "kind": "workflow",
       "literalCount": 0,
@@ -357201,7 +357318,7 @@
       "owner": "workflow/action declaration; #1909 runtime receipts",
       "path": ".github/workflows/acceptance-close.yml",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "2c390e860022f279dbd7a48eafc3bcea51e6ef423a04802317916bfcfce8cbd8"
+      "sha256": "3a627f1984acce3042910ab2af589e9dd2b8fbba030c444bbce00ecbe8230307"
     },
     {
       "bytes": 8099,
@@ -362452,6 +362569,21 @@
       "path": "src/acceptance-conservation.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "78140125134de64253cd12bc6f82514f6124820fb08be54775566f125de88f70"
+    },
+    {
+      "bytes": 23677,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "2c4eb7be9300d1e80223a4c0a9d5b9cce47e3515",
+      "id": "src/acceptance-evidence-revision.test.ts",
+      "kind": "source",
+      "literalCount": 367,
+      "literalSha256": "e45b16b589cbcf41d67310d5b5b806d70032367257199df8cbe09193834705c4",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/acceptance-evidence-revision.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "007d653a1e3b9ea5069eaa2e481208a9e6dc68df857abe6f21b886b07d096b70"
     },
     {
       "bytes": 2339,
