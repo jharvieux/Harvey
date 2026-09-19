@@ -296,6 +296,37 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     expect(parsed.moduleRecord?.status).toBe("partial");
   });
 
+  it("counts missing compiler-live overlay inputs in the actual imported mutation report", async () => {
+    const repo = fixtureRepo({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }),
+      "outside.ts": "export { one } from './optional/overlay/live/one.js';\nexport { two } from './optional/overlay/live/two.js';\n",
+      "optional/install.sh": [
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+        'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+        'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+        ...["one", "two", "three"].map((name) => `cp "$ROOT_DIR/live/${name}.ts" "$BACKUP_DIR/live/${name}.ts"`),
+        ...["one", "two", "three"].map((name) => `cp "$OVERLAY_DIR/live/${name}.ts" "$ROOT_DIR/live/${name}.ts"`),
+      ].join("\n"),
+      ...Object.fromEntries(["one", "two", "three"].flatMap((name) => [
+        [`live/${name}.ts`, `export const original${name} = true;\n`],
+        [`optional/overlay/live/${name}.ts`, `export const ${name} = true;\n`],
+      ])),
+    });
+    const reportPath = join(repo, "overlay-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", config: { mutate: ["outside.ts", "optional/**/*.ts"] }, files: { "outside.ts": { mutants: [killed] } } }));
+    const result = await runCli(repo, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: { configuredFileCount: number; expectedFileCount: number; verified: boolean; missing: string[]; files: Array<{ path: string; inventory: string }> };
+      moduleRecord?: { status: string };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 4, expectedFileCount: 3, verified: false });
+    expect(parsed.scope.missing).toEqual(["optional/overlay/live/one.ts", "optional/overlay/live/two.ts"]);
+    expect(parsed.scope.files.find((file) => file.path === "optional/overlay/live/three.ts")).toMatchObject({ inventory: "excluded" });
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
+
   it("inherits root product boundaries when an app workspace is scanned directly (#2132)", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-workspace-inventory-"));
     dirs.push(root);

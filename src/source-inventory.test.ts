@@ -492,6 +492,63 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("patches/authored-one.ts")).toBeUndefined();
   });
 
+  it.each([false, true])("retains compiler-live overlay files and ancestors while excluding inactive siblings (alias %s)", (alias) => {
+    const root = fixture({
+      "package.json": "{}",
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }),
+      "outside.ts": `export { one } from './${alias ? "active-alias" : "optional/overlay/live"}/one.js';\n`,
+      "optional/install.sh": [
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+        'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+        'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+        'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/live/one.ts"',
+        'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/live/two.ts"',
+        'cp "$OVERLAY_DIR/live/one.ts" "$ROOT_DIR/live/one.ts"',
+        'cp "$OVERLAY_DIR/live/two.ts" "$ROOT_DIR/live/two.ts"',
+      ].join("\n"),
+      "optional/overlay/live/one.ts": "export const one = true;\n",
+      "optional/overlay/live/two.ts": "export const inactive = true;\n",
+      "live/one.ts": "export const originalOne = true;\n",
+      "live/two.ts": "export const originalTwo = true;\n",
+      "node_modules/pkg/index.ts": "export const dependency = true;\n",
+    });
+    if (alias) symlinkSync("optional/overlay/live", join(root, "active-alias"));
+
+    const inventory = productSourceInventory(root);
+    for (const path of ["optional", "optional/overlay", "optional/overlay/live", "optional/overlay/live/one.ts"]) {
+      expect(inventory.excludedDirectoryFor(path)).toBeUndefined();
+    }
+    expect(inventory.excludedDirectoryFor("optional/overlay/live/two.ts")).toMatchObject({ match: "exact" });
+    if (alias) expect(inventory.excludedDirectoryFor("active-alias/two.ts")).toMatchObject({ match: "exact" });
+    expect(inventory.excludedDirectoryFor("node_modules/pkg/index.ts")).toMatchObject({ path: "node_modules" });
+    expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "optional/overlay", reason: expect.stringContaining("compiler input"),
+    }));
+    expect(loadSourceInventory(root).map((file) => file.path)).toContain("optional/overlay/live/one.ts");
+    const scope = resolveScanScope(root);
+    try {
+      expect(existsSync(join(scope.scanDir, "optional/overlay/live/one.ts"))).toBe(true);
+      expect(existsSync(join(scope.scanDir, "optional/overlay/live/two.ts"))).toBe(false);
+    } finally {
+      scope.cleanup();
+    }
+  });
+
+  it("retains compiler input identity reached through an alias inside a configured output", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }),
+      "vite.config.ts": "export default { build: { outDir: 'compiled' } };\n",
+      "outside.ts": "export { one } from './active-alias/one.js';\n",
+      "compiled/one.ts": "export const one = true;\n",
+    });
+    symlinkSync("compiled", join(root, "active-alias"));
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("compiled/one.ts")).toBeUndefined();
+    expect(loadSourceInventory(root).map((file) => file.path)).toContain("compiled/one.ts");
+  });
+
   it("retains authored files when copy steps target themselves or another file in the same tree", () => {
     const root = fixture({
       "package.json": "{}",

@@ -222,6 +222,41 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(scope.observation.productSources.count).toBe(6);
   }, 30000);
 
+  it("reports compiler-live overlay findings through the quality and quick-scan CLIs", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-live-overlay-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "live-overlay-fixture", private: true }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }));
+    write("knip.json", JSON.stringify({ entry: ["outside.ts"], project: ["**/*.ts"] }));
+    write("outside.ts", "import { one } from './optional/overlay/live/one.js';\nimport { two } from './optional/overlay/live/two.js';\nconsole.log(one(), two());\n");
+    write("optional/install.sh", [
+      'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+      'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+      'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+      'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+      ...["one", "two", "three"].map((name) => `cp "$ROOT_DIR/live/${name}.ts" "$BACKUP_DIR/live/${name}.ts"`),
+      ...["one", "two", "three"].map((name) => `cp "$OVERLAY_DIR/live/${name}.ts" "$ROOT_DIR/live/${name}.ts"`),
+    ].join("\n"));
+    for (const name of ["one", "two", "three"]) {
+      write(`live/${name}.ts`, `export const original${name} = true;\n`);
+      write(`optional/overlay/live/${name}.ts`, `${CLONED_BLOCK}\nexport function ${name}() { throw new Error("Not implemented"); }\n`);
+    }
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M4 — Duplication", location: expect.stringMatching(/optional\/overlay\/live\/one\.ts.*optional\/overlay\/live\/two\.ts|optional\/overlay\/live\/two\.ts.*optional\/overlay\/live\/one\.ts/),
+    }));
+    expect(findings.some((finding) => finding.location.includes("optional/overlay/live/three.ts"))).toBe(false);
+    const quickPath = join(repo, "quick-out.json");
+    await spawnCli(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/quick-scan.ts"), "--dir", repo, "--json", "--out", quickPath], REPO_ROOT);
+    const quick = JSON.parse(readFileSync(quickPath, "utf8")) as { scorecard: { dimensions: Array<{ module: string; count?: number }> } };
+    expect(quick.scorecard.dimensions.find((dimension) => dimension.module === "M5")).toMatchObject({ count: 2 });
+  }, 30000);
+
   it("preserves executable Knip config imports while applying package-store exclusions", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));
     dirs.push(repo);

@@ -510,8 +510,10 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
   const composerConfigs: string[] = [];
   const goModules: string[] = [];
   const npmrcConfigs: string[] = [];
+  const candidateFiles: string[] = [];
   const collectConfigs = (dir: string): void => {
     for (const entry of readEntriesSafe(dir).entries) {
+      if (!entry.isDirectory) candidateFiles.push(entry.path);
       if (entry.isDirectory) {
         const dependencyBoundary = exclusions[posix(relative(root, entry.path))];
         if (!Object.hasOwn(alwaysExcluded, entry.name)
@@ -542,26 +544,36 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     tsconfigs.push(...plan.referencedConfigs);
   }
   const compilerInputs = [...new Set([...inheritedInputs, ...tsPlans.flatMap((plan) => plan.inputFiles)])];
+  const inputIdentities = compilerInputs.map((path) => ({ path, canonical: canonicalExistingPath(path) }));
+  const compilerInputPaths = new Set(inputIdentities.flatMap(({ path, canonical }) => canonical ? [path, canonical] : [path]));
+  const isCompilerInput = (path: string): boolean => compilerInputPaths.has(path)
+    || compilerInputPaths.has(canonicalExistingPath(path) ?? path);
+  const inputsWithin = (directory: string): string[] => {
+    const canonicalDirectory = canonicalExistingPath(directory);
+    return inputIdentities.filter((input) => pathIsInside(directory, input.path)
+      || (canonicalDirectory !== undefined && input.canonical !== undefined && pathIsInside(canonicalDirectory, input.canonical)))
+      .map((input) => input.path);
+  };
   for (const plan of tsPlans) {
     const configLabel = posix(relative(root, plan.configPath));
     if (plan.error) gaps.push({ path: configLabel, reason: `TypeScript effective configuration is incomplete: ${plan.error}` });
     const declaredAt = plan.outputDeclaredAt ? posix(relative(root, plan.outputDeclaredAt)) : configLabel;
     const reason = `TypeScript compiler output declared by ${declaredAt}`;
     for (const emitted of plan.emittedFiles) {
-      if (!pathIsInside(root, emitted) || compilerInputs.includes(emitted)) continue;
+      if (!pathIsInside(root, emitted) || isCompilerInput(emitted)) continue;
       const emittedPath = posix(relative(root, emitted));
       if (emittedPath && emittedPath !== ".") exactFiles[emittedPath] = `${reason}; exact emitted artifact derived from the effective compiler inputs`;
     }
     for (const outputDirectory of plan.outputDirectories) {
       if (!pathIsInside(root, outputDirectory)) continue;
       const outputPath = posix(relative(root, outputDirectory));
-      const overlappingInputs = compilerInputs.filter((input) => pathIsInside(outputDirectory, input));
+      const overlappingInputs = inputsWithin(outputDirectory);
       if (!plan.emissionDisabled && !plan.error && overlappingInputs.length === 0) {
         addRelativeDirectory(exclusions, outputPath, reason);
         continue;
       }
-      // A build config cannot override source proven by a different checking/building config.
-      // With emission disabled, even a plausible output filename is not generated provenance.
+      // Preserve inputs selected by another config and limit exclusions to observed emitted files.
+      // Disabled emission leaves output-shaped filenames without generated-artifact provenance.
       gaps.push({
         path: configLabel,
         reason: overlappingInputs.length > 0
@@ -653,14 +665,13 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       addRelativeDirectory(exclusions, join(base, dirname((reporter as Record<string, unknown>).fileName as string)), `Stryker JSON report directory declared by ${label}`);
     }
   }
-  // A different configured producer can target a directory that contains a proven compiler
-  // input. A whole-directory ignore cannot represent that population safely, so retain the
-  // ambiguous directory and disclose only the boundary that overlaps the effective input set.
+  // Prefer observed compiler inputs over a configured output directory's inferred role.
+  // Retaining mixed directories keeps those source files available to the scanner population.
   for (const [path, reason] of Object.entries(exclusions)) {
     if (!/(?:output|coverage|temporary|report directory) declared/i.test(reason)) continue;
     if (reason.startsWith("TypeScript compiler output")) continue;
     const absolute = resolve(root, ...path.split("/"));
-    const overlappingInputs = compilerInputs.filter((input) => pathIsInside(absolute, input));
+    const overlappingInputs = inputsWithin(absolute);
     if (overlappingInputs.length === 0) continue;
     delete exclusions[path];
     const alreadyDisclosed = gaps.some((gap) => gap.reason.includes(`output ${path} overlaps`));
@@ -669,7 +680,35 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       reason: `Configured output ${path} overlaps ${overlappingInputs.length} effective TypeScript compiler input file(s); the ambiguous directory is retained as candidate source`,
     });
   }
-  Object.assign(exclusions, configuredInactiveOverlays(root));
+  let aliasesByIdentity: Map<string, string[]> | undefined;
+  for (const [path, reason] of Object.entries(configuredInactiveOverlays(root))) {
+    const population = filesBelow(root, path);
+    const liveFiles = population.filter((file) => isCompilerInput(resolve(root, file)));
+    if (liveFiles.length === 0) {
+      exclusions[path] = reason;
+      continue;
+    }
+    // Imported overlay files serve the current program as well as the installer. Keep their
+    // ancestors traversable and narrow the inactive population to individually evidenced files.
+    const inactiveFiles = population.filter((file) => !liveFiles.includes(file));
+    if (inactiveFiles.length > 0 && !aliasesByIdentity) {
+      aliasesByIdentity = new Map<string, string[]>();
+      for (const file of candidateFiles) {
+        const identity = canonicalExistingPath(file) ?? file;
+        const aliases = aliasesByIdentity.get(identity) ?? [];
+        aliases.push(posix(relative(root, file)));
+        aliasesByIdentity.set(identity, aliases);
+      }
+    }
+    for (const file of inactiveFiles) {
+      const identity = canonicalExistingPath(resolve(root, file)) ?? resolve(root, file);
+      for (const alias of aliasesByIdentity?.get(identity) ?? [file]) exactFiles[alias] = reason;
+    }
+    gaps.push({
+      path,
+      reason: `Staged install overlay ${path} overlaps ${liveFiles.length} effective TypeScript compiler input file(s); those live inputs are retained and ${inactiveFiles.length} inactive staged file(s) are excluded individually. Installer evidence: ${reason}`,
+    });
+  }
   return { directories: exclusions, files: exactFiles, gaps, compilerInputs };
 }
 
