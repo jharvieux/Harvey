@@ -2,7 +2,7 @@
 // dependency stores and configured build output. Directory names such as `reports`, `dist`, and
 // `vendor` are not evidence by themselves: a product can legitimately author code below each.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { readEntriesSafe } from "./fs-walk.js";
@@ -367,10 +367,15 @@ function staticCopySteps(scriptPath: string): StaticCopyStep[] {
 
   const steps: StaticCopyStep[] = [];
   for (const [order, line] of lines.entries()) {
-    const command = /^\s*cp(?:\s+-[^\s]+)*\s+(\S+)\s+(\S+)\s*$/.exec(line);
+    const command = /^\s*cp((?:\s+-[^\s]+)*)\s+(\S+)\s+(\S+)\s*$/.exec(line);
     if (!command) continue;
-    const source = staticShellPath(command[1]!, variables);
-    const destination = staticShellPath(command[2]!, variables);
+    const flags = command[1]!.trim().split(/\s+/).filter(Boolean);
+    // Interactive, no-clobber, update-only, dereference and other unmodelled modes do not prove
+    // that the destination is overwritten. Preserve source unless every supplied short flag has
+    // simple file-copy semantics that this narrow parser understands.
+    if (flags.some((flag) => !/^-[afprRvT]+$/.test(flag))) continue;
+    const source = staticShellPath(command[2]!, variables);
+    const destination = staticShellPath(command[3]!, variables);
     if (source && destination) steps.push({ source, destination, order });
   }
   return steps;
@@ -394,6 +399,19 @@ function filesBelow(root: string, relativeDirectory: string): string[] {
   return files;
 }
 
+function canonicalExistingPath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalPathIsInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith("/"));
+}
+
 function configuredInactiveOverlays(root: string): Record<string, string> {
   const scripts: string[] = [];
   const collectScripts = (directory: string): void => {
@@ -409,23 +427,36 @@ function configuredInactiveOverlays(root: string): Record<string, string> {
   const exclusions: Record<string, string> = {};
   for (const scriptPath of scripts) {
     const steps = staticCopySteps(scriptPath);
-    const overlaySources = new Set<string>();
+    const overlayDestinations = new Map<string, Set<string>>();
     for (const step of steps) {
       const source = relativeInside(root, step.source);
       const destination = relativeInside(root, step.destination);
       if (!source || !destination || !existsSync(step.source) || !existsSync(step.destination)) continue;
-      const backedUpFirst = steps.some((prior) => prior.order < step.order && resolve(prior.source) === resolve(step.destination));
-      if (backedUpFirst) overlaySources.add(source);
+      const sourceIdentity = canonicalExistingPath(step.source);
+      const destinationIdentity = canonicalExistingPath(step.destination);
+      if (!sourceIdentity || !destinationIdentity || sourceIdentity === destinationIdentity) continue;
+      const backedUpFirst = steps.some((prior) => {
+        if (prior.order >= step.order) return false;
+        return canonicalExistingPath(prior.source) === destinationIdentity;
+      });
+      if (!backedUpFirst) continue;
+      const destinations = overlayDestinations.get(source) ?? new Set<string>();
+      destinations.add(destinationIdentity);
+      overlayDestinations.set(source, destinations);
     }
-    if (overlaySources.size < 2) continue;
+    if (overlayDestinations.size < 2) continue;
 
     const candidateDirectories = new Set<string>();
-    for (const source of overlaySources) {
+    for (const source of overlayDestinations.keys()) {
       let candidate = posix(dirname(source));
       let accepted: string | undefined;
       while (candidate !== "." && candidate !== "") {
         const population = filesBelow(root, candidate);
-        if (population.length < 2 || population.some((file) => !overlaySources.has(file))) break;
+        if (population.length < 2 || population.some((file) => !overlayDestinations.has(file))) break;
+        const candidateIdentity = canonicalExistingPath(join(root, candidate));
+        if (!candidateIdentity || population.some((file) => {
+          return [...(overlayDestinations.get(file) ?? [])].some((destination) => canonicalPathIsInside(candidateIdentity, destination));
+        })) break;
         accepted = candidate;
         candidate = posix(dirname(candidate));
       }

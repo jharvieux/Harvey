@@ -182,6 +182,14 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/live/two.ts"',
       'cp "$OVERLAY_DIR/live/one.ts" "$ROOT_DIR/live/one.ts"',
       'cp "$OVERLAY_DIR/live/two.ts" "$ROOT_DIR/live/two.ts"',
+      'cp "$ROOT_DIR/patches/authored-one.ts" "$BACKUP_DIR/authored-one.ts"',
+      'cp "$ROOT_DIR/patches/authored-two.ts" "$BACKUP_DIR/authored-two.ts"',
+      'cp "$ROOT_DIR/patches/authored-one.ts" "$ROOT_DIR/patches/authored-one.ts"',
+      'cp "$ROOT_DIR/patches/authored-two.ts" "$ROOT_DIR/patches/authored-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-one.ts" "$BACKUP_DIR/cross-one.ts"',
+      'cp "$ROOT_DIR/patches/cross-two.ts" "$BACKUP_DIR/cross-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-one.ts" "$ROOT_DIR/patches/cross-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-two.ts" "$ROOT_DIR/patches/cross-one.ts"',
       '',
     ].join("\n"));
     write("optional/overlay/live/one.ts", CLONED_BLOCK);
@@ -190,6 +198,8 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     write("live/two.ts", "export const liveTwo = false;\n");
     write("patches/authored-one.ts", CLONED_BLOCK);
     write("patches/authored-two.ts", CLONED_BLOCK);
+    write("patches/cross-one.ts", "export const crossOne = true;\n");
+    write("patches/cross-two.ts", "export const crossTwo = false;\n");
 
     const findings = await runCli(repo, ["--scope-out", scopePath]);
     expect(findings.filter((finding) => finding.location.includes("optional/overlay"))).toEqual([]);
@@ -197,6 +207,9 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       taxonomy: "M4 — Duplication",
       location: expect.stringMatching(/patches\/authored-one\.ts.*patches\/authored-two\.ts|patches\/authored-two\.ts.*patches\/authored-one\.ts/),
     }));
+    for (const path of ["patches/cross-one.ts", "patches/cross-two.ts"]) {
+      expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: path }));
+    }
     expect(findings).toContainEqual(expect.objectContaining({
       id: "M4-SCOPE-00",
       evidence: expect.stringMatching(/`optional\/overlay\/\*\*`: 2 files.*optional\/install\.sh/),
@@ -205,8 +218,8 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       unitsExamined: number;
       observation: { productSources: { count: number } };
     };
-    expect(scope.unitsExamined).toBe(4);
-    expect(scope.observation.productSources.count).toBe(4);
+    expect(scope.unitsExamined).toBe(6);
+    expect(scope.observation.productSources.count).toBe(6);
   }, 30000);
 
   it("preserves executable Knip config imports while applying package-store exclusions", async () => {

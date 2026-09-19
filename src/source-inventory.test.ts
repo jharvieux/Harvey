@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -490,5 +490,83 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.jscpdIgnoreGlobs).toContain("optional/overlay/**");
     expect(inventory.excludedDirectoryFor("live/one.ts")).toBeUndefined();
     expect(inventory.excludedDirectoryFor("patches/authored-one.ts")).toBeUndefined();
+  });
+
+  it("retains authored files when copy steps target themselves or another file in the same tree", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "install.sh": [
+        'ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'BACKUP_DIR="$ROOT_DIR/backup"',
+        'cp "$ROOT_DIR/patches/self-one.ts" "$BACKUP_DIR/self-one.ts"',
+        'cp "$ROOT_DIR/patches/self-two.ts" "$BACKUP_DIR/self-two.ts"',
+        'cp "$ROOT_DIR/patches/self-one.ts" "$ROOT_DIR/patches/self-one.ts"',
+        'cp "$ROOT_DIR/patches/self-two.ts" "$ROOT_DIR/patches/self-two.ts"',
+        'cp "$ROOT_DIR/patches/cross-one.ts" "$BACKUP_DIR/cross-one.ts"',
+        'cp "$ROOT_DIR/patches/cross-two.ts" "$BACKUP_DIR/cross-two.ts"',
+        'cp "$ROOT_DIR/patches/cross-one.ts" "$ROOT_DIR/patches/cross-two.ts"',
+        'cp "$ROOT_DIR/patches/cross-two.ts" "$ROOT_DIR/patches/cross-one.ts"',
+      ].join("\n"),
+      "backup/.gitkeep": "",
+      "patches/self-one.ts": "export const selfOne = true;\n",
+      "patches/self-two.ts": "export const selfTwo = true;\n",
+      "patches/cross-one.ts": "export const crossOne = true;\n",
+      "patches/cross-two.ts": "export const crossTwo = true;\n",
+    });
+
+    const inventory = productSourceInventory(root);
+    for (const file of ["self-one.ts", "self-two.ts", "cross-one.ts", "cross-two.ts"]) {
+      expect(inventory.excludedDirectoryFor(`patches/${file}`)).toBeUndefined();
+    }
+  });
+
+  it("matches backup provenance through a canonical directory alias", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "install.sh": [
+        'ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'BACKUP_DIR="$ROOT_DIR/backup"',
+        'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/one.ts"',
+        'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/two.ts"',
+        'cp "$ROOT_DIR/patches/one.ts" "$ROOT_DIR/live-alias/one.ts"',
+        'cp "$ROOT_DIR/patches/two.ts" "$ROOT_DIR/live-alias/two.ts"',
+      ].join("\n"),
+      "backup/.gitkeep": "",
+      "live/one.ts": "export const liveOne = true;\n",
+      "live/two.ts": "export const liveTwo = true;\n",
+      "patches/one.ts": "export const overlayOne = true;\n",
+      "patches/two.ts": "export const overlayTwo = true;\n",
+    });
+    symlinkSync("live", join(root, "live-alias"));
+
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("patches/one.ts")).toMatchObject({
+      path: "patches",
+      reason: expect.stringContaining("install.sh"),
+    });
+    expect(inventory.excludedDirectoryFor("live/one.ts")).toBeUndefined();
+  });
+
+  it("does not infer an overlay from copy flags that may leave the destination unchanged", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "install.sh": [
+        'ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'BACKUP_DIR="$ROOT_DIR/backup"',
+        'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/one.ts"',
+        'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/two.ts"',
+        'cp -n "$ROOT_DIR/patches/one.ts" "$ROOT_DIR/live/one.ts"',
+        'cp -i "$ROOT_DIR/patches/two.ts" "$ROOT_DIR/live/two.ts"',
+      ].join("\n"),
+      "backup/.gitkeep": "",
+      "live/one.ts": "export const liveOne = true;\n",
+      "live/two.ts": "export const liveTwo = true;\n",
+      "patches/one.ts": "export const authoredOne = true;\n",
+      "patches/two.ts": "export const authoredTwo = true;\n",
+    });
+
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("patches/one.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("patches/two.ts")).toBeUndefined();
   });
 });
