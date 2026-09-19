@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AzureDevOpsTracker } from "./azure-devops.js";
 import { GitHubTracker } from "./github.js";
 import { GitLabTracker } from "./gitlab.js";
-import { TrackerError } from "./http.js";
+import { TrackerError, trackerFetch } from "./http.js";
 import { JiraTracker } from "./jira.js";
 import { LinearTracker } from "./linear.js";
 import type { Tracker } from "./types.js";
@@ -45,6 +45,11 @@ const adapters: { name: string; make: (fetchImpl: typeof fetch) => Tracker; toke
 ];
 
 const consoleMethods = ["log", "info", "warn", "error", "debug"] as const;
+
+function serializedErrorSurfaces(error: unknown): string[] {
+  const candidate = error as Error & { responseBody?: string };
+  return [candidate.message, candidate.stack ?? "", candidate.responseBody ?? "", JSON.stringify(candidate)];
+}
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -95,6 +100,51 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     expect(error.message).not.toContain(TOKEN);
     expect(String(error.stack ?? "")).not.toContain(TOKEN);
     expect(JSON.stringify(error)).not.toContain(TOKEN);
+  });
+
+  it("redacts echoed credentials and their Authorization encoding from HTTP errors", async () => {
+    let echoedAuthorization = "";
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      echoedAuthorization = (init?.headers as Record<string, string>)?.Authorization ?? "";
+      return new Response(`upstream denied request containing ${TOKEN} and ${echoedAuthorization}`, { status: 401 });
+    }) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await make(fetchImpl).createEpic({ title: "t", description: "d" });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(TrackerError);
+    expect((err as TrackerError).status).toBe(401);
+    for (const surface of serializedErrorSurfaces(err)) {
+      expect(surface).not.toContain(TOKEN);
+      expect(surface).not.toContain(echoedAuthorization);
+    }
+    expect((err as Error).message).toContain("upstream denied request");
+  });
+
+  it("redacts echoed credentials from thrown fetch exceptions", async () => {
+    let echoedAuthorization = "";
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      echoedAuthorization = (init?.headers as Record<string, string>)?.Authorization ?? "";
+      throw new Error(`proxy refused ${TOKEN}; request header was ${echoedAuthorization}`);
+    }) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await make(fetchImpl).createEpic({ title: "t", description: "d" });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    for (const surface of serializedErrorSurfaces(err)) {
+      expect(surface).not.toContain(TOKEN);
+      expect(surface).not.toContain(echoedAuthorization);
+    }
+    expect((err as Error).message).toContain("proxy refused");
   });
 
   it("sends the token for findByMarker and updateStory too (#50 additions)", async () => {
@@ -162,5 +212,79 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
         expect(JSON.stringify(call)).not.toContain(TOKEN);
       }
     }
+  });
+});
+
+it("redacts configured credentials echoed by a successful GraphQL error response", async () => {
+  let echoedAuthorization = "";
+  const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+    echoedAuthorization = (init?.headers as Record<string, string>)?.Authorization ?? "";
+    return new Response(JSON.stringify({ errors: [{ message: `team lookup denied for ${TOKEN}; auth ${echoedAuthorization}` }] }));
+  }) as unknown as typeof fetch;
+
+  let err: unknown;
+  try {
+    await new LinearTracker({ apiKey: TOKEN, teamId: "team-1", fetchImpl }).createEpic({ title: "t", description: "d" });
+  } catch (error) {
+    err = error;
+  }
+
+  for (const surface of serializedErrorSurfaces(err)) {
+    expect(surface).not.toContain(TOKEN);
+    expect(surface).not.toContain(echoedAuthorization);
+  }
+  expect((err as Error).message).toContain("team lookup denied");
+});
+
+describe("short configured credential redaction", () => {
+  const shortToken = "abc123";
+  const headers = { "x-api-key": shortToken };
+
+  it("redacts a short token echoed by an HTTP error", async () => {
+    const fetchImpl = vi.fn(async () => new Response(`proxy echoed ${shortToken}`, { status: 401 })) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await trackerFetch(fetchImpl, "https://example.invalid", { method: "GET", headers });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(TrackerError);
+    expect((err as TrackerError).status).toBe(401);
+    expect((err as Error).message).toContain("proxy echoed");
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+  });
+
+  it("redacts a short token echoed by a thrown fetch exception", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error(`proxy threw ${shortToken}`);
+    }) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await trackerFetch(fetchImpl, "https://example.invalid", { method: "GET", headers });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("proxy threw");
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+  });
+
+  it("redacts a short token echoed by a GraphQL error", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ errors: [{ message: `team lookup denied for ${shortToken}` }] }))) as unknown as typeof fetch;
+
+    let err: unknown;
+    try {
+      await new LinearTracker({ apiKey: shortToken, teamId: "team-1", fetchImpl }).createEpic({ title: "t", description: "d" });
+    } catch (error) {
+      err = error;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    for (const surface of serializedErrorSurfaces(err)) expect(surface).not.toContain(shortToken);
+    expect((err as Error).message).toContain("team lookup denied");
   });
 });

@@ -114,6 +114,31 @@ describe("checkBlastRadius", () => {
 });
 
 describe("parseDiffFacts", () => {
+  it.each(["rename", "copy"])("refuses headerless contradictory %s endpoints and retains the actual protected path", (kind) => {
+    const facts = parseDiffFacts([`${kind} from src/safe.txt`, `${kind} to src/destination.txt`,
+      "--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-DUMMY=before", "+DUMMY=after", ""].join("\n"));
+    expect(facts.files).toContain(".env");
+    expect(facts.unsupportedMetadata).toContain("ambiguous or contradictory Git diff path metadata is unsupported");
+  });
+
+  it.each(["", "rename", "copy"])("refuses dual-null unified endpoints with %s metadata", (kind) => {
+    const prefix = kind ? [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`] : [];
+    const facts = parseDiffFacts([...prefix, "--- /dev/null", "+++ /dev/null", "@@ -0,0 +1 @@", "+created", ""].join("\n"));
+    expect(facts.unsupportedMetadata).toContain("dual-null Git unified path metadata is unsupported");
+  });
+
+  it("separates completed plain unified files while preserving multiple hunks", () => {
+    const facts = parseDiffFacts(["--- a/src/a.txt", "+++ b/src/a.txt", "@@ -1 +1 @@", "-a", "+A",
+      "@@ -3 +3 @@", "-c", "+C", "--- /dev/null", "+++ b/src/b.txt", "@@ -0,0 +1 @@", "+B", ""].join("\n"));
+    expect(facts).toEqual({ files: ["src/a.txt"], createdFiles: ["src/b.txt"], changedLines: 5, unsupportedMetadata: [] });
+  });
+
+  it("still refuses conflicting plain unified headers before a hunk", () => {
+    const facts = parseDiffFacts(["--- a/src/a.txt", "+++ b/src/a.txt", "--- a/src/b.txt", "+++ b/src/b.txt",
+      "@@ -1 +1 @@", "-a", "+A", ""].join("\n"));
+    expect(facts.unsupportedMetadata.join(" ")).toContain("contradictory");
+  });
+
   it("separates modified from created files and counts changed body lines", () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",
@@ -131,7 +156,7 @@ describe("parseDiffFacts", () => {
       "+hello",
       "",
     ].join("\n");
-    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4 });
+    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4, unsupportedMetadata: [] });
   });
 
   it("does not mistake a removed `--- ` content line for a file header", () => {
@@ -144,5 +169,46 @@ describe("parseDiffFacts", () => {
       "",
     ].join("\n");
     expect(parseDiffFacts(diff).files).toEqual(["db/seed.sql"]);
+  });
+
+  it("unions Git header and rename metadata endpoints so contradictory metadata cannot hide a protected path", () => {
+    const diff = [
+      "diff --git a/.env b/renamed-secret.txt",
+      "similarity index 100%",
+      "rename from harmless.txt",
+      "rename to renamed-secret.txt",
+      "",
+    ].join("\n");
+    const facts = parseDiffFacts(diff);
+    expect(facts.files).toEqual([".env", "harmless.txt"]);
+    expect(facts.createdFiles).toEqual(["renamed-secret.txt"]);
+    expect(facts.unsupportedMetadata).toContain("ambiguous or contradictory Git diff path metadata is unsupported");
+  });
+
+  it("rejects unresolved ambiguous headers without reporting speculative endpoints as actual", () => {
+    const diff = [
+      "diff --git a/.env b/harmless b/renamed.txt",
+      "similarity index 100%",
+      "rename from harmless b/source.txt",
+      "rename to renamed.txt",
+      "",
+    ].join("\n");
+    const facts = parseDiffFacts(diff);
+    expect(facts.files).toEqual(["harmless b/source.txt"]);
+    expect(facts.createdFiles).toEqual(["renamed.txt"]);
+    expect(facts.unsupportedMetadata).toContain("ambiguous or contradictory Git diff path metadata is unsupported");
+  });
+
+  it("fails closed on incomplete extended metadata without promoting header candidates", () => {
+    const facts = parseDiffFacts([
+      "diff --git a/src/old b/file.ts b/src/new b/file.ts",
+      "similarity index 100%",
+      "rename from src/old b/file.ts",
+      "",
+    ].join("\n"));
+    expect(facts.files).toEqual(["src/old b/file.ts"]);
+    expect(facts.createdFiles).toEqual([]);
+    expect(facts.unsupportedMetadata).toContain("incomplete Git rename metadata is unsupported");
+    expect(facts.unsupportedMetadata).toContain("ambiguous or contradictory Git diff path metadata is unsupported");
   });
 });

@@ -11,6 +11,7 @@ import { readNamesSafe } from "../fs-walk.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { parse } from "yaml";
 import {
   computeGreen,
   runCommand,
@@ -26,6 +27,8 @@ export interface DiscoveredCommand {
   command: string;
   workspace: string;
   source: string; // e.g. "package.json (root)", "package.json (apps/web)", "ci-workflow (ci.yml)"
+  notRunnableLocally?: string; // explicit workflow semantics that require the Actions runtime
+  discoveryFailure?: string; // fail-closed evidence when an admitted workflow cannot be inspected
 }
 
 type Runner = (command: string, cwd: string) => Promise<CommandRun>;
@@ -43,7 +46,8 @@ function readScripts(dir: string): Record<string, string> | undefined {
   }
 }
 
-export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace">) => `${c.workspace}\u0000${c.command}`;
+export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace" | "notRunnableLocally" | "discoveryFailure">) =>
+  `${c.workspace}\u0000${c.command}\u0000${c.notRunnableLocally ?? ""}\u0000${c.discoveryFailure ?? ""}`;
 
 /**
  * A baseline result is a property of `(targetDir, baselineCommit, workspace, command)` and nothing
@@ -87,8 +91,14 @@ export function discoverClientCommands(
 ): DiscoveredCommand[] {
   const out: DiscoveredCommand[] = [];
   const seen = new Set<string>();
-  const add = (command: string, workspace: string, source: string) => {
-    const c = { command, workspace, source };
+  const add = (command: string, workspace: string, source: string, notRunnableLocally?: string, discoveryFailure?: string) => {
+    const c: DiscoveredCommand = {
+      command,
+      workspace,
+      source,
+      ...(notRunnableLocally ? { notRunnableLocally } : {}),
+      ...(discoveryFailure ? { discoveryFailure } : {}),
+    };
     if (seen.has(cmdKey(c))) return;
     seen.add(cmdKey(c));
     out.push(c);
@@ -99,13 +109,13 @@ export function discoverClientCommands(
     if (!scripts) continue;
     for (const cmd of discoverVerifyCommands(scripts, runner)) add(cmd, ws, `package.json (${ws})`);
   }
-  for (const step of ciSteps) add(step.command, step.workspace, step.source);
+  for (const step of ciSteps) add(step.command, step.workspace, step.source, step.notRunnableLocally, step.discoveryFailure);
   return out;
 }
 
-// §2.1 step 2: PR-triggered workflow run: steps. No YAML dependency — a purpose-built extractor that
-// (a) confirms the file's `on:` triggers include pull_request and (b) collects `run:` steps, both the
-// inline `run: cmd` form and the `run: |` block-scalar form.
+// §2.1 step 2: PR-triggered workflow run: steps. Trigger admission stays a narrow textual check;
+// admitted workflows are parsed as YAML so run blocks and their effective working-directory values
+// remain attached to the same step instead of being reconstructed from unrelated lines.
 export function isPullRequestTriggered(yaml: string): boolean {
   const lines = yaml.split("\n");
   const onIdx = lines.findIndex((l) => /^on:/.test(l));
@@ -130,51 +140,83 @@ export function extractCiRunSteps(workflowsDir: string): DiscoveredCommand[] {
   for (const file of readNamesSafe(workflowsDir).filter((f) => /\.ya?ml$/.test(f))) {
     const yaml = readFileSync(join(workflowsDir, file), "utf8");
     if (!isPullRequestTriggered(yaml)) continue;
-    for (const cmd of extractRunCommands(yaml)) {
-      if (seen.has(cmd)) continue;
-      seen.add(cmd);
-      steps.push({ command: cmd, workspace: "", source: `ci-workflow (${file})` });
+    for (const step of extractRunCommands(yaml, file)) {
+      const key = cmdKey(step);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      steps.push(step);
     }
   }
   return steps;
 }
 
-function extractRunCommands(yaml: string): string[] {
-  const lines = yaml.split("\n");
-  const cmds: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] as string;
-    const inline = /^(\s*)(?:-\s*)?run:\s*(\S.*)$/.exec(line);
-    if (!inline) continue;
-    const rest = (inline[2] as string).trim();
-    if (rest !== "|" && rest !== ">") {
-      cmds.push(stripQuotes(rest));
-      continue;
-    }
-    // block scalar: collect the more-indented lines that follow, then dedent by their own common
-    // indent so the shell command reads as authored.
-    const baseIndent = (inline[1] as string).length;
-    const block: string[] = [];
-    for (let j = i + 1; j < lines.length; j++) {
-      const bl = lines[j] as string;
-      if (bl.trim() === "") {
-        block.push("");
-        continue;
-      }
-      const indent = bl.length - bl.trimStart().length;
-      if (indent <= baseIndent) break;
-      block.push(bl);
-    }
-    const indents = block.filter((b) => b.trim() !== "").map((b) => b.length - b.trimStart().length);
-    const common = indents.length ? Math.min(...indents) : 0;
-    const joined = block.map((b) => (b.trim() === "" ? "" : b.slice(common))).join("\n").trim();
-    if (joined) cmds.push(joined);
-  }
-  return cmds;
+interface WorkflowRunDefaults { "working-directory"?: unknown }
+interface WorkflowJob {
+  defaults?: { run?: WorkflowRunDefaults };
+  steps?: unknown[];
 }
 
-function stripQuotes(s: string): string {
-  return /^(["']).*\1$/.test(s) ? s.slice(1, -1) : s;
+function ownWorkingDirectory(value: unknown): { present: boolean; value?: unknown } {
+  if (!value || typeof value !== "object" || !("working-directory" in value)) return { present: false };
+  return { present: true, value: (value as WorkflowRunDefaults)["working-directory"] };
+}
+
+function resolveWorkingDirectory(value: unknown): Pick<DiscoveredCommand, "workspace" | "notRunnableLocally"> {
+  if (typeof value !== "string") {
+    return { workspace: "", notRunnableLocally: "non-string workflow working-directory requires GitHub Actions" };
+  }
+  const raw = value.trim();
+  if (raw.includes("${{")) {
+    return { workspace: "", notRunnableLocally: `dynamic workflow working-directory \`${raw}\` requires GitHub Actions` };
+  }
+  if (raw === "" || raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw) || raw.includes("\\")) {
+    return { workspace: "", notRunnableLocally: `unsupported workflow working-directory \`${raw}\` requires GitHub Actions` };
+  }
+  const parts = raw.replace(/^\.\//, "").split("/");
+  if (parts.some((part) => part === "..")) {
+    return { workspace: "", notRunnableLocally: `escaping workflow working-directory \`${raw}\` requires GitHub Actions` };
+  }
+  const workspace = parts.filter((part) => part !== "" && part !== ".").join("/");
+  return { workspace };
+}
+
+function extractRunCommands(yaml: string, file: string): DiscoveredCommand[] {
+  let document: unknown;
+  try {
+    document = parse(yaml);
+  } catch {
+    return [{
+      command: `workflow discovery failed: ${file}`,
+      workspace: "",
+      source: `ci-workflow (${file})`,
+      discoveryFailure: "workflow YAML could not be parsed; CI commands were not discovered",
+    }];
+  }
+  if (!document || typeof document !== "object") return [];
+  const root = document as { defaults?: { run?: WorkflowRunDefaults }; jobs?: unknown };
+  if (!root.jobs || typeof root.jobs !== "object" || Array.isArray(root.jobs)) return [];
+  const workflowDefault = ownWorkingDirectory(root.defaults?.run);
+  const commands: DiscoveredCommand[] = [];
+  for (const rawJob of Object.values(root.jobs)) {
+    if (!rawJob || typeof rawJob !== "object" || Array.isArray(rawJob)) continue;
+    const job = rawJob as WorkflowJob;
+    const jobDefault = ownWorkingDirectory(job.defaults?.run);
+    if (!Array.isArray(job.steps)) continue;
+    for (const rawStep of job.steps) {
+      if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) continue;
+      const step = rawStep as Record<string, unknown>;
+      if (typeof step.run !== "string" || step.run.trim() === "") continue;
+      const stepDefault = ownWorkingDirectory(step);
+      const effective = stepDefault.present ? stepDefault : jobDefault.present ? jobDefault : workflowDefault;
+      const directory = effective.present ? resolveWorkingDirectory(effective.value) : { workspace: "" };
+      commands.push({
+        command: step.run.trim(),
+        source: `ci-workflow (${file})`,
+        ...directory,
+      });
+    }
+  }
+  return commands;
 }
 
 // Baseline run on the pinned commit (§2.1 step 3), keyed so the fixed run can look each command up.
@@ -183,7 +225,10 @@ function stripQuotes(s: string): string {
 // overlap is the scheduler's job (§4 maxClientChecks), not this loop's.
 export async function runBaseline(commands: DiscoveredCommand[], baselineRoot: string, run: Runner = runCommand): Promise<Map<string, CommandRun>> {
   const m = new Map<string, CommandRun>();
-  for (const c of commands) m.set(cmdKey(c), await run(c.command, join(baselineRoot, c.workspace)));
+  for (const c of commands) {
+    if (c.discoveryFailure) continue;
+    m.set(cmdKey(c), await run(c.command, join(baselineRoot, c.workspace)));
+  }
   return m;
 }
 
@@ -247,13 +292,24 @@ export async function buildVerificationEvidence(inputs: EvidenceInputs, fixedRoo
   const clientChecks: CommandRun[] = [];
   for (const c of inputs.commands) {
     const cwd = join(fixedRoot, c.workspace);
-    const baselineRun = inputs.baseline.get(cmdKey(c));
-    if (baselineRun && baselineRun.exitCode !== 0) {
-      clientChecks.push({ ...baselineRun, cwd, skipped: "pre-existing-failure-on-baseline" });
+    if (c.discoveryFailure) {
+      clientChecks.push({ command: c.command, cwd, exitCode: 1, durationMs: 0, outputTail: c.discoveryFailure });
       continue;
     }
     if (inputs.needsCi?.(c)) {
-      clientChecks.push({ command: c.command, cwd, exitCode: 0, durationMs: 0, outputTail: "", skipped: "needs-ci" });
+      clientChecks.push({
+        command: c.command,
+        cwd,
+        exitCode: 0,
+        durationMs: 0,
+        outputTail: c.notRunnableLocally ?? "dynamic workflow command requires GitHub Actions",
+        skipped: "needs-ci",
+      });
+      continue;
+    }
+    const baselineRun = inputs.baseline.get(cmdKey(c));
+    if (baselineRun && baselineRun.exitCode !== 0) {
+      clientChecks.push({ ...baselineRun, cwd, skipped: "pre-existing-failure-on-baseline" });
       continue;
     }
     clientChecks.push(await run(c.command, cwd));

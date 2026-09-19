@@ -51,6 +51,9 @@ const defaultRunner: Runner = (file, args, input, cwd) =>
 // finally.
 export async function verifySuggestedFix(diff: string, opts: VerifyOptions): Promise<VerifyResult> {
   const facts = parseDiffFacts(diff);
+  if (facts.unsupportedMetadata.length > 0) {
+    return { verified: false, detail: `refuses unsupported Git patch metadata: ${facts.unsupportedMetadata.join(", ")}` };
+  }
   const denied = [...facts.files, ...facts.createdFiles].filter(isDenied);
   if (denied.length) return { verified: false, detail: `refuses denylisted path(s) (secrets/CI/keys/git): ${denied.join(", ")}` };
   const cap = checkDiffCap(blastRadiusOf(facts), opts.diffCap);

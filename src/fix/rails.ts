@@ -103,12 +103,90 @@ interface DiffFacts {
   files: string[]; // paths the diff modifies or deletes
   createdFiles: string[]; // paths the diff adds
   changedLines: number; // added + removed body lines
+  unsupportedMetadata: string[]; // patch forms the fix pipeline refuses before git apply
 }
 
-function stripPrefix(raw: string): string | undefined {
-  const path = raw.split("\t")[0]?.trim() ?? "";
-  if (path === "" || path === "/dev/null") return undefined;
-  return path.replace(/^[ab]\//, "");
+function decodeGitPath(raw: string): string | undefined {
+  const value = raw;
+  if (!value.startsWith('"')) return value;
+  if (!value.endsWith('"')) return undefined;
+  const bytes: number[] = [];
+  for (let i = 1; i < value.length - 1; i++) {
+    const char = value[i] as string;
+    if (char !== "\\") {
+      const codePoint = value.codePointAt(i);
+      if (codePoint === undefined) return undefined;
+      bytes.push(...Buffer.from(String.fromCodePoint(codePoint)));
+      if (codePoint > 0xffff) i++;
+      continue;
+    }
+    const escaped = value[++i];
+    if (escaped === undefined) return undefined;
+    const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+    if (simple[escaped] !== undefined) {
+      bytes.push(simple[escaped]);
+      continue;
+    }
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(value[i + 1] ?? "")) octal += value[++i];
+      bytes.push(Number.parseInt(octal, 8));
+      continue;
+    }
+    return undefined;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function gitPathField(raw: string): string | undefined {
+  if (!raw.startsWith('"')) return raw.split("\t")[0];
+  let escaped = false;
+  for (let i = 1; i < raw.length; i++) {
+    const char = raw[i] as string;
+    if (escaped) escaped = false;
+    else if (char === "\\") escaped = true;
+    else if (char === '"') return raw.slice(0, i + 1);
+  }
+  return undefined;
+}
+
+function parseUnifiedPath(raw: string): { path?: string; devNull: boolean; valid: boolean } {
+  const field = gitPathField(raw);
+  if (field === undefined) return { devNull: false, valid: false };
+  const path = decodeGitPath(field);
+  if (path === undefined || path === "") return { devNull: false, valid: false };
+  if (path === "/dev/null") return { devNull: true, valid: true };
+  return { path: path.replace(/^[ab]\//, ""), devNull: false, valid: true };
+}
+
+function parseDiffGitPaths(line: string): { oldPath: string; newPath: string }[] {
+  const payload = line.slice("diff --git ".length);
+  const candidates: { oldPath: string; newPath: string }[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload[i] as string;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char !== " " || quoted) continue;
+    const oldField = payload.slice(0, i);
+    const newField = payload.slice(i + 1);
+    const oldDecoded = decodeGitPath(oldField);
+    const newDecoded = decodeGitPath(newField);
+    if (!oldDecoded?.startsWith("a/") || !newDecoded?.startsWith("b/")) continue;
+    candidates.push({ oldPath: oldDecoded.slice(2), newPath: newDecoded.slice(2) });
+  }
+  return candidates;
 }
 
 // Hunk headers carry exact old/new line counts, so the body is consumed by count rather than by
@@ -123,11 +201,103 @@ function parseHunkCounts(line: string): { oldLines: number; newLines: number } |
 export function parseDiffFacts(diff: string): DiffFacts {
   const files = new Set<string>();
   const createdFiles = new Set<string>();
+  const unsupportedMetadata = new Set<string>();
   let changedLines = 0;
-  let oldPath: string | undefined;
-  let oldIsDevNull = false;
   let remainingOld = 0;
   let remainingNew = 0;
+
+  interface Section {
+    headerPaths: { oldPath: string; newPath: string }[];
+    unifiedOld?: string;
+    unifiedNew?: string;
+    sawUnifiedOld: boolean;
+    sawUnifiedNew: boolean;
+    oldIsDevNull: boolean;
+    newIsDevNull: boolean;
+    extendedKind?: "rename" | "copy";
+    extendedFrom?: string;
+    extendedTo?: string;
+    sawMode: boolean;
+    sawHunk: boolean;
+  }
+
+  const emptySection = (): Section => ({
+    headerPaths: [],
+    sawUnifiedOld: false,
+    sawUnifiedNew: false,
+    oldIsDevNull: false,
+    newIsDevNull: false,
+    sawMode: false,
+    sawHunk: false,
+  });
+  let section = emptySection();
+
+  const accountPair = (oldPath: string | undefined, newPath: string | undefined, oldIsDevNull = false, newIsDevNull = false) => {
+    if (oldIsDevNull) {
+      if (newPath !== undefined) createdFiles.add(newPath);
+    } else if (newIsDevNull) {
+      if (oldPath !== undefined) files.add(oldPath);
+    } else if (oldPath === newPath) {
+      if (oldPath !== undefined && !createdFiles.has(oldPath)) files.add(oldPath);
+    } else {
+      if (oldPath !== undefined) files.add(oldPath);
+      if (newPath !== undefined) createdFiles.add(newPath);
+    }
+  };
+
+  const finishSection = () => {
+    const candidates = [...new Map(section.headerPaths.map((paths) => [`${paths.oldPath}\0${paths.newPath}`, paths])).values()];
+    const oldConstraints = [section.unifiedOld, section.extendedFrom].filter((path): path is string => path !== undefined);
+    const newConstraints = [section.unifiedNew, section.extendedTo].filter((path): path is string => path !== undefined);
+    const oldConstraint = oldConstraints[0];
+    const newConstraint = newConstraints[0];
+    const contradictory = new Set(oldConstraints).size > 1
+      || new Set(newConstraints).size > 1
+      || section.oldIsDevNull && section.extendedFrom !== undefined
+      || section.newIsDevNull && section.extendedTo !== undefined;
+    const incompleteExtended = section.extendedKind !== undefined && (section.extendedFrom === undefined || section.extendedTo === undefined);
+    const hasUnified = section.sawUnifiedOld || section.sawUnifiedNew;
+    const incompleteUnified = hasUnified
+      && (!section.sawUnifiedOld || !section.sawUnifiedNew);
+
+    if (contradictory) {
+      unsupportedMetadata.add("ambiguous or contradictory Git diff path metadata is unsupported");
+      accountPair(section.unifiedOld, section.unifiedNew, section.oldIsDevNull, section.newIsDevNull);
+    }
+    if (section.oldIsDevNull && section.newIsDevNull) {
+      unsupportedMetadata.add("dual-null Git unified path metadata is unsupported");
+    }
+
+    let selected: { oldPath: string; newPath: string } | undefined;
+    if (!contradictory && !incompleteExtended && !incompleteUnified && candidates.length > 0) {
+      const consistent = candidates.filter(
+        (paths) => (oldConstraint === undefined || paths.oldPath === oldConstraint) && (newConstraint === undefined || paths.newPath === newConstraint),
+      );
+      const resolved = oldConstraint !== undefined || newConstraint !== undefined
+        ? consistent
+        : section.sawMode
+          ? consistent.filter((paths) => paths.oldPath === paths.newPath)
+          : [];
+      if (resolved.length === 1) selected = resolved[0];
+    } else if (!contradictory && !incompleteExtended && !incompleteUnified && candidates.length === 0 && (oldConstraint !== undefined || newConstraint !== undefined)) {
+      selected = { oldPath: oldConstraint ?? newConstraint!, newPath: newConstraint ?? oldConstraint! };
+    }
+
+    if (selected) {
+      accountPair(selected.oldPath, selected.newPath, section.oldIsDevNull, section.newIsDevNull);
+    } else if (candidates.length > 0) {
+      unsupportedMetadata.add("ambiguous or contradictory Git diff path metadata is unsupported");
+      if (candidates.length === 1) accountPair(candidates[0]!.oldPath, candidates[0]!.newPath);
+    }
+
+    if (section.extendedKind !== undefined) {
+      if (incompleteExtended) unsupportedMetadata.add(`incomplete Git ${section.extendedKind} metadata is unsupported`);
+      accountPair(section.extendedFrom, section.extendedTo);
+    }
+    if (incompleteUnified) unsupportedMetadata.add("incomplete Git unified path metadata is unsupported");
+
+    section = emptySection();
+  };
 
   for (const line of diff.split("\n")) {
     if (remainingOld > 0 || remainingNew > 0) {
@@ -144,23 +314,80 @@ export function parseDiffFacts(diff: string): DiffFacts {
       }
       continue;
     }
+    if (line.startsWith("diff --git ")) {
+      finishSection();
+      section.headerPaths = parseDiffGitPaths(line);
+      if (section.headerPaths.length === 0) unsupportedMetadata.add("unparseable Git diff header is unsupported");
+      continue;
+    }
     const hunk = parseHunkCounts(line);
     if (hunk) {
+      section.sawHunk = true;
       remainingOld = hunk.oldLines;
       remainingNew = hunk.newLines;
       continue;
     }
+    const endpoint = /^(rename|copy) (from|to) (.+)$/.exec(line);
+    if (endpoint) {
+      const path = decodeGitPath(endpoint[3] as string);
+      if (!path) unsupportedMetadata.add(`unparseable Git ${endpoint[1]} ${endpoint[2]} path is unsupported`);
+      const kind = endpoint[1] as "rename" | "copy";
+      if (section.extendedKind !== undefined && section.extendedKind !== kind) {
+        unsupportedMetadata.add("contradictory Git rename/copy metadata is unsupported");
+      } else {
+        section.extendedKind = kind;
+      }
+      if (path && endpoint[2] === "from") {
+        if (section.extendedFrom !== undefined && section.extendedFrom !== path) {
+          unsupportedMetadata.add(`contradictory Git ${kind} from metadata is unsupported`);
+        }
+        section.extendedFrom = path;
+      } else if (path) {
+        if (section.extendedTo !== undefined && section.extendedTo !== path) {
+          unsupportedMetadata.add(`contradictory Git ${kind} to metadata is unsupported`);
+        }
+        section.extendedTo = path;
+      }
+      continue;
+    }
+    const mode = /^(?:old mode|new mode|new file mode|deleted file mode) (\d+)$/.exec(line)?.[1];
+    if (mode !== undefined) section.sawMode = true;
+    if (mode === "120000") unsupportedMetadata.add("symlink patch metadata is unsupported");
+    if (mode === "160000") unsupportedMetadata.add("gitlink patch metadata is unsupported");
+    const indexedMode = /^index \S+\.\.\S+ (\d+)$/.exec(line)?.[1];
+    if (indexedMode !== undefined) section.sawMode = true;
+    if (indexedMode === "120000") unsupportedMetadata.add("symlink patch metadata is unsupported");
+    if (indexedMode === "160000") unsupportedMetadata.add("gitlink patch metadata is unsupported");
+    if (line === "GIT binary patch" || /^Binary files .+ differ$/.test(line)) {
+      unsupportedMetadata.add("binary patch metadata is unsupported");
+      continue;
+    }
     if (line.startsWith("--- ")) {
-      oldPath = stripPrefix(line.slice(4));
-      oldIsDevNull = oldPath === undefined;
+      // A completed plain unified file may be followed by another without a diff --git header.
+      if (section.sawHunk && section.sawUnifiedOld && section.sawUnifiedNew) finishSection();
+      const parsed = parseUnifiedPath(line.slice(4));
+      if (!parsed.valid) unsupportedMetadata.add("unparseable Git old path is unsupported");
+      if (section.sawUnifiedOld && (section.unifiedOld !== parsed.path || section.oldIsDevNull !== parsed.devNull)) {
+        unsupportedMetadata.add("contradictory Git old path metadata is unsupported");
+      }
+      section.sawUnifiedOld = true;
+      section.unifiedOld = parsed.path;
+      section.oldIsDevNull = parsed.devNull;
       continue;
     }
     if (line.startsWith("+++ ")) {
-      const path = stripPrefix(line.slice(4)) ?? oldPath;
-      if (path !== undefined) (oldIsDevNull ? createdFiles : files).add(path);
+      const parsed = parseUnifiedPath(line.slice(4));
+      if (!parsed.valid) unsupportedMetadata.add("unparseable Git new path is unsupported");
+      if (section.sawUnifiedNew && (section.unifiedNew !== parsed.path || section.newIsDevNull !== parsed.devNull)) {
+        unsupportedMetadata.add("contradictory Git new path metadata is unsupported");
+      }
+      section.sawUnifiedNew = true;
+      section.unifiedNew = parsed.path;
+      section.newIsDevNull = parsed.devNull;
     }
   }
-  return { files: [...files], createdFiles: [...createdFiles], changedLines };
+  finishSection();
+  return { files: [...files], createdFiles: [...createdFiles], changedLines, unsupportedMetadata: [...unsupportedMetadata] };
 }
 
 // behaviorPreserving is not knowable from a diff, so it is stated conservatively; the rail checks
