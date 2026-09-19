@@ -130,6 +130,52 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(scope?.evidence).toContain("2 files");
   }, 30000);
 
+  it("excludes a proven inactive install overlay but still scans authored code named patches", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-overlay-cli-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "overlay-fixture", private: true }));
+    write("optional/install.sh", [
+      '#!/usr/bin/env bash',
+      'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+      'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+      'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+      'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+      'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/live/one.ts"',
+      'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/live/two.ts"',
+      'cp "$OVERLAY_DIR/live/one.ts" "$ROOT_DIR/live/one.ts"',
+      'cp "$OVERLAY_DIR/live/two.ts" "$ROOT_DIR/live/two.ts"',
+      '',
+    ].join("\n"));
+    write("optional/overlay/live/one.ts", CLONED_BLOCK);
+    write("optional/overlay/live/two.ts", CLONED_BLOCK);
+    write("live/one.ts", "export const liveOne = true;\n");
+    write("live/two.ts", "export const liveTwo = false;\n");
+    write("patches/authored-one.ts", CLONED_BLOCK);
+    write("patches/authored-two.ts", CLONED_BLOCK);
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings.filter((finding) => finding.location.includes("optional/overlay"))).toEqual([]);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M4 — Duplication",
+      location: expect.stringMatching(/patches\/authored-one\.ts.*patches\/authored-two\.ts|patches\/authored-two\.ts.*patches\/authored-one\.ts/),
+    }));
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-SCOPE-00",
+      evidence: expect.stringMatching(/`optional\/overlay\/\*\*`: 2 files.*optional\/install\.sh/),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      unitsExamined: number;
+      observation: { productSources: { count: number } };
+    };
+    expect(scope.unitsExamined).toBe(4);
+    expect(scope.observation.productSources.count).toBe(4);
+  }, 30000);
+
   it("preserves executable Knip config imports while applying package-store exclusions", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));
     dirs.push(repo);

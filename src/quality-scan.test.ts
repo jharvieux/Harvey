@@ -452,6 +452,19 @@ describe("jscpdIgnoreScopeFinding (#1080)", () => {
     expect(finding?.evidence).toContain("3 files");
     expect(finding?.evidence).toContain("pnpm package store");
   });
+
+  it("explains installation overlays as evidenced scope without granting directory-name exclusions", () => {
+    const finding = jscpdIgnoreScopeFinding([{
+      glob: "optional/overlay/**",
+      count: 2,
+      example: "optional/overlay/live/one.ts",
+      reason: "2 staged overlay files are copied over backed-up live product files by optional/install.sh",
+    }]);
+    expect(finding?.evidence).toContain("exact evidenced paths");
+    expect(finding?.evidence).toContain("optional/install.sh");
+    expect(finding?.evidence).toContain("Directory names alone do not narrow");
+    expect(finding?.impact).toContain("static installation-copy provenance");
+  });
 });
 
 // Real committed knip 5.88.1 `--reporter json` capture (see __fixtures__/knip/PROVENANCE.md): a

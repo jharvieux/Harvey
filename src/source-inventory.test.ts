@@ -310,4 +310,38 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("src/index.ts")).toBeUndefined();
     expect(inventory.unresolvedConfigurations).not.toContainEqual(expect.objectContaining({ path: "../b/vite.config.ts" }));
   });
+
+  it("excludes a fully staged install overlay while retaining unrelated authored patches", () => {
+    const root = fixture({
+      "package.json": "{}",
+      "optional/install.sh": [
+        '#!/usr/bin/env bash',
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+        'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+        'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+        'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/live/one.ts"',
+        'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/live/two.ts"',
+        'cp "$OVERLAY_DIR/live/one.ts" "$ROOT_DIR/live/one.ts"',
+        'cp "$OVERLAY_DIR/live/two.ts" "$ROOT_DIR/live/two.ts"',
+        '',
+      ].join("\n"),
+      "optional/overlay/live/one.ts": "export const optionalOne = true;\n",
+      "optional/overlay/live/two.ts": "export const optionalTwo = true;\n",
+      "live/one.ts": "export const liveOne = true;\n",
+      "live/two.ts": "export const liveTwo = true;\n",
+      "patches/authored-one.ts": "export const authoredOne = true;\n",
+      "patches/authored-two.ts": "export const authoredTwo = true;\n",
+    });
+
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("optional/overlay/live/one.ts")).toMatchObject({
+      path: "optional/overlay",
+      match: "anchored",
+      reason: expect.stringContaining("optional/install.sh"),
+    });
+    expect(inventory.jscpdIgnoreGlobs).toContain("optional/overlay/**");
+    expect(inventory.excludedDirectoryFor("live/one.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("patches/authored-one.ts")).toBeUndefined();
+  });
 });

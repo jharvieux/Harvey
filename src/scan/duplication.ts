@@ -6,9 +6,9 @@
 // #931 and are load-bearing, so they travel with the code rather than being summarised.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSCPD_IGNORE_GLOBS, jscpdAnalysedNothingReason, type JscpdReport } from "../quality-scan.js";
 
@@ -25,6 +25,11 @@ interface JscpdRunOptions {
   jscpdBin?: string;
   /** Context-derived output/store paths in addition to the stable file-level exclusions. */
   ignoreGlobs?: readonly string[];
+}
+
+function ignoreRelativeToTemporaryConfig(configDir: string, targetDir: string, pattern: string): string {
+  if (isAbsolute(pattern) || pattern.startsWith("**/")) return pattern;
+  return join(relative(configDir, targetDir), pattern).split("\\").join("/");
 }
 
 function readJscpdConfig(dir: string): Record<string, unknown> {
@@ -53,13 +58,13 @@ function readJscpdConfig(dir: string): Record<string, unknown> {
   return { ...packageConfig, ...fileConfig };
 }
 
-function absoluteIgnore(dir: string, pattern: string): string {
-  return pattern.startsWith("**/") || pattern.startsWith("/") ? pattern : join(dir, pattern).split("\\").join("/");
-}
-
 export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
   const bin = opts.jscpdBin ?? JSCPD_BIN;
-  const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
+  // Keep the config coordinate and child cwd in the same canonical namespace. macOS exposes
+  // tmpdir as /var/... while a child reports /private/var/...; mixing those aliases makes jscpd's
+  // config-relative resolver treat a target-contained ignore as external and absolutize it.
+  const scanDir = realpathSync(dir);
+  const outDir = realpathSync(mkdtempSync(join(tmpdir(), "harvey-jscpd-")));
   try {
     const targetConfig = readJscpdConfig(dir);
     const configuredIgnore = targetConfig.ignore;
@@ -70,7 +75,12 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
     const configPath = join(outDir, "jscpd.harvey.json");
     writeFileSync(configPath, JSON.stringify({
       ...targetConfig,
-      ignore: [...new Set([...targetIgnore, ...JSCPD_IGNORE_GLOBS, ...(opts.ignoreGlobs ?? [])])].map((glob) => absoluteIgnore(dir, glob)),
+      // jscpd first resolves non-** ignore entries relative to the CONFIG FILE, which lives in our
+      // temporary report directory. Rebase target-relative entries into that coordinate; jscpd then
+      // resolves them back to the target cwd and fast-glob receives the intended anchored path.
+      // Absolute and leading-** patterns already carry their own coordinate/any-depth semantics.
+      ignore: [...new Set([...targetIgnore, ...JSCPD_IGNORE_GLOBS, ...(opts.ignoreGlobs ?? [])])]
+        .map((glob) => ignoreRelativeToTemporaryConfig(outDir, scanDir, glob)),
     }));
     // --threshold 100 overrides any client .jscpd.json so the scan never exits
     // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
@@ -104,7 +114,7 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
     execFileSync(
       bin,
       [".", "--config", configPath, "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips"],
-      { cwd: dir, stdio: ["ignore", "ignore", "pipe"], timeout: opts.timeoutMs, killSignal: "SIGKILL" },
+      { cwd: scanDir, stdio: ["ignore", "ignore", "pipe"], timeout: opts.timeoutMs, killSignal: "SIGKILL" },
     );
     const reportPath = join(outDir, "jscpd-report.json");
     // #505: per-workspace scopes surface a case a whole-repo run rarely hit — a workspace with
@@ -127,8 +137,8 @@ export function runJscpd(dir: string, opts: JscpdRunOptions): JscpdReport {
     // process.cwd(), which need not equal `dir` — the exact class of bug this fix removes) so the
     // report never leaks local filesystem layout regardless of which form jscpd emits.
     for (const dup of report.duplicates) {
-      dup.firstFile.name = relative(dir, resolve(dir, dup.firstFile.name));
-      dup.secondFile.name = relative(dir, resolve(dir, dup.secondFile.name));
+      dup.firstFile.name = relative(scanDir, resolve(scanDir, dup.firstFile.name));
+      dup.secondFile.name = relative(scanDir, resolve(scanDir, dup.secondFile.name));
     }
     return report;
   } finally {

@@ -312,6 +312,132 @@ interface ConfiguredSourceBoundaries {
   gaps: SourceInventoryGap[];
 }
 
+interface StaticCopyStep {
+  source: string;
+  destination: string;
+  order: number;
+}
+
+function staticShellPath(token: string, variables: ReadonlyMap<string, string>): string | undefined {
+  let value = token.trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1);
+  }
+  value = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, braced: string | undefined, plain: string | undefined) => {
+    return variables.get(braced ?? plain ?? "") ?? "\0";
+  });
+  if (value.includes("\0") || /[$`*?{}[\]]/.test(value)) return undefined;
+  return resolve(value);
+}
+
+// Read only the narrow shell shape needed to prove that a committed tree is an install-time
+// overlay: static `cp source destination` commands plus literal path variables. The script is never
+// executed. An arbitrary directory name (including `patches`) is not evidence on its own.
+function staticCopySteps(scriptPath: string): StaticCopyStep[] {
+  const lines = readFileSync(scriptPath, "utf8").split(/\r?\n/);
+  const variables = new Map<string, string>();
+  const scriptDir = dirname(scriptPath);
+  for (let pass = 0; pass < lines.length; pass += 1) {
+    let changed = false;
+    for (const line of lines) {
+      const assignment = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$/.exec(line);
+      if (!assignment || variables.has(assignment[1]!)) continue;
+      const [, name, rawValue] = assignment;
+      if (/dirname\s+["']?\$\{?BASH_SOURCE\[0\]\}?/.test(rawValue!)) {
+        variables.set(name!, scriptDir);
+        changed = true;
+        continue;
+      }
+      let expression = rawValue!.trim();
+      if (expression.startsWith('"') && expression.endsWith('"')) expression = expression.slice(1, -1);
+      const physicalDir = /^\$\(cd\s+["']?(.+?)["']?\s+&&\s+pwd\)$/.exec(expression);
+      const resolved = staticShellPath(physicalDir?.[1] ?? expression, variables);
+      if (resolved) {
+        variables.set(name!, resolved);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const steps: StaticCopyStep[] = [];
+  for (const [order, line] of lines.entries()) {
+    const command = /^\s*cp(?:\s+-[^\s]+)*\s+(\S+)\s+(\S+)\s*$/.exec(line);
+    if (!command) continue;
+    const source = staticShellPath(command[1]!, variables);
+    const destination = staticShellPath(command[2]!, variables);
+    if (source && destination) steps.push({ source, destination, order });
+  }
+  return steps;
+}
+
+function relativeInside(root: string, path: string): string | undefined {
+  const rel = posix(relative(root, path));
+  return rel === ".." || rel.startsWith("../") || resolve(root, ...rel.split("/")) !== resolve(path) ? undefined : rel;
+}
+
+function filesBelow(root: string, relativeDirectory: string): string[] {
+  const files: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readEntriesSafe(join(root, directory)).entries) {
+      const rel = posix(relative(root, entry.path));
+      if (entry.isDirectory) visit(rel);
+      else files.push(rel);
+    }
+  };
+  visit(relativeDirectory);
+  return files;
+}
+
+function configuredInactiveOverlays(root: string): Record<string, string> {
+  const scripts: string[] = [];
+  const collectScripts = (directory: string): void => {
+    for (const entry of readEntriesSafe(directory).entries) {
+      const rel = posix(relative(root, entry.path));
+      if (entry.isDirectory) {
+        if (!FIXED_BOUNDARIES.some((boundary) => matchesExclusion(boundary, rel))) collectScripts(entry.path);
+      } else if (entry.name.endsWith(".sh")) scripts.push(entry.path);
+    }
+  };
+  collectScripts(root);
+
+  const exclusions: Record<string, string> = {};
+  for (const scriptPath of scripts) {
+    const steps = staticCopySteps(scriptPath);
+    const overlaySources = new Set<string>();
+    for (const step of steps) {
+      const source = relativeInside(root, step.source);
+      const destination = relativeInside(root, step.destination);
+      if (!source || !destination || !existsSync(step.source) || !existsSync(step.destination)) continue;
+      const backedUpFirst = steps.some((prior) => prior.order < step.order && resolve(prior.source) === resolve(step.destination));
+      if (backedUpFirst) overlaySources.add(source);
+    }
+    if (overlaySources.size < 2) continue;
+
+    const candidateDirectories = new Set<string>();
+    for (const source of overlaySources) {
+      let candidate = posix(dirname(source));
+      let accepted: string | undefined;
+      while (candidate !== "." && candidate !== "") {
+        const population = filesBelow(root, candidate);
+        if (population.length < 2 || population.some((file) => !overlaySources.has(file))) break;
+        accepted = candidate;
+        candidate = posix(dirname(candidate));
+      }
+      if (accepted) candidateDirectories.add(accepted);
+    }
+    const maximal = [...candidateDirectories].filter((candidate) => {
+      return ![...candidateDirectories].some((other) => candidate !== other && candidate.startsWith(`${other}/`));
+    });
+    const script = posix(relative(root, scriptPath));
+    for (const directory of maximal) {
+      const count = filesBelow(root, directory).length;
+      exclusions[directory] = `${count} staged overlay files are copied over backed-up live product files by ${script}`;
+    }
+  }
+  return exclusions;
+}
+
 function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): ConfiguredSourceBoundaries {
   const exclusions: Record<string, string> = {};
   const exactFiles: Record<string, string> = {};
@@ -490,6 +616,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       reason: `Configured output ${path} overlaps ${overlappingInputs.length} effective TypeScript compiler input file(s); the ambiguous directory is retained as candidate source`,
     });
   }
+  Object.assign(exclusions, configuredInactiveOverlays(root));
   return { directories: exclusions, files: exactFiles, gaps };
 }
 

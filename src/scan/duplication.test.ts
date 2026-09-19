@@ -45,6 +45,42 @@ fs.writeFileSync(path.join(output, "jscpd-report.json"), JSON.stringify({ statis
     expect(observed.config.ignore.some((glob) => glob.includes("credential-shaped-output"))).toBe(true);
   });
 
+  it("applies anchored inventory exclusions before clone partitioning without excluding a nested lookalike", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-jscpd-anchored-"));
+    dirs.push(root);
+    const block = `export function summarize(values: number[]) {
+  let subtotal = 0;
+  for (const value of values) subtotal += value;
+  const doubled = subtotal * 2;
+  const rounded = Math.round(doubled * 100) / 100;
+  return { subtotal, doubled, rounded, count: values.length };
+}
+`;
+    for (const path of [
+      "optional/overlay/one.ts",
+      "optional/overlay/two.ts",
+      "nested/optional/overlay/one.ts",
+      "nested/optional/overlay/two.ts",
+    ]) {
+      mkdirSync(join(root, path, ".."), { recursive: true });
+      writeFileSync(join(root, path), block);
+    }
+
+    const report = runJscpd(root, {
+      timeoutMs: 5_000,
+      sourceFileCount: () => 2,
+      ignoreGlobs: ["optional/overlay/**"],
+    });
+    expect(report.duplicates.some((duplicate) => {
+      return duplicate.firstFile.name.startsWith("nested/optional/overlay/")
+        && duplicate.secondFile.name.startsWith("nested/optional/overlay/");
+    })).toBe(true);
+    expect(report.duplicates.some((duplicate) => {
+      return duplicate.firstFile.name.startsWith("optional/overlay/")
+        || duplicate.secondFile.name.startsWith("optional/overlay/");
+    })).toBe(false);
+  });
+
   it("rejects an existing malformed jscpd config instead of replacing it with a valid generated config", () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-jscpd-malformed-"));
     dirs.push(root);

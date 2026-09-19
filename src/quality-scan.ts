@@ -202,10 +202,10 @@ export function jscpdIgnoreScopeFinding(matches: JscpdGlobMatch[]): Finding | un
     taxonomy: "M4 — Duplication",
     location: "(repo-wide)",
     status: "Open",
-    evidence: `M4's jscpd pass excludes files matching these exact configured/store paths: ${summary}. Directory names alone do not narrow the product population.`,
+    evidence: `M4's jscpd pass excludes files matching these exact evidenced paths: ${summary}. Directory names alone do not narrow the product population.`,
     impact:
-      "The M4 duplication percentage and clone findings elsewhere in this report are computed over the listed product inventory. Each excluded directory is tied to package-manager or build configuration so product code under similarly named directories remains measured.",
-    fix: "If an exclusion no longer matches the target's package or build configuration, remove that configuration or rerun M4 after correcting it.",
+      "The M4 duplication percentage and clone findings elsewhere in this report are computed over the listed product inventory. Each exclusion is tied to project configuration or static installation-copy provenance so product code under similarly named directories remains measured.",
+    fix: "If an exclusion no longer matches the target's declared output, dependency store, or staged installation overlay, correct that provenance and rerun M4.",
     value: 1,
     ease: 3,
     safety: 5,
