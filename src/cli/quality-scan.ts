@@ -337,7 +337,14 @@ function runKnip(
     } else if (existing === undefined) {
       // No config of its own: knip can't infer non-app entries (tests above all) and floods the
       // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
-      config = buildInferredKnipConfig(detectTargetFramework(dir));
+      const framework = detectTargetFramework(dir);
+      config = buildInferredKnipConfig(framework);
+      // A package-manager workspace may keep Vite in the root manifest while the member owns the
+      // Vite config. Knip's direct-member run does not inherit that dependency declaration, so its
+      // plugin stays off even though Node can resolve the installed provider. Explicitly enable the
+      // plugin only at that proven boundary; it then executes the member config just as Knip's root
+      // workspace run does, while an uninstalled provider still follows the existing reduced tier.
+      if (framework === "vite" && isViteResolvable(dir)) config.vite = {};
       entriesInferred = true;
     } else if (!("ignoreExportsUsedInFile" in existing.value)) {
       // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
@@ -552,7 +559,6 @@ const knipGaps: ScanGap[] = [];
 for (const gap of sourceInventory.unresolvedConfigurations) {
   const reason = `${gap.path}: ${gap.reason}`;
   jscpdGaps.push({ scope: "(whole repo product inventory)", reason });
-  knipGaps.push({ scope: "(whole repo product inventory)", reason });
 }
 const knipUncertainScopes: ScanGap[] = [];
 // #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
@@ -587,6 +593,9 @@ for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   const scopeInventory = productSourceInventoryForScope(targetDir, scope, sourceInventory);
+  for (const gap of scopeInventory.unresolvedConfigurations) {
+    knipGaps.push({ scope: label, reason: `${gap.path}: ${gap.reason}` });
+  }
   try {
     const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
       ? runKnipDegraded(scope, degradedKnipReason, scopeInventory)
@@ -642,6 +651,8 @@ for (const scope of scopes) {
 }
 
 const jscpdReport = mergeJscpdReports(jscpdReports);
+const knipIncompleteScopeLabels = [...new Set(knipGaps.map((gap) => gap.scope))].sort();
+const knipReducedScopeLabels = [...new Set(knipReducedScopes.map((scope) => scope.scope))].sort();
 
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
@@ -728,8 +739,8 @@ if (knipReport) {
     // orchestrator reads it off stderr to say what knip actually looked at (src/audit-runners.ts).
     `M5 dead code across ${scopes.length} scope(s): ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports, ` +
       `${knipReport.issues.reduce((sum, i) => sum + (i.dependencies?.length ?? 0) + (i.devDependencies?.length ?? 0), 0)} unused dependenc(ies) (#1050)` +
-      (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
-      (knipReducedScopes.length ? `, ${knipReducedScopes.length}/${scopes.length} scope(s) ran in reduced no-deps mode (#810, see M5-98)` : "") +
+      (knipIncompleteScopeLabels.length ? `, ${knipIncompleteScopeLabels.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
+      (knipReducedScopeLabels.length ? `, ${knipReducedScopeLabels.length}/${scopes.length} scope(s) ran in reduced no-deps mode (#810, see M5-98)` : "") +
       (knipUncertainScopes.length ? `, ${knipUncertainScopes.length}/${scopes.length} scope(s) flagged as uncertain (#580, see M5-99)` : ""),
   );
 } else {
@@ -752,9 +763,9 @@ writeCorpusScannerScope(scopeOutPath, "quality-scan", {
     jscpd: { status: jscpdGaps.length > 0 ? "incomplete" : "completed", comparedLines: dup.totalLines },
     knip: {
       discovered: scopes.map(scopeLabel).sort(),
-      completed: scopes.map(scopeLabel).filter((scope) => !knipGaps.some((gap) => gap.scope === scope)).sort(),
-      reduced: knipReducedScopes.map((scope) => scope.scope).sort(),
-      incomplete: knipGaps.map((scope) => scope.scope).sort(),
+      completed: scopes.map(scopeLabel).filter((scope) => !knipIncompleteScopeLabels.includes(scope)).sort(),
+      reduced: knipReducedScopeLabels.filter((scope) => !knipIncompleteScopeLabels.includes(scope)),
+      incomplete: knipIncompleteScopeLabels,
     },
     divergedClones: {
       securityPathSources: narrowFiles.length,

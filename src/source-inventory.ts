@@ -110,8 +110,7 @@ function staticValue(node: ts.Expression): unknown | undefined {
 }
 
 /** Read only a literal exported object. Imports, spreads, identifiers and computed values stay unresolved. */
-export function readStaticConfigObject(path: string): { value?: Record<string, unknown>; error?: string; executable?: boolean } {
-  if ([".json", ".jsonc"].includes(extname(path))) return { ...readJsonc(path), executable: false };
+function readConfigExportExpression(path: string): { expression?: ts.Expression; error?: string; executable?: boolean } {
   try {
     const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true,
       path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
@@ -136,14 +135,67 @@ export function readStaticConfigObject(path: string): { value?: Record<string, u
       // serializing the literal object and silently dropping the import.
       if (!(ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly)) executable = true;
     }
-    if (!expression) return { error: "no static default/module.exports object" };
-    const value = staticValue(expression);
+    return expression ? { expression, executable } : { error: "no static default/module.exports object" };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function readStaticConfigObject(path: string): { value?: Record<string, unknown>; error?: string; executable?: boolean } {
+  if ([".json", ".jsonc"].includes(extname(path))) return { ...readJsonc(path), executable: false };
+  const parsed = readConfigExportExpression(path);
+  if (!parsed.expression) return parsed;
+  try {
+    const value = staticValue(parsed.expression);
     return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? { value: value as Record<string, unknown>, executable }
+      ? { value: value as Record<string, unknown>, executable: parsed.executable }
       : { error: "export is not a fully static object" };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+function objectProperty(expression: ts.Expression, name: string): { expression?: ts.Expression; unresolved?: boolean } {
+  const object = unwrapExpression(expression);
+  if (!ts.isObjectLiteralExpression(object)) return { unresolved: true };
+  let found: ts.Expression | undefined;
+  let unresolved = false;
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      unresolved = true;
+      continue;
+    }
+    const propertyName = "name" in property && property.name
+      && (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) || ts.isNumericLiteral(property.name))
+      ? property.name.text
+      : undefined;
+    if (propertyName === undefined) {
+      unresolved = true;
+      continue;
+    }
+    if (propertyName !== name) continue;
+    if (ts.isPropertyAssignment(property)) found = property.initializer;
+    else unresolved = true;
+  }
+  return { ...(found ? { expression: found } : {}), ...(unresolved ? { unresolved: true } : {}) };
+}
+
+// Vite's output remains `dist` when unrelated config fields are dynamic. Reading the whole object
+// would conflate an executable lib-entry/plugin expression with an unknown output boundary and
+// make quality-scan reject findings that Knip produced successfully.
+function readViteOutputDirectory(path: string): { output?: string; error?: string } {
+  const parsed = readConfigExportExpression(path);
+  if (!parsed.expression) return { error: parsed.error };
+  const build = objectProperty(parsed.expression, "build");
+  if (build.unresolved) return { error: "Vite build output is obscured by a spread or computed property" };
+  if (!build.expression) return { output: "dist" };
+  const outDir = objectProperty(build.expression, "outDir");
+  if (outDir.unresolved) return { error: "Vite build.outDir is obscured by a spread or computed property" };
+  if (!outDir.expression) return { output: "dist" };
+  const value = staticValue(outDir.expression);
+  return typeof value === "string"
+    ? { output: value }
+    : { error: "Vite build.outDir is not a static string" };
 }
 
 function hasDependency(pkg: Record<string, unknown> | undefined, name: string): boolean {
@@ -214,14 +266,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
   if (viteConfig || hasDependency(pkg, "vite")) {
     let output: string | undefined = "dist";
     if (viteConfig) {
-      const config = readStaticConfigObject(viteConfig);
-      if (!config.value) output = undefined;
-      else if (config.value.build !== undefined) {
-        const build = config.value.build;
-        output = typeof build === "object" && build !== null && !Array.isArray(build)
-          ? ((build as Record<string, unknown>).outDir === undefined ? "dist" : (build as Record<string, unknown>).outDir as string | undefined)
-          : undefined;
-      }
+      output = readViteOutputDirectory(viteConfig).output;
     }
     addRelativeDirectory(exclusions, output, "Vite build output declared by Vite configuration");
   }
@@ -302,14 +347,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     if (workspaceViteConfig || hasDependency(workspacePkg, "vite")) {
       let output: string | undefined = "dist";
       if (workspaceViteConfig) {
-        const config = readStaticConfigObject(workspaceViteConfig);
-        if (!config.value) output = undefined;
-        else if (config.value.build !== undefined) {
-          const build = config.value.build;
-          output = typeof build === "object" && build !== null && !Array.isArray(build)
-            ? ((build as Record<string, unknown>).outDir === undefined ? "dist" : (build as Record<string, unknown>).outDir as string | undefined)
-            : undefined;
-        }
+        output = readViteOutputDirectory(workspaceViteConfig).output;
       }
       if (output) {
         const source = workspaceViteConfig
@@ -358,14 +396,12 @@ function configurationGaps(root: string): SourceInventoryGap[] {
         continue;
       }
       if (VITE_CONFIG_NAMES.includes(entry.name) || STRYKER_CONFIG_NAMES.includes(entry.name)) {
-        const parsed = readStaticConfigObject(entry.path);
-        if (!parsed.value) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
-        else if (VITE_CONFIG_NAMES.includes(entry.name) && parsed.value.build !== undefined) {
-          const build = parsed.value.build;
-          if (typeof build !== "object" || build === null || Array.isArray(build)) gaps.push({ path: rel, reason: "Vite build configuration is not a static object" });
-          else if ((build as Record<string, unknown>).outDir !== undefined && typeof (build as Record<string, unknown>).outDir !== "string") {
-            gaps.push({ path: rel, reason: "Vite build.outDir is not a static string" });
-          }
+        if (VITE_CONFIG_NAMES.includes(entry.name)) {
+          const parsed = readViteOutputDirectory(entry.path);
+          if (!parsed.output) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
+        } else {
+          const parsed = readStaticConfigObject(entry.path);
+          if (!parsed.value) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
         }
       } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
         const parsed = readJsonc(entry.path);
@@ -452,10 +488,15 @@ export function productSourceInventoryForScope(
   }
   const entries = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
 
-  const rootGaps = rootInventory.unresolvedConfigurations.map((gap): SourceInventoryGap => ({
-    ...gap,
-    path: posix(relative(absoluteScope, resolve(absoluteRoot, ...gap.path.split("/")))),
-  }));
+  const rootGaps = rootInventory.unresolvedConfigurations.flatMap((gap): SourceInventoryGap[] => {
+    const absoluteGap = resolve(absoluteRoot, ...gap.path.split("/"));
+    const gapRelativeToScope = relative(absoluteScope, absoluteGap);
+    const scopeRelativeToConfigDir = relative(dirname(absoluteGap), absoluteScope);
+    const gapIsInsideScope = gapRelativeToScope === "" || (!gapRelativeToScope.startsWith(`..${sep}`) && gapRelativeToScope !== ".." && !gapRelativeToScope.startsWith("/"));
+    const configCanGovernScope = scopeRelativeToConfigDir === "" || (!scopeRelativeToConfigDir.startsWith(`..${sep}`) && scopeRelativeToConfigDir !== ".." && !scopeRelativeToConfigDir.startsWith("/"));
+    if (!gapIsInsideScope && !configCanGovernScope) return [];
+    return [{ ...gap, path: posix(gapRelativeToScope) }];
+  });
   const gaps = [...new Map([...local.unresolvedConfigurations, ...rootGaps]
     .map((gap) => [`${gap.path}\0${gap.reason}`, gap])).values()]
     .sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));

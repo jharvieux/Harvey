@@ -84,7 +84,7 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(workspaceInventory.jscpdIgnoreGlobs).toEqual(expect.arrayContaining(["**/.pnpm-store/**", "package-cache/**", "compiled/**"]));
     expect(workspaceInventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
       path: "../../vite.config.ts",
-      reason: expect.stringContaining("not a fully static object"),
+      reason: expect.stringContaining("configuration output paths are unresolved"),
     }));
     expect(productSourceInventoryForTarget(join(root, "apps/web")).excludedDirectories).toEqual(workspaceInventory.excludedDirectories);
   });
@@ -204,5 +204,37 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.unresolvedConfigurations).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "vite.config.ts", reason: expect.stringContaining("unresolved") }),
     ]));
+  });
+
+  it("keeps Vite's default output exclusion when unrelated config fields are dynamic", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ devDependencies: { vite: "1" } }),
+      "vite.config.js": [
+        'const selected = process.env.VITE_ENTRY;',
+        'module.exports = { build: { lib: { entry: `src/${selected}.ts` } } };',
+        "",
+      ].join("\n"),
+      "dist/generated.ts": "export const generated = true;\n",
+      "src/dist/authored.ts": "export const authored = true;\n",
+    });
+
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("dist/generated.ts")).toMatchObject({ path: "dist" });
+    expect(inventory.excludedDirectoryFor("src/dist/authored.ts")).toBeUndefined();
+    expect(inventory.unresolvedConfigurations).not.toContainEqual(expect.objectContaining({ path: "vite.config.js" }));
+  });
+
+  it("does not inherit an unresolved sibling config into a direct workspace scan", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "apps/a/package.json": JSON.stringify({ name: "a", private: true }),
+      "apps/a/src/index.ts": "export const authored = true;\n",
+      "apps/b/package.json": JSON.stringify({ name: "b", private: true }),
+      "apps/b/vite.config.ts": "const outDir = process.env.OUT_DIR; export default { build: { outDir } };\n",
+    });
+
+    const inventory = productSourceInventoryForTarget(join(root, "apps/a"));
+    expect(inventory.excludedDirectoryFor("src/index.ts")).toBeUndefined();
+    expect(inventory.unresolvedConfigurations).not.toContainEqual(expect.objectContaining({ path: "../b/vite.config.ts" }));
   });
 });

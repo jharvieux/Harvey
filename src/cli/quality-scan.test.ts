@@ -195,6 +195,67 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(directScope?.evidence).toContain("`compiled/**`: 1 file");
   }, 30000);
 
+  it("inherits a root output boundary through a brace-declared direct workspace scan", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-brace-workspace-"));
+    dirs.push(repo);
+    const app = join(repo, "packages/app");
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true, workspaces: ["packages/{app,lib}"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "packages/app/generated" } }));
+    write("packages/app/package.json", JSON.stringify({ name: "app", private: true }));
+    write("packages/app/knip.json", JSON.stringify({ entry: ["src/live.ts"], project: ["**/*.ts"] }));
+    write("packages/app/src/live.ts", "export const live = true;\n");
+    write("packages/app/src/dead.ts", "export const dead = true;\n");
+    write("packages/app/generated/dead.ts", "export const generated = true;\n");
+    write("packages/lib/package.json", JSON.stringify({ name: "lib", private: true }));
+
+    const findings = await runCli(app, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "src/dead.ts" }));
+    expect(findings.some((finding) => finding.location.includes("generated/dead.ts"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-SCOPE-00",
+      evidence: expect.stringMatching(/`generated\/\*\*`: 1 file.*TypeScript compiler output declared by tsconfig\.json/),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as { unitsExamined: number; observation: { productSources: { count: number } } };
+    expect(scope.unitsExamined).toBe(2);
+    expect(scope.observation.productSources.count).toBe(2);
+  }, 30000);
+
+  it("keeps findings and a conserved receipt when a Vite output boundary is unresolved", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-unresolved-vite-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "dynamic-vite", private: true }));
+    write("knip.json", JSON.stringify({ entry: ["src/live.ts"], project: ["src/**/*.ts"] }));
+    write("src/live.ts", "export const live = true;\n");
+    write("src/dead.ts", "export const dead = true;\n");
+    write("vite.config.ts", "const outDir = process.env.OUT_DIR; export default { build: { outDir } };\n");
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "src/dead.ts" }));
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M5-00",
+      evidence: expect.stringContaining("vite.config.ts"),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
+    };
+    expect(scope.observation.knip).toEqual({
+      discovered: ["(repo root)"],
+      completed: [],
+      reduced: [],
+      incomplete: ["(repo root)"],
+    });
+  }, 30000);
+
   it("excludes an entire generated workspace from every M4 source consumer", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-quality-whole-workspace-"));
     dirs.push(root);
