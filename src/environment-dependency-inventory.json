@@ -182736,8 +182736,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-19T15:57:42.115Z",
-        "observedAt": "2026-09-12T15:57:42.115Z",
+        "expiresAt": "2026-09-26T13:47:15.056Z",
+        "observedAt": "2026-09-19T13:47:15.056Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/ghostfolio:clock:expiry-clock",
@@ -182794,8 +182794,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-19T15:57:42.115Z",
-        "observedAt": "2026-09-12T15:57:42.115Z",
+        "expiresAt": "2026-09-26T13:47:15.056Z",
+        "observedAt": "2026-09-19T13:47:15.056Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/ghostfolio:mutable-data:osv-advisory-snapshot",
@@ -182810,10 +182810,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "7947a61c9d84d009c651b52e2e9d620cb7f8c4269de20d0de97f4a4d23244cd7",
+      "observedIdentity": "15ea7361f96a3c24e120ba1a6737b5e4e001d2232e6d550b1ad41805c8e88b80",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "7947a61c9d84d009c651b52e2e9d620cb7f8c4269de20d0de97f4a4d23244cd7",
+        "identity": "15ea7361f96a3c24e120ba1a6737b5e4e001d2232e6d550b1ad41805c8e88b80",
         "location": {
           "anchor": "targets/ghostfolio",
           "line": 60,
@@ -182856,8 +182856,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-19T15:57:42.115Z",
-        "observedAt": "2026-09-12T15:57:42.115Z",
+        "expiresAt": "2026-09-26T13:47:15.056Z",
+        "observedAt": "2026-09-19T13:47:15.056Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/ghostfolio:tool:osv-scanner-and-scalibr",
@@ -356941,8 +356941,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "c9151beca89b64158bf403d0fee0986787bfdf58",
-    "commitPayload": "dHJlZSA1ODQxM2E3NjYyZGUyMzhmYWM4ZGUxYjI2YjVkYWQ1NTZiZWMxNGVkCnBhcmVudCA0ZDE1NjJkNzVkZGYzZjBiYzhkNWRkMDFiMTIwNTg5N2I1NjlhMWYwCnBhcmVudCBjNzVjMzE0MGVlN2NkYzUxM2NhZDc4NWY5NjI0MmQ4ZWNjOGI0OWI1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODI0NTcwIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODI0NTcwIC0wNTAwCgpJbnRlZ3JhdGUgcmV2aWV3ZWQgYWR2aXNvcnkgcmVmcmVzaCAoIzIwNjcpCg==",
+    "commit": "ef1f29480edba099b3670fd432dbb1c01a8e0d82",
+    "commitPayload": "dHJlZSBmM2NkZDQ2M2RkMzk1OTM3ZTRkNzRmY2Q4MTBmYTAwNTM2OWJjZjFkCnBhcmVudCA1MzI1NzIyN2FmYTUyNjgxOWI4NjMzZTQ4MWJjMmNiYjIyM2YxOTM5CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODM5NjI0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODM5NjI0IC0wNTAwCgpSZWZyZXNoIEdob3N0Zm9saW8gYWR2aXNvcnkgZXZpZGVuY2UgZm9yICMyMDY3Cg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -356951,13 +356951,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "3a4d3ed896d0dd97dcd7c99480cba6417e13aeb5",
+        "gitOid": "2e52eb6aeff88eafbd8c071c60a030db479d61f0",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "8d4c798028f6f2bcfd51094a72742d8a6c8cbbbf752d21ee39a8d4ed20bfd7bb",
-    "tree": "58413a7662de238fac8de1b26b5dad556bec14ed"
+    "populationSha256": "df1fa70f1e29b52dc6ce50bc5591887131ba5fb299e4e0f5e50c8ace3a3de19d",
+    "tree": "f3cdd463dd395937e4d74fcd810fa005369bcf1d"
   },
   "venues": [
     {
@@ -378681,11 +378681,11 @@
       "sha256": "1f0ddefa98388a4481825d40b07d9a36ae907ddcf0774caa6be3b50f4ab77c91"
     },
     {
-      "bytes": 355310,
+      "bytes": 355169,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "3e8797a4fdc30d8dd0aa08e08e3fe73009d93595",
+      "gitOid": "7aab407e89259db39ebf2ebe47b494267921214c",
       "id": "src/scan/__fixtures__/corpus-advisories/ghostfolio.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378693,7 +378693,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/ghostfolio.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "7947a61c9d84d009c651b52e2e9d620cb7f8c4269de20d0de97f4a4d23244cd7"
+      "sha256": "15ea7361f96a3c24e120ba1a6737b5e4e001d2232e6d550b1ad41805c8e88b80"
     },
     {
       "bytes": 249695,
@@ -378730,7 +378730,7 @@
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "5cc9af86fbbccdd83dcdf618114dfbd7c70141cd",
+      "gitOid": "2ce7cd86f132e5bdc0914a60a4bb3c2f01d535ca",
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378738,7 +378738,7 @@
       "owner": "corpus advisory snapshot schema 2",
       "path": "src/scan/__fixtures__/corpus-advisories/manifest.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "7ad5b9e033d5b24e88993cc1af9e2c9cbf8baa90f831276e8cf4ade47fa3db20"
+      "sha256": "4cb8da7cdd4b4f9beb18ef356f3ac2e745046a556a6c7432603526d495237d80"
     },
     {
       "bytes": 602,
