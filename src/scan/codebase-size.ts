@@ -24,7 +24,8 @@
 import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { JSCPD_IGNORE_GLOBS } from "../quality-scan.js";
+import { JSCPD_IGNORE_GLOBS, matchesGlob } from "../quality-scan.js";
+import { productSourceInventory, type ProductSourceInventory } from "../source-inventory.js";
 
 export type SizeBand = "small" | "medium" | "large" | "enterprise";
 
@@ -38,22 +39,6 @@ export interface CodebaseSize {
 }
 
 const SOURCE_FILE = /\.(m|c)?[jt]sx?$/;
-const BUILD_OUTPUT_DIRS = new Set(["build", "coverage", "out", ".turbo", ".git"]);
-
-// The M4 ignore globs use only `**/` (any depth) and `*` (within a segment), so a small converter is
-// enough — and reusing the real list beats maintaining a second, drifting definition of "generated".
-const globToRegExp = (glob: string): RegExp => {
-  const body = glob
-    .split("/")
-    .map((seg) => (seg === "**" ? "**" : seg.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")))
-    .join("/")
-    .replace(/^\*\*\//, "(?:.*/)?")
-    .replace(/\/\*\*$/, "(?:/.*)?");
-  return new RegExp(`^${body}$`);
-};
-
-const EXCLUDED = JSCPD_IGNORE_GLOBS.map(globToRegExp);
-
 const BANDS: { under: number; band: SizeBand; label: string }[] = [
   { under: 10_000, band: "small", label: "Small · under 10k lines" },
   { under: 50_000, band: "medium", label: "Medium · 10k–50k lines" },
@@ -63,13 +48,12 @@ const BANDS: { under: number; band: SizeBand; label: string }[] = [
 
 const DEFINITION =
   "Non-blank lines of JS/TS application source (.ts/.tsx/.js/.jsx/.mjs/.cjs), tests included. " +
-  "Generated and vendored code is excluded using the same path list the M4 duplication module uses " +
-  "(node_modules, dist, .next, generated/, *.gen.ts, database.types.ts, types_db.ts, vendor, patches, " +
-  "demo), plus build output (build, coverage, out, .turbo). Bands are line-count only — a monorepo or " +
+  "Generated, dependency and build output is excluded using the same configuration-derived product " +
+  "inventory and generated-file rules as the M4 duplication module. Bands are line-count only — a monorepo or " +
   "a regulated app is custom-quoted regardless of size, which is an operator judgement, not this " +
   "measurement.";
 
-export function measureCodebaseSize(root: string): CodebaseSize {
+export function measureCodebaseSize(root: string, inventory: ProductSourceInventory = productSourceInventory(root)): CodebaseSize {
   let loc = 0;
   let files = 0;
   let excludedFiles = 0;
@@ -85,9 +69,16 @@ export function measureCodebaseSize(root: string): CodebaseSize {
   // secrets and dependency work, and every finding it produced, on 3 of 15 wild repos.
   const walk = (dir: string, excluded: boolean): void => {
     for (const { name: entry, path: full, isDirectory: isDir } of readEntriesSafe(dir).entries) {
-      if (isDir && BUILD_OUTPUT_DIRS.has(entry)) continue;
       const rel = relative(root, full).split(sep).join("/");
-      const skip = excluded || EXCLUDED.some((re) => re.test(rel));
+      const inventoryExclusions = inventory.exclusionsFor(rel);
+      // VCS metadata and installed node_modules can be skipped without opening them: they are
+      // universal dependencies, not a measured contextual population. Package stores and other
+      // configuration-derived directories must still be walked so `excludedFiles` is the physical
+      // population disclosed to the client rather than a count of matched directory names.
+      if (isDir && inventoryExclusions.some((exclusion) => exclusion.path === ".git" || exclusion.path === "node_modules")) continue;
+      const skip = excluded
+        || inventoryExclusions.length > 0
+        || (!isDir && JSCPD_IGNORE_GLOBS.some((glob) => matchesGlob(glob, rel)));
       if (isDir) {
         walk(full, skip);
       } else if (SOURCE_FILE.test(entry)) {

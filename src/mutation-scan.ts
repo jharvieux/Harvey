@@ -910,10 +910,21 @@ function matchesMutateGlobs(path: string, globs: readonly string[]): boolean {
 interface MutationScope {
   mutatedFileCount: number;
   configuredGlobs?: string[];
+  configuredFileCount?: number;
   expectedFileCount?: number;
   missingCount?: number;
   // Sample (max 5) of files the configured globs match but the report never covered.
   missing?: string[];
+  files?: Array<{
+    path: string;
+    configured: true;
+    inventory: "included" | "excluded";
+    inventoryReason?: string;
+    staged: "present in invoked tree" | "absent from invoked tree" | "unknown for imported report";
+    instrumented: "confirmed by report row" | "unknown — no per-file instrumentation receipt";
+    reported: boolean;
+    absenceReason?: string;
+  }>;
   // False when the configured scope could not be statically read (non-JSON config, no mutate
   // array, unsupported glob syntax) — the run is not KNOWN scoped, but full coverage is unproven.
   verified: boolean;
@@ -925,6 +936,11 @@ export function verifyMutationScope(
   reportFiles: readonly string[],
   mutateGlobs: readonly string[] | undefined,
   sourceFiles: readonly string[],
+  options: {
+    excludedReasons?: Readonly<Record<string, string>>;
+    stagedPaths?: ReadonlySet<string>;
+    inventoryGaps?: readonly string[];
+  } = {},
 ): MutationScope {
   const base = { mutatedFileCount: reportFiles.length };
   if (!mutateGlobs || mutateGlobs.length === 0) {
@@ -936,22 +952,74 @@ export function verifyMutationScope(
   }
   // .d.ts files carry no executable code, so Stryker configs rarely bother excluding them; leaving
   // them in `expected` would flag honest full runs as scoped.
-  const expected = sourceFiles.filter((f) => !f.endsWith(".d.ts") && matchesMutateGlobs(f, mutateGlobs));
+  const configured = sourceFiles.filter((f) => !f.endsWith(".d.ts") && matchesMutateGlobs(f, mutateGlobs));
+  const expected = configured.filter((f) => options.excludedReasons?.[f] === undefined);
   const covered = new Set(reportFiles);
   const missing = expected.filter((f) => !covered.has(f));
+  const files = configured.map((path) => ({
+    path,
+    configured: true as const,
+    inventory: options.excludedReasons?.[path] === undefined ? "included" as const : "excluded" as const,
+    ...(options.excludedReasons?.[path] === undefined ? {} : { inventoryReason: options.excludedReasons[path] }),
+    staged: options.stagedPaths === undefined
+      ? "unknown for imported report" as const
+      : options.stagedPaths.has(path) ? "present in invoked tree" as const : "absent from invoked tree" as const,
+    instrumented: covered.has(path) ? "confirmed by report row" as const : "unknown — no per-file instrumentation receipt" as const,
+    reported: covered.has(path),
+    ...(covered.has(path) ? {} : {
+      absenceReason: options.excludedReasons?.[path]
+        ? `configured but excluded from the product inventory: ${options.excludedReasons[path]}`
+        : options.stagedPaths === undefined
+          ? "configured and inventory-included; staging is unknown for this imported report; absent from the Stryker JSON report"
+          : options.stagedPaths.has(path)
+            ? "configured, inventory-included and present in the invoked tree, but absent from the Stryker JSON report"
+            : "configured and inventory-included, but absent from the invoked tree and the Stryker JSON report",
+    }),
+  }));
+  if ((options.inventoryGaps?.length ?? 0) > 0) {
+    return {
+      ...base,
+      configuredGlobs: [...mutateGlobs],
+      configuredFileCount: configured.length,
+      expectedFileCount: expected.length,
+      missingCount: missing.length,
+      missing: missing.slice(0, 5),
+      files,
+      verified: false,
+      scoped: missing.length > 0,
+      note: `product inventory configuration is unresolved (${options.inventoryGaps!.join("; ")}) — full-scope coverage is unverified`,
+    };
+  }
+  if (expected.length === 0) {
+    return {
+      ...base,
+      configuredGlobs: [...mutateGlobs],
+      configuredFileCount: configured.length,
+      expectedFileCount: 0,
+      missingCount: 0,
+      files,
+      verified: false,
+      scoped: false,
+      note: configured.length > 0
+        ? `configured mutate globs matched ${configured.length} file(s), but all were excluded from the product inventory — full-scope coverage is unverified`
+        : "configured mutate globs matched zero source files — full-scope coverage is unverified",
+    };
+  }
   if (missing.length > 0) {
     return {
       ...base,
       configuredGlobs: [...mutateGlobs],
+      configuredFileCount: configured.length,
       expectedFileCount: expected.length,
       missingCount: missing.length,
       missing: missing.slice(0, 5),
+      files,
       verified: true,
       scoped: true,
       note: `run covered ${reportFiles.length} file(s) but the configured mutate globs match ${expected.length} — ${missing.length} file(s) were never mutated (e.g. ${missing.slice(0, 3).join(", ")})`,
     };
   }
-  return { ...base, configuredGlobs: [...mutateGlobs], expectedFileCount: expected.length, verified: true, scoped: false, note: `run covered all ${expected.length} file(s) matched by the configured mutate globs` };
+  return { ...base, configuredGlobs: [...mutateGlobs], configuredFileCount: configured.length, expectedFileCount: expected.length, files, verified: true, scoped: false, note: `run covered all ${expected.length} inventory-included file(s) matched by the configured mutate globs` };
 }
 
 export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"; note: string } {

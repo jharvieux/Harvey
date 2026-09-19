@@ -118,6 +118,25 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(card.gradedModules).toContain("M9");
   });
 
+  it("retains real M9 configuration findings without fabricating a grade across an excluded product population", () => {
+    const reason = "All discovered JS/TS product source was excluded by configured output boundaries.";
+    const card = buildHealthScorecard(input({
+      framework: "next",
+      sourcePopulationGap: reason,
+      sources: [{ path: "next.config.mjs", text: "export default { env: { screen: window.innerWidth } };" }],
+    }));
+    const m9 = card.dimensions.find((dimension) => dimension.module === "M9")!;
+
+    expect(m9).toMatchObject({ status: "not-assessed", count: 1, reason: expect.stringContaining(reason) });
+    expect(m9.grade).toBeUndefined();
+    expect(m9.score).toBeUndefined();
+    expect(m9.evidence?.totalFindings).toBe(1);
+    expect(m9.evidence?.examples).toEqual(expect.arrayContaining([
+      expect.objectContaining({ location: "next.config.mjs:1", shape: "M9 — SSR-only API misuse" }),
+    ]));
+    expect(card.gradedModules).not.toContain("M9");
+  });
+
   it("requires eligible source before assigning an M9 grade", () => {
     const scorecard = buildHealthScorecard(input({ framework: "other", sources: [], nonNextWorkspaces: [{ rel: "apps/site", framework: "astro" }] }));
     const m9 = scorecard.dimensions.find((d) => d.module === "M9")!;
@@ -161,6 +180,75 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(m9.reason).toContain("was not analysed");
     expect(m9.evidence?.totalFindings).toBe(6);
     expect(mixed.gradedModules).toContain("M9");
+  });
+
+  it("does not fabricate source grades when configured boundaries exclude the whole product population", () => {
+    const reason = "All 4 discovered JS/TS source files were excluded by root tsconfig.json output.";
+    const scorecard = buildHealthScorecard(input({
+      m1: { grade: "A", score: 100, gradedCount: 0, indicatorCount: 0 },
+      sources: [],
+      kloc: 0,
+      duplication: { percentage: 0, duplicatedLines: 0, totalLines: 0 },
+      sourcePopulationGap: reason,
+    }));
+    for (const module of ["M1", "M4", "M5", "M6", "M7", "M8", "M9"]) {
+      expect(scorecard.dimensions.find((row) => row.module === module)).toMatchObject({
+        status: "not-assessed",
+        reason,
+      });
+    }
+    expect(scorecard.grade).toBeUndefined();
+    expect(scorecard.score).toBeUndefined();
+    expect(scorecard.composition).toContain("there is no health grade");
+  });
+
+  it("retains an M1 grade when a config-only defect was actually assessed", () => {
+    const scorecard = buildHealthScorecard(input({
+      m1: { grade: "B", score: 80, gradedCount: 1, indicatorCount: 0 },
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: "Every discovered source file was configured output.",
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M1")).toMatchObject({ status: "graded", grade: "B", score: 80 });
+    expect(scorecard.grade).toBe("B");
+  });
+
+  it("keeps a producer-backed M5 assessment when configured boundaries excluded only JS/TS", () => {
+    const reason = "All 1 discovered JS/TS source file was excluded. No JS/TS product source was inspected.";
+    const finding = f("M5 — Python empty/pass exception handler", "worker.py:4");
+    const scorecard = buildHealthScorecard(input({
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: reason,
+      m5SourceAssessment: {
+        findings: [finding],
+        kloc: 0.004,
+        examinedFiles: 1,
+        scope: `Bounded M5 source rules examined 1 authored source file. ${reason}`,
+      },
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
+      status: "graded",
+      grade: "F",
+      count: 1,
+      scope: expect.stringContaining(reason),
+    });
+    expect(scorecard.dimensions.find((row) => row.module === "M4")).toMatchObject({ status: "not-assessed", reason });
+  });
+
+  it("represents a producer-backed zero-finding M5 assessment as examined", () => {
+    const scorecard = buildHealthScorecard(input({
+      sources: [],
+      kloc: 0,
+      sourcePopulationGap: "The JS/TS population was excluded.",
+      m5SourceAssessment: {
+        findings: [],
+        kloc: 0.004,
+        examinedFiles: 1,
+        scope: "A bounded M5 rule set examined one Python file.",
+      },
+    }));
+    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "graded", grade: "A", count: 0 });
   });
 
   it("weights every graded dimension equally — security is one dimension, not the subject", () => {

@@ -266,6 +266,112 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     // pulled straight from a real --out, instead of the raw Stryker JSON being discarded after parse.
     expect(parsed.rawReport.config).toEqual({ mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" });
   });
+
+  it("keeps all six ATC-shaped product reports routes in configured scope; dropping one is partial (#2125)", async () => {
+    const routes = [
+      "bookings-by-source", "campaigns", "cancellations", "first-vs-last-touch", "leads-by-source", "source-funnel",
+    ].map((name) => `apps/main/src/app/api/reports/${name}/route.ts`);
+    const repo = fixtureRepo(Object.fromEntries(routes.map((path) => [path, "export const GET = () => new Response();\n"])));
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ mutate: ["apps/main/src/**/*.ts"] }));
+    const full = join(repo, "six-routes-full.json");
+    writeFileSync(full, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.map((path) => [path, { mutants: [killed] }])) }));
+    const fullRun = await runCli(repo, ["--report", full]);
+    expect(fullRun.status).toBe(0);
+    const fullScope = JSON.parse(fullRun.out).scope as { expectedFileCount: number; files: Array<{ path: string; reported: boolean }> };
+    expect(fullScope).toMatchObject({ expectedFileCount: 6, verified: true, scoped: false });
+    expect(fullScope.files).toHaveLength(6);
+    expect(fullScope.files.every((file) => file.reported)).toBe(true);
+
+    const dropped = join(repo, "six-routes-dropped.json");
+    writeFileSync(dropped, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.slice(0, -1).map((path) => [path, { mutants: [killed] }])) }));
+    const droppedRun = await runCli(repo, ["--report", dropped]);
+    expect(droppedRun.status).toBe(0);
+    const parsed = JSON.parse(droppedRun.out) as { scope: { expectedFileCount: number; missingCount: number; missing: string[]; files: Array<{ path: string; reported: boolean; absenceReason?: string }> }; moduleRecord?: { status: string } };
+    expect(parsed.scope).toMatchObject({ expectedFileCount: 6, missingCount: 1, missing: [routes[5]] });
+    expect(parsed.scope.files.find((file) => file.path === routes[5])).toMatchObject({
+      reported: false,
+      staged: "unknown for imported report",
+      absenceReason: "configured and inventory-included; staging is unknown for this imported report; absent from the Stryker JSON report",
+    });
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
+
+  it("inherits root product boundaries when an app workspace is scanned directly (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-workspace-inventory-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write(root, "pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(root, ".npmrc", "store-dir=apps/web/package-cache\n");
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const authored = ["src/index.ts", "src/live.ts", "src/app/reports/dead.ts", "src/app/dist/dead.ts"];
+    for (const path of authored) write(app, path, "export const authored = true;\n");
+    const excluded = [".pnpm-store/v3/pkg/dead.ts", "package-cache/v3/pkg/dead.ts", "compiled/dead.ts"];
+    for (const path of excluded) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(authored.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: {
+        configuredFileCount: number;
+        expectedFileCount: number;
+        missing?: string[];
+        scoped: boolean;
+        files: Array<{ path: string; inventory: string; inventoryReason?: string; reported: boolean }>;
+      };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 7, expectedFileCount: 4, verified: true, scoped: false });
+    expect(parsed.scope.missing).toBeUndefined();
+    for (const path of excluded) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.any(String),
+        reported: false,
+      });
+    }
+    expect(parsed.scope.files.filter((file) => file.reported).map((file) => file.path).sort()).toEqual([...authored].sort());
+  });
+
+  it("records flat and nested files as excluded when root output contains the whole app workspace (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const generated = ["generated.ts", "src/generated.ts"];
+    for (const path of generated) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "whole-workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(generated.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: { configuredFileCount: number; expectedFileCount: number; verified: boolean; files: Array<{ path: string; inventory: string; inventoryReason?: string }> };
+      moduleRecord?: { status: string };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 2, expectedFileCount: 0, verified: false });
+    for (const path of generated) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.stringContaining("tsconfig.json"),
+      });
+    }
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via
@@ -922,8 +1028,23 @@ if (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {
 
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    const parsed = JSON.parse(out) as {
+      summary?: { overall: { totalMutants: number } };
+      scope?: {
+        files: Array<{
+          path: string;
+          staged: string;
+          instrumented: string;
+          reported: boolean;
+        }>;
+      };
+    };
     expect(parsed.summary?.overall.totalMutants).toBe(1); // a real run, not a degrade
+    expect(parsed.scope?.files.find((file) => file.path === "src/add.ts")).toMatchObject({
+      staged: "present in invoked tree",
+      instrumented: "confirmed by report row",
+      reported: true,
+    });
 
     const marked = JSON.parse(readFileSync(marker, "utf8")) as { cwd: string; extends: string };
     expect(marked.cwd).not.toBe(repo); // staged into a disposable copy, not run in-place

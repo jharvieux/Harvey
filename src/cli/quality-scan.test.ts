@@ -108,6 +108,175 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
   }, 30000);
 });
 
+describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
+  it("excludes a pnpm store clone, retains a real reports-route clone, and discloses the exact store population", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-store-cli-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "store-fixture", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/app/api/reports/one/route.ts", CLONED_BLOCK);
+    write("src/app/api/reports/two/route.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/a/index.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/b/index.ts", CLONED_BLOCK);
+    const findings = await runCli(repo);
+    const productClone = findings.find((finding) => finding.taxonomy.startsWith("M4 —") && finding.location.includes("reports/one") && finding.location.includes("reports/two"));
+    expect(productClone).toBeDefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("**/.pnpm-store/**");
+    expect(scope?.evidence).toContain("2 files");
+  }, 30000);
+
+  it("preserves executable Knip config imports while applying package-store exclusions", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "executable-knip", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/index.ts", "export const live = true;\n");
+    write("src/authored-ignore/dead.ts", "export const intentionallyIgnored = true;\n");
+    write("src/cache/.pnpm-store/v3/pkg/unused.ts", "export const dependencyArtifact = true;\n");
+    write("knip-provider.ts", 'import { writeFileSync } from "node:fs"; writeFileSync("provider-consumed", "yes");\n');
+    write("knip.config.ts", 'import "./knip-provider.ts"; const project = ["src/**/*.ts"]; export default () => ({ entry: ["src/index.ts"], project, ignore: "src/authored-ignore/**" });\n');
+    const findings = await runCli(repo);
+    expect(readFileSync(join(repo, "provider-consumed"), "utf8")).toBe("yes");
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes("authored-ignore"))).toBe(false);
+    expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
+  }, 30000);
+
+  it("retains root-declared stores and generated output for root and direct workspace entry points", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-workspace-inventory-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write("pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(".npmrc", "store-dir=apps/web/package-cache\n");
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write("apps/web/knip.json", JSON.stringify({ entry: ["src/index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/src/index.ts", 'import { live } from "./live.js"; console.log(live);\n');
+    write("apps/web/src/live.ts", "export const live = true;\n");
+    write("apps/web/src/app/reports/dead.ts", "export const authoredReport = true;\n");
+    write("apps/web/src/app/dist/dead.ts", "export const authoredDist = true;\n");
+    write("apps/web/.pnpm-store/v3/pkg/dead.ts", "export const dependencyArtifact = true;\n");
+    write("apps/web/package-cache/v3/pkg/dead.ts", "export const cachedArtifact = true;\n");
+    write("apps/web/compiled/dead.ts", "export const generatedArtifact = true;\n");
+
+    const findings = await runCli(repo);
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(findings.some((finding) => finding.location.includes(excluded)), excluded).toBe(false);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: `apps/web/${authored}` }));
+    }
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("apps/web/package-cache/**");
+    expect(scope?.evidence).toContain("apps/web/compiled/**");
+
+    const directFindings = await runCli(join(repo, "apps/web"));
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(directFindings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.location.includes(excluded)), `direct ${excluded}`).toEqual([]);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(directFindings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: authored }));
+    }
+    const directScope = directFindings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(directScope?.evidence).toContain("`**/.pnpm-store/**`: 1 file");
+    expect(directScope?.evidence).toContain("`package-cache/**`: 1 file");
+    expect(directScope?.evidence).toContain("`compiled/**`: 1 file");
+  }, 30000);
+
+  it("excludes an entire generated workspace from every M4 source consumer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "generated", private: true }));
+    write("apps/web/auth-one.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantOne"));
+    write("apps/web/auth-two.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantTwo").replace("itemCount", "rowCount"));
+    write("apps/web/plain-one.ts", CLONED_BLOCK.replace("summarizeOrder", "buildOne"));
+    write("apps/web/plain-two.ts", CLONED_BLOCK.replace("summarizeOrder", "buildTwo").replace("itemCount", "rowCount"));
+
+    for (const args of [[], ["--whole-repo-diverged"]]) {
+      rmSync(join(app, "quality-out.json"), { force: true });
+      const findings = await runCli(app, args);
+      expect(findings.some((finding) => finding.id.startsWith("M4-DIV"))).toBe(false);
+      expect(findings.some((finding) => finding.id === "M4-99")).toBe(false);
+      expect(findings.some((finding) => finding.id === "M4-97")).toBe(false);
+      expect(findings.some((finding) => finding.taxonomy === "M5 — Slop / dead code")).toBe(false);
+      expect(findings).toContainEqual(expect.objectContaining({
+        id: "M4-SCOPE-00",
+        evidence: expect.stringMatching(/`\*\*\/\*`: 5 files.*TypeScript compiler output declared by tsconfig\.json/),
+      }));
+    }
+  }, 30000);
+
+  it("retains outer exclusions through a nested workspace owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-nested-workspace-"));
+    dirs.push(root);
+    const workspace = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }));
+    write("apps/web/packages/leaf/package.json", JSON.stringify({ name: "leaf", private: true }));
+    write("apps/web/packages/leaf/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/leaf/unused.ts", "export const generated = true;\n");
+    write("apps/web/packages/authored/package.json", JSON.stringify({ name: "authored", private: true }));
+    write("apps/web/packages/authored/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/authored/unused.ts", "export const authored = true;\n");
+
+    const findings = await runCli(workspace);
+    expect(findings.some((finding) => finding.location.includes("packages/leaf/unused.ts"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "packages/authored/unused.ts" }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M4-SCOPE-00", evidence: expect.stringContaining("`packages/leaf/**`: 3 files") }));
+  }, 30000);
+
+  it("discloses an existing malformed jscpd config instead of replacing it", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-malformed-jscpd-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "malformed-jscpd", private: true }));
+    write(".jscpd.json", '{"ignore": [ BROKEN }\n');
+    write("src/one.ts", CLONED_BLOCK);
+    write("src/two.ts", CLONED_BLOCK);
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid \.jscpd\.json/),
+    }));
+    expect(findings.some((finding) => finding.id === "M4-01")).toBe(false);
+
+    write(".jscpd.json", JSON.stringify({ ignore: "src/one.ts" }));
+    const invalidShapeFindings = await runCli(repo);
+    expect(invalidShapeFindings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid jscpd ignore configuration/),
+    }));
+  }, 30000);
+});
+
 // #580: MEASURED against a real knip run (2026-07-18) — a Vite target where `vite` is declared in
 // no dependency at all (the issue's "vite not in deps" cause) leaves knip unable to activate its
 // Vite plugin. It falls back to default index.*-only entry resolution: main.ts and its one real
@@ -255,7 +424,14 @@ describe("quality-scan CLI — M5 resolves Vite entries (index.html/main/vite.co
 function ownKnipConfigFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-ownknip-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "ownknip", private: true, version: "0.0.0", type: "module" }));
+  write(repo, "package.json", JSON.stringify({
+    name: "ownknip",
+    private: true,
+    version: "0.0.0",
+    type: "module",
+    packageManager: "pnpm@9.0.0",
+    knip: { ignore: "src/package-ignored/**" },
+  }));
   // The target's OWN knip config names a NON-standard entry Harvey's inferred globs would never
   // declare. If Harvey overrode entries, custom-entry.ts (and reachable.ts) would show unused.
   write(repo, "knip.json", JSON.stringify({ entry: ["custom-entry.ts"] }));
@@ -264,6 +440,8 @@ function ownKnipConfigFixture(): string {
   // happens even though entries are the target's own.
   write(repo, "reachable.ts", "export interface LocalProps {\n  x: number;\n}\nexport const thing: LocalProps = { x: 1 };\n");
   write(repo, "dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/package-ignored/dead.ts", 'export const packageIgnored = "ignored";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -274,6 +452,8 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 
     // reachable via the TARGET's own custom entry — proves Harvey did not override entries.
     expect(unusedFile("reachable.ts")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes("package-ignored"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
 
     // dead file surfaces at Confirmed tier — the target supplied its own entry graph, so its file
     // findings are NOT the review-tier inferred kind.
@@ -297,13 +477,14 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 function noNodeModulesViteFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-noinstall-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
+  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", packageManager: "pnpm@9.0.0", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
   // Imports an uninstalled plugin → knip can't load this config without the target's node_modules.
   write(repo, "vite.config.cjs", 'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("@vitejs/plugin-react");\nmodule.exports = {};\n');
   write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
   write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
   write(repo, "src/used.ts", 'export const used = "u";\n');
   write(repo, "src/dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -395,6 +576,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(reduced?.taxonomy).toContain("M5");
     expect(reduced?.fix).toContain("dependencies");
     expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("starts directly in the source-only tier when dependency preparation rejected the installed tree", async () => {
@@ -405,6 +587,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
     expect(findings.find((finding) => finding.id === "M5-98")?.evidence).not.toContain("canary-quality-unrequested-stdin");
     expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("preserves an explicit stdin reason byte-for-byte in M5-98 without executing the target provider (#1778)", async () => {

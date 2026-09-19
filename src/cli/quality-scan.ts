@@ -31,8 +31,9 @@
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -52,7 +53,6 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   matchesGlob,
-  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
@@ -138,6 +138,7 @@ if (degradedKnipReasonStdin) {
 const TIMEOUT_MS = timeoutSeconds * 1000;
 
 const targetDir = resolve(targetArg);
+const sourceInventory = productSourceInventoryForTarget(targetDir);
 
 // #505: one scope per workspace. discoverTargets' app enumeration already falls back to the
 // target's own root as a single app when there's no workspace manifest, so `scopes` is always
@@ -193,7 +194,8 @@ function gapReason(err: unknown): string {
 function runJscpd(dir: string): JscpdReport {
   // #1305: the invocation itself now lives in src/scan/duplication.ts so the free-tier health
   // scorecard can run the same pass. This wrapper keeps the CLI's own timeout and file-count walk.
-  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir), jscpdBin });
+  const inventory = productSourceInventoryForScope(targetDir, dir, sourceInventory);
+  return runJscpdLive(dir, { timeoutMs: TIMEOUT_MS, sourceFileCount: () => countSourceFiles(dir, "", inventory), jscpdBin, ignoreGlobs: inventory.jscpdIgnoreGlobs });
 }
 
 // #693/AoP#566: knip's `ignoreExportsUsedInFile` has no CLI flag (config-file only, verified on
@@ -207,42 +209,78 @@ const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 // config we won't risk re-serializing, or undefined when there is none. A root config in an
 // ANCESTOR dir is deliberately not consulted: knip run per-workspace treats the scope dir as its
 // own root and auto-detects entries, so there is nothing there to preserve.
-function scopeKnipConfig(dir: string): Record<string, unknown> | "unmergeable" | undefined {
-  const jsonPath = join(dir, "knip.json");
-  if (existsSync(jsonPath)) {
-    try {
-      return JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
-    } catch {
-      return "unmergeable";
-    }
-  }
-  if (["knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"].some((n) => existsSync(join(dir, n)))) {
-    return "unmergeable";
-  }
+type ScopeKnipConfig =
+  | { value: Record<string, unknown>; executablePath?: string; packageConfig?: Record<string, unknown> }
+  | { unresolved: string; executablePath?: string; packageConfig?: Record<string, unknown> };
+
+function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   const pkgPath = join(dir, "package.json");
+  let packageConfig: Record<string, unknown> | undefined;
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { knip?: Record<string, unknown> };
-      if (pkg.knip) return pkg.knip;
+      if (pkg.knip) packageConfig = pkg.knip;
     } catch {
       // a malformed package.json is knip's own error to report, not ours to merge
     }
   }
-  return undefined;
+  const configNames = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"];
+  const configPath = configNames.map((name) => join(dir, name)).find(existsSync);
+  if (!configPath) return packageConfig ? { value: packageConfig } : undefined;
+  const parsed = readStaticConfigObject(configPath);
+  if (!parsed.value) {
+    const executablePath = [".js", ".ts"].includes(extname(configPath)) ? configPath : undefined;
+    return {
+      unresolved: `${basename(configPath)}: ${parsed.error}`,
+      ...(executablePath ? { executablePath } : {}),
+      ...(packageConfig ? { packageConfig } : {}),
+    };
+  }
+  // Installed Knip shallow-merges package.json#knip first and the config file second. Preserve that
+  // exact precedence before Harvey adds its product-inventory ignores.
+  return {
+    value: { ...packageConfig, ...parsed.value },
+    ...(parsed.executable ? { executablePath: configPath } : {}),
+    ...(packageConfig ? { packageConfig } : {}),
+  };
 }
 
 // One knip invocation against `dir`. `config`, when given, is written as HARVEY_KNIP_CONFIG and
 // forced with `-c`; when undefined, knip runs against the scope's own config untouched. Throws on
 // timeout, a non-zero exit (knip aborts with exit 2 when it can't LOAD a config it needs to resolve
 // — the #810 missing-deps case), or non-JSON stdout.
-function execKnip(dir: string, config: Record<string, unknown> | undefined): KnipReport {
+function execKnip(
+  dir: string,
+  config: Record<string, unknown> | undefined,
+  executablePath?: string,
+  packageConfig: Record<string, unknown> = {},
+  inventory: ProductSourceInventory = productSourceInventoryForTarget(dir),
+): KnipReport {
   const plainArgs = ["--reporter", "json", "--no-exit-code"];
   let args = plainArgs;
   let cleanup: (() => void) | undefined;
   if (config) {
-    writeFileSync(join(dir, HARVEY_KNIP_CONFIG), JSON.stringify(config));
-    args = ["-c", HARVEY_KNIP_CONFIG, ...plainArgs];
-    cleanup = () => rmSync(join(dir, HARVEY_KNIP_CONFIG), { force: true });
+    const configName = executablePath ? ".knip.harvey.ts" : HARVEY_KNIP_CONFIG;
+    const configPath = join(dir, configName);
+    if (executablePath) {
+      const importPath = `./${basename(executablePath)}`;
+      const inventoryIgnore = productInventoryKnipIgnore(inventory);
+      writeFileSync(configPath, [
+        `import original from ${JSON.stringify(importPath)};`,
+        `const packageConfig = ${JSON.stringify(packageConfig)};`,
+        `const inventoryIgnore = ${JSON.stringify(inventoryIgnore)};`,
+        "export default async function harveyKnipConfig(options: unknown) {",
+        "  const resolved = typeof original === \"function\" ? await original(options) : await original;",
+        "  if (!resolved || typeof resolved !== \"object\" || Array.isArray(resolved)) throw new Error(\"Knip config did not resolve to an object\");",
+        "  const merged = { ...packageConfig, ...resolved };",
+        "  const existingIgnore = typeof merged.ignore === \"string\" ? [merged.ignore] : Array.isArray(merged.ignore) ? merged.ignore.filter((value): value is string => typeof value === \"string\") : [];",
+        "  return { ...merged, ignoreExportsUsedInFile: merged.ignoreExportsUsedInFile ?? { interface: true, type: true }, ignore: [...new Set([...existingIgnore, ...inventoryIgnore])] };",
+        "}",
+        "",
+      ].join("\n"));
+    } else writeFileSync(configPath, JSON.stringify(config));
+    args = ["-c", configName, ...plainArgs];
+    cleanup = () => rmSync(configPath, { force: true });
   }
   try {
     const out = execFileSync(knipBin, args, {
@@ -257,36 +295,77 @@ function execKnip(dir: string, config: Record<string, unknown> | undefined): Kni
   }
 }
 
+function productInventoryKnipIgnore(inventory: ProductSourceInventory): string[] {
+  return inventory.excludedDirectories
+    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
+    .map((entry) => entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
+}
+
+function withProductInventoryIgnore(config: Record<string, unknown>, inventory: ProductSourceInventory): Record<string, unknown> {
+  const configured = config.ignore;
+  const existing = typeof configured === "string"
+    ? [configured]
+    : Array.isArray(configured) ? configured.filter((value): value is string => typeof value === "string") : [];
+  const generated = productInventoryKnipIgnore(inventory);
+  return { ...config, ignore: [...new Set([...existing, ...generated])] };
+}
+
 // #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
 // so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
 // that supplied its own config keeps confirmed file findings.
 // #810: `pluginsDisabled`/`reducedReason` mark a scope that only ran after the degraded retry
 // (knip couldn't load the target's config/plugin configs — the missing-node_modules case).
-function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
+function runKnip(
+  dir: string,
+  inventory: ProductSourceInventory,
+): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
   // First-attempt config: an inferred config for a config-less scope (#696), the
   // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
   // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
   const existing = scopeKnipConfig(dir);
   let config: Record<string, unknown> | undefined;
+  let configurationError: unknown;
   let entriesInferred = false;
   try {
-    if (existing === undefined) {
+    if (existing && "unresolved" in existing) {
+      if (!existing.executablePath) {
+        throw new Error(`Knip config is not a fully static object, so Harvey's product-source exclusions were not applied: ${existing.unresolved}`);
+      }
+      // Executable configs are merged at runtime by a wrapper. That preserves provider imports and
+      // dynamic values while still applying the same product inventory as every static config.
+      config = {};
+    } else if (existing === undefined) {
       // No config of its own: knip can't infer non-app entries (tests above all) and floods the
       // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
       config = buildInferredKnipConfig(detectTargetFramework(dir));
       entriesInferred = true;
-    } else if (existing !== "unmergeable" && !("ignoreExportsUsedInFile" in existing)) {
+    } else if (!("ignoreExportsUsedInFile" in existing.value)) {
       // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
       // its entries — they know their app (#695).
-      config = { ...existing, ignoreExportsUsedInFile: { interface: true, type: true } };
+      config = { ...existing.value, ignoreExportsUsedInFile: { interface: true, type: true } };
+    } else {
+      config = existing.value;
     }
-  } catch {
-    // a config read/detect failure falls back to an unmodified, non-inferred run
+  } catch (err) {
+    // Preserve the failure for the existing source-only retry. Running the target config without
+    // inventory exclusions could succeed while silently restoring generated or vendored files.
+    configurationError = err;
     config = undefined;
     entriesInferred = false;
   }
   try {
-    return { report: execKnip(dir, config), entriesInferred, pluginsDisabled: false };
+    if (configurationError) throw configurationError;
+    return {
+      report: execKnip(
+        dir,
+        config ? withProductInventoryIgnore(config, inventory) : undefined,
+        existing?.executablePath,
+        existing?.packageConfig,
+        inventory,
+      ),
+      entriesInferred,
+      pluginsDisabled: false,
+    };
   } catch (err) {
     // #810: knip most often fails here because it tried to LOAD the target's own knip config or a
     // framework plugin config (vite.config.ts, next.config.ts, ...) whose imports don't resolve —
@@ -296,7 +375,13 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
     // second full timeout; and with no plugin list we can't build the retry config. Either way, let
     // the original error propagate to the M5-00 gap disclosure — fail loud, never a silent degrade.
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
-    const report = execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES));
+    const report = execKnip(
+      dir,
+      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      undefined,
+      {},
+      inventory,
+    );
     return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
   }
 }
@@ -306,10 +391,20 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
 // framework/provider config against that partial tree. Start directly in the same source-only tier
 // as #810's retry, with every plugin disabled and Harvey-inferred entries. An empty live plugin
 // catalog leaves no complete disable list; abort into M5-00 before starting Knip.
-function runKnipDegraded(dir: string, reason: string): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+function runKnipDegraded(
+  dir: string,
+  reason: string,
+  inventory: ProductSourceInventory,
+): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
-    report: execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)),
+    report: execKnip(
+      dir,
+      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      undefined,
+      {},
+      inventory,
+    ),
     entriesInferred: true,
     pluginsDisabled: true,
     reducedReason: reason,
@@ -334,17 +429,20 @@ function lineCount(dir: string, relPath: string): number | undefined {
 // #505: this pass is an in-process directory walk (already excluding node_modules/dist/etc via
 // SKIP_DIRS), not an external tool invocation — it isn't what the issue found hanging, so it stays
 // whole-target rather than per-workspace.
-const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "generated", "vendor", "patches", "__tests__", "e2e"]);
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
+
+function excludedProductPath(relPath: string): boolean {
+  return sourceInventory.excludedDirectoryFor(relPath) !== undefined;
+}
 
 function securityPathFiles(dir: string, rel = "", observed?: Set<string>): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath, observed));
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (!excludedProductPath(relPath)) files.push(...securityPathFiles(dir, relPath, observed));
+    } else if (!excludedProductPath(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       observed?.add(relPath);
       if (touchesSecurityPath(relPath)) {
         files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
@@ -366,8 +464,8 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...allSourceFiles(dir, relPath));
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (!excludedProductPath(relPath)) files.push(...allSourceFiles(dir, relPath));
+    } else if (!excludedProductPath(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
     }
   }
@@ -378,13 +476,13 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
 // reuses the same SKIP_DIRS/SOURCE_EXT/SKIP_FILE walk shape as securityPathFiles above (total
 // count instead of a security-relevant subset) so the ratio denominator matches what knip could
 // plausibly have scanned.
-function countSourceFiles(dir: string, rel = ""): number {
+function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInventory = sourceInventory): number {
   let count = 0;
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) count += countSourceFiles(dir, relPath);
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (!inventory.excludedDirectoryFor(relPath)) count += countSourceFiles(dir, relPath, inventory);
+    } else if (!inventory.excludedDirectoryFor(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       count += 1;
     }
   }
@@ -396,28 +494,34 @@ function countSourceFiles(dir: string, rel = ""): number {
 // one of JSCPD_DISCLOSED_GLOBS's counts read as zero. This walk only skips the build-artifact dirs
 // (node_modules/dist/.next/.git — the ones deliberately NOT in JSCPD_DISCLOSED_GLOBS, see its header)
 // so it actually visits the files the disclosed globs are about.
-const GLOB_TALLY_SKIP_DIRS = new Set(["node_modules", "dist", ".next", ".git"]);
-
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
-  const counts = new Map<string, { count: number; example?: string }>(JSCPD_DISCLOSED_GLOBS.map((g) => [g, { count: 0 }]));
+  const configured = sourceInventory.excludedDirectories
+    .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
+    .map((entry) => ({ glob: entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`, reason: entry.reason }));
+  // Configured directories are the primary allocation. A generated filename inside a package store
+  // is one physical exclusion, so it contributes once here while the configured reason remains visible.
+  const entries: Array<{ glob: string; reason?: string }> = [...configured, ...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob }))]
+    .filter((entry, index, all) => all.findIndex((candidate) => candidate.glob === entry.glob) === index);
+  const counts = new Map<string, { count: number; example?: string; reason?: string }>(entries.map((entry) => [entry.glob, { count: 0, reason: entry.reason }]));
   const walk = (curRel: string): void => {
     for (const entry of readEntriesSafe(join(dir, curRel)).entries) {
       const relPath = curRel ? `${curRel}/${entry.name}` : entry.name;
       if (entry.isDirectory) {
-        if (!GLOB_TALLY_SKIP_DIRS.has(entry.name)) walk(relPath);
+        // The M4 run skips configured output/store directories, but this disclosure walk must
+        // enter them to count the exact omitted population. Git metadata and installed dependency
+        // trees are universal exclusions and intentionally have no client-facing denominator.
+        if (!sourceInventory.exclusionsFor(relPath).some((exclusion) => exclusion.path === "node_modules" || exclusion.path === ".git")) walk(relPath);
         continue;
       }
-      if (!matchesJscpdIgnoreGlob(relPath)) continue;
-      for (const g of JSCPD_DISCLOSED_GLOBS) {
-        if (!matchesGlob(g, relPath)) continue;
-        const hit = counts.get(g)!;
-        hit.count += 1;
-        if (!hit.example) hit.example = relPath;
-      }
+      const primary = entries.find(({ glob }) => matchesGlob(glob, relPath));
+      if (!primary) continue;
+      const hit = counts.get(primary.glob)!;
+      hit.count += 1;
+      if (!hit.example) hit.example = relPath;
     }
   };
   walk(rel);
-  return [...counts.entries()].map(([glob, { count, example }]) => ({ glob, count, example }));
+  return [...counts.entries()].map(([glob, { count, example, reason }]) => ({ glob, count, example, reason }));
 }
 
 const VITE_CONFIG_NAMES = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.mts", "vite.config.cts"];
@@ -445,6 +549,11 @@ const jscpdReports: JscpdReport[] = [];
 const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
+for (const gap of sourceInventory.unresolvedConfigurations) {
+  const reason = `${gap.path}: ${gap.reason}`;
+  jscpdGaps.push({ scope: "(whole repo product inventory)", reason });
+  knipGaps.push({ scope: "(whole repo product inventory)", reason });
+}
 const knipUncertainScopes: ScanGap[] = [];
 // #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
 const knipReducedScopes: ScanGap[] = [];
@@ -477,10 +586,11 @@ try {
 for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
+  const scopeInventory = productSourceInventoryForScope(targetDir, scope, sourceInventory);
   try {
     const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
-      ? runKnipDegraded(scope, degradedKnipReason)
-      : runKnip(scope);
+      ? runKnipDegraded(scope, degradedKnipReason, scopeInventory)
+      : runKnip(scope, scopeInventory);
     if (pluginsDisabled) {
       for (const issue of report.issues) {
         let source: string | undefined;
@@ -509,7 +619,7 @@ for (const scope of scopes) {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
       // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
       // operate on the real scope dir, not the merged-report-relative path.
-      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope), hasViteEntryMarkers(scope), isViteResolvable(scope));
+      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope, "", scopeInventory), hasViteEntryMarkers(scope), isViteResolvable(scope));
       if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
@@ -553,7 +663,9 @@ if (wholeRepoDiverged) {
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
 const eligibleFileCount = observedProductSources.size;
-const divergedScopeDisclosure = wholeRepoDiverged ? undefined : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
+const divergedScopeDisclosure = wholeRepoDiverged || eligibleFileCount === 0
+  ? undefined
+  : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
 
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
 

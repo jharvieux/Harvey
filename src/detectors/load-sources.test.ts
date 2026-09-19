@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectHandrolledFindings } from "./handrolled.js";
-import { loadSources, NON_PRODUCT } from "./load-sources.js";
+import { loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
 import { detectPerfCodeFindings } from "./perf-code.js";
 import { detectSlopFindings } from "./slop.js";
 
@@ -30,6 +30,33 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("loadSources extension coverage (#1065)", () => {
+  it("keeps authored reports/dist paths while excluding a pnpm store from every loader consumer (#2132/#2125)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0" }),
+      "src/app/api/reports/route.ts": "export const GET = () => null;\n",
+      "src/dist/handwritten.ts": "export const authored = true;\n",
+      ".pnpm-store/v3/pkg/index.ts": "export const dependency = true;\n",
+    });
+    expect(loadSources(dir).map((file) => file.path).sort()).toEqual([
+      "package.json",
+      "src/app/api/reports/route.ts",
+      "src/dist/handwritten.ts",
+    ]);
+  });
+
+  it("excludes flat and nested files when an ancestor config marks the whole workspace as output", () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/generated.ts": "export const direct = true;\n",
+      "apps/web/src/generated.ts": "export const nested = true;\n",
+    });
+    const app = join(root, "apps/web");
+    expect(loadSourceInventory(app)).toEqual([]);
+    expect(loadSources(app)).toEqual([]);
+  });
+
   it("loads the whole JS/TS family, not just the TypeScript half", () => {
     const dir = makeTarget({
       "app/route.js": "export const GET = () => null;\n",
