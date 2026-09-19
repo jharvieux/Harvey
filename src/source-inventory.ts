@@ -11,7 +11,7 @@ import { discoverWorkspaceInventory } from "./workspaces.js";
 export interface SourceExclusion {
   path: string;
   reason: string;
-  match: "anchored" | "any-depth";
+  match: "anchored" | "any-depth" | "exact";
 }
 
 export interface SourceInventoryGap {
@@ -228,6 +228,70 @@ function resolveTsOutput(configPath: string, seen = new Set<string>()): { output
   return existsSync(parent) ? resolveTsOutput(parent, seen) : {};
 }
 
+interface TypeScriptOutputPlan {
+  configPath: string;
+  outputDirectory?: string;
+  outputDeclaredAt?: string;
+  inputFiles: readonly string[];
+  emittedFiles: readonly string[];
+  error?: string;
+}
+
+function pathIsInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith("/"));
+}
+
+function typescriptOutputPlan(configPath: string): TypeScriptOutputPlan {
+  const diagnostics: ts.Diagnostic[] = [];
+  const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  if (!parsed) {
+    return {
+      configPath,
+      inputFiles: [],
+      emittedFiles: [],
+      error: diagnostics.length > 0
+        ? diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")).join("; ")
+        : "TypeScript could not resolve the effective configuration",
+    };
+  }
+  // TS18002/TS18003 describe an empty project population, not an unreadable output boundary.
+  // They are common in solution configs and must not turn an otherwise exact inventory partial.
+  const errors = [...diagnostics, ...parsed.errors.filter((diagnostic) => ![18002, 18003].includes(diagnostic.code))];
+  const effectiveOutput = parsed.options.outDir;
+  const declared = resolveTsOutput(configPath);
+  const emittedFiles: string[] = [];
+  if (effectiveOutput) {
+    for (const input of parsed.fileNames) {
+      try {
+        emittedFiles.push(...ts.getOutputFileNames(parsed, input, !ts.sys.useCaseSensitiveFileNames));
+      } catch (err) {
+        errors.push({
+          category: ts.DiagnosticCategory.Error,
+          code: 0,
+          file: undefined,
+          start: undefined,
+          length: undefined,
+          messageText: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+  return {
+    configPath,
+    ...(effectiveOutput ? { outputDirectory: resolve(effectiveOutput) } : {}),
+    ...(declared.declaredAt ? { outputDeclaredAt: declared.declaredAt } : {}),
+    inputFiles: parsed.fileNames.map((file) => resolve(file)),
+    emittedFiles: [...new Set(emittedFiles.map((file) => resolve(file)))],
+    ...(errors.length > 0 ? {
+      error: errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")).join("; "),
+    } : {}),
+  };
+}
+
 function npmrcStoreDir(path: string): string | undefined {
   try {
     for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
@@ -242,8 +306,16 @@ function npmrcStoreDir(path: string): string | undefined {
   return undefined;
 }
 
-function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): Record<string, string> {
+interface ConfiguredSourceBoundaries {
+  directories: Record<string, string>;
+  files: Record<string, string>;
+  gaps: SourceInventoryGap[];
+}
+
+function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): ConfiguredSourceBoundaries {
   const exclusions: Record<string, string> = {};
+  const exactFiles: Record<string, string> = {};
+  const gaps: SourceInventoryGap[] = [];
   const pnpm = existsSync(join(root, "pnpm-lock.yaml")) || existsSync(join(root, "pnpm-workspace.yaml"))
     || (typeof pkg?.packageManager === "string" && pkg.packageManager.startsWith("pnpm@"));
   if (pnpm) {
@@ -294,11 +366,30 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     }
   };
   collectConfigs(root);
-  for (const configPath of tsconfigs) {
-    const resolvedOutput = resolveTsOutput(configPath);
-    if (!resolvedOutput.output || !resolvedOutput.declaredAt) continue;
-    const base = relative(root, dirname(resolvedOutput.declaredAt));
-    addRelativeDirectory(exclusions, join(base, resolvedOutput.output), `TypeScript compiler output declared by ${relative(root, resolvedOutput.declaredAt).split(sep).join("/")}`);
+  const tsPlans = tsconfigs.map(typescriptOutputPlan);
+  const compilerInputs = [...new Set(tsPlans.flatMap((plan) => plan.inputFiles))];
+  for (const plan of tsPlans) {
+    const configLabel = posix(relative(root, plan.configPath));
+    if (plan.error) gaps.push({ path: configLabel, reason: `TypeScript effective configuration is incomplete: ${plan.error}` });
+    if (!plan.outputDirectory || !pathIsInside(root, plan.outputDirectory)) continue;
+    const outputPath = posix(relative(root, plan.outputDirectory));
+    if (!outputPath || outputPath === ".") continue;
+    const declaredAt = plan.outputDeclaredAt ? posix(relative(root, plan.outputDeclaredAt)) : configLabel;
+    const reason = `TypeScript compiler output declared by ${declaredAt}`;
+    const overlappingInputs = plan.inputFiles.filter((input) => pathIsInside(plan.outputDirectory!, input));
+    if (overlappingInputs.length === 0) {
+      addRelativeDirectory(exclusions, outputPath, reason);
+      continue;
+    }
+    for (const emitted of plan.emittedFiles) {
+      if (!pathIsInside(root, emitted) || plan.inputFiles.includes(emitted)) continue;
+      const emittedPath = posix(relative(root, emitted));
+      if (emittedPath && emittedPath !== ".") exactFiles[emittedPath] = `${reason}; exact emitted artifact derived from the effective compiler inputs`;
+    }
+    gaps.push({
+      path: configLabel,
+      reason: `TypeScript output ${outputPath} overlaps ${overlappingInputs.length} effective compiler input file(s); exact emitted artifacts are excluded and other paths are retained as candidate source`,
+    });
   }
 
   for (const configPath of composerConfigs) {
@@ -383,10 +474,26 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       addRelativeDirectory(exclusions, join(base, dirname((reporter as Record<string, unknown>).fileName as string)), `Stryker JSON report directory declared by ${label}`);
     }
   }
-  return exclusions;
+  // A different configured producer can target a directory that contains a proven compiler
+  // input. A whole-directory ignore cannot represent that population safely, so retain the
+  // ambiguous directory and disclose only the boundary that overlaps the effective input set.
+  for (const [path, reason] of Object.entries(exclusions)) {
+    if (!/(?:output|coverage|temporary|report directory) declared/i.test(reason)) continue;
+    if (reason.startsWith("TypeScript compiler output")) continue;
+    const absolute = resolve(root, ...path.split("/"));
+    const overlappingInputs = compilerInputs.filter((input) => pathIsInside(absolute, input));
+    if (overlappingInputs.length === 0) continue;
+    delete exclusions[path];
+    const alreadyDisclosed = gaps.some((gap) => gap.reason.includes(`output ${path} overlaps`));
+    if (!alreadyDisclosed) gaps.push({
+      path,
+      reason: `Configured output ${path} overlaps ${overlappingInputs.length} effective TypeScript compiler input file(s); the ambiguous directory is retained as candidate source`,
+    });
+  }
+  return { directories: exclusions, files: exactFiles, gaps };
 }
 
-function configurationGaps(root: string): SourceInventoryGap[] {
+function configurationGaps(root: string, configuredGaps: readonly SourceInventoryGap[] = []): SourceInventoryGap[] {
   const gaps: SourceInventoryGap[] = [];
   const visit = (dir: string): void => {
     for (const entry of readEntriesSafe(dir).entries) {
@@ -406,9 +513,6 @@ function configurationGaps(root: string): SourceInventoryGap[] {
       } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
         const parsed = readJsonc(entry.path);
         if (!parsed.value) gaps.push({ path: rel, reason: `TypeScript configuration is not statically readable: ${parsed.error}` });
-        else if (parsed.value.extends !== undefined && (typeof parsed.value.extends !== "string" || (!parsed.value.extends.startsWith(".") && !parsed.value.extends.startsWith("/")))) {
-          gaps.push({ path: rel, reason: "TypeScript extends output is unresolved because the base is not a relative/absolute static file" });
-        }
       } else if (entry.name === ".npmrc") {
         const text = readFileSync(entry.path, "utf8");
         const storeLine = text.split(/\r?\n/).map((line) => line.trim()).find((line) => /^(?:store-dir|storeDir)\s*=/.test(line));
@@ -417,7 +521,8 @@ function configurationGaps(root: string): SourceInventoryGap[] {
     }
   };
   visit(root);
-  return gaps.sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));
+  return [...new Map([...gaps, ...configuredGaps].map((gap) => [`${gap.path}\0${gap.reason}`, gap])).values()]
+    .sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));
 }
 
 function matchesExclusion(exclusion: SourceExclusion, path: string): boolean {
@@ -426,7 +531,14 @@ function matchesExclusion(exclusion: SourceExclusion, path: string): boolean {
     if (exclusion.path === ".") return true;
     return normalized === exclusion.path || normalized.startsWith(`${exclusion.path}/`);
   }
+  if (exclusion.match === "exact") return normalized === exclusion.path;
   return normalized.split("/").includes(exclusion.path);
+}
+
+export function sourceExclusionGlob(exclusion: SourceExclusion): string {
+  if (exclusion.match === "exact") return exclusion.path;
+  if (exclusion.path === ".") return "**/*";
+  return exclusion.match === "any-depth" ? `**/${exclusion.path}/**` : `${exclusion.path}/**`;
 }
 
 function inventoryFrom(
@@ -439,7 +551,7 @@ function inventoryFrom(
     unresolvedConfigurations,
     exclusionsFor,
     excludedDirectoryFor: (path: string) => exclusionsFor(path)[0],
-    jscpdIgnoreGlobs: entries.map((entry) => entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`),
+    jscpdIgnoreGlobs: entries.map(sourceExclusionGlob),
   };
 }
 
@@ -449,13 +561,14 @@ export function productSourceInventory(root: string): ProductSourceInventory {
   const configured = configuredOutputDirectories(root, pkg);
   const entries: SourceExclusion[] = [
     ...FIXED_BOUNDARIES,
-    ...Object.entries(configured).map(([path, reason]): SourceExclusion => ({
+    ...Object.entries(configured.directories).map(([path, reason]): SourceExclusion => ({
       path,
       reason,
       match: path === ".pnpm-store" || path === ".pnpm" ? "any-depth" : "anchored",
     })),
+    ...Object.entries(configured.files).map(([path, reason]): SourceExclusion => ({ path, reason, match: "exact" })),
   ].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
-  return inventoryFrom(entries, configurationGaps(root));
+  return inventoryFrom(entries, configurationGaps(root, configured.gaps));
 }
 
 /** Rebase the authoritative root inventory for a workspace-scoped scanner invocation. */
@@ -476,15 +589,16 @@ export function productSourceInventoryForScope(
   const local = productSourceInventory(absoluteScope);
   const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
     if (entry.match === "any-depth") return [entry];
-    if (entry.path === ".") return [entry];
-    if (entry.path === scopePath || scopePath.startsWith(`${entry.path}/`)) return [{ ...entry, path: "." }];
+    if (entry.path === ".") return entry.match === "anchored" ? [entry] : [];
+    if (entry.match === "anchored" && (entry.path === scopePath || scopePath.startsWith(`${entry.path}/`))) return [{ ...entry, path: "." }];
     if (!entry.path.startsWith(`${scopePath}/`)) return [];
     return [{ ...entry, path: entry.path.slice(scopePath.length + 1) }];
   });
   const byPath = new Map<string, SourceExclusion>();
   for (const entry of [...local.excludedDirectories, ...inherited]) {
-    const prior = byPath.get(entry.path);
-    if (!prior || prior.match === entry.match || entry.match === "any-depth") byPath.set(entry.path, entry);
+    const key = entry.match === "exact" ? `exact\0${entry.path}` : entry.path;
+    const prior = byPath.get(key);
+    if (!prior || prior.match === entry.match || entry.match === "any-depth") byPath.set(key, entry);
   }
   const entries = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
 

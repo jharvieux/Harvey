@@ -1,7 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadSourceInventory } from "./detectors/load-sources.js";
+import { resolveScanScope } from "./scan/scan-scope.js";
 import { productSourceInventory, productSourceInventoryForScope, productSourceInventoryForTarget } from "./source-inventory.js";
 
 const dirs: string[] = [];
@@ -49,6 +51,77 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("build/generated")).toMatchObject({ path: "build/generated" });
     expect(inventory.excludedDirectoryFor("src/generated")).toBeUndefined();
     expect(inventory.excludedDirectoryFor("src/reports")).toBeUndefined();
+  });
+
+  it.each([
+    { mode: "noEmit", compilerOptions: { noEmit: true }, extension: "js" },
+    { mode: "ordinary emit", compilerOptions: { noEmit: false }, extension: "js" },
+    { mode: "declaration-only emit", compilerOptions: { declaration: true, emitDeclarationOnly: true }, extension: "d.ts" },
+  ])("preserves effective compiler inputs inside an overlapping outDir for $mode", ({ compilerOptions, extension }) => {
+    const root = fixture({
+      "tsconfig.build.json": JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", ...compilerOptions },
+        files: ["outside.ts", "src/app/api/eval/route.ts", "src/reports/dead.ts"],
+      }),
+      "outside.ts": "export const outside = true;\n",
+      "src/app/api/eval/route.ts": "export const GET = () => null;\n",
+      "src/reports/dead.ts": "export const dead = true;\n",
+      [`src/outside.${extension}`]: "export declare const outside = true;\n",
+      [`src/src/app/api/eval/route.${extension}`]: "export declare const GET = true;\n",
+      [`src/src/reports/dead.${extension}`]: "export declare const dead = true;\n",
+    });
+
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("src")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/app/api/eval/route.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/reports/dead.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor(`src/outside.${extension}`)).toMatchObject({ match: "exact" });
+    expect(inventory.excludedDirectoryFor(`src/src/reports/dead.${extension}`)).toMatchObject({ match: "exact" });
+    expect(inventory.jscpdIgnoreGlobs).toContain(`src/outside.${extension}`);
+    expect(inventory.jscpdIgnoreGlobs).not.toContain("src/**");
+    expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "tsconfig.build.json",
+      reason: expect.stringContaining("overlaps 2 effective compiler input file(s)"),
+    }));
+    expect(loadSourceInventory(root).map((source) => source.path)).toEqual([
+      "outside.ts",
+      "src/app/api/eval/route.ts",
+      "src/reports/dead.ts",
+    ]);
+
+    const scope = resolveScanScope(root);
+    try {
+      expect(existsSync(join(scope.scanDir, "src/app/api/eval/route.ts"))).toBe(true);
+      expect(existsSync(join(scope.scanDir, `src/outside.${extension}`))).toBe(false);
+    } finally {
+      scope.cleanup();
+    }
+  });
+
+  it("resolves inherited compiler options before protecting inputs and rebases exact outputs for a workspace", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "config/base.json": JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", rootDir: "..", outDir: "../apps/web/src" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/tsconfig.build.json": JSON.stringify({
+        extends: "../../config/base.json",
+        compilerOptions: { noEmit: true },
+        files: ["outside.ts", "src/reports/dead.ts"],
+      }),
+      "apps/web/outside.ts": "export const outside = true;\n",
+      "apps/web/src/reports/dead.ts": "export const dead = true;\n",
+      "apps/web/src/apps/web/outside.js": "export const generated = true;\n",
+      "apps/web/src/apps/web/src/reports/dead.js": "export const generated = true;\n",
+    });
+
+    const inventory = productSourceInventoryForTarget(join(root, "apps/web"));
+    expect(inventory.excludedDirectoryFor("src/reports/dead.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/apps/web/outside.js")).toMatchObject({ match: "exact" });
+    expect(inventory.jscpdIgnoreGlobs).toContain("src/apps/web/outside.js");
+    expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "tsconfig.build.json",
+      reason: expect.stringContaining("effective compiler input"),
+    }));
   });
 
   it("derives each workspace's output boundary from that workspace's manifest", () => {

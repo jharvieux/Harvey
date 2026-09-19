@@ -33,7 +33,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, type ProductSourceInventory } from "../source-inventory.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, sourceExclusionGlob, type ProductSourceInventory } from "../source-inventory.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -298,7 +298,7 @@ function execKnip(
 function productInventoryKnipIgnore(inventory: ProductSourceInventory): string[] {
   return inventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`);
+    .map(sourceExclusionGlob);
 }
 
 function withProductInventoryIgnore(config: Record<string, unknown>, inventory: ProductSourceInventory): Record<string, unknown> {
@@ -504,7 +504,7 @@ function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInvento
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
   const configured = sourceInventory.excludedDirectories
     .filter((entry) => entry.path !== "node_modules" && entry.path !== ".git")
-    .map((entry) => ({ glob: entry.path === "." ? "**/*" : entry.match === "any-depth" ? `**/${entry.path}/**` : `${entry.path}/**`, reason: entry.reason }));
+    .map((entry) => ({ glob: sourceExclusionGlob(entry), reason: entry.reason }));
   // Configured directories are the primary allocation. A generated filename inside a package store
   // is one physical exclusion, so it contributes once here while the configured reason remains visible.
   const entries: Array<{ glob: string; reason?: string }> = [...configured, ...JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob }))]
