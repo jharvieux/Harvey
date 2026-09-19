@@ -181575,8 +181575,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:41.287Z",
+        "observedAt": "2026-09-19T01:30:41.287Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/boxyhq:clock:expiry-clock",
@@ -181633,8 +181633,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:41.287Z",
+        "observedAt": "2026-09-19T01:30:41.287Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/boxyhq:mutable-data:osv-advisory-snapshot",
@@ -181649,10 +181649,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "f93c8cdb5a45fd75c7c5c5d434aa6a1924dab6403f7b2ae6178a237317a7a763",
+      "observedIdentity": "148080238e8a00a23fb7b4ecd714afe7833062c787c9d395ff8e64d766beb534",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "f93c8cdb5a45fd75c7c5c5d434aa6a1924dab6403f7b2ae6178a237317a7a763",
+        "identity": "148080238e8a00a23fb7b4ecd714afe7833062c787c9d395ff8e64d766beb534",
         "location": {
           "anchor": "targets/boxyhq",
           "line": 20,
@@ -181695,8 +181695,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:41.287Z",
+        "observedAt": "2026-09-19T01:30:41.287Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/boxyhq:tool:osv-scanner-and-scalibr",
@@ -181749,8 +181749,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:20.303Z",
+        "observedAt": "2026-09-19T01:32:20.303Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/carbon:clock:expiry-clock",
@@ -181807,8 +181807,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:20.303Z",
+        "observedAt": "2026-09-19T01:32:20.303Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/carbon:mutable-data:osv-advisory-snapshot",
@@ -181823,10 +181823,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "2da83a613f983d0bb8bee310da4847c958950e4e3bb9b11b6c24adf4c2501d0a",
+      "observedIdentity": "713e73361c3e51c155c853ee48098eca267c3ee8f2fa95d36bbbd6bce9fde5ec",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "2da83a613f983d0bb8bee310da4847c958950e4e3bb9b11b6c24adf4c2501d0a",
+        "identity": "713e73361c3e51c155c853ee48098eca267c3ee8f2fa95d36bbbd6bce9fde5ec",
         "location": {
           "anchor": "targets/carbon",
           "line": 92,
@@ -181869,8 +181869,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:20.303Z",
+        "observedAt": "2026-09-19T01:32:20.303Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/carbon:tool:osv-scanner-and-scalibr",
@@ -181923,8 +181923,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:12.526Z",
+        "observedAt": "2026-09-19T01:33:12.526Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/cravab:clock:expiry-clock",
@@ -181981,8 +181981,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:12.526Z",
+        "observedAt": "2026-09-19T01:33:12.526Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/cravab:mutable-data:osv-advisory-snapshot",
@@ -181997,10 +181997,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "efd30f87b462508f4810786afaff72abdd8dd4e7af2f6c791bc3062dd77cdc82",
+      "observedIdentity": "76ccd853fd5dc5e0f7654982a8d64bc1085067f252d8e5ea3417eed91c746571",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "efd30f87b462508f4810786afaff72abdd8dd4e7af2f6c791bc3062dd77cdc82",
+        "identity": "76ccd853fd5dc5e0f7654982a8d64bc1085067f252d8e5ea3417eed91c746571",
         "location": {
           "anchor": "targets/cravab",
           "line": 116,
@@ -182043,8 +182043,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:12.526Z",
+        "observedAt": "2026-09-19T01:33:12.526Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/cravab:tool:osv-scanner-and-scalibr",
@@ -182097,8 +182097,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:05.467Z",
+        "observedAt": "2026-09-19T01:32:05.467Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/documenso:clock:expiry-clock",
@@ -182155,8 +182155,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:05.467Z",
+        "observedAt": "2026-09-19T01:32:05.467Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/documenso:mutable-data:osv-advisory-snapshot",
@@ -182171,10 +182171,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "70eb33acad12e2c241855bc3f20d7bb1e06d9a441dfad8680868b61221f034fc",
+      "observedIdentity": "2173c07f238c1eea8bbc7c25e678157b38f096004a3d01f5b7660915d0dedbf7",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "70eb33acad12e2c241855bc3f20d7bb1e06d9a441dfad8680868b61221f034fc",
+        "identity": "2173c07f238c1eea8bbc7c25e678157b38f096004a3d01f5b7660915d0dedbf7",
         "location": {
           "anchor": "targets/documenso",
           "line": 84,
@@ -182217,8 +182217,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:05.467Z",
+        "observedAt": "2026-09-19T01:32:05.467Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/documenso:tool:osv-scanner-and-scalibr",
@@ -182271,8 +182271,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:34.557Z",
+        "observedAt": "2026-09-19T01:33:34.557Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/effective:clock:expiry-clock",
@@ -182329,8 +182329,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:34.557Z",
+        "observedAt": "2026-09-19T01:33:34.557Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/effective:mutable-data:osv-advisory-snapshot",
@@ -182345,10 +182345,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "ad179b577a20c5dd1c131d253a7d0277a1cc1f3bb47b4c20b71718996a6c2cf9",
+      "observedIdentity": "29e96b86937d49be3c66f0ee8285c070d9c77f0f69d0e81180a4e7c298641b88",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "ad179b577a20c5dd1c131d253a7d0277a1cc1f3bb47b4c20b71718996a6c2cf9",
+        "identity": "29e96b86937d49be3c66f0ee8285c070d9c77f0f69d0e81180a4e7c298641b88",
         "location": {
           "anchor": "targets/effective",
           "line": 132,
@@ -182391,8 +182391,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:34.557Z",
+        "observedAt": "2026-09-19T01:33:34.557Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/effective:tool:osv-scanner-and-scalibr",
@@ -182445,8 +182445,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:23.006Z",
+        "observedAt": "2026-09-19T01:33:23.006Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/flori-web:clock:expiry-clock",
@@ -182503,8 +182503,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:23.006Z",
+        "observedAt": "2026-09-19T01:33:23.006Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/flori-web:mutable-data:osv-advisory-snapshot",
@@ -182519,10 +182519,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "5c533dfbb84c4db157d244107312bda600cff72c0101b65061fd33531f0f6e0c",
+      "observedIdentity": "1f0ddefa98388a4481825d40b07d9a36ae907ddcf0774caa6be3b50f4ab77c91",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "5c533dfbb84c4db157d244107312bda600cff72c0101b65061fd33531f0f6e0c",
+        "identity": "1f0ddefa98388a4481825d40b07d9a36ae907ddcf0774caa6be3b50f4ab77c91",
         "location": {
           "anchor": "targets/flori-web",
           "line": 124,
@@ -182565,8 +182565,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:23.006Z",
+        "observedAt": "2026-09-19T01:33:23.006Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/flori-web:tool:osv-scanner-and-scalibr",
@@ -182793,8 +182793,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:51.035Z",
+        "observedAt": "2026-09-19T01:31:51.035Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/inbox-zero:clock:expiry-clock",
@@ -182851,8 +182851,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:51.035Z",
+        "observedAt": "2026-09-19T01:31:51.035Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/inbox-zero:mutable-data:osv-advisory-snapshot",
@@ -182867,10 +182867,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "2dfb2623150760c12b50d8ff5b5c007179fe8b8b7347f873e3950816dc4dc5ed",
+      "observedIdentity": "866b0d6d9ff5afbcec83b26f7f1923bf121daf432885cc918338971a507dd997",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "2dfb2623150760c12b50d8ff5b5c007179fe8b8b7347f873e3950816dc4dc5ed",
+        "identity": "866b0d6d9ff5afbcec83b26f7f1923bf121daf432885cc918338971a507dd997",
         "location": {
           "anchor": "targets/inbox-zero",
           "line": 76,
@@ -182913,8 +182913,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:51.035Z",
+        "observedAt": "2026-09-19T01:31:51.035Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/inbox-zero:tool:osv-scanner-and-scalibr",
@@ -182967,8 +182967,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:56.935Z",
+        "observedAt": "2026-09-19T01:30:56.935Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/launch-mvp:clock:expiry-clock",
@@ -183025,8 +183025,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:56.935Z",
+        "observedAt": "2026-09-19T01:30:56.935Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/launch-mvp:mutable-data:osv-advisory-snapshot",
@@ -183041,10 +183041,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "32074a3ce7731369ef44c3ef0730f250d9ee59053c3c416b7c0bea89001afd4b",
+      "observedIdentity": "64fcf433b01d1f350f598caface734c2f0547d36c11b93a679ce430ffba9fa57",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "32074a3ce7731369ef44c3ef0730f250d9ee59053c3c416b7c0bea89001afd4b",
+        "identity": "64fcf433b01d1f350f598caface734c2f0547d36c11b93a679ce430ffba9fa57",
         "location": {
           "anchor": "targets/launch-mvp",
           "line": 36,
@@ -183087,8 +183087,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:56.935Z",
+        "observedAt": "2026-09-19T01:30:56.935Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/launch-mvp:tool:osv-scanner-and-scalibr",
@@ -183141,8 +183141,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:50.615Z",
+        "observedAt": "2026-09-19T01:30:50.615Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/multi-tenant-starter:clock:expiry-clock",
@@ -183199,8 +183199,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:50.615Z",
+        "observedAt": "2026-09-19T01:30:50.615Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/multi-tenant-starter:mutable-data:osv-advisory-snapshot",
@@ -183261,8 +183261,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:50.615Z",
+        "observedAt": "2026-09-19T01:30:50.615Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/multi-tenant-starter:tool:osv-scanner-and-scalibr",
@@ -183315,8 +183315,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:05.164Z",
+        "observedAt": "2026-09-19T01:31:05.164Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/mvp-boilerplate:clock:expiry-clock",
@@ -183373,8 +183373,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:05.164Z",
+        "observedAt": "2026-09-19T01:31:05.164Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/mvp-boilerplate:mutable-data:osv-advisory-snapshot",
@@ -183389,10 +183389,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "8d6ef172fc378381f99521e2d5565c9c514508c63268b796859fabc5c5d5e656",
+      "observedIdentity": "769da2cf3b4c05c44817cfd7abd763412842cf40baa2dbc1f5ae0fd961516ece",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "8d6ef172fc378381f99521e2d5565c9c514508c63268b796859fabc5c5d5e656",
+        "identity": "769da2cf3b4c05c44817cfd7abd763412842cf40baa2dbc1f5ae0fd961516ece",
         "location": {
           "anchor": "targets/mvp-boilerplate",
           "line": 44,
@@ -183435,8 +183435,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:05.164Z",
+        "observedAt": "2026-09-19T01:31:05.164Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/mvp-boilerplate:tool:osv-scanner-and-scalibr",
@@ -183489,8 +183489,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:29:45.738Z",
+        "observedAt": "2026-09-19T01:29:45.738Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/proposit:clock:expiry-clock",
@@ -183547,8 +183547,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:29:45.738Z",
+        "observedAt": "2026-09-19T01:29:45.738Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/proposit:mutable-data:osv-advisory-snapshot",
@@ -183563,10 +183563,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "41b2cdd370f3dd48a455afb446b19edf91e26072177b3b0240dd6e04a953f5c4",
+      "observedIdentity": "074d627c7746e6e21a54dd3c1ac7b86e978a1e802666b3d6a0c2af94b8ecf941",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "41b2cdd370f3dd48a455afb446b19edf91e26072177b3b0240dd6e04a953f5c4",
+        "identity": "074d627c7746e6e21a54dd3c1ac7b86e978a1e802666b3d6a0c2af94b8ecf941",
         "location": {
           "anchor": "targets/proposit",
           "line": 4,
@@ -183609,8 +183609,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:29:45.738Z",
+        "observedAt": "2026-09-19T01:29:45.738Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/proposit:tool:osv-scanner-and-scalibr",
@@ -183663,8 +183663,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:40.997Z",
+        "observedAt": "2026-09-19T01:31:40.997Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/rallly:clock:expiry-clock",
@@ -183721,8 +183721,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:40.997Z",
+        "observedAt": "2026-09-19T01:31:40.997Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/rallly:mutable-data:osv-advisory-snapshot",
@@ -183737,10 +183737,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "e2bb140e76525348282d7dba7da349a4226a7561731e1035b6831989a7cf0e2e",
+      "observedIdentity": "9622c5462d30e88e2bf3c39f38310874c7cdc8b3b18562b73cd66c188ab08023",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "e2bb140e76525348282d7dba7da349a4226a7561731e1035b6831989a7cf0e2e",
+        "identity": "9622c5462d30e88e2bf3c39f38310874c7cdc8b3b18562b73cd66c188ab08023",
         "location": {
           "anchor": "targets/rallly",
           "line": 68,
@@ -183783,8 +183783,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:40.997Z",
+        "observedAt": "2026-09-19T01:31:40.997Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/rallly:tool:osv-scanner-and-scalibr",
@@ -183837,8 +183837,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:14.844Z",
+        "observedAt": "2026-09-19T01:31:14.844Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/saas-lite:clock:expiry-clock",
@@ -183895,8 +183895,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:14.844Z",
+        "observedAt": "2026-09-19T01:31:14.844Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/saas-lite:mutable-data:osv-advisory-snapshot",
@@ -183911,10 +183911,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "054b3485fa97270d0a17e980c932fc521a097336a5fdff9d73247c49754468c0",
+      "observedIdentity": "26d8312a2721eec66ed7216c3169cfc9e22947f66e3adf1e9deb4b7ea0806c69",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "054b3485fa97270d0a17e980c932fc521a097336a5fdff9d73247c49754468c0",
+        "identity": "26d8312a2721eec66ed7216c3169cfc9e22947f66e3adf1e9deb4b7ea0806c69",
         "location": {
           "anchor": "targets/saas-lite",
           "line": 52,
@@ -183957,8 +183957,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:31:14.844Z",
+        "observedAt": "2026-09-19T01:31:14.844Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/saas-lite:tool:osv-scanner-and-scalibr",
@@ -184011,8 +184011,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:14.150Z",
+        "observedAt": "2026-09-19T01:30:14.150Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/subscription-payments:clock:expiry-clock",
@@ -184069,8 +184069,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:14.150Z",
+        "observedAt": "2026-09-19T01:30:14.150Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/subscription-payments:mutable-data:osv-advisory-snapshot",
@@ -184085,10 +184085,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "94c39bfc4d3cdb79d62e51e889a2d8583ac162b52ccb87bee63becf9049248f9",
+      "observedIdentity": "cf40a26aabf543dd6c9356fa89ae28ff2a16eac6aece334f8b85c8272d52f565",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "94c39bfc4d3cdb79d62e51e889a2d8583ac162b52ccb87bee63becf9049248f9",
+        "identity": "cf40a26aabf543dd6c9356fa89ae28ff2a16eac6aece334f8b85c8272d52f565",
         "location": {
           "anchor": "targets/subscription-payments",
           "line": 12,
@@ -184131,8 +184131,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:30:14.150Z",
+        "observedAt": "2026-09-19T01:30:14.150Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/subscription-payments:tool:osv-scanner-and-scalibr",
@@ -184185,8 +184185,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:07.680Z",
+        "observedAt": "2026-09-19T01:33:07.680Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/supabase-security-labs:clock:expiry-clock",
@@ -184243,8 +184243,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:07.680Z",
+        "observedAt": "2026-09-19T01:33:07.680Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/supabase-security-labs:mutable-data:osv-advisory-snapshot",
@@ -184305,8 +184305,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:33:07.680Z",
+        "observedAt": "2026-09-19T01:33:07.680Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/supabase-security-labs:tool:osv-scanner-and-scalibr",
@@ -184359,8 +184359,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:37.687Z",
+        "observedAt": "2026-09-19T01:32:37.687Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/tanstack-com:clock:expiry-clock",
@@ -184417,8 +184417,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:37.687Z",
+        "observedAt": "2026-09-19T01:32:37.687Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/tanstack-com:mutable-data:osv-advisory-snapshot",
@@ -184433,10 +184433,10 @@
         "#1853",
         "#1909"
       ],
-      "observedIdentity": "6d6e87aee255513923b0dda1e38bb426d70ae076643ae671f8ac6da048ba84ca",
+      "observedIdentity": "1b002118cb4434a479511c7d19a57d7502680acf6d6639293bf754865b27ffb4",
       "owner": "src/corpus-advisory-snapshot.ts schema 2",
       "pinSource": {
-        "identity": "6d6e87aee255513923b0dda1e38bb426d70ae076643ae671f8ac6da048ba84ca",
+        "identity": "1b002118cb4434a479511c7d19a57d7502680acf6d6639293bf754865b27ffb4",
         "location": {
           "anchor": "targets/tanstack-com",
           "line": 100,
@@ -184479,8 +184479,8 @@
           "line": 309,
           "path": "src/corpus-advisory-snapshot.ts"
         },
-        "expiresAt": "2026-09-17T01:08:31.580Z",
-        "observedAt": "2026-09-10T01:08:31.580Z",
+        "expiresAt": "2026-09-26T01:32:37.687Z",
+        "observedAt": "2026-09-19T01:32:37.687Z",
         "requirement": "Valid only between capturedAt and expiresAt for the exact target and payload digest. The loader checks current time; census generation is offline and does not assert it remains fresh now."
       },
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json#targets/tanstack-com:tool:osv-scanner-and-scalibr",
@@ -356824,23 +356824,23 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "c261a63db72d3b326799b51a44e419216ebc00e7",
-    "commitPayload": "dHJlZSA0ZTE0MzljYTE5MzM2MmFhYTQ2MjQ3YzYyY2I0YTE3YzcxY2I4NTVhCnBhcmVudCBjZTg0NmM0NjBmZWVhNWU4ODMxOWI1MzBkOTEwNDRmYmU0NDAxMmQ0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5MzE1Mjg1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5MzE1MzA4IC0wNTAwCgpFcmFzZSBjZW5zdXMgdGhpcyBwYXJhbWV0ZXJzIGJlZm9yZSBhcmd1bWVudCBiaW5kaW5nICgjMTkwNikK",
+    "commit": "d458cdfc78c3991154ff6594f6f4538aeb7011fa",
+    "commitPayload": "dHJlZSBlZWZmMjJjZGQxNzMzMDQ2M2QzNGM5Y2ZlYzFlZmZkZWVkNTEwMmJmCnBhcmVudCBhZjk1YTIyYzFkZjNkNWZlMTU1YTM0MGQ0NjczN2MwNGM4ZTQxN2EyCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODI0MjY4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODI0MjY4IC0wNTAwCgpSZWZyZXNoIGNvcnB1cyBhZHZpc29yeSBzbmFwc2hvdHMgKCMyMDY3KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
-        "gitOid": "dffc852f4fb48a4af408d86b901e322e9421f3b7",
+        "gitOid": "204bc7a39cf1a2a424a7c0783123d37f0d5896df",
         "path": "docs/design/environment-dependency-census.md"
       },
       {
         "gitMode": "100644",
-        "gitOid": "5d93144e05da2002d7d72ef1e4dcc23513e4e618",
+        "gitOid": "580482573028d4007d4e4a52ecb5ea222d884b90",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "27297dc78560d4c14d912cced7536c97b9dabc4684f24600d98974f13dd284dc",
-    "tree": "4e1439ca193362aaa46247c62cb4a17c71cb855a"
+    "populationSha256": "c94b7dba4ad130a7a43c147c3c8d171429a9d39202c91a76eb26939e7a796eee",
+    "tree": "eeff22cdd17330463d34c9cfec1effdeed5102bf"
   },
   "venues": [
     {
@@ -378459,11 +378459,11 @@
       "sha256": "58c6bc1bcf65bf3ab59698cd9adbdf4d09bf6ad07de5084738e2cd9b52d40ecb"
     },
     {
-      "bytes": 440355,
+      "bytes": 436147,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "c880abc79edca6c45e275d28534d29e5a2a3ff80",
+      "gitOid": "40a6e7bd8bf8602ec3bdb11d57d66b772db31067",
       "id": "src/scan/__fixtures__/corpus-advisories/boxyhq.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378471,14 +378471,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/boxyhq.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f93c8cdb5a45fd75c7c5c5d434aa6a1924dab6403f7b2ae6178a237317a7a763"
+      "sha256": "148080238e8a00a23fb7b4ecd714afe7833062c787c9d395ff8e64d766beb534"
     },
     {
-      "bytes": 388398,
+      "bytes": 384255,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "24350ac8a7b0584aaa1ad4a8e9df04b42b2c0220",
+      "gitOid": "a6e4745ad8183aa9a8847b8c9c71fa5f199fd102",
       "id": "src/scan/__fixtures__/corpus-advisories/carbon.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378486,14 +378486,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/carbon.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "2da83a613f983d0bb8bee310da4847c958950e4e3bb9b11b6c24adf4c2501d0a"
+      "sha256": "713e73361c3e51c155c853ee48098eca267c3ee8f2fa95d36bbbd6bce9fde5ec"
     },
     {
-      "bytes": 117449,
+      "bytes": 116028,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "6691135404a59ec4d3de2d42c6dfa3779f960b6e",
+      "gitOid": "eedd55b40d0ff95cb12ee9386c4526709c792284",
       "id": "src/scan/__fixtures__/corpus-advisories/cravab.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378501,14 +378501,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/cravab.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "efd30f87b462508f4810786afaff72abdd8dd4e7af2f6c791bc3062dd77cdc82"
+      "sha256": "76ccd853fd5dc5e0f7654982a8d64bc1085067f252d8e5ea3417eed91c746571"
     },
     {
-      "bytes": 178434,
+      "bytes": 178197,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "76691c850baccdc9aa9af87e42b15627a4801452",
+      "gitOid": "87a96fabcaf932d1353e211891f155e69eb1b6e8",
       "id": "src/scan/__fixtures__/corpus-advisories/documenso.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378516,14 +378516,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/documenso.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "70eb33acad12e2c241855bc3f20d7bb1e06d9a441dfad8680868b61221f034fc"
+      "sha256": "2173c07f238c1eea8bbc7c25e678157b38f096004a3d01f5b7660915d0dedbf7"
     },
     {
-      "bytes": 53500,
+      "bytes": 52923,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "19a1e3966f439a8797f95f66fea0d9ae24de489c",
+      "gitOid": "46268cbd9dffd21768fe4b698c82cfae99a726ec",
       "id": "src/scan/__fixtures__/corpus-advisories/effective.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378531,14 +378531,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/effective.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ad179b577a20c5dd1c131d253a7d0277a1cc1f3bb47b4c20b71718996a6c2cf9"
+      "sha256": "29e96b86937d49be3c66f0ee8285c070d9c77f0f69d0e81180a4e7c298641b88"
     },
     {
-      "bytes": 114447,
+      "bytes": 113354,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "6435a1910cebfa4b0ddcdea12c7d9aff62f3e6e2",
+      "gitOid": "f42b091206d8809350f435bcf6b9a28a16934a23",
       "id": "src/scan/__fixtures__/corpus-advisories/flori-web.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378546,7 +378546,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/flori-web.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "5c533dfbb84c4db157d244107312bda600cff72c0101b65061fd33531f0f6e0c"
+      "sha256": "1f0ddefa98388a4481825d40b07d9a36ae907ddcf0774caa6be3b50f4ab77c91"
     },
     {
       "bytes": 355310,
@@ -378564,11 +378564,11 @@
       "sha256": "7947a61c9d84d009c651b52e2e9d620cb7f8c4269de20d0de97f4a4d23244cd7"
     },
     {
-      "bytes": 250626,
+      "bytes": 249695,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "4d66b4993b62b27e980a7420b191cd3bed2dc97e",
+      "gitOid": "436f76d8ae51b07bddc4a7edf070194a06d06fe8",
       "id": "src/scan/__fixtures__/corpus-advisories/inbox-zero.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378576,14 +378576,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/inbox-zero.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "2dfb2623150760c12b50d8ff5b5c007179fe8b8b7347f873e3950816dc4dc5ed"
+      "sha256": "866b0d6d9ff5afbcec83b26f7f1923bf121daf432885cc918338971a507dd997"
     },
     {
-      "bytes": 177484,
+      "bytes": 175151,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "a1e2e5270debc32e93af7f027d883238f6781964",
+      "gitOid": "9279923f213134455453579928b535a145aa3039",
       "id": "src/scan/__fixtures__/corpus-advisories/launch-mvp.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378591,14 +378591,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/launch-mvp.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "32074a3ce7731369ef44c3ef0730f250d9ee59053c3c416b7c0bea89001afd4b"
+      "sha256": "64fcf433b01d1f350f598caface734c2f0547d36c11b93a679ce430ffba9fa57"
     },
     {
       "bytes": 7281,
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "02fa788cd40fe97e88d7137a24dae1d0d93df34d",
+      "gitOid": "5cc9af86fbbccdd83dcdf618114dfbd7c70141cd",
       "id": "src/scan/__fixtures__/corpus-advisories/manifest.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378606,7 +378606,7 @@
       "owner": "corpus advisory snapshot schema 2",
       "path": "src/scan/__fixtures__/corpus-advisories/manifest.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "0e98d32bc6bdecca16dcbf76c3c40b5c9c28ff0e894165372bb28031b014e990"
+      "sha256": "7ad5b9e033d5b24e88993cc1af9e2c9cbf8baa90f831276e8cf4ade47fa3db20"
     },
     {
       "bytes": 602,
@@ -378624,11 +378624,11 @@
       "sha256": "9ad1abb543d7d43ee5d81e343e00ad859f7b2f248538da1175b032e475f9daf9"
     },
     {
-      "bytes": 109957,
+      "bytes": 108417,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "294910faa53e5745afd4a7d88b71f33b6da992f3",
+      "gitOid": "295b1b056ab38c218b94c9a1a86d257fd17a2f48",
       "id": "src/scan/__fixtures__/corpus-advisories/mvp-boilerplate.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378636,14 +378636,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/mvp-boilerplate.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "8d6ef172fc378381f99521e2d5565c9c514508c63268b796859fabc5c5d5e656"
+      "sha256": "769da2cf3b4c05c44817cfd7abd763412842cf40baa2dbc1f5ae0fd961516ece"
     },
     {
-      "bytes": 224907,
+      "bytes": 222223,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "2fe5f3b14a8c1f48fd21ac05e7343045c39247ee",
+      "gitOid": "14b51612de1fc9fae8ebbba6eee8d992aa11845d",
       "id": "src/scan/__fixtures__/corpus-advisories/proposit.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378651,14 +378651,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/proposit.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "41b2cdd370f3dd48a455afb446b19edf91e26072177b3b0240dd6e04a953f5c4"
+      "sha256": "074d627c7746e6e21a54dd3c1ac7b86e978a1e802666b3d6a0c2af94b8ecf941"
     },
     {
-      "bytes": 506107,
+      "bytes": 502264,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "a4e0f5601293b060c282ea54695e49b27b193ad1",
+      "gitOid": "4876ec76700be01002f71fe42aec5628aee888ae",
       "id": "src/scan/__fixtures__/corpus-advisories/rallly.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378666,14 +378666,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/rallly.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "e2bb140e76525348282d7dba7da349a4226a7561731e1035b6831989a7cf0e2e"
+      "sha256": "9622c5462d30e88e2bf3c39f38310874c7cdc8b3b18562b73cd66c188ab08023"
     },
     {
-      "bytes": 43635,
+      "bytes": 43360,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "c4fa72644e7ae270eef8a11d10a5e9a5d9fadd51",
+      "gitOid": "87506bc618a4692218b9e9091d7cdbbc8c0c009f",
       "id": "src/scan/__fixtures__/corpus-advisories/saas-lite.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378681,14 +378681,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/saas-lite.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "054b3485fa97270d0a17e980c932fc521a097336a5fdff9d73247c49754468c0"
+      "sha256": "26d8312a2721eec66ed7216c3169cfc9e22947f66e3adf1e9deb4b7ea0806c69"
     },
     {
-      "bytes": 109145,
+      "bytes": 107523,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "a2d11da27bd28041aabe708e5fd843bb8443f9fd",
+      "gitOid": "8e01ba08415be093f115fccb5922f18b60fa307a",
       "id": "src/scan/__fixtures__/corpus-advisories/subscription-payments.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378696,7 +378696,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/subscription-payments.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "94c39bfc4d3cdb79d62e51e889a2d8583ac162b52ccb87bee63becf9049248f9"
+      "sha256": "cf40a26aabf543dd6c9356fa89ae28ff2a16eac6aece334f8b85c8272d52f565"
     },
     {
       "bytes": 470,
@@ -378714,11 +378714,11 @@
       "sha256": "93f08c453bc8e752f90660ff66a4fd1af150f61bcebbec5587907237e001508f"
     },
     {
-      "bytes": 183229,
+      "bytes": 181143,
       "disposition": "conservative-candidate",
       "format": "gzip/json",
       "gitMode": "100644",
-      "gitOid": "ca7162b9e02a823d0af87ff116519d13848db20d",
+      "gitOid": "30607258ef1ad5a304332fc2dbc3927ee1faf15d",
       "id": "src/scan/__fixtures__/corpus-advisories/tanstack-com.osv.json.gz",
       "kind": "structured-data",
       "literalCount": 0,
@@ -378726,7 +378726,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/__fixtures__/corpus-advisories/tanstack-com.osv.json.gz",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "6d6e87aee255513923b0dda1e38bb426d70ae076643ae671f8ac6da048ba84ca"
+      "sha256": "1b002118cb4434a479511c7d19a57d7502680acf6d6639293bf754865b27ffb4"
     },
     {
       "bytes": 4518,
