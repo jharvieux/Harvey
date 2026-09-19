@@ -144,7 +144,7 @@ function affectedWorkspaces(targetDir: string, files: string[]): string[] {
 // meaning outside Actions, so it is recorded skipped:"needs-ci" rather than run locally and failed
 // for a reason that is not the fix's fault (§2.2).
 function needsCi(c: DiscoveredCommand): boolean {
-  return c.source.startsWith("ci-workflow") && c.command.includes("${{");
+  return c.source.startsWith("ci-workflow") && (c.notRunnableLocally !== undefined || c.command.includes("${{"));
 }
 
 interface IngestResult {
@@ -159,7 +159,12 @@ interface IngestResult {
    * Reported rather than inferred: a batch that shares a cache and a batch that does not are
    * otherwise indistinguishable in the artifact, which is how the 2N cost went unnoticed.
    */
-  baseline: { requested: number; executed: number; durationMs: number };
+  baseline: {
+    requested: number;
+    executed: number;
+    durationMs: number;
+    checks: { command: string; workspace: string; exitCode: number }[];
+  };
 }
 
 // Run the operator's diff through the existing rails and score it. `green` is DECIDED by computeGreen —
@@ -193,7 +198,8 @@ export async function ingestFixDiff(input: IngestInput): Promise<IngestResult> {
     if (baselineRuns) return baselineRuns;
     const cache = input.baselineCache;
     const cacheKey = (c: DiscoveredCommand) => baselineCacheKey(input.targetDir, input.baselineCommit, c);
-    const missing = cache ? commands.filter((c) => !cache.has(cacheKey(c))) : commands;
+    const runnableCommands = commands.filter((c) => !needsCi(c) && c.discoveryFailure === undefined);
+    const missing = cache ? runnableCommands.filter((c) => !cache.has(cacheKey(c))) : runnableCommands;
     baselineRequested = commands.length;
     baselineExecuted = missing.length;
     const started = Date.now();
@@ -220,7 +226,7 @@ export async function ingestFixDiff(input: IngestInput): Promise<IngestResult> {
         );
       }
     }
-    const settled = await Promise.all(commands.map(async (c) => [cmdKey(c), await cache.get(cacheKey(c))] as const));
+    const settled = await Promise.all(runnableCommands.map(async (c) => [cmdKey(c), await cache.get(cacheKey(c))] as const));
     baselineMs = Date.now() - started;
     return (baselineRuns = new Map(settled.flatMap(([k, run]) => (run ? [[k, run] as const] : []))));
   };
@@ -292,6 +298,14 @@ export async function ingestFixDiff(input: IngestInput): Promise<IngestResult> {
     rejectReason,
     // Zeroes here mean the baseline was never REACHED (a rails-blocked or non-applying diff), which
     // is a different fact from "it ran and cost nothing".
-    baseline: { requested: baselineRequested, executed: baselineExecuted, durationMs: baselineMs },
+    baseline: {
+      requested: baselineRequested,
+      executed: baselineExecuted,
+      durationMs: baselineMs,
+      checks: commands.flatMap((command) => {
+        const run = baselineRuns?.get(cmdKey(command));
+        return run ? [{ command: command.command, workspace: command.workspace, exitCode: run.exitCode }] : [];
+      }),
+    },
   };
 }

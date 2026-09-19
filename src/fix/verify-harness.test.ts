@@ -91,6 +91,96 @@ describe("extractCiRunSteps", () => {
     expect(cmds).toContain("pnpm knip\npnpm check:duplication");
     expect(cmds).not.toContain("deploy"); // push-only workflow is not a PR gate
   });
+
+  it("preserves step, job, and workflow-default working directories in precedence order", () => {
+    const dir = scratch({
+      ".github/workflows/ci.yml": [
+        "on: [pull_request]",
+        "defaults:",
+        "  run:",
+        "    working-directory: apps/workflow",
+        "jobs:",
+        "  inherited:",
+        "    steps:",
+        "      - run: node workflow.cjs",
+        "  overridden:",
+        "    defaults:",
+        "      run:",
+        "        working-directory: apps/job",
+        "    steps:",
+        "      - run: node job.cjs",
+        "      - name: step override",
+        "        working-directory: apps/step",
+        "        run: node step.cjs",
+      ].join("\n"),
+    });
+
+    expect(extractCiRunSteps(join(dir, ".github/workflows"))).toEqual([
+      { command: "node workflow.cjs", workspace: "apps/workflow", source: "ci-workflow (ci.yml)" },
+      { command: "node job.cjs", workspace: "apps/job", source: "ci-workflow (ci.yml)" },
+      { command: "node step.cjs", workspace: "apps/step", source: "ci-workflow (ci.yml)" },
+    ]);
+  });
+
+  it("keeps dynamic working-directory semantics as an explicit needs-CI disclosure", async () => {
+    const dir = scratch({
+      ".github/workflows/ci.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    defaults:",
+        "      run:",
+        "        working-directory: ${{ matrix.package }}",
+        "    steps:",
+        "      - run: node check.cjs",
+      ].join("\n"),
+    });
+    const commands = extractCiRunSteps(join(dir, ".github/workflows"));
+    expect(commands).toEqual([
+      {
+        command: "node check.cjs",
+        workspace: "",
+        source: "ci-workflow (ci.yml)",
+        notRunnableLocally: "dynamic workflow working-directory `${{ matrix.package }}` requires GitHub Actions",
+      },
+    ]);
+    const ev = await buildVerificationEvidence(
+      {
+        findingId: "F",
+        baselineCommit: "b",
+        worktreeCommit: "w",
+        detectorBefore: { detectorId: "d", fired: true, output: "" },
+        detectorAfter: cleanDetector,
+        commands,
+        baseline: new Map(),
+        needsCi: (command) => command.notRunnableLocally !== undefined,
+      },
+      "/fixed",
+      async () => { throw new Error("dynamic workflow step must not run locally"); },
+    );
+    expect(ev.clientChecks[0]).toMatchObject({ skipped: "needs-ci", cwd: "/fixed" });
+    expect(ev.clientChecks[0]!.outputTail).toContain("dynamic workflow working-directory");
+  });
+
+  it("returns a blocking discovery record for an admitted malformed workflow", () => {
+    const dir = scratch({
+      ".github/workflows/broken.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    steps:",
+        "      - run: [node check.cjs",
+      ].join("\n"),
+    });
+    expect(extractCiRunSteps(join(dir, ".github/workflows"))).toEqual([
+      {
+        command: "workflow discovery failed: broken.yml",
+        workspace: "",
+        source: "ci-workflow (broken.yml)",
+        discoveryFailure: "workflow YAML could not be parsed; CI commands were not discovered",
+      },
+    ]);
+  });
 });
 
 describe("buildVerificationEvidence", () => {

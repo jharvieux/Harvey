@@ -109,6 +109,10 @@ export async function executeFixDiff(findingId: string, diff: string, opts: Exec
     railViolations: [],
   };
 
+  if (facts.unsupportedMetadata.length > 0) {
+    return { ...base, outcome: "rails-blocked", railViolations: facts.unsupportedMetadata };
+  }
+
   if (facts.files.length + facts.createdFiles.length === 0) {
     return { ...base, abortReason: "diff declares no file changes" };
   }

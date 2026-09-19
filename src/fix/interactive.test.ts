@@ -299,4 +299,74 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     expect(ingest.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test", "node client-test.js"]);
     expect(ingest.green).toBe(true);
   });
+
+  it("runs a workflow check in its declared directory and rejects its baseline-0 to fixed-7 regression", async () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus({
+      [M5_FILE]: src,
+      "package.json": `${JSON.stringify({ name: "client", private: true, scripts: { test: "node root-check.cjs" } }, null, 2)}\n`,
+      "root-check.cjs": "console.log(`root cwd=${process.cwd()}`);\n",
+      "apps/web/check.cjs": [
+        "const { readFileSync } = require('node:fs');",
+        "const { resolve } = require('node:path');",
+        "console.log(`workflow cwd=${process.cwd()}`);",
+        `const source = readFileSync(resolve(process.cwd(), "../..", ${JSON.stringify(M5_FILE)}), "utf8");`,
+        "process.exit(source.includes('request: Request') ? 0 : 7);",
+        "",
+      ].join("\n"),
+      ".github/workflows/ci.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    defaults:",
+        "      run:",
+        "        working-directory: apps/web",
+        "    steps:",
+        "      - run: node check.cjs",
+      ].join("\n"),
+    });
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    expect(ingest.execution.outcome).toBe("diff-verified");
+    expect(ingest.evidence.detectorAfter.fired).toBe(false);
+    const root = ingest.evidence.clientChecks.find((check) => check.command === "npm run test")!;
+    const workflow = ingest.evidence.clientChecks.find((check) => check.command === "node check.cjs")!;
+    expect(root).toMatchObject({ exitCode: 0, cwd: expect.stringMatching(/harvey-fix-[^/]+$/) });
+    expect(root.skipped).toBeUndefined();
+    expect(root.outputTail).toContain("root cwd=");
+    expect(workflow).toMatchObject({ exitCode: 7, cwd: expect.stringMatching(/harvey-fix-[^/]+\/apps\/web$/) });
+    expect(workflow.skipped).toBeUndefined();
+    expect(workflow.outputTail).toContain("workflow cwd=");
+    expect(ingest.baseline.checks).toContainEqual({ command: "node check.cjs", workspace: "apps/web", exitCode: 0 });
+    expect(ingest.green).toBe(false);
+    expect(ingest.rejectReason).toContain("node check.cjs (exit 7)");
+  });
+
+  it("rejects an admitted malformed workflow while retaining the valid root check", async () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus({
+      ...clientRepo(src, "ok"),
+      ".github/workflows/broken.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  test:",
+        "    steps:",
+        "      - run: [node missing-close.cjs",
+      ].join("\n"),
+    });
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    expect(ingest.execution.outcome).toBe("diff-verified");
+    expect(ingest.evidence.detectorAfter.fired).toBe(false);
+    expect(ingest.evidence.clientChecks).toContainEqual(expect.objectContaining({ command: "npm run test", exitCode: 0 }));
+    expect(ingest.evidence.clientChecks).toContainEqual(expect.objectContaining({
+      command: "workflow discovery failed: broken.yml",
+      exitCode: 1,
+      outputTail: "workflow YAML could not be parsed; CI commands were not discovered",
+    }));
+    expect(ingest.green).toBe(false);
+    expect(ingest.rejectReason).toContain("workflow discovery failed: broken.yml (exit 1)");
+  });
 });

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -44,6 +44,35 @@ const CORRECT_DIFF = [
 const EFFECT = ["node", "-e", "process.exit(require('./calc.js').add(2, 3) === 5 ? 0 : 1)"];
 
 describe("verifySuggestedFix", () => {
+  it.each(["rename", "copy"])("refuses Git-applicable headerless %s metadata hiding a protected path", async (kind) => {
+    const patch = [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`, "--- a/.env", "+++ b/.env",
+      "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await verifySuggestedFix(patch, { targetDir: dir, effectCommand: ["node", "-e", "process.exit(0)"] });
+    expect(result.verified).toBe(false);
+    expect(result.detail).toContain("unsupported");
+  });
+
+  it.each(["", "rename", "copy"])("refuses Git-applicable dual-null endpoints with %s metadata", async (kind) => {
+    const prefix = kind ? [`${kind} from src/safe.txt`, `${kind} to src/destination.txt`] : [];
+    const patch = [...prefix, "--- /dev/null", "+++ /dev/null", "@@ -0,0 +1 @@", "+created", ""].join("\n");
+    execFileSync("git", ["apply", "--check", "-"], { cwd: dir, input: patch });
+    const result = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(result.verified).toBe(false);
+    expect(result.detail).toContain("dual-null");
+  });
+
+  it("verifies both completed files in a plain unified patch", async () => {
+    writeFileSync(join(dir, "other.txt"), "before\n");
+    git(["add", "other.txt"]);
+    git(["commit", "-m", "add other file"]);
+    const patch = CORRECT_DIFF + ["--- a/other.txt", "+++ b/other.txt", "@@ -1 +1 @@", "-before", "+after", ""].join("\n");
+    const result = await verifySuggestedFix(patch, { targetDir: dir,
+      effectCommand: ["node", "-e", "process.exit(require('./calc.js').add(2,3)===5&&require('fs').readFileSync('other.txt','utf8')==='after\\n'?0:1)"] });
+    expect(result.verified).toBe(true);
+    expect(result.detail).toContain("effect confirmed");
+  });
+
   it("verifies a diff that applies cleanly and achieves its stated effect (mutant killed)", async () => {
     const res = await verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
     expect(res.verified).toBe(true);
@@ -83,6 +112,113 @@ describe("verifySuggestedFix", () => {
     const res = await verifySuggestedFix(envDiff, { targetDir: dir });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("denylisted");
+  });
+
+  it("refuses a protected endpoint in a real Git rename before the unrelated effect check", async () => {
+    writeFileSync(join(dir, "calc.js"), "module.exports.add = (a, b) => a + b;\n");
+    renameSync(join(dir, ".env"), join(dir, "renamed-secret.txt"));
+    git(["add", "-A"]);
+    const patch = `${execFileSync("git", ["diff", "--cached", "--binary", "--find-renames=100%"], { cwd: dir, encoding: "utf8" }).trim()}\n`;
+    git(["reset", "--hard", "HEAD"]);
+    expect(patch).toContain("rename from .env");
+
+    const res = await verifySuggestedFix(patch, { targetDir: dir, effectCommand: EFFECT });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("denylisted");
+  });
+
+  it("refuses a real Git binary patch as unsupported metadata", async () => {
+    writeFileSync(join(dir, "image.bin"), "before\u0000bytes\n");
+    git(["add", "image.bin"]);
+    git(["commit", "-m", "add binary"]);
+    writeFileSync(join(dir, "image.bin"), "after\u0000bytes\n");
+    const patch = execFileSync("git", ["diff", "--binary"], { cwd: dir, encoding: "utf8" });
+    expect(patch).toContain("GIT binary patch");
+
+    const res = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("binary patch metadata is unsupported");
+  });
+
+  it("admits Git NUL-exact space, trailing-space, rename, copy, and quoted Unicode paths", async () => {
+    git(["config", "core.quotePath", "false"]);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    const ordinary = "src/two words.ts";
+    const renameSource = "src/trailing old.ts ";
+    const renameDestination = "src/trailing new.ts ";
+    const copySource = "src/😀\tfile.ts";
+    const copyDestination = "src/copy 😀\tfile.ts";
+    writeFileSync(join(dir, ordinary), "ordinary before\n");
+    writeFileSync(join(dir, renameSource), "rename source\n");
+    writeFileSync(join(dir, copySource), "unicode copy source\n");
+    git(["add", "-A"]);
+    git(["commit", "-m", "path baseline"]);
+
+    writeFileSync(join(dir, ordinary), "ordinary after\n");
+    renameSync(join(dir, renameSource), join(dir, renameDestination));
+    copyFileSync(join(dir, copySource), join(dir, copyDestination));
+    git(["add", "-A"]);
+    const status = execFileSync(
+      "git",
+      ["diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir },
+    ).toString("utf8").split("\0").filter(Boolean);
+    expect(status).toContain(ordinary);
+    expect(status).toContain(renameSource);
+    expect(status).toContain(renameDestination);
+    expect(status).toContain(copySource);
+    expect(status).toContain(copyDestination);
+    const patch = execFileSync(
+      "git",
+      ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    git(["reset", "--hard", "HEAD"]);
+
+    const result = await verifySuggestedFix(patch, { targetDir: dir });
+    expect(result).toMatchObject({ verified: true, detail: "applies cleanly (git apply --check)" });
+  });
+
+  it("admits NUL-exact text, mode, rename, and copy paths whose component ends in b", async () => {
+    mkdirSync(join(dir, "src/job b"), { recursive: true });
+    mkdirSync(join(dir, "src/old b"), { recursive: true });
+    mkdirSync(join(dir, "src/source b"), { recursive: true });
+    writeFileSync(join(dir, "src/job b/config.ts"), "export const config = 1;\n");
+    writeFileSync(join(dir, "src/job b/script.sh"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(dir, "src/old b/file.ts"), "export const rename = 1;\n");
+    writeFileSync(join(dir, "src/source b/file.ts"), "export const copy = 1;\n");
+    git(["add", "-A"]);
+    git(["commit", "-m", "ambiguous path baseline"]);
+
+    writeFileSync(join(dir, "src/job b/config.ts"), "export const config = 2;\n");
+    chmodSync(join(dir, "src/job b/script.sh"), 0o755);
+    mkdirSync(join(dir, "src/new b"), { recursive: true });
+    mkdirSync(join(dir, "src/copy b"), { recursive: true });
+    renameSync(join(dir, "src/old b/file.ts"), join(dir, "src/new b/file.ts"));
+    copyFileSync(join(dir, "src/source b/file.ts"), join(dir, "src/copy b/file.ts"));
+    git(["add", "-A"]);
+    const status = execFileSync(
+      "git",
+      ["diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir },
+    ).toString("utf8").split("\0").filter(Boolean);
+    expect(status).toEqual([
+      "C100", "src/source b/file.ts", "src/copy b/file.ts",
+      "M", "src/job b/config.ts",
+      "M", "src/job b/script.sh",
+      "R100", "src/old b/file.ts", "src/new b/file.ts",
+    ]);
+    const patch = execFileSync(
+      "git",
+      ["diff", "--cached", "--binary", "--find-renames=100%", "--find-copies-harder"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    git(["reset", "--hard", "HEAD"]);
+
+    await expect(verifySuggestedFix(patch, { targetDir: dir })).resolves.toMatchObject({
+      verified: true,
+      detail: "applies cleanly (git apply --check)",
+    });
   });
 
   it("refuses a diff that exceeds the engagement diff cap", async () => {

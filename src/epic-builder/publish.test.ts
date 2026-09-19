@@ -192,7 +192,12 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
       throw new Error(`unexpected request: ${method} ${u}`);
     });
 
-    const tracker = new GitHubTracker({ token: "t", owner: "o", repo: "r", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const tracker = new GitHubTracker({
+      token: "publish-fixture-token",
+      owner: "o",
+      repo: "r",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
     const { dir, session } = seedWorkspace();
     const outcome = await publish(dir, session, tracker);
 
