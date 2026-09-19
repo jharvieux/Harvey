@@ -109,6 +109,39 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
 });
 
 describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
+  it.each(["imported", "cross-config", "noEmit JavaScript"])("reports authored dead code through %s compiler provenance", async (mode) => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-compiler-cli-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    const authoredPath = mode === "noEmit JavaScript" ? "src/outside.js" : "src/authored.ts";
+    write("package.json", JSON.stringify({ name: "compiler-fixture", private: true }));
+    write("knip.json", JSON.stringify({ entry: ["outside.ts"], project: ["**/*.{ts,js}"] }));
+    write("outside.ts", mode === "cross-config" ? "export const outside = true;\n" : `import { used } from './${authoredPath.replace(/\.ts$/, ".js")}';\nconsole.log(used);\n`);
+    write(authoredPath, "export const used = true;\nexport function unusedAuthoredFunction() { return 'authored'; }\n");
+    write("tsconfig.build.json", JSON.stringify({
+      compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", ...(mode === "noEmit JavaScript" ? { noEmit: true, allowJs: true } : {}) },
+      files: ["outside.ts"],
+    }));
+    if (mode === "cross-config") write("tsconfig.check.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: [authoredPath] }));
+    if (mode !== "noEmit JavaScript") write("src/outside.js", "export function generatedArtifact() { return 'generated'; }\n");
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M5 — Slop / dead code",
+      location: expect.stringContaining(authoredPath),
+      title: expect.stringContaining("Unused"),
+    }));
+    if (mode !== "noEmit JavaScript") {
+      expect(findings.filter((finding) => finding.location.includes("src/outside.js"))).toEqual([]);
+      expect(findings).toContainEqual(expect.objectContaining({
+        id: "M4-SCOPE-00", evidence: expect.stringMatching(/`src\/outside\.js`: 1 file.*TypeScript compiler output/),
+      }));
+    }
+  }, 30000);
+
   it("excludes a pnpm store clone, retains a real reports-route clone, and discloses the exact store population", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-store-cli-"));
     dirs.push(repo);

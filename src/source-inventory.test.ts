@@ -53,11 +53,157 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("src/reports")).toBeUndefined();
   });
 
+  it.each([false, true])("retains transitive compiler inputs below outDir when noEmit is %s", (noEmit) => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", noEmit },
+        files: ["outside.ts"],
+      }),
+      "outside.ts": "export { authored } from './src/authored.js';\n",
+      "src/authored.ts": "export const authored = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("src/authored.ts")).toBeUndefined();
+    expect(loadSourceInventory(root).map((source) => source.path)).toEqual(["outside.ts", "src/authored.ts"]);
+    const scope = resolveScanScope(root);
+    try {
+      expect(existsSync(join(scope.scanDir, "src/authored.ts"))).toBe(true);
+    } finally {
+      scope.cleanup();
+    }
+  });
+
+  it("unions compiler inputs across configs before applying directory or exact output exclusions", () => {
+    const root = fixture({
+      "tsconfig.build.json": JSON.stringify({ compilerOptions: { rootDir: ".", outDir: "src" }, files: ["outside.ts"] }),
+      "tsconfig.check.json": JSON.stringify({ compilerOptions: { noEmit: true, allowJs: true }, files: ["src/authored.ts", "src/outside.js"] }),
+      "outside.ts": "export const outside = true;\n",
+      "src/authored.ts": "export const authored = true;\n",
+      "src/outside.js": "export const handwritten = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("src")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/authored.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/outside.js")).toBeUndefined();
+    expect(loadSourceInventory(root).map((source) => source.path)).toEqual(["outside.ts", "src/authored.ts", "src/outside.js"]);
+    expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "tsconfig.build.json",
+      reason: expect.stringContaining("overlaps 2 effective compiler input file(s)"),
+    }));
+  });
+
+  it("keeps a root checker's compiler inputs when a direct workspace scan rebases a local build", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.check.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["apps/web/src/authored.ts"] }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/tsconfig.build.json": JSON.stringify({ compilerOptions: { rootDir: ".", outDir: "src" }, files: ["outside.ts"] }),
+      "apps/web/outside.ts": "export const outside = true;\n",
+      "apps/web/src/authored.ts": "export const authored = true;\n",
+      "apps/web/src/outside.js": "export const outside = true;\n",
+    });
+    const rootInventory = productSourceInventory(root);
+    const app = join(root, "apps/web");
+    for (const inventory of [productSourceInventoryForScope(root, app, rootInventory), productSourceInventoryForTarget(app)]) {
+      expect(inventory.excludedDirectoryFor("src/authored.ts")).toBeUndefined();
+      expect(inventory.excludedDirectoryFor("src/outside.js")).toMatchObject({ match: "exact" });
+      expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+        path: "tsconfig.build.json",
+        reason: expect.stringContaining("overlaps 1 effective compiler input file(s)"),
+      }));
+    }
+  });
+
+  it("uses a referenced config's inputs even when its filename is not a tsconfig discovery pattern", () => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({ files: [], references: [{ path: "./config/check.json" }] }),
+      "tsconfig.build.json": JSON.stringify({ compilerOptions: { outDir: "src", rootDir: "." }, files: ["outside.ts"] }),
+      "config/check.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["../src/authored.ts"] }),
+      "outside.ts": "export const outside = true;\n",
+      "src/authored.ts": "export const authored = true;\n",
+      "src/outside.js": "export const outside = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("src/authored.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/outside.js")).toMatchObject({ match: "exact" });
+  });
+
+  it("follows an explicit outside project reference that owns an in-scope input", () => {
+    const root = fixture({
+      "project/tsconfig.json": JSON.stringify({ files: [], references: [{ path: "../config/check.json" }] }),
+      "project/tsconfig.build.json": JSON.stringify({ compilerOptions: { outDir: "src", rootDir: "." }, files: ["outside.ts"] }),
+      "config/check.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["../project/src/authored.ts"] }),
+      "project/outside.ts": "export const outside = true;\n",
+      "project/src/authored.ts": "export const authored = true;\n",
+      "project/src/outside.js": "export const outside = true;\n",
+    });
+    const inventory = productSourceInventory(join(root, "project"));
+    expect(inventory.excludedDirectoryFor("src/authored.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("src/outside.js")).toMatchObject({ match: "exact" });
+  });
+
+  it("honors blocked emission and a distinct declarationDir without writing to the audited source", () => {
+    const root = fixture({
+      "tsconfig.build.json": JSON.stringify({
+        compilerOptions: { declaration: true, emitDeclarationOnly: true, declarationDir: "types", outDir: "src", rootDir: "." },
+        files: ["outside.ts", "src/authored.ts"],
+      }),
+      "tsconfig.check.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["types/authored.ts"] }),
+      "outside.ts": "export const outside = true;\n",
+      "src/authored.ts": "export const authored = true;\n",
+      "types/authored.ts": "export const handwritten = true;\n",
+      "types/outside.d.ts": "export declare const outside: true;\n",
+      "types/src/authored.d.ts": "export declare const authored: true;\n",
+      "src/outside.js": "export const unproven = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("types/authored.ts")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("types/outside.d.ts")).toMatchObject({ match: "exact" });
+    expect(inventory.excludedDirectoryFor("types/src/authored.d.ts")).toMatchObject({ match: "exact" });
+    expect(inventory.excludedDirectoryFor("src/outside.js")).toBeUndefined();
+    expect(existsSync(join(root, "src/src/authored.js"))).toBe(false);
+
+    writeFileSync(join(root, "tsconfig.build.json"), JSON.stringify({
+      compilerOptions: { noEmitOnError: true, outDir: "src", rootDir: "." }, files: ["outside.ts"],
+    }));
+    writeFileSync(join(root, "outside.ts"), "export const outside: string = 1;\n");
+    const blocked = productSourceInventory(root);
+    expect(blocked.excludedDirectoryFor("src/outside.js")).toBeUndefined();
+    expect(blocked.unresolvedConfigurations).toContainEqual(expect.objectContaining({
+      path: "tsconfig.build.json", reason: expect.stringContaining("compiler blocked emission"),
+    }));
+  });
+
+  it("does not infer emitted artifacts from a noEmit config or omit its imported JavaScript input", () => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", noEmit: true, allowJs: true },
+        files: ["outside.ts", "src/live.ts"],
+      }),
+      "outside.ts": "export const outside = true;\n",
+      "src/live.ts": "export { handwritten } from './outside.js';\n",
+      "src/outside.js": "export const handwritten = true;\n",
+      "src/src/live.js": "export const anotherHandwritten = true;\n",
+    });
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectories.filter((entry) => entry.match === "exact")).toEqual([]);
+    expect(loadSourceInventory(root).map((source) => source.path)).toEqual([
+      "outside.ts", "src/live.ts", "src/outside.js", "src/src/live.js",
+    ]);
+    const scope = resolveScanScope(root);
+    try {
+      expect(existsSync(join(scope.scanDir, "src/outside.js"))).toBe(true);
+      expect(existsSync(join(scope.scanDir, "src/src/live.js"))).toBe(true);
+    } finally {
+      scope.cleanup();
+    }
+  });
+
   it.each([
-    { mode: "noEmit", compilerOptions: { noEmit: true }, extension: "js" },
-    { mode: "ordinary emit", compilerOptions: { noEmit: false }, extension: "js" },
-    { mode: "declaration-only emit", compilerOptions: { declaration: true, emitDeclarationOnly: true }, extension: "d.ts" },
-  ])("preserves effective compiler inputs inside an overlapping outDir for $mode", ({ compilerOptions, extension }) => {
+    { mode: "noEmit", compilerOptions: { noEmit: true }, extension: "js", emits: false },
+    { mode: "ordinary emit", compilerOptions: { noEmit: false }, extension: "js", emits: true },
+    { mode: "declaration-only emit", compilerOptions: { declaration: true, emitDeclarationOnly: true }, extension: "d.ts", emits: true },
+  ])("preserves effective compiler inputs inside an overlapping outDir for $mode", ({ compilerOptions, extension, emits }) => {
     const root = fixture({
       "tsconfig.build.json": JSON.stringify({
         compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", ...compilerOptions },
@@ -75,9 +221,9 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.excludedDirectoryFor("src")).toBeUndefined();
     expect(inventory.excludedDirectoryFor("src/app/api/eval/route.ts")).toBeUndefined();
     expect(inventory.excludedDirectoryFor("src/reports/dead.ts")).toBeUndefined();
-    expect(inventory.excludedDirectoryFor(`src/outside.${extension}`)).toMatchObject({ match: "exact" });
-    expect(inventory.excludedDirectoryFor(`src/src/reports/dead.${extension}`)).toMatchObject({ match: "exact" });
-    expect(inventory.jscpdIgnoreGlobs).toContain(`src/outside.${extension}`);
+    expect(inventory.excludedDirectoryFor(`src/outside.${extension}`)?.match).toBe(emits ? "exact" : undefined);
+    expect(inventory.excludedDirectoryFor(`src/src/reports/dead.${extension}`)?.match).toBe(emits ? "exact" : undefined);
+    expect(inventory.jscpdIgnoreGlobs.includes(`src/outside.${extension}`)).toBe(emits);
     expect(inventory.jscpdIgnoreGlobs).not.toContain("src/**");
     expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
       path: "tsconfig.build.json",
@@ -87,25 +233,26 @@ describe("productSourceInventory (#2132/#2125)", () => {
       "outside.ts",
       "src/app/api/eval/route.ts",
       "src/reports/dead.ts",
-    ]);
+      ...(!emits ? ["src/outside.js", "src/src/app/api/eval/route.js", "src/src/reports/dead.js"] : []),
+    ].sort());
 
     const scope = resolveScanScope(root);
     try {
       expect(existsSync(join(scope.scanDir, "src/app/api/eval/route.ts"))).toBe(true);
-      expect(existsSync(join(scope.scanDir, `src/outside.${extension}`))).toBe(false);
+      expect(existsSync(join(scope.scanDir, `src/outside.${extension}`))).toBe(!emits);
     } finally {
       scope.cleanup();
     }
   });
 
-  it("resolves inherited compiler options before protecting inputs and rebases exact outputs for a workspace", () => {
+  it.each([false, true])("resolves inherited compiler options and rebases outputs for a workspace with noEmit %s", (noEmit) => {
     const root = fixture({
       "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
       "config/base.json": JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", rootDir: "..", outDir: "../apps/web/src" } }),
       "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
       "apps/web/tsconfig.build.json": JSON.stringify({
         extends: "../../config/base.json",
-        compilerOptions: { noEmit: true },
+        compilerOptions: { noEmit },
         files: ["outside.ts", "src/reports/dead.ts"],
       }),
       "apps/web/outside.ts": "export const outside = true;\n",
@@ -116,8 +263,8 @@ describe("productSourceInventory (#2132/#2125)", () => {
 
     const inventory = productSourceInventoryForTarget(join(root, "apps/web"));
     expect(inventory.excludedDirectoryFor("src/reports/dead.ts")).toBeUndefined();
-    expect(inventory.excludedDirectoryFor("src/apps/web/outside.js")).toMatchObject({ match: "exact" });
-    expect(inventory.jscpdIgnoreGlobs).toContain("src/apps/web/outside.js");
+    expect(inventory.excludedDirectoryFor("src/apps/web/outside.js")?.match).toBe(noEmit ? undefined : "exact");
+    expect(inventory.jscpdIgnoreGlobs.includes("src/apps/web/outside.js")).toBe(!noEmit);
     expect(inventory.unresolvedConfigurations).toContainEqual(expect.objectContaining({
       path: "tsconfig.build.json",
       reason: expect.stringContaining("effective compiler input"),
@@ -180,8 +327,8 @@ describe("productSourceInventory (#2132/#2125)", () => {
     const root = fixture({
       "package.json": JSON.stringify({ private: true, packageManager: "pnpm@9", workspaces: ["apps/*"] }),
       "pnpm-workspace.yaml": "packages:\n  - apps/*\n",
-      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf/generated" } }),
-      "tsconfig.whole.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/whole" } }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf/generated" }, files: ["apps/web/packages/leaf/src/index.ts"] }),
+      "tsconfig.whole.json": JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/whole" }, files: ["apps/web/packages/leaf/src/index.ts"] }),
       "apps/web/package.json": JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }),
       "apps/web/packages/leaf/package.json": JSON.stringify({ name: "leaf", private: true }),
       "apps/web/packages/leaf/generated/out.ts": "export const generated = true;\n",

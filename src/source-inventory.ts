@@ -22,6 +22,7 @@ export interface SourceInventoryGap {
 export interface ProductSourceInventory {
   excludedDirectories: readonly SourceExclusion[];
   unresolvedConfigurations: readonly SourceInventoryGap[];
+  compilerInputs: readonly string[];
   exclusionsFor(path: string): readonly SourceExclusion[];
   excludedDirectoryFor(path: string): SourceExclusion | undefined;
   jscpdIgnoreGlobs: readonly string[];
@@ -230,10 +231,12 @@ function resolveTsOutput(configPath: string, seen = new Set<string>()): { output
 
 interface TypeScriptOutputPlan {
   configPath: string;
-  outputDirectory?: string;
+  outputDirectories: readonly string[];
   outputDeclaredAt?: string;
   inputFiles: readonly string[];
   emittedFiles: readonly string[];
+  referencedConfigs: readonly string[];
+  emissionDisabled?: string;
   error?: string;
 }
 
@@ -251,8 +254,10 @@ function typescriptOutputPlan(configPath: string): TypeScriptOutputPlan {
   if (!parsed) {
     return {
       configPath,
+      outputDirectories: [],
       inputFiles: [],
       emittedFiles: [],
+      referencedConfigs: [],
       error: diagnostics.length > 0
         ? diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")).join("; ")
         : "TypeScript could not resolve the effective configuration",
@@ -261,31 +266,30 @@ function typescriptOutputPlan(configPath: string): TypeScriptOutputPlan {
   // TS18002/TS18003 describe an empty project population, not an unreadable output boundary.
   // They are common in solution configs and must not turn an otherwise exact inventory partial.
   const errors = [...diagnostics, ...parsed.errors.filter((diagnostic) => ![18002, 18003].includes(diagnostic.code))];
-  const effectiveOutput = parsed.options.outDir;
   const declared = resolveTsOutput(configPath);
   const emittedFiles: string[] = [];
-  if (effectiveOutput) {
-    for (const input of parsed.fileNames) {
-      try {
-        emittedFiles.push(...ts.getOutputFileNames(parsed, input, !ts.sys.useCaseSensitiveFileNames));
-      } catch (err) {
-        errors.push({
-          category: ts.DiagnosticCategory.Error,
-          code: 0,
-          file: undefined,
-          start: undefined,
-          length: undefined,
-          messageText: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
+  // Config fileNames are entry points, not the compiler's complete input population. Resolve
+  // imports, triple-slash references and project references before classifying any output path.
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options, projectReferences: parsed.projectReferences });
+  const inputFiles = program.getSourceFiles()
+    .filter((file) => !program.isSourceFileDefaultLibrary(file))
+    .map((file) => resolve(file.fileName));
+  errors.push(...program.getOptionsDiagnostics());
+  // The callback records compiler-supported emission without writing into the audited tree.
+  // Filename prediction ignores noEmit/noEmitOnError and can even identify authored JS as output.
+  const emission = program.emit(undefined, (file) => emittedFiles.push(resolve(file)));
+  errors.push(...emission.diagnostics);
+  const outputDirectories = [parsed.options.outDir, parsed.options.declarationDir]
+    .filter((path): path is string => typeof path === "string").map((path) => resolve(path));
   return {
     configPath,
-    ...(effectiveOutput ? { outputDirectory: resolve(effectiveOutput) } : {}),
+    outputDirectories: [...new Set(outputDirectories)],
     ...(declared.declaredAt ? { outputDeclaredAt: declared.declaredAt } : {}),
-    inputFiles: parsed.fileNames.map((file) => resolve(file)),
-    emittedFiles: [...new Set(emittedFiles.map((file) => resolve(file)))],
+    inputFiles,
+    emittedFiles: [...new Set(emittedFiles)],
+    referencedConfigs: (parsed.projectReferences ?? []).map(ts.resolveProjectReferencePath),
+    ...(parsed.options.noEmit ? { emissionDisabled: "noEmit is enabled" }
+      : emission.emitSkipped && emittedFiles.length === 0 ? { emissionDisabled: "the compiler blocked emission" } : {}),
     ...(errors.length > 0 ? {
       error: errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")).join("; "),
     } : {}),
@@ -310,6 +314,7 @@ interface ConfiguredSourceBoundaries {
   directories: Record<string, string>;
   files: Record<string, string>;
   gaps: SourceInventoryGap[];
+  compilerInputs: readonly string[];
 }
 
 interface StaticCopyStep {
@@ -438,7 +443,7 @@ function configuredInactiveOverlays(root: string): Record<string, string> {
   return exclusions;
 }
 
-function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined): ConfiguredSourceBoundaries {
+function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined, inheritedInputs: readonly string[]): ConfiguredSourceBoundaries {
   const exclusions: Record<string, string> = {};
   const exactFiles: Record<string, string> = {};
   const gaps: SourceInventoryGap[] = [];
@@ -477,7 +482,10 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
   const collectConfigs = (dir: string): void => {
     for (const entry of readEntriesSafe(dir).entries) {
       if (entry.isDirectory) {
-        if (!Object.hasOwn(alwaysExcluded, entry.name) && !Object.hasOwn(exclusions, entry.name)) collectConfigs(entry.path);
+        const dependencyBoundary = exclusions[posix(relative(root, entry.path))];
+        if (!Object.hasOwn(alwaysExcluded, entry.name)
+          && !/dependency (?:vendor )?directory|package store/.test(dependencyBoundary ?? "")
+          && !(pnpm && [".pnpm-store", ".pnpm"].includes(entry.name))) collectConfigs(entry.path);
       } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
         tsconfigs.push(entry.path);
       } else if (entry.name === "package.json" && entry.path !== join(root, "package.json")) {
@@ -492,30 +500,44 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     }
   };
   collectConfigs(root);
-  const tsPlans = tsconfigs.map(typescriptOutputPlan);
-  const compilerInputs = [...new Set(tsPlans.flatMap((plan) => plan.inputFiles))];
+  const tsPlans: TypeScriptOutputPlan[] = [];
+  const seenConfigs = new Set<string>();
+  for (let index = 0; index < tsconfigs.length; index++) {
+    const configPath = resolve(tsconfigs[index]!);
+    if (seenConfigs.has(configPath)) continue;
+    seenConfigs.add(configPath);
+    const plan = typescriptOutputPlan(configPath);
+    tsPlans.push(plan);
+    tsconfigs.push(...plan.referencedConfigs);
+  }
+  const compilerInputs = [...new Set([...inheritedInputs, ...tsPlans.flatMap((plan) => plan.inputFiles)])];
   for (const plan of tsPlans) {
     const configLabel = posix(relative(root, plan.configPath));
     if (plan.error) gaps.push({ path: configLabel, reason: `TypeScript effective configuration is incomplete: ${plan.error}` });
-    if (!plan.outputDirectory || !pathIsInside(root, plan.outputDirectory)) continue;
-    const outputPath = posix(relative(root, plan.outputDirectory));
-    if (!outputPath || outputPath === ".") continue;
     const declaredAt = plan.outputDeclaredAt ? posix(relative(root, plan.outputDeclaredAt)) : configLabel;
     const reason = `TypeScript compiler output declared by ${declaredAt}`;
-    const overlappingInputs = plan.inputFiles.filter((input) => pathIsInside(plan.outputDirectory!, input));
-    if (overlappingInputs.length === 0) {
-      addRelativeDirectory(exclusions, outputPath, reason);
-      continue;
-    }
     for (const emitted of plan.emittedFiles) {
-      if (!pathIsInside(root, emitted) || plan.inputFiles.includes(emitted)) continue;
+      if (!pathIsInside(root, emitted) || compilerInputs.includes(emitted)) continue;
       const emittedPath = posix(relative(root, emitted));
       if (emittedPath && emittedPath !== ".") exactFiles[emittedPath] = `${reason}; exact emitted artifact derived from the effective compiler inputs`;
     }
-    gaps.push({
-      path: configLabel,
-      reason: `TypeScript output ${outputPath} overlaps ${overlappingInputs.length} effective compiler input file(s); exact emitted artifacts are excluded and other paths are retained as candidate source`,
-    });
+    for (const outputDirectory of plan.outputDirectories) {
+      if (!pathIsInside(root, outputDirectory)) continue;
+      const outputPath = posix(relative(root, outputDirectory));
+      const overlappingInputs = compilerInputs.filter((input) => pathIsInside(outputDirectory, input));
+      if (!plan.emissionDisabled && !plan.error && overlappingInputs.length === 0) {
+        addRelativeDirectory(exclusions, outputPath, reason);
+        continue;
+      }
+      // A build config cannot override source proven by a different checking/building config.
+      // With emission disabled, even a plausible output filename is not generated provenance.
+      gaps.push({
+        path: configLabel,
+        reason: overlappingInputs.length > 0
+          ? `TypeScript output ${outputPath} overlaps ${overlappingInputs.length} effective compiler input file(s); ${plan.emissionDisabled ? `${plan.emissionDisabled}, so no emitted artifacts are excluded` : "exact emitted artifacts that are not compiler inputs are excluded"} and other paths are retained as candidate source`
+          : `TypeScript output ${outputPath} cannot establish an exclusion because ${plan.emissionDisabled ?? "the effective configuration is incomplete"}; candidate source is retained`,
+      });
+    }
   }
 
   for (const configPath of composerConfigs) {
@@ -617,7 +639,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     });
   }
   Object.assign(exclusions, configuredInactiveOverlays(root));
-  return { directories: exclusions, files: exactFiles, gaps };
+  return { directories: exclusions, files: exactFiles, gaps, compilerInputs };
 }
 
 function configurationGaps(root: string, configuredGaps: readonly SourceInventoryGap[] = []): SourceInventoryGap[] {
@@ -671,11 +693,13 @@ export function sourceExclusionGlob(exclusion: SourceExclusion): string {
 function inventoryFrom(
   entries: readonly SourceExclusion[],
   unresolvedConfigurations: readonly SourceInventoryGap[],
+  compilerInputs: readonly string[],
 ): ProductSourceInventory {
   const exclusionsFor = (path: string): readonly SourceExclusion[] => entries.filter((entry) => matchesExclusion(entry, path));
   return {
     excludedDirectories: entries,
     unresolvedConfigurations,
+    compilerInputs,
     exclusionsFor,
     excludedDirectoryFor: (path: string) => exclusionsFor(path)[0],
     jscpdIgnoreGlobs: entries.map(sourceExclusionGlob),
@@ -683,9 +707,9 @@ function inventoryFrom(
 }
 
 /** Build the explicit product boundary from package and tool configuration. */
-export function productSourceInventory(root: string): ProductSourceInventory {
+export function productSourceInventory(root: string, inheritedInputs: readonly string[] = []): ProductSourceInventory {
   const pkg = readJson(join(root, "package.json"));
-  const configured = configuredOutputDirectories(root, pkg);
+  const configured = configuredOutputDirectories(root, pkg, inheritedInputs);
   const entries: SourceExclusion[] = [
     ...FIXED_BOUNDARIES,
     ...Object.entries(configured.directories).map(([path, reason]): SourceExclusion => ({
@@ -695,7 +719,7 @@ export function productSourceInventory(root: string): ProductSourceInventory {
     })),
     ...Object.entries(configured.files).map(([path, reason]): SourceExclusion => ({ path, reason, match: "exact" })),
   ].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
-  return inventoryFrom(entries, configurationGaps(root, configured.gaps));
+  return inventoryFrom(entries, configurationGaps(root, configured.gaps), configured.compilerInputs);
 }
 
 /** Rebase the authoritative root inventory for a workspace-scoped scanner invocation. */
@@ -713,7 +737,7 @@ export function productSourceInventoryForScope(
     throw new Error(`Source inventory scope must be inside its root: ${absoluteScope}`);
   }
 
-  const local = productSourceInventory(absoluteScope);
+  const local = productSourceInventory(absoluteScope, rootInventory.compilerInputs);
   const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
     if (entry.match === "any-depth") return [entry];
     if (entry.path === ".") return entry.match === "anchored" ? [entry] : [];
@@ -741,7 +765,7 @@ export function productSourceInventoryForScope(
   const gaps = [...new Map([...local.unresolvedConfigurations, ...rootGaps]
     .map((gap) => [`${gap.path}\0${gap.reason}`, gap])).values()]
     .sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));
-  return inventoryFrom(entries, gaps);
+  return inventoryFrom(entries, gaps, [...new Set([...rootInventory.compilerInputs, ...local.compilerInputs])]);
 }
 
 /** Find an explicitly declared workspace root and retain its inventory when scanning one member. */

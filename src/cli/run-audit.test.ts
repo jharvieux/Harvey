@@ -229,7 +229,6 @@ describe("run-audit CLI export capture", () => {
     expect(readinessPlan.schemaVersion).toBe(1);
     expect(readinessPlan.workspaceInventory.applicationWorkspaceIds).toEqual([
       "workspace:apps/api",
-      "workspace:apps/scratch",
       "workspace:apps/web",
     ]);
     expect(readinessPlan.workspaces.map((workspace) => workspace.id)).not.toContain("workspace:apps/scratch");

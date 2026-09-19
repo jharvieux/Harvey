@@ -384,6 +384,39 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
   const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
   const COVERING_TEST = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
 
+  it("stages transitive authored inputs and omits exact compiler artifacts in the actual test-runner copy (#2132)", async () => {
+    const paths = ["outside.ts", "src/authored.ts", "src/outside.js", "src/src/authored.js", "src/nested/outside.js"];
+    const repo = fixtureRepo({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src" },
+        files: ["outside.ts"],
+      }),
+      "outside.ts": "import { authored } from './src/authored.js';\nexport function run() { return authored(); }\n",
+      "outside.test.ts": "import { run } from './outside';\nit('runs', () => { expect(run()).toBe(2); });\n",
+      "src/authored.ts": "export function authored() { return 2; }\n",
+      "src/outside.js": "export function generated() { return 0; }\n",
+      "src/src/authored.js": "export function generated() { return 0; }\n",
+      "src/nested/outside.js": "export function handwritten() { return 3; }\n",
+    });
+    const receiptsDir = mkdtempSync(join(tmpdir(), "harvey-m8-exact-stage-"));
+    dirs.push(receiptsDir);
+    const recorder = join(receiptsDir, "record.cjs");
+    const receipt = join(receiptsDir, "receipts.jsonl");
+    writeFileSync(recorder, `const fs = require('node:fs'); fs.appendFileSync(process.env.STAGE_RECEIPT, JSON.stringify({ cwd: process.cwd(), present: ${JSON.stringify(paths)}.filter(path => fs.existsSync(path)) }) + '\\n');\n`);
+
+    const result = await runCli(repo, ["--stub-check", "--test-cmd", `node ${recorder}`], { STAGE_RECEIPT: receipt });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.out).runs.length).toBeGreaterThan(0);
+    const rows = readFileSync(receipt, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { cwd: string; present: string[] });
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row.cwd).not.toBe(repo);
+      expect(row.present).toEqual(["outside.ts", "src/authored.ts", "src/nested/outside.js"]);
+      expect(existsSync(row.cwd)).toBe(false);
+    }
+    for (const path of paths) expect(existsSync(join(repo, path))).toBe(true);
+  });
+
   it("a normal (non-killed) run leaves the target checkout byte-identical, having actually run the stub against a copy", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
     // "true" always exits 0 — the covering "suite" trivially "survives" the stub, proving the

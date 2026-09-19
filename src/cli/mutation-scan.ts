@@ -107,7 +107,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
+import { readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
 import { productSourceInventoryForTarget, readStaticConfigObject } from "../source-inventory.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
@@ -352,15 +352,11 @@ function walkRelPaths(root: string, includeContextExcluded = false): string[] {
 
 const readRel = (root: string, rel: string): { path: string; text: string } => ({ path: rel, text: readFileSync(join(root, ...rel.split("/")), "utf8") });
 
-// The cpSync filter shared by the two disposable-copy rungs (#600's stub-check, #1285's coverage
-// pass): skip the same heavy/irrelevant directories walkRelPaths already skips. `existsSync` first
-// because statSync throws on a dangling symlink, which real repos commit (#944).
+// Every disposable-copy rung uses the same source boundary as discovery, including exact emitted
+// files inside a retained mixed source/output directory. No stat is needed for dangling symlinks.
 const excludeHeavyDirs = (root: string) => {
   const inventory = productSourceInventoryForTarget(root);
-  return (src: string): boolean => {
-    if (!isDirectorySafe(src)) return true;
-    return !inventory.excludedDirectoryFor(relative(root, src).split(sep).join("/"));
-  };
+  return (src: string): boolean => !inventory.excludedDirectoryFor(relative(root, src).split(sep).join("/"));
 };
 
 // #773: planTsconfigRewrites is pure (fixture-testable), but ACTING on its plan means physically
