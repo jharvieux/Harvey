@@ -256,6 +256,37 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     });
   }, 30000);
 
+  it("does not scan workspace members removed by a negated package-manager glob", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-negated-workspace-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true }));
+    write("pnpm-workspace.yaml", "packages:\n  - packages/*\n  - '!packages/{scratch,temp}'\n");
+    for (const name of ["app", "scratch", "temp"]) {
+      write(`packages/${name}/package.json`, JSON.stringify({ name, private: true }));
+      write(`packages/${name}/knip.json`, JSON.stringify({ entry: ["src/live.ts"], project: ["src/**/*.ts"] }));
+      write(`packages/${name}/src/live.ts`, "export const live = true;\n");
+      write(`packages/${name}/src/dead.ts`, "export const dead = true;\n");
+    }
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ location: "packages/app/src/dead.ts" }));
+    expect(findings.some((finding) => /packages\/(?:scratch|temp)\//.test(finding.location))).toBe(false);
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
+    };
+    expect(scope.observation.knip).toEqual({
+      discovered: ["packages/app"],
+      completed: ["packages/app"],
+      reduced: [],
+      incomplete: [],
+    });
+  }, 30000);
+
   it("excludes an entire generated workspace from every M4 source consumer", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-quality-whole-workspace-"));
     dirs.push(root);

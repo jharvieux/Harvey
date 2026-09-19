@@ -613,8 +613,8 @@ function discoverWorkspaceRecords(repoRoot: string): {
         continue;
       }
       const id = workspaceIdForDir(dir);
-      applicationWorkspaceIds.add(id);
       if (excluded.has(dir)) continue;
+      applicationWorkspaceIds.add(id);
       const discoveredBy: WorkspaceDiscoveryEvidence = source === "no workspace globs declared"
         ? { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }
         : { kind: "workspace-glob", ...sourceDetails, glob };

@@ -21,6 +21,7 @@ vi.mock("./fs-walk.js", async (importOriginal) => {
 });
 
 import { collectWorkspaceManifests, discoverWorkspaceInventory, workspacePackages } from "./workspaces.js";
+import { discoverTargets } from "./pentest/targets.js";
 
 describe("collectWorkspaceManifests", () => {
   let dir: string;
@@ -136,10 +137,17 @@ describe("collectWorkspaceManifests", () => {
     manifest("packages/ui", { name: "ui" });
     manifest("packages/scratch", { name: "scratch" });
     manifest("packages/temp", { name: "temp" });
+    const inventory = discoverWorkspaceInventory(dir);
     const labels = collectWorkspaceManifests(dir).manifests.map((m) => m.label);
     expect(labels).toContain("packages/ui/package.json");
     expect(labels).not.toContain("packages/scratch/package.json");
     expect(labels).not.toContain("packages/temp/package.json");
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:packages/ui"]);
+    expect(discoverTargets(dir).apps.map((app) => app.name)).toEqual(["packages/ui"]);
+    expect(inventory.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "packages/scratch/package.json" }),
+      expect.objectContaining({ kind: "excluded", path: "packages/temp/package.json" }),
+    ]));
   });
 
   it("names a glob that matched nothing instead of degrading silently to the root", () => {
