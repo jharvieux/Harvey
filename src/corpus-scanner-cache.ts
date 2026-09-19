@@ -23,6 +23,12 @@ export type CorpusScannerObservation =
       jscpd: { status: "completed" | "incomplete"; comparedLines: number };
       knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[] };
       divergedClones: { securityPathSources: number; wholeRepoEnabled: boolean; complementSources: number };
+      zeroSourceDisposition?: {
+        status: "not-assessed";
+        reason: string;
+        provenance: string;
+        falsifier: string;
+      };
     }
   | {
       scanner: "mutation-detect-only";

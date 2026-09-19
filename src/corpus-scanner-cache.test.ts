@@ -89,6 +89,22 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     },
     completed: true,
   });
+  const zeroQuality = () => {
+    const observed: Extract<CorpusScannerObservation, { scanner: "quality-scan" }> = {
+      scanner: "quality-scan",
+      productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+      jscpd: { status: "incomplete", comparedLines: 0 },
+      knip: { discovered: ["root"], completed: [], reduced: [], incomplete: ["root"] },
+      divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
+      zeroSourceDisposition: {
+        status: "not-assessed",
+        reason: "external-src was excluded because it points outside the selected target",
+        provenance: "quality-scan inspected the bounded source inventory and read zero product sources",
+        falsifier: "An admitted source file on a subsequent run invalidates this empty source digest",
+      },
+    };
+    return { findings: [finding("source-excluded")], scope: { unitsExamined: 0, description: "zero product sources read", observation: observed }, completed: true };
+  };
 
   it("preserves normalized findings, categories, order, and examined scope on a warm hit", async () => {
     const cache = options("detect-static");
@@ -186,6 +202,48 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
         falsifier: expect.stringContaining("invalidates"),
       },
     });
+  });
+
+  it("preserves a zero-quality not-assessed result through cold, warm, and verified cache execution", async () => {
+    const cache = options("quality-scan");
+    const expected = zeroQuality();
+    const cold = await executeCorpusScanner(cache, () => expected);
+    const shouldNotRun = vi.fn(zeroQuality);
+    const warm = await executeCorpusScanner(cache, shouldNotRun);
+    const verified = await executeCorpusScanner({ ...cache, mode: "verify" }, zeroQuality);
+    expect([cold.cache, warm.cache, verified.cache]).toEqual(["miss", "hit", "recomputed"]);
+    expect(shouldNotRun).not.toHaveBeenCalled();
+    for (const record of [cold, warm, verified]) {
+      expect(record.scope).toEqual(expected.scope);
+      expect(record.findings).toEqual(expected.findings);
+    }
+    const changedReason = zeroQuality();
+    changedReason.scope.observation.zeroSourceDisposition!.reason = "A different exclusion reason must be visible to forced parity verification";
+    await expect(executeCorpusScanner({ ...cache, mode: "verify" }, () => changedReason)).rejects.toThrow(/differs from cached/);
+  });
+
+  it.each(["dropped disposition", "short reason", "forged positive"] as const)("rejects %s from both the zero-quality producer and a restored cache artifact", async (shape) => {
+    const events: string[] = [];
+    const cache = options("quality-scan", { onEvent: (message) => events.push(message) });
+    const cold = await executeCorpusScanner(cache, zeroQuality);
+    const invalid = zeroQuality();
+    if (shape === "short reason") invalid.scope.observation.zeroSourceDisposition!.reason = "none";
+    else {
+      delete invalid.scope.observation.zeroSourceDisposition;
+      if (shape === "forged positive") invalid.scope.unitsExamined = invalid.scope.observation.productSources.count = 1;
+    }
+    await expect(executeCorpusScanner({ ...cache, mode: "verify" }, () => invalid)).rejects.toThrow(/complete scanner-owned observation/);
+    const path = join(cache.dir, "corpus-scanners", cache.scanner, `${cold.key}.json`);
+    const artifact = JSON.parse(readFileSync(path, "utf8"));
+    artifact.scope = invalid.scope;
+    writeFileSync(path, JSON.stringify(artifact));
+    expect(inspectCorpusScannerSeed(cache)).toMatchObject({ status: "invalid", reason: expect.stringContaining("examined-scope metadata") });
+    const fresh = vi.fn(zeroQuality);
+    const restored = await executeCorpusScanner(cache, fresh);
+    expect(restored.cache).toBe("miss");
+    expect(fresh).toHaveBeenCalledOnce();
+    expect(restored.scope).toEqual(zeroQuality().scope);
+    expect(events).toContainEqual(expect.stringContaining("examined-scope metadata"));
   });
 
   it("rejects completed zero scopes that omit disposition, claim a suite, or come from another scanner", async () => {

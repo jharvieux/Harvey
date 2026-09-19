@@ -7,12 +7,14 @@
 // the cross-workspace pair. A regression back to per-workspace jscpd fails this test.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
+import { digestObservedPaths, readCorpusScannerScope } from "../corpus-scanner-scope.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "quality-scan.ts");
@@ -64,7 +66,7 @@ function monorepoFixture(): string {
 // and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
 // here are ~0.7-1.7s each on this hardware, well under the ceiling either way, but the standing
 // constraint is "no single blocking window may approach 60s" for every heavy CLI test.
-function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<void> {
+function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<string> {
   return new Promise((res, rej) => {
     const child = spawn(binPath, args, {
       cwd, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
@@ -78,7 +80,7 @@ function spawnCli(binPath: string, args: string[], cwd: string, input?: string |
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (d: string) => (stderr += d));
     child.on("error", rej);
-    child.on("close", (code) => (code === 0 ? res() : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
+    child.on("close", (code) => (code === 0 ? res(stderr) : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
   });
 }
 
@@ -109,6 +111,63 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
 });
 
 describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
+  it.each(["empty", "config-only", "external-only", "positive"] as const)("delivers the requested %s source receipt and its assessment disposition", async (shape) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-quality-zero-receipt-"));
+    dirs.push(fixture);
+    const repo = join(fixture, "target");
+    mkdirSync(repo);
+    if (shape !== "empty") {
+      writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "zero-quality-fixture", private: true }));
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true } }));
+    }
+    if (shape === "external-only") {
+      mkdirSync(join(fixture, "outside"));
+      writeFileSync(join(fixture, "outside", "hidden.ts"), CLONED_BLOCK);
+      symlinkSync(join(fixture, "outside"), join(repo, "external-src"), "dir");
+    } else if (shape === "positive") {
+      writeFileSync(join(repo, "authored.ts"), CLONED_BLOCK);
+    }
+    const scopePath = join(fixture, "scope.json");
+    const outPath = join(fixture, "findings.json");
+    const stderr = await spawnCli("node_modules/.bin/tsx", [CLI, repo, "--degraded-knip-reason", "Explicit source-only receipt control without target dependency installation.", "--scope-out", scopePath, "--out", outPath], REPO_ROOT);
+    const findings = JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
+    const receipt = readCorpusScannerScope(scopePath, "quality-scan");
+    if (receipt.observation.scanner !== "quality-scan") throw new Error("expected quality receipt");
+    if (shape === "positive") {
+      expect(receipt.unitsExamined).toBe(1);
+      expect(receipt.observation.productSources.pathsDigest).toBe(digestObservedPaths(["authored.ts"]));
+      expect(receipt.observation.zeroSourceDisposition).toBeUndefined();
+      expect(findings.some((finding) => finding.id === "M4-99" || finding.id === "M5-00")).toBe(false);
+    } else {
+      expect(receipt.unitsExamined).toBe(0);
+      expect(receipt.observation).toMatchObject({
+        productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+        jscpd: { status: shape === "external-only" ? "incomplete" : "completed", comparedLines: 0 },
+        zeroSourceDisposition: {
+          status: "not-assessed", reason: expect.stringContaining("no eligible"),
+          provenance: expect.stringContaining("0 admitted files"), falsifier: expect.stringContaining("invalidates"),
+        },
+      });
+      for (const id of ["M4-99", "M5-00"]) {
+        const gap = findings.find((finding) => finding.id === id);
+        expect(gap).toBeDefined();
+        expect(gap!.evidence).toContain(shape === "external-only" ? "external-src" : shape === "empty" && id === "M5-00" ? "Unable to find package.json" : "no eligible");
+      }
+      if (shape === "external-only") {
+        expect(receipt.observation.zeroSourceDisposition!.reason).toContain("external-src");
+        const assessment = AUDIT_RUNNERS.find((runner) => runner.module === "M4")!.run({
+          targetDir: repo, env: { connected: false, dynamic: false, llm: false }, exists: existsSync,
+          exec: () => ({ ok: true, output: readFileSync(outPath, "utf8"), stderr }),
+        });
+        expect(assessment).toMatchObject({
+          kind: "not-assessed", reason: expect.stringContaining(findings.find((finding) => finding.id === "M4-99")!.evidence),
+          provenance: "MEASURED", falsifier: expect.stringContaining("quality-scan"),
+        });
+        expect(assessment).not.toHaveProperty("unitsExamined");
+      }
+    }
+  }, 30_000);
+
   it.each(["imported", "cross-config", "noEmit JavaScript"])("reports authored dead code through %s compiler provenance", async (mode) => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-compiler-cli-"));
     dirs.push(repo);
@@ -432,11 +491,18 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
 
     for (const args of [[], ["--whole-repo-diverged"]]) {
       rmSync(join(app, "quality-out.json"), { force: true });
-      const findings = await runCli(app, args);
+      const scopePath = join(root, "generated-scope.json");
+      const findings = await runCli(app, [...args, "--scope-out", scopePath]);
       expect(findings.some((finding) => finding.id.startsWith("M4-DIV"))).toBe(false);
-      expect(findings.some((finding) => finding.id === "M4-99")).toBe(false);
+      expect(findings.find((finding) => finding.id === "M4-99")?.evidence).toContain("no eligible");
+      expect(readCorpusScannerScope(scopePath, "quality-scan")).toMatchObject({
+        unitsExamined: 0,
+        observation: { zeroSourceDisposition: { status: "not-assessed" } },
+      });
       expect(findings.some((finding) => finding.id === "M4-97")).toBe(false);
-      expect(findings.some((finding) => finding.taxonomy === "M5 — Slop / dead code")).toBe(false);
+      expect(findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code")).toEqual([
+        expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining("no eligible") }),
+      ]);
       expect(findings).toContainEqual(expect.objectContaining({
         id: "M4-SCOPE-00",
         evidence: expect.stringMatching(/`\*\*\/\*`: 5 files.*TypeScript compiler output declared by tsconfig\.json/),

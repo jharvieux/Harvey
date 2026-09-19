@@ -40,9 +40,9 @@ export function isCorpusScannerOwnedScope(scope: Partial<CorpusScannerOwnedScope
   const units = scope.unitsExamined;
   const observation = scope.observation;
   if (!Number.isInteger(units) || units! < 0 || typeof scope.description !== "string" || scope.description.length === 0 || !observation || observation.scanner !== scanner) return false;
-  if (scanner !== "mutation-detect-only" && units === 0) return false;
   if (observation.scanner === "detect-static") {
-    return nonNegativeInteger(observation.loadedSources?.count)
+    return units! > 0
+      && nonNegativeInteger(observation.loadedSources?.count)
       && observation.loadedSources.count === units
       && sha256Digest(observation.loadedSources.pathsDigest)
       && nonNegativeInteger(observation.ancillary?.productSources)
@@ -72,9 +72,17 @@ export function isCorpusScannerOwnedScope(scope: Partial<CorpusScannerOwnedScope
       || observation.knip.incomplete.some((scope) => !discovered.has(scope))
       || observation.knip.completed.some((scope) => !discovered.has(scope))
       || discovered.size !== completed.size + incomplete.size) return false;
-    return observation.divergedClones.complementSources === (observation.divergedClones.wholeRepoEnabled
+    if (observation.divergedClones.complementSources !== (observation.divergedClones.wholeRepoEnabled
       ? units! - observation.divergedClones.securityPathSources
-      : 0);
+      : 0)) return false;
+    if (units! > 0) return observation.zeroSourceDisposition === undefined
+      && observation.productSources.pathsDigest !== digestObservedPaths([]);
+    const disposition = observation.zeroSourceDisposition;
+    return observation.productSources.pathsDigest === digestObservedPaths([])
+      && disposition?.status === "not-assessed"
+      && completeExplanation(disposition.reason)
+      && completeExplanation(disposition.provenance)
+      && completeExplanation(disposition.falsifier);
   }
   const mutationShapeIsComplete = nonNegativeInteger(observation.testSources?.count)
     && observation.testSources.count === units

@@ -683,6 +683,19 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m4?.reason).toMatch(/jscpd did not complete/);
   });
 
+  it("M4 — zero compared lines retain the excluded source-alias reason in the assessment", () => {
+    const sourceGap = "external-src points outside the selected target; its source population was excluded and not assessed";
+    const qualityZero = {
+      exec: (_c: string, argv: string[]) => argv.includes("quality-scan")
+        ? { ok: true, output: JSON.stringify([{ id: "M4-99", evidence: sourceGap }]), stderr: "M4 duplication: 0% (0/0 lines) — 0 clone clusters" }
+        : cleanRun(argv),
+    };
+    const m4 = status(AUDIT_RUNNERS, qualityZero, "M4");
+    expect(m4).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining(sourceGap) });
+    expect(m4?.reason).toContain("MEASURED; falsifier:");
+    expect(m4?.detail).toBeUndefined();
+  });
+
   // #754: "no test suite at all" is a COMPLETE assessment — the M8-00 zero-coverage finding IS the
   // verdict (CLAUDE.md / #224) — so it must read `ran`, not `partial`. `partial` is reserved for a
   // suite that EXISTS but the measurement itself fell short (dry-run failure, degraded ladder,

@@ -651,8 +651,6 @@ for (const scope of scopes) {
 }
 
 const jscpdReport = mergeJscpdReports(jscpdReports);
-const knipIncompleteScopeLabels = [...new Set(knipGaps.map((gap) => gap.scope))].sort();
-const knipReducedScopeLabels = [...new Set(knipReducedScopes.map((scope) => scope.scope))].sort();
 
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
@@ -674,6 +672,17 @@ if (wholeRepoDiverged) {
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
 const eligibleFileCount = observedProductSources.size;
+const zeroSourceDisposition = eligibleFileCount === 0 ? {
+  status: "not-assessed" as const,
+  reason: [
+    "quality-scan read no eligible JavaScript/TypeScript product sources; its source passes were not assessed.",
+    ...sourceInventory.unresolvedConfigurations.map((gap) => `${gap.path}: ${gap.reason}`),
+  ].join(" "),
+  provenance: "MEASURED: quality-scan completed its in-process product-source walk with 0 admitted files after applying the target source inventory.",
+  falsifier: "Rerun quality-scan --scope-out after adding an admitted product source or repairing the disclosed source boundary; a nonempty observed path digest invalidates this zero-source disposition.",
+} : undefined;
+const knipIncompleteScopeLabels = [...new Set(knipGaps.map((gap) => gap.scope))].sort();
+const knipReducedScopeLabels = [...new Set(knipReducedScopes.map((scope) => scope.scope))].sort();
 const divergedScopeDisclosure = wholeRepoDiverged || eligibleFileCount === 0
   ? undefined
   : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
@@ -714,7 +723,9 @@ const findings: Finding[] = [
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces
 // scanned clean, 1 timed out).
 if (knipGaps.length) findings.push(knipUnavailableFinding(knipGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
+else if (zeroSourceDisposition) findings.push(knipUnavailableFinding(zeroSourceDisposition.reason));
 if (jscpdGaps.length) findings.push(jscpdUnavailableFinding(jscpdGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
+else if (zeroSourceDisposition) findings.push(jscpdUnavailableFinding(zeroSourceDisposition.reason));
 // #580: a completed-without-error knip run that still looks untrustworthy — disclosed separately
 // from knipGaps (which is "didn't complete at all") so the two failure shapes stay distinguishable
 // in the report.
@@ -772,5 +783,6 @@ writeCorpusScannerScope(scopeOutPath, "quality-scan", {
       wholeRepoEnabled: wholeRepoDiverged,
       complementSources: wholeRepoDiverged ? Math.max(0, eligibleFileCount - narrowFiles.length) : 0,
     },
+    ...(zeroSourceDisposition ? { zeroSourceDisposition } : {}),
   },
 });
