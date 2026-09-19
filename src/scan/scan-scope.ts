@@ -21,11 +21,11 @@
 // real, clonable repo) must keep operating on the ORIGINAL directory — callers pass both.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
-import { productSourceInventoryForTarget, type ProductSourceInventory } from "../source-inventory.js";
+import { basename, join } from "node:path";
+import { copyFilteredSourceTree } from "../source-copy.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 
 const NON_GIT_EXCLUDE_FILE = /\.log$/;
 const WORKTREE_DIR = /worktrees?$/i;
@@ -50,46 +50,19 @@ function trackedFiles(dir: string): string[] {
   return out.split("\0").filter(Boolean);
 }
 
-// A tracked entry can be a SYMLINK, including one pointing at a directory (git mode 120000 —
-// zenstack's packages/ide/vscode/res is one). Plain cpSync follows it, sees a directory and throws
-// "Recursive option not enabled", which killed the whole scan on the first such repo. Copy the link
-// VERBATIM instead of what it points at: an in-repo relative link still resolves inside the scratch
-// copy, and a link out of the repo is left dangling rather than pulling an out-of-scope tree in.
-function copyFile(src: string, dest: string): void {
-  mkdirSync(dirname(dest), { recursive: true });
-  cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
-}
-
-function copyTracked(dir: string, dest: string, inventory: ProductSourceInventory): void {
-  for (const rel of trackedFiles(dir)) {
-    if (inventory.excludedDirectoryFor(rel)) continue;
-    const src = join(dir, rel);
-    // Staged deletion, submodule gitlink — or, MEASURED 2026-07-28 (#1451), a committed symlink
-    // whose target does not resolve: `existsSync` follows the link, so a tracked dangling link is
-    // dropped here too. That is why the git path never reproduced the crash the non-git path below
-    // did, and it is worth naming rather than leaving as a happy accident — the shielding is one
-    // `existsSync` wide, and every detector downstream was relying on it without saying so.
-    if (!existsSync(src)) continue;
-    copyFile(src, join(dest, rel));
-  }
-}
-
-function copyExcluding(dir: string, dest: string, root: string, inventory: ProductSourceInventory): void {
-  for (const { name: entry, path: src, isDirectory } of readEntriesSafe(dir).entries) {
-    const rel = relative(root, src).split(sep).join("/");
-    if (inventory.excludedDirectoryFor(rel) || WORKTREE_DIR.test(entry) || NON_GIT_EXCLUDE_FILE.test(entry)) continue;
-    if (isDirectory) copyExcluding(src, join(dest, entry), root, inventory);
-    else copyFile(src, join(dest, entry));
-  }
-}
-
 // Builds the scratch copy and returns it plus a cleanup callback. Callers MUST call cleanup()
 // (e.g. in a finally block) once scanning is done.
 export function resolveScanScope(dir: string): ScanScope {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-scan-scope-"));
   const inventory = productSourceInventoryForTarget(dir);
-  if (isGitWorkTree(dir)) copyTracked(dir, scratch, inventory);
-  else copyExcluding(dir, scratch, dir, inventory);
+  try {
+    const tracked = isGitWorkTree(dir) ? trackedFiles(dir) : undefined;
+    copyFilteredSourceTree(dir, scratch, (path) => !inventory.excludedDirectoryFor(path)
+      && (tracked !== undefined || (!WORKTREE_DIR.test(basename(path)) && !NON_GIT_EXCLUDE_FILE.test(path))), tracked);
+  } catch (error) {
+    rmSync(scratch, { recursive: true, force: true });
+    throw error;
+  }
   return { scanDir: scratch, cleanup: () => rmSync(scratch, { recursive: true, force: true }) };
 }
 

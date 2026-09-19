@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -159,6 +159,33 @@ describe("resolveScanScope — non-git target (zip export fallback)", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe("source alias boundaries in mechanical scratch copies", () => {
+  it.each([false, true])("rebases absolute internal aliases and excludes external and generated targets (git %s)", (git) => {
+    const root = tmp("harvey-scope-alias-"), external = tmp("harvey-scope-external-");
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ devDependencies: { vite: "1" } }));
+    writeFileSync(join(root, "src/live.ts"), "export const live = true;\n");
+    writeFileSync(join(root, "dist/excluded.ts"), "export const generated = true;\n");
+    writeFileSync(join(external, "outside.ts"), "external");
+    symlinkSync(join(root, "src"), join(root, "live-alias"));
+    symlinkSync(join(root, "dist"), join(root, "generated-alias"));
+    symlinkSync(external, join(root, "external-alias"));
+    if (git) {
+      execFileSync("git", ["init", "-q", root]);
+      execFileSync("git", ["-C", root, "add", "-A"]);
+    }
+    const scope = resolveScanScope(root);
+    try {
+      expect(realpathSync(join(scope.scanDir, "live-alias/live.ts"))).toBe(realpathSync(join(scope.scanDir, "src/live.ts")));
+      expect(existsSync(join(scope.scanDir, "generated-alias/excluded.ts"))).toBe(false);
+      expect(existsSync(join(scope.scanDir, "external-alias/outside.ts"))).toBe(false);
+      writeFileSync(join(scope.scanDir, "live-alias/live.ts"), "mutated");
+      expect(readFileSync(join(root, "src/live.ts"), "utf8")).toContain("live = true");
+    } finally { scope.cleanup(); }
   });
 });
 

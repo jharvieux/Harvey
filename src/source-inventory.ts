@@ -2,8 +2,8 @@
 // dependency stores and configured build output. Directory names such as `reports`, `dist`, and
 // `vendor` are not evidence by themselves: a product can legitimately author code below each.
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { readEntriesSafe } from "./fs-walk.js";
 import { discoverWorkspaceInventory } from "./workspaces.js";
@@ -15,6 +15,7 @@ export interface SourceExclusion {
 }
 
 export interface SourceInventoryGap {
+  kind?: "source-alias";
   path: string;
   reason: string;
 }
@@ -311,6 +312,7 @@ function npmrcStoreDir(path: string): string | undefined {
 }
 
 interface ConfiguredSourceBoundaries {
+  sourceFiles: string[];
   directories: Record<string, string>;
   files: Record<string, string>;
   gaps: SourceInventoryGap[];
@@ -386,17 +388,8 @@ function relativeInside(root: string, path: string): string | undefined {
   return rel === ".." || rel.startsWith("../") || resolve(root, ...rel.split("/")) !== resolve(path) ? undefined : rel;
 }
 
-function filesBelow(root: string, relativeDirectory: string): string[] {
-  const files: string[] = [];
-  const visit = (directory: string): void => {
-    for (const entry of readEntriesSafe(join(root, directory)).entries) {
-      const rel = posix(relative(root, entry.path));
-      if (entry.isDirectory) visit(rel);
-      else files.push(rel);
-    }
-  };
-  visit(relativeDirectory);
-  return files;
+function filesBelow(sourceFiles: readonly string[], relativeDirectory: string): string[] {
+  return sourceFiles.filter((path) => path.startsWith(`${relativeDirectory}/`));
 }
 
 function canonicalExistingPath(path: string): string | undefined {
@@ -412,17 +405,8 @@ function canonicalPathIsInside(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith("/"));
 }
 
-function configuredInactiveOverlays(root: string): Record<string, string> {
-  const scripts: string[] = [];
-  const collectScripts = (directory: string): void => {
-    for (const entry of readEntriesSafe(directory).entries) {
-      const rel = posix(relative(root, entry.path));
-      if (entry.isDirectory) {
-        if (!FIXED_BOUNDARIES.some((boundary) => matchesExclusion(boundary, rel))) collectScripts(entry.path);
-      } else if (entry.name.endsWith(".sh")) scripts.push(entry.path);
-    }
-  };
-  collectScripts(root);
+function configuredInactiveOverlays(root: string, sourceFiles: readonly string[]): Record<string, string> {
+  const scripts = sourceFiles.filter((path) => path.endsWith(".sh")).map((path) => join(root, path));
 
   const exclusions: Record<string, string> = {};
   for (const scriptPath of scripts) {
@@ -451,7 +435,7 @@ function configuredInactiveOverlays(root: string): Record<string, string> {
       let candidate = posix(dirname(source));
       let accepted: string | undefined;
       while (candidate !== "." && candidate !== "") {
-        const population = filesBelow(root, candidate);
+        const population = filesBelow(sourceFiles, candidate);
         if (population.length < 2 || population.some((file) => !overlayDestinations.has(file))) break;
         const candidateIdentity = canonicalExistingPath(join(root, candidate));
         if (!candidateIdentity || population.some((file) => {
@@ -467,7 +451,7 @@ function configuredInactiveOverlays(root: string): Record<string, string> {
     });
     const script = posix(relative(root, scriptPath));
     for (const directory of maximal) {
-      const count = filesBelow(root, directory).length;
+      const count = filesBelow(sourceFiles, directory).length;
       exclusions[directory] = `${count} staged overlay files are copied over backed-up live product files by ${script}`;
     }
   }
@@ -511,14 +495,31 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
   const goModules: string[] = [];
   const npmrcConfigs: string[] = [];
   const candidateFiles: string[] = [];
-  const collectConfigs = (dir: string): void => {
+  const sourceAliases: Array<{ path: string; directory: boolean; reason: string }> = [];
+  const internalAliases: Array<{ path: string; target: string; directory: boolean }> = [];
+  const canonicalRoot = canonicalExistingPath(root) ?? resolve(root);
+  const collectConfigs = (dir: string, ancestors: ReadonlySet<string>): void => {
     for (const entry of readEntriesSafe(dir).entries) {
+      const rel = posix(relative(root, entry.path));
+      const dependencyBoundary = exclusions[rel];
+      if (Object.hasOwn(alwaysExcluded, entry.name)
+        || /dependency (?:vendor )?directory|package store|pnpm store-dir declared/.test(dependencyBoundary ?? "")
+        || (pnpm && [".pnpm-store", ".pnpm"].includes(entry.name))) continue;
+      const identity = canonicalExistingPath(entry.path);
+      const outside = identity !== undefined && !canonicalPathIsInside(canonicalRoot, identity);
+      const cycle = entry.isDirectory && identity !== undefined && ancestors.has(identity);
+      if (outside || cycle) {
+        sourceAliases.push({ path: rel, directory: entry.isDirectory, reason: outside
+          ? `Source alias ${rel} resolves outside the selected source tree; its external population is not assessed`
+          : `Source directory alias ${rel} forms a cycle; its recursive population is not assessed` });
+        continue;
+      }
+      if (identity && lstatSync(entry.path).isSymbolicLink()) internalAliases.push({
+        path: rel, target: posix(relative(canonicalRoot, identity)), directory: entry.isDirectory,
+      });
       if (!entry.isDirectory) candidateFiles.push(entry.path);
       if (entry.isDirectory) {
-        const dependencyBoundary = exclusions[posix(relative(root, entry.path))];
-        if (!Object.hasOwn(alwaysExcluded, entry.name)
-          && !/dependency (?:vendor )?directory|package store/.test(dependencyBoundary ?? "")
-          && !(pnpm && [".pnpm-store", ".pnpm"].includes(entry.name))) collectConfigs(entry.path);
+        collectConfigs(entry.path, new Set([...ancestors, identity ?? entry.path]));
       } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
         tsconfigs.push(entry.path);
       } else if (entry.name === "package.json" && entry.path !== join(root, "package.json")) {
@@ -532,7 +533,7 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       }
     }
   };
-  collectConfigs(root);
+  collectConfigs(root, new Set([canonicalRoot]));
   const tsPlans: TypeScriptOutputPlan[] = [];
   const seenConfigs = new Set<string>();
   for (let index = 0; index < tsconfigs.length; index++) {
@@ -681,8 +682,9 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     });
   }
   let aliasesByIdentity: Map<string, string[]> | undefined;
-  for (const [path, reason] of Object.entries(configuredInactiveOverlays(root))) {
-    const population = filesBelow(root, path);
+  const sourceFiles = candidateFiles.map((path) => posix(relative(root, path)));
+  for (const [path, reason] of Object.entries(configuredInactiveOverlays(root, sourceFiles))) {
+    const population = filesBelow(sourceFiles, path);
     const liveFiles = population.filter((file) => isCompilerInput(resolve(root, file)));
     if (liveFiles.length === 0) {
       exclusions[path] = reason;
@@ -709,37 +711,55 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
       reason: `Staged install overlay ${path} overlaps ${liveFiles.length} effective TypeScript compiler input file(s); those live inputs are retained and ${inactiveFiles.length} inactive staged file(s) are excluded individually. Installer evidence: ${reason}`,
     });
   }
-  return { directories: exclusions, files: exactFiles, gaps, compilerInputs };
-}
-
-function configurationGaps(root: string, configuredGaps: readonly SourceInventoryGap[] = []): SourceInventoryGap[] {
-  const gaps: SourceInventoryGap[] = [];
-  const visit = (dir: string): void => {
-    for (const entry of readEntriesSafe(dir).entries) {
-      const rel = posix(relative(root, entry.path));
-      if (entry.isDirectory) {
-        if (!FIXED_BOUNDARIES.some((boundary) => matchesExclusion(boundary, rel))) visit(entry.path);
-        continue;
-      }
-      if (VITE_CONFIG_NAMES.includes(entry.name) || STRYKER_CONFIG_NAMES.includes(entry.name)) {
-        if (VITE_CONFIG_NAMES.includes(entry.name)) {
-          const parsed = readViteOutputDirectory(entry.path);
-          if (!parsed.output) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
-        } else {
-          const parsed = readStaticConfigObject(entry.path);
-          if (!parsed.value) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
-        }
-      } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
-        const parsed = readJsonc(entry.path);
-        if (!parsed.value) gaps.push({ path: rel, reason: `TypeScript configuration is not statically readable: ${parsed.error}` });
-      } else if (entry.name === ".npmrc") {
-        const text = readFileSync(entry.path, "utf8");
-        const storeLine = text.split(/\r?\n/).map((line) => line.trim()).find((line) => /^(?:store-dir|storeDir)\s*=/.test(line));
-        if (storeLine && /\$\{|%[^%]+%/.test(storeLine)) gaps.push({ path: rel, reason: "pnpm store-dir contains a dynamic environment reference" });
+  for (const alias of sourceAliases) {
+    const dependency = Object.entries(exclusions).some(([path, reason]) => /dependency (?:vendor )?directory|package store|pnpm store-dir declared/.test(reason)
+      && matchesExclusion({ path, reason, match: "anchored" }, alias.path));
+    if (dependency) continue;
+    if (alias.directory) exclusions[alias.path] = alias.reason;
+    else exactFiles[alias.path] = alias.reason;
+    gaps.push({ kind: "source-alias", path: alias.path, reason: alias.reason });
+  }
+  const canonicalExclusions: SourceExclusion[] = [
+    ...FIXED_BOUNDARIES,
+    ...Object.entries(exclusions).map(([path, reason]): SourceExclusion => ({ path, reason, match: "anchored" })),
+    ...Object.entries(exactFiles).map(([path, reason]): SourceExclusion => ({ path, reason, match: "exact" })),
+  ];
+  for (const alias of internalAliases) {
+    for (const exclusion of canonicalExclusions) {
+      if (matchesExclusion(exclusion, alias.target)) {
+        if (alias.directory) exclusions[alias.path] = exclusion.reason;
+        else exactFiles[alias.path] = exclusion.reason;
+      } else if (alias.directory && exclusion.path.startsWith(`${alias.target}/`)) {
+        const path = `${alias.path}/${exclusion.path.slice(alias.target.length + 1)}`;
+        if (exclusion.match === "exact") exactFiles[path] = exclusion.reason;
+        else exclusions[path] = exclusion.reason;
       }
     }
-  };
-  visit(root);
+  }
+  return { directories: exclusions, files: exactFiles, gaps, compilerInputs, sourceFiles };
+}
+
+function configurationGaps(root: string, sourceFiles: readonly string[], configuredGaps: readonly SourceInventoryGap[]): SourceInventoryGap[] {
+  const gaps: SourceInventoryGap[] = [];
+  for (const rel of sourceFiles) {
+    const entry = { path: join(root, rel), name: basename(rel) };
+    if (VITE_CONFIG_NAMES.includes(entry.name) || STRYKER_CONFIG_NAMES.includes(entry.name)) {
+      if (VITE_CONFIG_NAMES.includes(entry.name)) {
+        const parsed = readViteOutputDirectory(entry.path);
+        if (!parsed.output) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
+      } else {
+        const parsed = readStaticConfigObject(entry.path);
+        if (!parsed.value) gaps.push({ path: rel, reason: `configuration output paths are unresolved: ${parsed.error}` });
+      }
+    } else if (/^tsconfig(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
+      const parsed = readJsonc(entry.path);
+      if (!parsed.value) gaps.push({ path: rel, reason: `TypeScript configuration is not statically readable: ${parsed.error}` });
+    } else if (entry.name === ".npmrc") {
+      const text = readFileSync(entry.path, "utf8");
+      const storeLine = text.split(/\r?\n/).map((line) => line.trim()).find((line) => /^(?:store-dir|storeDir)\s*=/.test(line));
+      if (storeLine && /\$\{|%[^%]+%/.test(storeLine)) gaps.push({ path: rel, reason: "pnpm store-dir contains a dynamic environment reference" });
+    }
+  }
   return [...new Map([...gaps, ...configuredGaps].map((gap) => [`${gap.path}\0${gap.reason}`, gap])).values()]
     .sort((a, b) => a.path.localeCompare(b.path) || a.reason.localeCompare(b.reason));
 }
@@ -789,7 +809,7 @@ export function productSourceInventory(root: string, inheritedInputs: readonly s
     })),
     ...Object.entries(configured.files).map(([path, reason]): SourceExclusion => ({ path, reason, match: "exact" })),
   ].sort((a, b) => a.path.localeCompare(b.path) || a.match.localeCompare(b.match));
-  return inventoryFrom(entries, configurationGaps(root, configured.gaps), configured.compilerInputs);
+  return inventoryFrom(entries, configurationGaps(root, configured.sourceFiles, configured.gaps), configured.compilerInputs);
 }
 
 /** Rebase the authoritative root inventory for a workspace-scoped scanner invocation. */

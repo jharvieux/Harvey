@@ -103,7 +103,7 @@
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -115,6 +115,7 @@ import { discoverTargets } from "../pentest/targets.js";
 import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
+import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
 import {
   coveredScopeLine,
   detectDryRunFailure,
@@ -333,6 +334,17 @@ const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
 function walkRelPaths(root: string, includeContextExcluded = false): string[] {
   const paths: string[] = [];
   const inventory = productSourceInventoryForTarget(root);
+  const aliasGaps = inventory.unresolvedConfigurations.filter((gap) => gap.kind === "source-alias");
+  if (aliasGaps.length) {
+    const reason = aliasGaps.map((gap) => gap.reason).join("; ");
+    const sourceScope = {
+      status: "not-assessed", reason,
+      provenance: "Canonical source-alias boundaries in the selected target inventory",
+      falsifier: "Re-run after the source aliases resolve to an acyclic population within the selected target tree",
+    };
+    if (scopeOutPath) writeFileSync(scopeOutPath, JSON.stringify(sourceScope, null, 2) + "\n");
+    emitAndExit({ moduleRecord: mutationNotRunModuleRecord(reason), sourceScope }, `M8 source scope is not assessed: ${reason}`);
+  }
   const walk = (dir: string) => {
     for (const { path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
@@ -353,10 +365,18 @@ function walkRelPaths(root: string, includeContextExcluded = false): string[] {
 const readRel = (root: string, rel: string): { path: string; text: string } => ({ path: rel, text: readFileSync(join(root, ...rel.split("/")), "utf8") });
 
 // Every disposable-copy rung uses the same source boundary as discovery, including exact emitted
-// files inside a retained mixed source/output directory. No stat is needed for dangling symlinks.
-const excludeHeavyDirs = (root: string) => {
+// files inside a retained mixed source/output directory. Source aliases resolve within the copy.
+const copySource = (root: string, destination: string): void => {
   const inventory = productSourceInventoryForTarget(root);
-  return (src: string): boolean => !inventory.excludedDirectoryFor(relative(root, src).split(sep).join("/"));
+  copyFilteredSourceTree(root, destination, (path) => !inventory.excludedDirectoryFor(path));
+};
+
+const mirrorSourceDependencies = (root: string, destination: string) => {
+  const mirror = mirrorNodeModules(root, destination);
+  if (mirror.unresolvedWorkspacePkgs.length) {
+    throw new SourceCopyError(`Cannot stage workspace package aliases whose source is absent from the filtered copy: ${mirror.unresolvedWorkspacePkgs.join(", ")}`);
+  }
+  return mirror;
 };
 
 // #773: planTsconfigRewrites is pure (fixture-testable), but ACTING on its plan means physically
@@ -372,9 +392,15 @@ function stageTs7TsconfigFix(dir: string, label: string): string | undefined {
   const rewrites = planTsconfigRewrites(dir, "tsconfig.json", (p) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
   if (rewrites.length === 0) return undefined;
   const runDir = mkdtempSync(join(tmpdir(), `harvey-stryker-ts7-copy-${label}-`));
-  cpSync(dir, runDir, { recursive: true, filter: excludeHeavyDirs(dir) });
-  if (existsSync(join(dir, "node_modules"))) mirrorNodeModules(dir, runDir);
-  for (const r of rewrites) writeFileSync(join(runDir, relative(dir, r.path)), r.text);
+  try {
+    copySource(dir, runDir);
+    if (existsSync(join(dir, "node_modules"))) mirrorSourceDependencies(dir, runDir);
+    for (const r of rewrites) writeFileSync(join(runDir, relative(dir, r.path)), r.text);
+  } catch (error) {
+    rmSync(runDir, { recursive: true, force: true });
+    if (error instanceof SourceCopyError) degradeExit(error.message);
+    throw error;
+  }
   process.on("exit", () => rmSync(runDir, { recursive: true, force: true }));
   console.error(`#773: ${rewrites.length} tsconfig(s) under ${dir} reach outside it via extends/references — rewrote them to absolute paths in a disposable copy at ${runDir} (Stryker's own preprocessor would do this, but its TS7-incompatible compiler-API call is bypassed here) so the target's test-runner transform pipeline still resolves them post-sandbox`);
   return runDir;
@@ -852,17 +878,14 @@ if (stubCheck) {
   // so the copyDir cleanup is a real try/finally and the exit happens AFTER it, not inside it.
   let stubJson: string;
   try {
-    cpSync(targetDir, copyDir, { recursive: true, filter: excludeHeavyDirs(targetDir) });
+    copySource(targetDir, copyDir);
     if (existsSync(join(targetDir, "node_modules"))) {
       // #607: mirror node_modules as a real dir, re-pointing workspace-package symlinks at the copy
       // so a stub in packages/* is honored across package boundaries instead of resolving to the
       // original (unstubbed) source through a wholesale node_modules symlink.
-      const mirror = mirrorNodeModules(targetDir, copyDir);
+      const mirror = mirrorSourceDependencies(targetDir, copyDir);
       if (mirror.repointed.length) {
         console.error(`M8 stub-check: re-pointed ${mirror.repointed.length} workspace-package symlink(s) into the copy so cross-package stubs are honored (#607): ${mirror.repointed.slice(0, 5).join(", ")}${mirror.repointed.length > 5 ? " ..." : ""}`);
-      }
-      if (mirror.unresolvedWorkspacePkgs.length) {
-        console.error(`⚠ ${mirror.unresolvedWorkspacePkgs.length} workspace-package symlink(s) could NOT be re-pointed (source not in the copy) — stubs in these resolve to ORIGINAL source and may be bypassed (#607): ${mirror.unresolvedWorkspacePkgs.join(", ")}`);
       }
     }
     console.error(`M8 stub-check: mutating a disposable copy at ${copyDir} — ${targetDir} is never opened for writing (#600)`);
@@ -926,6 +949,11 @@ if (stubCheck) {
     // moved this into a shared assertion (and added the new-path half) so the full-mutation rung
     // is held to the identical invariant rather than a second, weaker mechanism of its own.
     assertTreePristine(pristineBefore, "#600");
+  } catch (error) {
+    if (!(error instanceof SourceCopyError)) throw error;
+    assertTreePristine(pristineBefore, "#600");
+    stubJson = JSON.stringify({ runs: [], findings: [], moduleRecord: mutationNotRunModuleRecord(error.message) }, null, 2);
+    console.error(`M8 stub-check staging is partial: ${error.message}`);
   } finally {
     // Best-effort: a killed process can't run this either, but that only leaks a scratch temp
     // dir — never the client's checkout, which this branch never wrote to.
@@ -1063,8 +1091,8 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
   };
 
   try {
-    cpSync(cwd, runDir, { recursive: true, filter: excludeHeavyDirs(cwd) });
-    if (existsSync(join(cwd, "node_modules"))) mirrorNodeModules(cwd, runDir);
+    copySource(cwd, runDir);
+    if (existsSync(join(cwd, "node_modules"))) mirrorSourceDependencies(cwd, runDir);
   } catch (err) {
     cleanUp();
     return { status: "partial", reason: `could not stage a disposable copy of ${cwd} to run the coverage tool in (#1285 forbids running it in the target's own tree): ${(err as Error).message.slice(0, 200)}` };

@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSourceInventory } from "./detectors/load-sources.js";
+import { loadSourceInventory, loadSources } from "./detectors/load-sources.js";
+import { measureCodebaseSize } from "./scan/codebase-size.js";
 import { resolveScanScope } from "./scan/scan-scope.js";
 import { productSourceInventory, productSourceInventoryForScope, productSourceInventoryForTarget } from "./source-inventory.js";
 
@@ -490,6 +491,37 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.jscpdIgnoreGlobs).toContain("optional/overlay/**");
     expect(inventory.excludedDirectoryFor("live/one.ts")).toBeUndefined();
     expect(inventory.excludedDirectoryFor("patches/authored-one.ts")).toBeUndefined();
+  });
+
+  it("excludes external source aliases with a concrete gap across loaders and size measurement", () => {
+    const external = fixture({ "one.ts": "export function one() { throw new Error('Not implemented'); }\n", "two.py": "print('external')\n" });
+    const root = fixture({ "package.json": "{}", "live.ts": "export const live = true;\n" });
+    symlinkSync(external, join(root, "external-dir"));
+    symlinkSync(join(external, "one.ts"), join(root, "external-file.ts"));
+    const inventory = productSourceInventory(root);
+    expect(inventory.excludedDirectoryFor("external-dir/one.ts")).toMatchObject({ match: "anchored" });
+    expect(inventory.excludedDirectoryFor("external-file.ts")).toMatchObject({ match: "exact" });
+    expect(inventory.unresolvedConfigurations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "source-alias", path: "external-dir", reason: expect.stringContaining("outside") }),
+      expect.objectContaining({ kind: "source-alias", path: "external-file.ts", reason: expect.stringContaining("outside") }),
+    ]));
+    expect(loadSourceInventory(root).map((file) => file.path)).toEqual(["live.ts"]);
+    expect(loadSources(root).map((file) => file.path)).toEqual(["live.ts", "package.json"]);
+    expect(measureCodebaseSize(root).files).toBe(1);
+  });
+
+  it("bounds directory cycles and preserves configured external package-store exclusions", () => {
+    const store = fixture({ "package/index.ts": "export const dependency = true;\n" });
+    const root = fixture({ "package.json": "{}", ".npmrc": "store-dir=.cache/store\n", "live.ts": "export const live = true;\n" });
+    mkdirSync(join(root, ".cache"));
+    symlinkSync(store, join(root, ".cache/store"));
+    symlinkSync(".", join(root, "cycle"));
+    const inventory = productSourceInventory(root);
+    expect(inventory.unresolvedConfigurations).toEqual([
+      expect.objectContaining({ kind: "source-alias", path: "cycle", reason: expect.stringContaining("cycle") }),
+    ]);
+    expect(inventory.excludedDirectoryFor(".cache/store/package/index.ts")?.reason).toContain("store-dir");
+    expect(loadSourceInventory(root).map((file) => file.path)).toEqual(["live.ts"]);
   });
 
   it.each([false, true])("retains compiler-live overlay files and ancestors while excluding inactive siblings (alias %s)", (alias) => {
