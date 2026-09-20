@@ -241,6 +241,43 @@ interface TypeScriptOutputPlan {
   error?: string;
 }
 
+// Plans contain only filenames and diagnostics. They live for one synchronous inventory
+// request, so workspace rebasing reuses work without retaining Programs or stale source state.
+type TypeScriptOutputPlans = Map<string, TypeScriptOutputPlan>;
+
+function compilerEmittedFiles(program: ts.Program, options: ts.CompilerOptions): string[] | undefined {
+  if (options.noEmit || options.noEmitOnError || options.declaration || options.composite || options.emitDeclarationOnly) return undefined;
+  // This compiler-native enumerator uses the same input closure, project-reference redirects,
+  // common source directory and output paths as emit, without creating its type/transform graph.
+  // Its internal contract is verified against this exact version; upgrades use real emit until
+  // parity is re-established. Option diagnostics must already be empty (including collisions).
+  const compiler = ts as typeof ts & {
+    forEachEmittedFile?: (
+      host: ts.Program,
+      action: (paths: Record<string, unknown>) => void,
+      sourceFile: undefined,
+      forceDtsEmit: false,
+      onlyBuildInfo: false,
+      includeBuildInfo: true,
+    ) => unknown;
+  };
+  if (ts.version !== "5.9.3" || typeof compiler.forEachEmittedFile !== "function") return undefined;
+  const emittedFiles: string[] = [];
+  const pathKeys = new Set(["jsFilePath", "sourceMapFilePath", "declarationFilePath", "declarationMapPath", "buildInfoPath"]);
+  try {
+    compiler.forEachEmittedFile(program, (paths) => {
+      for (const [key, path] of Object.entries(paths)) {
+        if (!pathKeys.has(key) || (path !== undefined && typeof path !== "string")) throw new Error("Unsupported TypeScript output-path contract");
+        if (typeof path === "string") emittedFiles.push(resolve(path));
+      }
+    }, undefined, false, false, true);
+    return emittedFiles;
+  } catch {
+    // Never turn an unavailable or changed compiler adapter into false output exclusions.
+    return undefined;
+  }
+}
+
 function pathIsInside(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith("/"));
@@ -276,9 +313,13 @@ function typescriptOutputPlan(configPath: string): TypeScriptOutputPlan {
     .filter((file) => !program.isSourceFileDefaultLibrary(file))
     .map((file) => resolve(file.fileName));
   errors.push(...program.getOptionsDiagnostics());
-  // The callback records compiler-supported emission without writing into the audited tree.
-  // Filename prediction ignores noEmit/noEmitOnError and can even identify authored JS as output.
-  const emission = program.emit(undefined, (file) => emittedFiles.push(resolve(file)));
+  const plannedFiles = errors.length === 0 ? compilerEmittedFiles(program, parsed.options) : undefined;
+  // Diagnostics-sensitive emission still runs the exact compiler, without writing to the tree.
+  // In particular noEmitOnError and declarations cannot be decided from filenames alone.
+  const emission = plannedFiles === undefined
+    ? program.emit(undefined, (file) => emittedFiles.push(resolve(file)))
+    : { emitSkipped: false, diagnostics: [] };
+  if (plannedFiles !== undefined) emittedFiles.push(...plannedFiles);
   errors.push(...emission.diagnostics);
   const outputDirectories = [parsed.options.outDir, parsed.options.declarationDir]
     .filter((path): path is string => typeof path === "string").map((path) => resolve(path));
@@ -458,7 +499,7 @@ function configuredInactiveOverlays(root: string, sourceFiles: readonly string[]
   return exclusions;
 }
 
-function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined, inheritedInputs: readonly string[]): ConfiguredSourceBoundaries {
+function configuredOutputDirectories(root: string, pkg: Record<string, unknown> | undefined, inheritedInputs: readonly string[], plans: TypeScriptOutputPlans): ConfiguredSourceBoundaries {
   const exclusions: Record<string, string> = {};
   const exactFiles: Record<string, string> = {};
   const gaps: SourceInventoryGap[] = [];
@@ -540,7 +581,8 @@ function configuredOutputDirectories(root: string, pkg: Record<string, unknown> 
     const configPath = resolve(tsconfigs[index]!);
     if (seenConfigs.has(configPath)) continue;
     seenConfigs.add(configPath);
-    const plan = typescriptOutputPlan(configPath);
+    const plan = plans.get(configPath) ?? typescriptOutputPlan(configPath);
+    plans.set(configPath, plan);
     tsPlans.push(plan);
     tsconfigs.push(...plan.referencedConfigs);
   }
@@ -836,8 +878,12 @@ function inventoryFrom(
 
 /** Build the explicit product boundary from package and tool configuration. */
 export function productSourceInventory(root: string, inheritedInputs: readonly string[] = []): ProductSourceInventory {
+  return buildProductSourceInventory(root, inheritedInputs, new Map());
+}
+
+function buildProductSourceInventory(root: string, inheritedInputs: readonly string[], plans: TypeScriptOutputPlans): ProductSourceInventory {
   const pkg = readJson(join(root, "package.json"));
-  const configured = configuredOutputDirectories(root, pkg, inheritedInputs);
+  const configured = configuredOutputDirectories(root, pkg, inheritedInputs, plans);
   const entries: SourceExclusion[] = [
     ...FIXED_BOUNDARIES,
     ...Object.entries(configured.directories).map(([path, reason]): SourceExclusion => ({
@@ -854,7 +900,17 @@ export function productSourceInventory(root: string, inheritedInputs: readonly s
 export function productSourceInventoryForScope(
   root: string,
   scope: string,
-  rootInventory: ProductSourceInventory = productSourceInventory(root),
+  rootInventory?: ProductSourceInventory,
+): ProductSourceInventory {
+  const plans: TypeScriptOutputPlans = new Map();
+  return inventoryForScope(root, scope, rootInventory ?? buildProductSourceInventory(root, [], plans), plans);
+}
+
+function inventoryForScope(
+  root: string,
+  scope: string,
+  rootInventory: ProductSourceInventory,
+  plans: TypeScriptOutputPlans,
 ): ProductSourceInventory {
   const absoluteRoot = resolve(root);
   const absoluteScope = resolve(scope);
@@ -865,7 +921,7 @@ export function productSourceInventoryForScope(
     throw new Error(`Source inventory scope must be inside its root: ${absoluteScope}`);
   }
 
-  const local = productSourceInventory(absoluteScope, rootInventory.compilerInputs);
+  const local = buildProductSourceInventory(absoluteScope, rootInventory.compilerInputs, plans);
   const inherited = rootInventory.excludedDirectories.flatMap((entry): SourceExclusion[] => {
     if (entry.match === "any-depth") return [entry];
     if (entry.path === ".") return entry.match === "anchored" ? [entry] : [];
@@ -898,8 +954,12 @@ export function productSourceInventoryForScope(
 
 /** Find an explicitly declared workspace root and retain its inventory when scanning one member. */
 export function productSourceInventoryForTarget(scope: string): ProductSourceInventory {
+  return inventoryForTarget(scope, new Map());
+}
+
+function inventoryForTarget(scope: string, plans: TypeScriptOutputPlans): ProductSourceInventory {
   const absoluteScope = resolve(scope);
-  if (existsSync(join(absoluteScope, ".git"))) return productSourceInventory(absoluteScope);
+  if (existsSync(join(absoluteScope, ".git"))) return buildProductSourceInventory(absoluteScope, [], plans);
   let candidate = dirname(absoluteScope);
   for (;;) {
     const hasWorkspaceDeclaration = existsSync(join(candidate, "pnpm-workspace.yaml"))
@@ -913,8 +973,8 @@ export function productSourceInventoryForTarget(scope: string): ProductSourceInv
       const ownsScope = inventory.packages.some((workspace) => workspace.dir !== "."
         && resolve(candidate, ...workspace.dir.split("/")) === absoluteScope);
       if (ownsScope) {
-        const rootInventory = productSourceInventoryForTarget(candidate);
-        return productSourceInventoryForScope(candidate, absoluteScope, rootInventory);
+        const rootInventory = inventoryForTarget(candidate, plans);
+        return inventoryForScope(candidate, absoluteScope, rootInventory, plans);
       }
     }
     if (existsSync(join(candidate, ".git"))) break;
@@ -922,5 +982,5 @@ export function productSourceInventoryForTarget(scope: string): ProductSourceInv
     if (parent === candidate) break;
     candidate = parent;
   }
-  return productSourceInventory(absoluteScope);
+  return buildProductSourceInventory(absoluteScope, [], plans);
 }

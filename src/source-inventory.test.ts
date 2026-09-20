@@ -1,16 +1,47 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, relative } from "node:path";
+import ts from "typescript";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSourceInventory, loadSources } from "./detectors/load-sources.js";
 import { measureCodebaseSize } from "./scan/codebase-size.js";
 import { resolveScanScope } from "./scan/scan-scope.js";
 import { productSourceInventory, productSourceInventoryForScope, productSourceInventoryForTarget } from "./source-inventory.js";
 
+// Keep the real compiler; only its export object is writable so tests can observe emit calls
+// and exercise the unavailable-internal-API fallback without adding production test exports.
+vi.mock("typescript", async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof ts }>();
+  return { default: { ...actual.default } };
+});
+
+const compilerAdapter = ts as unknown as { version: string; forEachEmittedFile?: (...args: unknown[]) => unknown };
+const compilerVersion = compilerAdapter.version;
+const emittedFileEnumerator = compilerAdapter.forEachEmittedFile;
+
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
+  compilerAdapter.version = compilerVersion;
+  compilerAdapter.forEachEmittedFile = emittedFileEnumerator;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function observeCompiler() {
+  const createProgram = ts.createProgram;
+  const observations = { programs: 0, emissions: 0 };
+  vi.spyOn(ts, "createProgram").mockImplementation((...args) => {
+    observations.programs++;
+    const program = Reflect.apply(createProgram, ts, args) as ts.Program;
+    const emit = program.emit;
+    vi.spyOn(program, "emit").mockImplementation((...emitArgs) => {
+      observations.emissions++;
+      return Reflect.apply(emit, program, emitArgs) as ts.EmitResult;
+    });
+    return program;
+  });
+  return observations;
+}
 
 function fixture(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "harvey-source-inventory-"));
@@ -24,6 +55,151 @@ function fixture(files: Record<string, string>): string {
 }
 
 describe("productSourceInventory (#2132/#2125)", () => {
+  it.each([
+    { sourceMap: true, jsx: "preserve", module: "nodenext", moduleResolution: "nodenext", resolveJsonModule: true },
+    { outFile: "bundle.js", module: "amd", sourceMap: true, jsx: "react" },
+    { incremental: true, tsBuildInfoFile: "cache/build.tsbuildinfo", jsx: "react" },
+  ])("uses compiler-native output names without invoking full emit: %j", (compilerOptions) => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({ compilerOptions, files: ["main.ts", "widget.tsx", "module.mts", "common.cts"] }),
+      "main.ts": 'import { value } from "./imported.js"; export const result: number = value;\n',
+      "imported.ts": "export const value = 1;\n",
+      "widget.tsx": "export const Widget = () => <div />;\n",
+      "module.mts": "export const moduleValue = true;\n",
+      "common.cts": "export const commonValue = true;\n",
+    });
+    const config = ts.getParsedCommandLineOfConfigFile(join(root, "tsconfig.json"), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} })!;
+    const reference = ts.createProgram({ rootNames: config.fileNames, options: config.options });
+    expect(reference.getOptionsDiagnostics()).toEqual([]);
+    const expectedOutputs: string[] = [];
+    reference.emit(undefined, (file) => { expectedOutputs.push(relative(root, file)); });
+    const observed = observeCompiler();
+    const inventory = productSourceInventory(root);
+    expect(observed).toEqual({ programs: 1, emissions: 0 });
+    expect(inventory.excludedDirectories.filter((entry) => entry.match === "exact").map((entry) => entry.path).sort())
+      .toEqual(expectedOutputs.sort());
+    expect(inventory.compilerInputs).toContain(join(root, "imported.ts"));
+  });
+
+  it.each(["missing", "version", "changed-contract"])("uses exact emit when the internal compiler adapter is %s", (failure) => {
+    const root = fixture({ "tsconfig.json": "{}", "main.ts": "export const value = 1;\n" });
+    if (failure === "missing") compilerAdapter.forEachEmittedFile = undefined;
+    if (failure === "version") compilerAdapter.version = "unverified-version";
+    if (failure === "changed-contract") compilerAdapter.forEachEmittedFile = (...args) => {
+      (args[1] as (paths: unknown) => void)({ unexpectedOutput: join(root, "authored.js") });
+    };
+    const observed = observeCompiler();
+    const inventory = productSourceInventory(root);
+    expect(observed.emissions).toBe(1);
+    expect(inventory.excludedDirectoryFor("main.js")).toMatchObject({ match: "exact" });
+    expect(inventory.excludedDirectoryFor("authored.js")).toBeUndefined();
+  });
+
+  it("preserves JSON copy output and compiler-live JSON inputs", () => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { module: "nodenext", moduleResolution: "nodenext", resolveJsonModule: true, outDir: "build" },
+        files: ["main.ts"],
+      }),
+      "main.ts": 'import data from "./data.json"; export default data;\n',
+      "data.json": '{"value":1}',
+    });
+    const config = ts.getParsedCommandLineOfConfigFile(join(root, "tsconfig.json"), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} })!;
+    const reference = ts.createProgram({ rootNames: config.fileNames, options: config.options });
+    expect(reference.getOptionsDiagnostics()).toEqual([]);
+    const expected: string[] = [];
+    reference.emit(undefined, (file) => { expected.push(file); });
+    const planned: string[] = [];
+    const enumerate = compilerAdapter.forEachEmittedFile!;
+    compilerAdapter.forEachEmittedFile = (...args) => {
+      const action = args[1] as (paths: Record<string, string | undefined>) => void;
+      args[1] = (paths: Record<string, string | undefined>) => {
+        planned.push(...Object.values(paths).filter((path): path is string => typeof path === "string"));
+        action(paths);
+      };
+      return enumerate(...args);
+    };
+    const observed = observeCompiler();
+    const inventory = productSourceInventory(root);
+    expect(observed.emissions).toBe(0);
+    expect(planned.sort()).toEqual(expected.sort());
+    expect(planned).toContain(join(root, "build/data.json"));
+    expect(inventory.compilerInputs).toContain(join(root, "data.json"));
+    expect(inventory.excludedDirectoryFor("data.json")).toBeUndefined();
+    expect(inventory.excludedDirectoryFor("build/data.json")).toMatchObject({ path: "build" });
+  });
+
+  it.each([
+    { noEmit: true },
+    { noEmitOnError: true },
+    { declaration: true },
+    { composite: true },
+    { declaration: true, emitDeclarationOnly: true },
+    { allowJs: true },
+  ])("retains exact emission for diagnostic-sensitive or colliding inputs: %j", (compilerOptions) => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({ compilerOptions }),
+      "main.ts": 'export const value: number = "semantic error";\n',
+      "authored.js": "exports.value = 2;\n",
+    });
+    const observed = observeCompiler();
+    const inventory = productSourceInventory(root);
+    expect(observed.emissions).toBe(1);
+    expect(inventory.excludedDirectoryFor("authored.js")).toBeUndefined();
+    if ("noEmit" in compilerOptions || "noEmitOnError" in compilerOptions) {
+      expect(inventory.excludedDirectoryFor("main.js")).toBeUndefined();
+    }
+  });
+
+  it("reuses compact compiler plans within one root/member inventory and refreshes after source or config changes", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "tsconfig.json": JSON.stringify({ files: ["packages/app/src/main.ts"] }),
+      "packages/app/package.json": JSON.stringify({ name: "app" }),
+      "packages/app/tsconfig.json": JSON.stringify({ files: ["src/main.ts"] }),
+      "packages/app/src/main.ts": "export const value = 1;\n",
+    });
+    const scope = join(root, "packages/app");
+    const observed = observeCompiler();
+    expect(productSourceInventoryForTarget(scope).excludedDirectoryFor("src/main.js")).toMatchObject({ match: "exact" });
+    expect(observed.programs).toBe(2);
+    writeFileSync(join(scope, "src/main.ts"), 'export { value } from "./added.js";\n');
+    writeFileSync(join(scope, "src/added.ts"), "export const value = 2;\n");
+    const afterSource = productSourceInventoryForTarget(scope);
+    expect(observed.programs).toBe(4);
+    expect(afterSource.compilerInputs).toContain(join(scope, "src/added.ts"));
+    expect(afterSource.excludedDirectoryFor("src/added.js")).toMatchObject({ match: "exact" });
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true }, files: ["packages/app/src/main.ts"] }));
+    writeFileSync(join(scope, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true }, files: ["src/main.ts"] }));
+    expect(productSourceInventoryForTarget(scope).excludedDirectoryFor("src/main.js")).toBeUndefined();
+    expect(observed.programs).toBe(6);
+  });
+
+  it("refreshes local compiler inputs when a caller supplies an earlier root inventory", () => {
+    const root = fixture({
+      "packages/app/tsconfig.json": JSON.stringify({ files: ["main.ts"] }),
+      "packages/app/main.ts": "export const value = 1;\n",
+    });
+    const earlierRoot = productSourceInventory(root);
+    writeFileSync(join(root, "packages/app/main.ts"), 'export { value } from "./prepared.js";\n');
+    writeFileSync(join(root, "packages/app/prepared.ts"), "export const value = 2;\n");
+    const inventory = productSourceInventoryForScope(root, join(root, "packages/app"), earlierRoot);
+    expect(inventory.compilerInputs).toContain(join(root, "packages/app/prepared.ts"));
+    expect(inventory.excludedDirectoryFor("prepared.js")).toMatchObject({ match: "exact" });
+  });
+
+  it("resolves newly prepared dependency declarations on the next inventory request", () => {
+    const root = fixture({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { moduleResolution: "node" }, files: ["main.ts"] }),
+      "main.ts": 'export { value } from "prepared-dependency";\n',
+    });
+    const dependency = join(root, "node_modules/prepared-dependency/index.d.ts");
+    expect(productSourceInventory(root).compilerInputs).not.toContain(dependency);
+    mkdirSync(dirname(dependency), { recursive: true });
+    writeFileSync(dependency, "export declare const value: number;\n");
+    expect(productSourceInventory(root).compilerInputs).toContain(realpathSync(dependency));
+  });
+
   it("excludes a pnpm store and configured Vite output, while retaining authored reports/dist/vendor paths", () => {
     const root = fixture({
       "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0", devDependencies: { vite: "1" } }),

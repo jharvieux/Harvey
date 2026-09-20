@@ -331,9 +331,8 @@ const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
 // tells dangling from resolvable. A dangling link is skipped outright — there is nothing to read.
 // A resolvable symlink keeps the pre-#944 behavior (recurse if it resolves to a directory, else
 // treat as a file) via one more `statSync`, now only reached once existence is confirmed.
-function walkRelPaths(root: string, includeContextExcluded = false): string[] {
+function walkRelPaths(root: string, includeContextExcluded = false, inventory = productSourceInventoryForTarget(root)): string[] {
   const paths: string[] = [];
-  const inventory = productSourceInventoryForTarget(root);
   const aliasGaps = inventory.unresolvedConfigurations.filter((gap) => gap.kind === "source-alias");
   if (aliasGaps.length) {
     const reason = aliasGaps.map((gap) => gap.reason).join("; ");
@@ -1311,7 +1310,7 @@ const toTargetRelative = (file: string): string => (isAbsolute(file) ? relative(
 
 const referenceConfigPath = defaultConfigPath ?? effectiveConfigPath;
 const scopeInventory = productSourceInventoryForTarget(targetDir);
-const configuredSourcePopulation = walkRelPaths(targetDir, true).filter((path) => SOURCE_PATH.test(path));
+const configuredSourcePopulation = walkRelPaths(targetDir, true, scopeInventory).filter((path) => SOURCE_PATH.test(path));
 const excludedReasons = Object.fromEntries(configuredSourcePopulation.flatMap((path) => {
   const reasons = scopeInventory.exclusionsFor(path).map((exclusion) => exclusion.reason);
   return reasons.length > 0 ? [[path, reasons.join("; ")]] : [];
