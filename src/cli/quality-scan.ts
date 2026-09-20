@@ -337,7 +337,7 @@ function runKnip(
     } else if (existing === undefined) {
       // No config of its own: knip can't infer non-app entries (tests above all) and floods the
       // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
-      const framework = detectTargetFramework(dir);
+      const framework = detectTargetFramework(dir, { root: dir, inventory });
       config = buildInferredKnipConfig(framework);
       // A package-manager workspace may keep Vite in the root manifest while the member owns the
       // Vite config. Knip's direct-member run does not inherit that dependency declaration, so its
@@ -382,6 +382,8 @@ function runKnip(
     // second full timeout; and with no plugin list we can't build the retry config. Either way, let
     // the original error propagate to the M5-00 gap disclosure — fail loud, never a silent degrade.
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
+    // An executed target config may have changed source or dependency inputs. Keep framework
+    // detection fresh here instead of reusing the pre-child inventory across that boundary.
     const report = execKnip(
       dir,
       withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
@@ -407,7 +409,7 @@ function runKnipDegraded(
   return {
     report: execKnip(
       dir,
-      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir, { root: dir, inventory }), KNIP_PLUGIN_NAMES), inventory),
       undefined,
       {},
       inventory,

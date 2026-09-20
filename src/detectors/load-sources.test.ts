@@ -4,7 +4,7 @@
 // that class of failure loud: the extensions actually loaded, and that a `.js`-only tree produces
 // real findings rather than silence.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import { detectHandrolledFindings } from "./handrolled.js";
 import { loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
 import { detectPerfCodeFindings } from "./perf-code.js";
 import { detectSlopFindings } from "./slop.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -30,6 +31,46 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("loadSources extension coverage (#1065)", () => {
+  it("preserves source populations and canonical aliases with a caller's current scope inventory", () => {
+    const root = makeTarget({
+      "tsconfig.json": JSON.stringify({ files: ["src/main.ts"] }),
+      "src/main.ts": "export const value = 1;\n",
+      "src/main.js": "exports.value = 1;\n",
+      "src/app/api/reports/route.ts": "export const GET = () => null;\n",
+      "tool.py": "value = 1\n",
+    });
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias);
+    dirs.push(alias);
+    const scope = { root: realpathSync(root), inventory: productSourceInventoryForTarget(root) };
+    expect(loadSources(alias, scope)).toEqual(loadSources(root));
+    expect(loadSourceInventory(alias, scope)).toEqual(loadSourceInventory(root));
+    const paths = loadSources(root, scope).map((file) => file.path);
+    expect(paths).toContain("src/main.ts");
+    expect(paths).toContain("src/app/api/reports/route.ts");
+    expect(paths).not.toContain("src/main.js");
+  });
+
+  it("rejects a supplied inventory bound to another scope", () => {
+    const root = makeTarget({ "main.ts": "export const live = true;\n" });
+    const other = makeTarget({ "main.ts": "export const other = true;\n" });
+    const scope = { root: other, inventory: productSourceInventoryForTarget(other) };
+    expect(() => loadSources(root, scope)).toThrow("different scope");
+    expect(() => loadSourceInventory(root, scope)).toThrow("different scope");
+  });
+
+  it("refreshes compiler-live source after dependency preparation on a later standalone call", () => {
+    const root = makeTarget({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "build", moduleResolution: "node" }, files: ["main.ts"] }),
+      "main.ts": 'import "prepared";\n',
+      "build/authored.ts": "export interface Value { value: number }\n",
+    });
+    expect(loadSources(root).map((file) => file.path)).not.toContain("build/authored.ts");
+    mkdirSync(join(root, "node_modules/prepared"), { recursive: true });
+    writeFileSync(join(root, "node_modules/prepared/index.d.ts"), 'export type Value = import("../../build/authored").Value;\n');
+    expect(loadSources(root).map((file) => file.path)).toContain("build/authored.ts");
+  });
+
   it("keeps authored reports/dist paths while excluding a pnpm store from every loader consumer (#2132/#2125)", () => {
     const dir = makeTarget({
       "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0" }),

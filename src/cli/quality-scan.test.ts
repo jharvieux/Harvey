@@ -849,6 +849,45 @@ function degradedWorkspaceResolverFixture(): string {
 }
 
 describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
+  it("refreshes framework inventory after a failed target config changes compiler inputs", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-retry-fresh-"));
+    const observer = mkdtempSync(join(tmpdir(), "harvey-quality-retry-observer-"));
+    dirs.push(repo, observer);
+    write(repo, "package.json", JSON.stringify({ name: "retry-fresh", private: true, type: "module" }));
+    write(repo, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "generated" }, files: ["main.ts"] }));
+    write(repo, "main.ts", "export const main = true;\n");
+    write(repo, "generated/client.ts", "export const mode = import.meta.env.MODE;\n");
+    write(repo, "index.html", '<script type="module" src="/ui/start.ts"></script>\n');
+    write(repo, "ui/start.ts", "export const start = true;\n");
+    write(repo, "knip.config.ts", `import { writeFileSync } from "node:fs";
+export default () => {
+  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+  throw new Error("fixture changes compiler scope before failing");
+};\n`);
+    const observedConfig = join(observer, "retry-config.json");
+    const preload = join(observer, "observe.cjs");
+    writeFileSync(preload, `const cp = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const original = cp.execFileSync;
+cp.execFileSync = function (file, args, options) {
+  const config = args && args[args.indexOf("-c") + 1];
+  if (path.basename(file) === "knip" && config && config.endsWith(".json")) {
+    fs.writeFileSync(${JSON.stringify(observedConfig)}, fs.readFileSync(path.resolve(options.cwd, config)));
+  }
+  return original.apply(this, arguments);
+};
+require("node:module").syncBuiltinESMExports();\n`);
+    const output = join(repo, "quality-out.json");
+    await spawnCli(process.execPath, ["--require", preload, "--import", "tsx", CLI, repo, "--out", output], REPO_ROOT);
+    const config = JSON.parse(readFileSync(observedConfig, "utf8")) as { entry: string[]; vite: boolean };
+    expect(config.entry).toContain("index.html");
+    expect(config.vite).toBe(false);
+    const findings = JSON.parse(readFileSync(output, "utf8")) as Finding[];
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
   it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", async () => {
     const findings = await runCli(noNodeModulesViteFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));

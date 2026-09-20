@@ -10,7 +10,7 @@
 
 import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { loadSources } from "../detectors/load-sources.js";
+import { loadSources, type SourceInventoryScope } from "../detectors/load-sources.js";
 import { discoverTargets } from "../pentest/targets.js";
 
 // #872: `other` used to swallow every non-Next, non-Vite framework — Remix / React Router 7 /
@@ -140,8 +140,8 @@ const FRAMEWORK_SIGNATURES: { framework: TargetFramework; deps: string[]; config
   { framework: "nuxt", deps: ["nuxt"], configs: ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"] },
 ];
 
-export function detectTargetFramework(dir: string): TargetFramework {
-  const sources = loadSources(dir);
+export function detectTargetFramework(dir: string, scope?: SourceInventoryScope): TargetFramework {
+  const sources = loadSources(dir, scope);
   const pkgText = sources.find((s) => s.path === "package.json")?.text;
 
   const isNext = hasDep(pkgText, "next") || NEXT_CONFIGS.some((f) => existsSync(join(dir, f)));

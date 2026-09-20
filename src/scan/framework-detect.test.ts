@@ -1,13 +1,20 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, nonNextWorkspaces, rawSqlDriver } from "./framework-detect.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
+
+vi.mock("../source-inventory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../source-inventory.js")>();
+  return { ...actual, productSourceInventoryForTarget: vi.fn(actual.productSourceInventoryForTarget) };
+});
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
 const dirs: string[] = [];
 afterEach(() => {
+  vi.mocked(productSourceInventoryForTarget).mockClear();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -23,6 +30,39 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("detectTargetFramework (#573)", () => {
+  it("uses the current scope inventory without starting another compiler inventory", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "client" }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true } }),
+      "index.html": "<html></html>",
+      "src/main.ts": "export const mode = import.meta.env.MODE;\n",
+    });
+    const scope = { root: dir, inventory: productSourceInventoryForTarget(dir) };
+    vi.mocked(productSourceInventoryForTarget).mockClear();
+    expect(detectTargetFramework(dir, scope)).toBe("vite");
+    expect(productSourceInventoryForTarget).not.toHaveBeenCalled();
+    expect(detectTargetFramework(dir)).toBe("vite");
+    expect(productSourceInventoryForTarget).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes standalone detection after source, compiler config and package changes", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "client" }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "build" }, files: ["main.ts"] }),
+      "index.html": "<html></html>",
+      "main.ts": "export const value = 1;\n",
+      "build/client.ts": "export const mode = import.meta.env.MODE;\n",
+    });
+    expect(detectTargetFramework(dir)).toBe("other");
+    writeFileSync(join(dir, "main.ts"), "export const mode = import.meta.env.MODE;\n");
+    expect(detectTargetFramework(dir)).toBe("vite");
+    writeFileSync(join(dir, "main.ts"), "export const value = 1;\n");
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+    expect(detectTargetFramework(dir)).toBe("vite");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "1" } }));
+    expect(detectTargetFramework(dir)).toBe("next");
+  });
+
   it("detects Vite from a vite.config + index.html + import.meta.env SPA export", () => {
     const dir = makeTarget({
       "vite.config.ts": `import { defineConfig } from "vite";\nexport default defineConfig({});\n`,
