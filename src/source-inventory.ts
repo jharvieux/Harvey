@@ -315,7 +315,7 @@ function typescriptOutputPlan(configPath: string): TypeScriptOutputPlan {
   errors.push(...program.getOptionsDiagnostics());
   const plannedFiles = errors.length === 0 ? compilerEmittedFiles(program, parsed.options) : undefined;
   // Diagnostics-sensitive emission still runs the exact compiler, without writing to the tree.
-  // In particular noEmitOnError and declarations cannot be decided from filenames alone.
+  // This preserves semantic-error blocking and per-file declaration diagnostics.
   const emission = plannedFiles === undefined
     ? program.emit(undefined, (file) => emittedFiles.push(resolve(file)))
     : { emitSkipped: false, diagnostics: [] };
