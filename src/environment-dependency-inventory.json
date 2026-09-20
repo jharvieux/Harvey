@@ -107204,7 +107204,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 152,
+        "line": 156,
         "path": "src/cli/static-detect.ts"
       },
       "freshness": {
@@ -146125,7 +146125,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 162,
+        "line": 184,
         "path": "src/detectors/load-sources.test.ts"
       },
       "freshness": {
@@ -146162,7 +146162,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 74,
+        "line": 96,
         "path": "src/detectors/load-sources.test.ts"
       },
       "freshness": {
@@ -285853,7 +285853,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 158,
+        "line": 183,
         "path": "src/scan/framework-detect.test.ts"
       },
       "freshness": {
@@ -285890,7 +285890,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 333,
+        "line": 373,
         "path": "src/scan/framework-detect.test.ts"
       },
       "freshness": {
@@ -285964,7 +285964,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 255,
+        "line": 295,
         "path": "src/scan/framework-detect.test.ts"
       },
       "freshness": {
@@ -286038,7 +286038,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 88,
+        "line": 89,
         "path": "src/scan/framework-detect.ts"
       },
       "freshness": {
@@ -286075,7 +286075,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 300,
+        "line": 301,
         "path": "src/scan/framework-detect.ts"
       },
       "freshness": {
@@ -286149,7 +286149,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 213,
+        "line": 214,
         "path": "src/scan/framework-detect.ts"
       },
       "freshness": {
@@ -358250,8 +358250,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "9a2ffdcf93133d3152b66242b1809116e01e6c4f",
-    "commitPayload": "dHJlZSA4N2U0MmVhNzdlNzQ3NTNiMzg2OThiNmY1ZDdmYjI1OWQ5YTRjZTAwCnBhcmVudCBkMmY1NzQwNmI4YzE4NDUxOTRjZjRjOWJiZGZjMDliYTc3ZjQ5NmI2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODcwOTcxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODcwOTcxIC0wNTAwCgpSZWJpbmQgZnJhbWV3b3JrIGludmVudG9yeSBldmlkZW5jZSAoIzIxMzIpCg==",
+    "commit": "e39ffb0e2cd820aa09a99b5e9ddaf8bdd4bbbf20",
+    "commitPayload": "dHJlZSBlOThmODk3NzFiYTYwYmU1OTM3ZTg0NjdjNDA1NzFiNzE5YWQxODkyCnBhcmVudCBmMDhhNTA0MWRjYTczZDM1ZTFhYzg2M2JlN2FiZTQ0MmUwZGFmNDk3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODc1MDU2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODc1MTk0IC0wNTAwCgpSZXVzZSBzdGF0aWMgc2NhbiBpbnZlbnRvcmllcyB3aXRoaW4gZWFjaCBzY29wZSAoIzIxMzIpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -358260,13 +358260,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "c231ab707d11ea750b89a7f15631c3e6f7ff6926",
+        "gitOid": "fdca1dff4ab2b1c2367cbd62b446c60a182ec1cb",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "4b91d0e4ce658df73a90ab7a4968cd5ac0e112eb9af4e724b5aed52f695d999f",
-    "tree": "87e42ea77e74753b38698b6f5d7fb259d9a4ce00"
+    "populationSha256": "269fa983b6fb801359ec95513201c8330e0ca57f2661b9852e049b748a9cd698",
+    "tree": "e98f89771ba60be5937e8467c40571b719ad1892"
   },
   "venues": [
     {
@@ -365755,19 +365755,19 @@
       "sha256": "7d6ec19037835363a239370408fd117f2794755ef836d8014c5e61d6d883e08b"
     },
     {
-      "bytes": 12582,
+      "bytes": 12992,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "dce21452de82ea9b5c3408487f9991adfe489d66",
+      "gitOid": "d769d3ca8db8d837a78955bb321373272a61c859",
       "id": "src/cli/static-detect.ts",
       "kind": "source",
-      "literalCount": 71,
-      "literalSha256": "a0f5b5c07392f957b47e0f703af47a3b3a4a31586b4fa8ff58cdb51542011185",
+      "literalCount": 72,
+      "literalSha256": "fcc4ce17c6475f1ba9405b376d351c020a4fa540ce346b4a020bacfde7885e28",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/static-detect.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "aaa0053c05756bc51754bb887befc80cc6542b344cd1852fd889416013b12e24"
+      "sha256": "cace22ed6672070d747c175e9fb5c24f6dab51d9afed5535e6e0a7118a86d996"
     },
     {
       "bytes": 4453,
@@ -375505,19 +375505,19 @@
       "sha256": "e3ee6036c39e53c37941cb32afcf9d6acb35ef64e9d176992f9e3e7267ab05e1"
     },
     {
-      "bytes": 10068,
+      "bytes": 11411,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "d5f08d4fde289837ca696a634371e22a0acd1985",
+      "gitOid": "5c72f26fde9c78265d362cc9f07fa6d7e8cd8226",
       "id": "src/detectors/load-sources.test.ts",
       "kind": "source",
-      "literalCount": 156,
-      "literalSha256": "d6f835180517fa79acb33b16e110764b820065acba97cd2e57ce98e7318dbfa1",
+      "literalCount": 180,
+      "literalSha256": "081b568470b5637139c2bdf7c0c68e1d4f1e97602c8a00dafe1ea73616737cf9",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/detectors/load-sources.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "c64f4ea2a3458cb1c39c74a36b4f861a594801444e30fce4f1164bd2e97eed4d"
+      "sha256": "1ed08a420f18ae18eb20f61b857ec0b2511add98499126fe5eafa4b4011057d0"
     },
     {
       "bytes": 7953,
@@ -382270,34 +382270,34 @@
       "sha256": "3d52ebacb46400aae44a402d8a182c7a1a5d61db84f0378b7f8eeac7d240091e"
     },
     {
-      "bytes": 18784,
+      "bytes": 25876,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6e5a4bdc9705d09f05a3d0a415b780582c32f0fd",
+      "gitOid": "00271dc0a716f632c81e24fad305e868467b5a04",
       "id": "src/scan/framework-detect.test.ts",
       "kind": "source",
-      "literalCount": 336,
-      "literalSha256": "55b61a9a3999b9805a21b6f028c70369a72a95c9599dfed004c1074f9c082597",
+      "literalCount": 457,
+      "literalSha256": "3beddc9f09405c866e3729c55698dfd023441b7e471e4bb884aa8f7676037919",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/framework-detect.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "fc198f5f8b2a3d33cf6de44d2bb9e1e394da948eb7115dfed96a15c17828fc30"
+      "sha256": "b793a56ebc0b046bf150e8ac6183d7e25f97f0ad99632ee6df0d9b38f4836296"
     },
     {
-      "bytes": 20157,
+      "bytes": 21029,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9dea63c5e924516126c881a12c3f04e339aef947",
+      "gitOid": "4401c01ea48f800afcb68bffc7158bc348962128",
       "id": "src/scan/framework-detect.ts",
       "kind": "source",
-      "literalCount": 195,
-      "literalSha256": "6f88e3af6fbfd18b4214eccbaf73e8448978b20911ef705d7aff23711da43936",
+      "literalCount": 196,
+      "literalSha256": "9435293259299101a9bd502ff15241cba4f68c89e5330fedd57020f15f84ae5c",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/framework-detect.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "1c7c922ff81c2438e06c83ea994a2b82ac42c00c28c7422455f0ea24ba3833a8"
+      "sha256": "79460f87e8c0b63dd9711cd4ff029bf605de55531e7c7bbb889e9431078baa24"
     },
     {
       "bytes": 6788,
@@ -383305,19 +383305,19 @@
       "sha256": "e0f13d1f7a4057f3c9a301e7936d947a5f82d5a307a9ec4a4a7024d8b6a021da"
     },
     {
-      "bytes": 30028,
+      "bytes": 33156,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9000fc5c58e5c1c56f6633f3a07ca6d3406441f3",
+      "gitOid": "fe96f49094100cdc30e4627a5ff7ac4392b8176e",
       "id": "src/scan/path-scope.test.ts",
       "kind": "source",
-      "literalCount": 362,
-      "literalSha256": "d153f174139d45fdb6f9e3c30042648a4755966bb673c73d21311240a0c35e36",
+      "literalCount": 426,
+      "literalSha256": "76d2699ae0d200a2173679f6e0d6be4ba320aa6a81b2e3dc917685271839f7ba",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/path-scope.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "89ff4e5af70910bc13caf258a5ad279095ed41346fa9415d01300a4881ea923e"
+      "sha256": "c199cc79f98a5f6aaa8a272e8b35927c39cc193bb149bc87b419e18ab3ec9446"
     },
     {
       "bytes": 15393,
