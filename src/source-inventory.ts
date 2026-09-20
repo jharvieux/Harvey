@@ -765,7 +765,10 @@ function configurationGaps(root: string, sourceFiles: readonly string[], configu
 }
 
 function matchesExclusion(exclusion: SourceExclusion, path: string): boolean {
-  const normalized = posix(path);
+  return matchesNormalizedExclusion(exclusion, posix(path));
+}
+
+function matchesNormalizedExclusion(exclusion: SourceExclusion, normalized: string): boolean {
   if (exclusion.match === "anchored") {
     if (exclusion.path === ".") return true;
     return normalized === exclusion.path || normalized.startsWith(`${exclusion.path}/`);
@@ -785,7 +788,42 @@ function inventoryFrom(
   unresolvedConfigurations: readonly SourceInventoryGap[],
   compilerInputs: readonly string[],
 ): ProductSourceInventory {
-  const exclusionsFor = (path: string): readonly SourceExclusion[] => entries.filter((entry) => matchesExclusion(entry, path));
+  type IndexedExclusion = { entry: SourceExclusion; order: number };
+  const exact = new Map<string, IndexedExclusion[]>();
+  const anchored = new Map<string, IndexedExclusion[]>();
+  const anyDepth = new Map<string, IndexedExclusion[]>();
+  const append = (index: Map<string, IndexedExclusion[]>, path: string, value: IndexedExclusion): void => {
+    const values = index.get(path);
+    if (values) values.push(value);
+    else index.set(path, [value]);
+  };
+  entries.forEach((entry, order) => {
+    const indexed = { entry, order };
+    if (entry.match === "exact") append(exact, entry.path, indexed);
+    else if (entry.match === "anchored") append(anchored, entry.path, indexed);
+    else append(anyDepth, entry.path, indexed);
+  });
+  const exclusionsFor = (path: string): readonly SourceExclusion[] => {
+    const normalized = posix(path);
+    const matches = [...(exact.get(normalized) ?? [])];
+    for (let ancestor = normalized;;) {
+      matches.push(...(anchored.get(ancestor) ?? []));
+      if (ancestor === ".") break;
+      const separator = ancestor.lastIndexOf("/");
+      ancestor = separator === -1 ? "." : ancestor.slice(0, separator);
+    }
+    const seenAnyDepth = new Set<number>();
+    for (const segment of normalized.split("/")) {
+      for (const indexed of anyDepth.get(segment) ?? []) {
+        if (seenAnyDepth.has(indexed.order)) continue;
+        seenAnyDepth.add(indexed.order);
+        matches.push(indexed);
+      }
+    }
+    if (matches.length === 0) return [];
+    if (matches.length === 1) return [matches[0]!.entry];
+    return matches.sort((left, right) => left.order - right.order).map(({ entry }) => entry);
+  };
   return {
     excludedDirectories: entries,
     unresolvedConfigurations,

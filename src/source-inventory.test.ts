@@ -388,6 +388,23 @@ describe("productSourceInventory (#2132/#2125)", () => {
     expect(inventory.jscpdIgnoreGlobs).not.toContain("**/dist/**");
   });
 
+  it("preserves ordered exact, anchored, and any-depth exclusions through normalized queries", () => {
+    const external = fixture({ "generated.ts": "export const generated = true;\n" });
+    const root = fixture({
+      "package.json": JSON.stringify({ devDependencies: { vite: "1" } }),
+      "dist/authored.ts": "export const authored = true;\n",
+      "nested/.git/config": "metadata\n",
+    });
+    symlinkSync(join(external, "generated.ts"), join(root, "dist/external.ts"));
+
+    const inventory = productSourceInventory(root);
+    const expected = inventory.exclusionsFor("dist/external.ts");
+    expect(expected.map((exclusion) => exclusion.path)).toEqual(["dist", "dist/external.ts"]);
+    expect(inventory.exclusionsFor("dist/./external.ts")).toEqual(expected);
+    expect(inventory.exclusionsFor("dist/child/../external.ts")).toEqual(expected);
+    expect(inventory.exclusionsFor("nested/.git/config").map((exclusion) => exclusion.path)).toEqual([".git"]);
+  });
+
   it("reads JSONC inheritance and workspace package-manager configuration without substring guesses", () => {
     const root = fixture({
       "package.json": "{}",
