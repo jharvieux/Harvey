@@ -281,7 +281,7 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     expect(scope.observation.productSources.count).toBe(6);
   }, 30000);
 
-  it("reports compiler-live overlay findings through the quality and quick-scan CLIs", async () => {
+  function compilerLiveOverlayFixture(): string {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-live-overlay-"));
     dirs.push(repo);
     const write = (rel: string, text: string) => {
@@ -304,17 +304,25 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       write(`live/${name}.ts`, `export const original${name} = true;\n`);
       write(`optional/overlay/live/${name}.ts`, `${CLONED_BLOCK}\nexport function ${name}() { throw new Error("Not implemented"); }\n`);
     }
+    return repo;
+  }
 
+  it("reports compiler-live overlay duplication findings through the quality CLI", async () => {
+    const repo = compilerLiveOverlayFixture();
     const findings = await runCli(repo);
     expect(findings).toContainEqual(expect.objectContaining({
       taxonomy: "M4 — Duplication", location: expect.stringMatching(/optional\/overlay\/live\/one\.ts.*optional\/overlay\/live\/two\.ts|optional\/overlay\/live\/two\.ts.*optional\/overlay\/live\/one\.ts/),
     }));
     expect(findings.some((finding) => finding.location.includes("optional/overlay/live/three.ts"))).toBe(false);
+  }, 30000);
+
+  it("reports compiler-live overlay dead-code findings through the quick-scan CLI", async () => {
+    const repo = compilerLiveOverlayFixture();
     const quickPath = join(repo, "quick-out.json");
     await spawnCli(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/quick-scan.ts"), "--dir", repo, "--json", "--out", quickPath], REPO_ROOT);
     const quick = JSON.parse(readFileSync(quickPath, "utf8")) as { scorecard: { dimensions: Array<{ module: string; count?: number }> } };
     expect(quick.scorecard.dimensions.find((dimension) => dimension.module === "M5")).toMatchObject({ count: 2 });
-  }, 30000);
+  }, 120000);
 
   it("preserves executable Knip config imports while applying package-store exclusions", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));

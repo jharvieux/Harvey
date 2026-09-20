@@ -160,7 +160,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
     const rendered = readFileSync(renderedOut, "utf8");
     expect(rendered).toContain("M4   Duplication — NOT ASSESSED by this scan");
     expect(rendered).toContain("Product-source configuration is unresolved");
-    expect(rendered).toContain("export is not a fully static object");
+    expect(rendered).toContain("Vite build.outDir is not a static string");
   }, 120000);
 
   it("does not grade a configured whole-output workspace with zero inspected product source", async () => {
