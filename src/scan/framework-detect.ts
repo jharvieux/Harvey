@@ -8,10 +8,11 @@
 // (vite.config, index.html). Next wins over Vite when both signals appear — never wrongly suppress
 // a real Next app's SSR checks.
 
-import { existsSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { loadSources, type SourceInventoryScope } from "../detectors/load-sources.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { productSourceInventoryForScope } from "../source-inventory.js";
 
 // #872: `other` used to swallow every non-Next, non-Vite framework — Remix / React Router 7 /
 // TanStack Start / Astro / SvelteKit / Nuxt — and `other` is the bucket with NO compensating
@@ -199,8 +200,8 @@ export function recogniseDataLayer(pkgText: string | undefined): TargetOrm {
 // only about making N/A explicit for a recognised architecture, never widening suppression).
 // #869 widened the recognised set beyond Prisma: Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose and
 // a bare raw-SQL driver each resolve to their own value so M1 can disclose them by name.
-export function detectOrm(dir: string): TargetOrm {
-  const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
+export function detectOrm(dir: string, scope?: SourceInventoryScope): TargetOrm {
+  const pkgText = loadSources(dir, scope).find((s) => s.path === "package.json")?.text;
 
   // On-disk signatures first where they outrank the dependency list: a supabase/ project directory
   // is a real RLS surface even when the client library isn't declared.
@@ -328,11 +329,21 @@ export interface WorkspaceFramework {
   framework: TargetFramework;
 }
 
-export function detectWorkspaceFrameworks(root: string): WorkspaceFramework[] {
-  return discoverTargets(root).apps.map((a) => ({
-    rel: a.path === root ? "" : relative(root, a.path).split(sep).join("/"),
-    framework: detectTargetFramework(a.path),
-  }));
+export function detectWorkspaceFrameworks(root: string, scope?: SourceInventoryScope): WorkspaceFramework[] {
+  if (scope && resolve(scope.root) !== resolve(root) && realpathSync(scope.root) !== realpathSync(root)) {
+    throw new Error(`Source inventory belongs to a different scope: ${scope.root}; requested ${root}`);
+  }
+  return discoverTargets(root).apps.map((app) => {
+    const rel = app.path === root ? "" : relative(root, app.path).split(sep).join("/");
+    // Rebase from the inventory's own root spelling so canonical aliases retain the same
+    // absolute compiler inputs and ancestor exclusions as the caller's current snapshot.
+    const memberRoot = scope ? resolve(scope.root, rel) : app.path;
+    const memberScope = scope ? {
+      root: memberRoot,
+      inventory: productSourceInventoryForScope(scope.root, memberRoot, scope.inventory),
+    } : undefined;
+    return { rel, framework: detectTargetFramework(app.path, memberScope) };
+  });
 }
 
 // Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since
@@ -340,6 +351,6 @@ export function detectWorkspaceFrameworks(root: string): WorkspaceFramework[] {
 // files under any of these prefixes even when the repo root's OWN verdict is `next`/`other`, and
 // discloses each one by name. A single-app repo enumerates only the root (rel === "") and returns
 // [] — its suppression is the whole-target `detectTargetFramework(root)` path, unchanged.
-export function nonNextWorkspaces(root: string): WorkspaceFramework[] {
-  return detectWorkspaceFrameworks(root).filter((w) => w.rel !== "" && isViteTooling(w.framework));
+export function nonNextWorkspaces(root: string, scope?: SourceInventoryScope): WorkspaceFramework[] {
+  return detectWorkspaceFrameworks(root, scope).filter((w) => w.rel !== "" && isViteTooling(w.framework));
 }

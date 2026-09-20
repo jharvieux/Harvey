@@ -51,6 +51,7 @@ import {
 } from "../scan/polyglot-quality.js";
 import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
 import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -67,8 +68,11 @@ if (!targetArg) {
 const targetDir = resolve(targetArg);
 const { scanDir, cleanup } = resolveScanScope(targetDir);
 try {
-  const allSources = loadSources(scanDir);
-  const identifiedSources = loadSourceInventory(scanDir);
+  // The scratch tree has its own compiler inputs; reuse its inventory only across these
+  // synchronous readers, after the original-target scope has been copied and filtered.
+  const sourceScope = { root: scanDir, inventory: productSourceInventoryForTarget(scanDir) };
+  const allSources = loadSources(scanDir, sourceScope);
+  const identifiedSources = loadSourceInventory(scanDir, sourceScope);
   const productSourceInventory = identifiedSources.filter((file) => !isTestSourcePath(file.path));
   // Product-code detectors skip test/story/fixture files; the M8 test-intent pass reads the
   // full set (test files are its subject; non-test files feed its cross-file resolution).
@@ -86,8 +90,8 @@ try {
 
   // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
   // M7's client-JS tiers and bundle reader also branch on it (#577).
-  const framework = detectTargetFramework(scanDir);
-  const orm = detectOrm(scanDir);
+  const framework = detectTargetFramework(scanDir, sourceScope);
+  const orm = detectOrm(scanDir, sourceScope);
   // #872: every recognised non-Next framework builds on Vite and has no App Router surface, so both
   // the M9 suppression and M7's Vite-mode tiers key on that, not on the `vite` value alone.
   const isVite = isViteTooling(framework);
@@ -96,7 +100,7 @@ try {
   // #597: at a monorepo root the root verdict is `other` (vite.config lives in apps/*), so the
   // whole-target Vite short-circuit above never fires. Resolve a framework per workspace so M9
   // suppresses the SSR family for each Vite app's files rather than false-firing on them.
-  const nonNextWs = isVite ? [] : nonNextWorkspaces(scanDir);
+  const nonNextWs = isVite ? [] : nonNextWorkspaces(scanDir, sourceScope);
   if (nonNextWs.length) {
     console.log(`non-Next workspaces (M9 App Router checks N/A): ${nonNextWs.map((w) => `${w.rel} (${w.framework})`).join(", ")}`);
   }

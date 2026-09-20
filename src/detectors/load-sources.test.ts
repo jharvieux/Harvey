@@ -12,7 +12,7 @@ import { detectHandrolledFindings } from "./handrolled.js";
 import { loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
 import { detectPerfCodeFindings } from "./perf-code.js";
 import { detectSlopFindings } from "./slop.js";
-import { productSourceInventoryForTarget } from "../source-inventory.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget } from "../source-inventory.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -57,6 +57,28 @@ describe("loadSources extension coverage (#1065)", () => {
     const scope = { root: other, inventory: productSourceInventoryForTarget(other) };
     expect(() => loadSources(root, scope)).toThrow("different scope");
     expect(() => loadSourceInventory(root, scope)).toThrow("different scope");
+  });
+
+  it("keeps complete ordered source contents with a rebased member inventory", () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ files: ["apps/web/src/main.ts"] }),
+      "apps/web/package.json": JSON.stringify({ name: "web" }),
+      "apps/web/src/main.ts": "export const live = true;\n",
+      "apps/web/src/main.js": "exports.live = true;\n",
+      "apps/web/src/dist/authored.ts": "export const authored = true;\n",
+      "apps/web/src/main.test.ts": "test('live', () => expect(true).toBe(true));\n",
+      "apps/web/report.py": "def report():\n    return 1\n",
+    });
+    const member = join(root, "apps/web");
+    const inventory = productSourceInventoryForTarget(root);
+    const scope = { root: member, inventory: productSourceInventoryForScope(root, member, inventory) };
+    expect(loadSources(member, scope)).toEqual(loadSources(member));
+    expect(loadSourceInventory(member, scope)).toEqual(loadSourceInventory(member));
+    expect(loadSources(member, scope).map((file) => file.path)).toEqual([
+      "package.json", "src/dist/authored.ts", "src/main.test.ts", "src/main.ts",
+    ]);
+    expect(loadSourceInventory(member, scope).map((file) => file.path)).toContain("report.py");
   });
 
   it("refreshes compiler-live source after dependency preparation on a later standalone call", () => {

@@ -13,6 +13,7 @@ import { buildHtml } from "../../report-template/render.mjs";
 import { esc } from "../../report-template/sections.mjs";
 import { assembleEngagementDocument } from "../audit-report.js";
 import { conservationLedger } from "../conservation-ledger.js";
+import { digestObservedPaths } from "../corpus-scanner-scope.js";
 import type { ReportMeta } from "../findings.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "../detectors/common.js";
@@ -543,6 +544,55 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
       const populated = JSON.parse(readFileSync(out, "utf8")) as { id: string }[];
       expect(populated.some((finding) => finding.id === "M1-PATHSCOPE-M8-VACUOUS-ASSERTION-00")).toBe(false);
       expect(populated.some((finding) => finding.id.startsWith("M8VAC-"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves findings and exact scope when the static CLI shares its scratch inventory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-static-inventory-scope-"));
+    try {
+      const target = join(dir, "target");
+      const files: Record<string, string> = {
+        "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+        "tsconfig.json": JSON.stringify({ files: ["apps/api/app/page.tsx"] }),
+        "apps/api/package.json": JSON.stringify({ dependencies: { next: "1", "@prisma/client": "1" } }),
+        "apps/api/app/page.tsx": "export const value = input as any;\n",
+        "apps/api/app/page.js": "exports.value = input;\n",
+        "apps/client/package.json": JSON.stringify({ name: "client" }),
+        "apps/client/index.html": "<html></html>\n",
+        "apps/client/main.ts": "export const mode = import.meta.env.MODE;\n",
+        "src/reports/authored.ts": "export const value = input as any;\n",
+        "test_example.py": "def test_example():\n    assert True\n",
+      };
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(target, path)), { recursive: true });
+        writeFileSync(join(target, path), text);
+      }
+      const out = join(dir, "findings.json");
+      const scopeOut = join(dir, "scope.json");
+      const { stdout } = await promisify(execFile)(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/static-detect.ts"), target, "--out", out, "--scope-out", scopeOut], {
+        cwd: REPO_ROOT, timeout: 20_000, maxBuffer: 1024 * 1024,
+      });
+      const loadedPaths = [
+        "package.json", "tsconfig.json", "apps/api/package.json", "apps/api/app/page.tsx",
+        "apps/client/package.json", "apps/client/main.ts", "src/reports/authored.ts",
+      ];
+      expect(JSON.parse(readFileSync(scopeOut, "utf8"))).toMatchObject({
+        scanner: "detect-static", unitsExamined: loadedPaths.length,
+        observation: {
+          loadedSources: { count: loadedPaths.length, pathsDigest: digestObservedPaths(loadedPaths) },
+          ancillary: { productSources: 3, configSources: 4, testStorySources: 0 },
+        },
+      });
+      const findings = JSON.parse(readFileSync(out, "utf8")) as { taxonomy: string; location: string }[];
+      expect(findings.filter((finding) => finding.taxonomy === "M5 — Type escape (`as any`)").map((finding) => finding.location))
+        .toEqual(["apps/api/app/page.tsx:1", "src/reports/authored.ts:1"]);
+      expect(findings.some((finding) => finding.taxonomy === "M8 — Production-independent assertion" && finding.location.startsWith("test_example.py:"))).toBe(true);
+      expect(findings.some((finding) => finding.location.startsWith("apps/api/app/page.js:"))).toBe(false);
+      expect(stdout).toContain("non-Next workspaces (M9 App Router checks N/A): apps/client (vite)");
+      expect(stdout).toContain("HARVEY_SOURCE_POPULATION M5");
+      expect(stdout).toContain("HARVEY_SOURCE_POPULATION M6");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
