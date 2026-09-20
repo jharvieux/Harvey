@@ -105,8 +105,16 @@ if (!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESE
 // worker cannot service the birpc ack for the task update it already sent — that ack has the
 // hardcoded 60s window. Awaiting a spawned child leaves the loop free, so the ack lands regardless
 // of how long the child itself takes.
-function runGate(args: string[]): Promise<{ code: number; output: string }> {
-  return new Promise((res, rej) => {
+type GateResult = { code: number; output: string };
+
+const gateRuns = new Map<string, Promise<GateResult>>();
+
+function runGate(args: readonly string[]): Promise<GateResult> {
+  const key = JSON.stringify(args);
+  const existing = gateRuns.get(key);
+  if (existing) return existing;
+
+  const run = new Promise<GateResult>((res, rej) => {
     const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     // setEncoding, never `output += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
@@ -119,7 +127,14 @@ function runGate(args: string[]): Promise<{ code: number; output: string }> {
     child.on("error", rej);
     child.on("close", (code) => res({ code: code ?? -1, output }));
   });
+  gateRuns.set(key, run);
+  return run;
 }
+
+// These faults occur at independent post-assembly seams, so one real CLI run can seed both without
+// masking either verdict. The two tests below retain distinct assertions: breaking either seed still
+// fails its own case, while memoization avoids paying for a second ten-module orchestration pass.
+const BASELINE_AND_DISPOSITION_SEEDS = ["--seed-baseline-loss", "--seed-misdeclared"] as const;
 
 describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESENT)("validate-conservation CLI — end-to-end against targets/calibration", () => {
   it("exits non-zero with an exclusive ledger failure after a real assembled finding is dropped", async () => {
@@ -159,8 +174,9 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
   // #1146, the 4b seam: a finding dropped during baseline application produces a ledger row and a
   // non-zero exit — the guard against silently deleting a NEW finding after assembly.
   it("FAILS when the baseline diff drops a finding (--seed-baseline-loss)", async () => {
-    const { code, output } = await runGate(["--seed-baseline-loss"]);
+    const { code, output } = await runGate(BASELINE_AND_DISPOSITION_SEEDS);
     expect(code).toBe(1);
+    expect(output).toContain("SEEDED BASELINE LOSS");
     expect(output).toContain("BASELINE LEDGER FAIL");
     expect(output).toMatch(/DELETED\s+\S+/);
   }, 240000);
@@ -168,8 +184,9 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
   // #1146, the 4a seam: a disposition column credited against a finding that still ships fails —
   // the producer path for suppressed/capped/not-applicable cannot close the arithmetic on a fiction.
   it("FAILS when a disposition is declared against a still-delivered finding (--seed-misdeclared)", async () => {
-    const { code, output } = await runGate(["--seed-misdeclared"]);
+    const { code, output } = await runGate(BASELINE_AND_DISPOSITION_SEEDS);
     expect(code).toBe(1);
+    expect(output).toContain("SEEDED MISDECLARED DISPOSITION");
     expect(output).toContain("did not actually go missing");
   }, 240000);
 });
