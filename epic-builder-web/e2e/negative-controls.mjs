@@ -15,6 +15,18 @@ const controls = [
     mutated: "return true;", test: "test/auth.test.ts", failure: "accepts only the configured password",
   },
   {
+    name: "missing password falls back to historical default", file: auth,
+    old: "return typeof expected === \"string\" && expected.length > 0 && constantTimeEqual(password, expected);",
+    mutated: 'return constantTimeEqual(password, process.env.EPIC_BUILDER_PASSWORD ?? "dev-password");',
+    test: "test/auth.test.ts", failure: "accepts only the configured password",
+  },
+  {
+    name: "missing signing key falls back to historical default", file: auth,
+    old: "return process.env.EPIC_BUILDER_SESSION_SECRET || null;",
+    mutated: 'return process.env.EPIC_BUILDER_SESSION_SECRET ?? "dev-insecure-session-secret";',
+    test: "test/auth.test.ts", failure: "denies absent signing configuration",
+  },
+  {
     name: "signature verification bypass", file: auth,
     old: "return constantTimeEqual(mac, sign(VALUE)) ? VALUE : null;",
     mutated: "return VALUE;", test: "test/auth.test.ts", failure: "mints with production code",
@@ -23,6 +35,12 @@ const controls = [
     name: "provider mode bypass", file: auth,
     old: 'if (process.env.EPIC_BUILDER_AUTH === "supabase") {',
     mutated: "if (false) {", test: "test/auth.test.ts", failure: "selects the configured cookie",
+  },
+  {
+    name: "provider exception authenticates unverified partition", file: auth,
+    old: '} catch {\n    return null;\n  }',
+    mutated: '} catch {\n    return "unverified-provider-partition";\n  }',
+    test: "test/auth.test.ts", failure: "denies rejected, missing and throwing provider identities",
   },
   {
     name: "route authorization bypass", file: route,

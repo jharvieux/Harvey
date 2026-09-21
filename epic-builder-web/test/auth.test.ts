@@ -31,7 +31,7 @@ beforeEach(() => {
   vi.stubEnv("EPIC_BUILDER_AUTH", "");
   vi.stubEnv("SUPABASE_URL", "https://fixture.invalid");
   vi.stubEnv("SUPABASE_ANON_KEY", "fixture-anon-key");
-  vi.stubEnv("SUPABASE_AUTH_COOKIE", "");
+  vi.stubEnv("SUPABASE_AUTH_COOKIE", undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -44,6 +44,9 @@ describe("shared-password and signed-cookie boundary", () => {
     vi.stubEnv("EPIC_BUILDER_PASSWORD", "");
     expect(checkPassword("correct horse battery staple")).toBe(false);
     expect(checkPassword("")).toBe(false);
+    vi.stubEnv("EPIC_BUILDER_PASSWORD", undefined);
+    expect(process.env.EPIC_BUILDER_PASSWORD).toBeUndefined();
+    expect(checkPassword("dev-password")).toBe(false);
   });
 
   it("mints with production code and resolves only its intact signed value", async () => {
@@ -78,6 +81,10 @@ describe("shared-password and signed-cookie boundary", () => {
     vi.stubEnv("EPIC_BUILDER_SESSION_SECRET", "another signing secret");
     expect(await resolveUserId()).toBeNull();
     vi.stubEnv("EPIC_BUILDER_SESSION_SECRET", "");
+    expect(await resolveUserId()).toBeNull();
+    expect(() => sessionCookie()).toThrow("EPIC_BUILDER_SESSION_SECRET is required");
+    vi.stubEnv("EPIC_BUILDER_SESSION_SECRET", undefined);
+    expect(process.env.EPIC_BUILDER_SESSION_SECRET).toBeUndefined();
     expect(await resolveUserId()).toBeNull();
     expect(() => sessionCookie()).toThrow("EPIC_BUILDER_SESSION_SECRET is required");
   });
@@ -128,15 +135,23 @@ describe("provider-backed request identity", () => {
 
   it("denies rejected, missing and throwing provider identities", async () => {
     vi.stubEnv("EPIC_BUILDER_AUTH", "supabase");
-    boundary.jar.set("sb-access-token", "bad-token");
-    boundary.getUser.mockResolvedValueOnce({ data: { user: null }, error: { message: "rejected" } });
+    expect(process.env.SUPABASE_AUTH_COOKIE).toBeUndefined();
+    boundary.jar.set("sb-access-token", "rejected-token");
+    boundary.getUser.mockResolvedValueOnce({ data: { user: { id: "unverified" } }, error: { message: "rejected" } });
     expect(await resolveUserId()).toBeNull();
+    expect(boundary.getUser).toHaveBeenNthCalledWith(1, "rejected-token");
+    boundary.jar.set("sb-access-token", "missing-user-token");
     boundary.getUser.mockResolvedValueOnce({ data: { user: null }, error: null });
     expect(await resolveUserId()).toBeNull();
+    expect(boundary.getUser).toHaveBeenNthCalledWith(2, "missing-user-token");
+    boundary.jar.set("sb-access-token", "throwing-token");
     boundary.getUser.mockRejectedValueOnce(new Error("provider unavailable"));
     expect(await resolveUserId()).toBeNull();
+    expect(boundary.getUser).toHaveBeenNthCalledWith(3, "throwing-token");
     boundary.jar.delete("sb-access-token");
     expect(await resolveUserId()).toBeNull();
+    expect(boundary.getUser).toHaveBeenCalledTimes(3);
+    expect(boundary.createClient).toHaveBeenCalledTimes(3);
   });
 
   it("denies a direct provider error without yielding an unverified id", async () => {
