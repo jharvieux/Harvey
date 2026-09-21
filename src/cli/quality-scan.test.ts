@@ -442,11 +442,12 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
       observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
     };
-    expect(scope.observation.knip).toEqual({
+    expect(scope.observation.knip).toMatchObject({
       discovered: ["(repo root)"],
       completed: [],
       reduced: [],
       incomplete: ["(repo root)"],
+      populations: [{ scope: "(repo root)", productSources: 3, status: "incomplete", reason: expect.stringContaining("vite.config.ts") }],
     });
   }, 30000);
 
@@ -473,12 +474,18 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
     const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
       observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
     };
-    expect(scope.observation.knip).toEqual({
-      discovered: ["packages/app"],
+    expect(scope.observation.knip).toMatchObject({
+      discovered: ["packages/app", "packages/scratch", "packages/temp"],
       completed: ["packages/app"],
       reduced: [],
-      incomplete: [],
+      incomplete: ["packages/scratch", "packages/temp"],
+      populations: [
+        { scope: "packages/app", productSources: 2, status: "completed" },
+        { scope: "packages/scratch", productSources: 2, status: "incomplete", reason: expect.stringContaining("negative-workspace-glob") },
+        { scope: "packages/temp", productSources: 2, status: "incomplete", reason: expect.stringContaining("negative-workspace-glob") },
+      ],
     });
+    expect(findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("packages/scratch");
   }, 30000);
 
   it("excludes an entire generated workspace from every M4 source consumer", async () => {
@@ -759,6 +766,86 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
     const typeFinding = findings.find((f) => f.title.includes("Exported-but-unreferenced type") && f.evidence.includes("LocalProps"));
     expect(typeFinding).toBeUndefined();
   }, 30000);
+});
+
+describe("quality-scan CLI — root Knip workspace configuration (#2151)", () => {
+  it("matches direct root Knip and preserves member settings from both entry points", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-root-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"] }));
+    write(repo, "knip.json", JSON.stringify({ workspaces: { "apps/web": {
+      entry: ["src/live.ts"], project: ["src/**/*.ts"], ignore: ["src/intentionally-ignored.ts"],
+    } } }));
+    write(repo, "apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write(repo, "apps/web/src/live.ts", "export const live = true;\n");
+    write(repo, "apps/web/src/dead.ts", "export const dead = true;\n");
+    write(repo, "apps/web/src/intentionally-ignored.ts", "export const ignored = true;\n");
+    write(repo, "src/root-dead.ts", "export const rootDead = true;\n");
+
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    const receiptPath = join(repo, "root-scope.json");
+    const findings = await runCli(repo, ["--scope-out", receiptPath]);
+    const receipt = readCorpusScannerScope(receiptPath, "quality-scan");
+    if (receipt.observation.scanner !== "quality-scan") throw new Error("expected quality-scan receipt");
+    expect(receipt.observation.productSources.count).toBe(4);
+    expect(receipt.observation.knip.populations.reduce((sum, population) => sum + population.productSources, 0)).toBe(4);
+    const unused = findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.title.startsWith("Unused file"));
+    expect(unused.map((finding) => finding.location).sort()).toEqual(direct.files.sort());
+    expect(unused.map((finding) => finding.location).sort()).toEqual(["apps/web/src/dead.ts", "src/root-dead.ts"]);
+    expect(unused.every((finding) => finding.confidence === "Confirmed")).toBe(true);
+    expect(findings.some((finding) => finding.id === "M5-00" || finding.id === "M5-98")).toBe(false);
+    expect(receipt.observation).toMatchObject({
+      productSources: { count: 4 },
+      knip: {
+        discovered: ["(repo root)", "apps/web"], completed: ["(repo root)", "apps/web"], incomplete: [],
+        populations: [
+          { scope: "(repo root)", productSources: 1, status: "completed", configuration: "root-workspace-config" },
+          { scope: "apps/web", productSources: 3, status: "completed", configuration: "root-workspace-config" },
+        ],
+      },
+    });
+
+    const member = join(repo, "apps/web");
+    const memberReceiptPath = join(repo, "member-scope.json");
+    const memberFindings = await runCli(member, ["--scope-out", memberReceiptPath]);
+    expect(memberFindings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location)).toEqual(["src/dead.ts"]);
+    expect(readCorpusScannerScope(memberReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 3 },
+      knip: { discovered: ["(repo root)"], completed: ["(repo root)"], populations: [
+        { scope: "(repo root)", productSources: 3, status: "completed", configuration: "root-workspace-config" },
+      ] },
+    });
+  }, 30_000);
+
+  it("discloses root sources left outside member-local Knip runs", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-local-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"] }));
+    write(repo, "apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write(repo, "apps/web/knip.json", JSON.stringify({ entry: ["src/live.ts"], project: ["src/**/*.ts"], ignore: ["src/ignored.ts"] }));
+    write(repo, "apps/web/src/live.ts", "export const live = true;\n");
+    write(repo, "apps/web/src/dead.ts", "export const dead = true;\n");
+    write(repo, "apps/web/src/ignored.ts", "export const ignored = true;\n");
+    write(repo, "src/root-dead.ts", "export const rootDead = true;\n");
+
+    const receiptPath = join(repo, "scope.json");
+    const findings = await runCli(repo, ["--scope-out", receiptPath]);
+    expect(findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location)).toEqual(["apps/web/src/dead.ts"]);
+    expect(findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("root or undeclared product source");
+    expect(readCorpusScannerScope(receiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 4 },
+      knip: {
+        discovered: ["(repo root)", "apps/web"], completed: ["apps/web"], incomplete: ["(repo root)"],
+        populations: [
+          { scope: "(repo root)", productSources: 1, status: "incomplete", configuration: "none", reason: expect.stringContaining("root or undeclared product source") },
+          { scope: "apps/web", productSources: 3, status: "completed", configuration: "local-config" },
+        ],
+      },
+    });
+  }, 30_000);
 });
 
 // #810: the "NEEDS target npm install" prereq. This fixture ships a vite.config.ts that imports an

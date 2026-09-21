@@ -66,7 +66,7 @@ function syntheticScope(scanner: SyntheticScanner): Record<string, unknown> {
         scanner,
         productSources: { count: 1, pathsDigest },
         jscpd: { status: "completed", comparedLines: 1 },
-        knip: { discovered: [], completed: [], reduced: [], incomplete: [] },
+        knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [], populations: [{ scope: "(repo root)", productSources: 1, pathsDigest, status: "completed", configuration: "local-config" }] },
         divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
       },
     };
@@ -337,7 +337,10 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       const observed = cold.cacheRecord!.scope.observation!;
       if (observed.scanner !== "quality-scan") throw new Error("expected quality observation");
       expect(observed.jscpd.comparedLines).toBeGreaterThan(0);
-      if (shape === "config-only") expect(observed.knip).toEqual({ discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] });
+      if (shape === "config-only") expect(observed.knip).toMatchObject({
+        discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [],
+        populations: [{ scope: "(repo root)", productSources: 0, status: "completed" }],
+      });
       for (const replay of [warm, verified]) {
         expect(replay.findings).toEqual(cold.findings);
         expect(replay.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);

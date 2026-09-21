@@ -34,7 +34,7 @@ const finding = (id: string): Finding => ({
 
 interface MutableQualityObservation {
   jscpd: { status: string };
-  knip: { completed: string[] };
+  knip: { completed: string[]; populations: Array<{ productSources: number; scope: string }> };
   divergedClones?: unknown;
 }
 
@@ -59,7 +59,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
   const observation = (scanner: CorpusCacheableScanner): CorpusScannerObservation => scanner === "detect-static"
     ? { scanner, loadedSources: { count: 6_929, pathsDigest: "a".repeat(64) }, ancillary: { productSources: 4_000, configSources: 10, testStorySources: 2_919 } }
     : scanner === "quality-scan"
-      ? { scanner, productSources: { count: 4_000, pathsDigest: "b".repeat(64) }, jscpd: { status: "completed", comparedLines: 20_000 }, knip: { discovered: ["root"], completed: ["root"], reduced: [], incomplete: [] }, divergedClones: { securityPathSources: 4, wholeRepoEnabled: false, complementSources: 0 } }
+      ? { scanner, productSources: { count: 4_000, pathsDigest: "b".repeat(64) }, jscpd: { status: "completed", comparedLines: 20_000 }, knip: { discovered: ["root"], completed: ["root"], reduced: [], incomplete: [], populations: [{ scope: "root", productSources: 4_000, pathsDigest: "b".repeat(64), status: "completed", configuration: "local-config" }] }, divergedClones: { securityPathSources: 4, wholeRepoEnabled: false, complementSources: 0 } }
       : { scanner, testSources: { count: 2_919, pathsDigest: "c".repeat(64) }, suiteSignals: { packageManifest: true, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] } };
   const execute = (ids: string[] = ["one"], scanner: CorpusCacheableScanner = "detect-static") => ({
     findings: ids.map(finding),
@@ -94,7 +94,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
       scanner: "quality-scan",
       productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
       jscpd: { status: "incomplete", comparedLines: 0 },
-      knip: { discovered: ["root"], completed: [], reduced: [], incomplete: ["root"] },
+      knip: { discovered: ["root"], completed: [], reduced: [], incomplete: ["root"], populations: [{ scope: "root", productSources: 0, pathsDigest: digestObservedPaths([]), status: "incomplete", configuration: "none", reason: "No eligible product source files were present for the root Knip scope" }] },
       divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
       zeroSourceDisposition: {
         status: "not-assessed",
@@ -117,6 +117,28 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     expect(warm.findings).toEqual(cold.findings);
     expect(warm.findings.map((row) => row.category)).toEqual(["corpus-cache-test", "corpus-cache-test"]);
     expect(warm.scope).toEqual(cold.scope);
+  });
+
+  it("preserves the root/member Knip population partition through a quality-scan cache hit", async () => {
+    const cache = options("quality-scan");
+    const produced = execute(["root", "member"], "quality-scan");
+    if (produced.scope.observation.scanner !== "quality-scan") throw new Error("expected quality observation");
+    produced.scope.observation.knip = {
+      discovered: ["(repo root)", "apps/web"], completed: ["(repo root)", "apps/web"], reduced: [], incomplete: [],
+      populations: [
+        { scope: "(repo root)", productSources: 1_000, pathsDigest: "a".repeat(64), status: "completed", configuration: "root-workspace-config" },
+        { scope: "apps/web", productSources: 3_000, pathsDigest: "b".repeat(64), status: "completed", configuration: "root-workspace-config" },
+      ],
+    };
+    const cold = await executeCorpusScanner(cache, () => produced);
+    const shouldNotRun = vi.fn(() => execute(["wrong"], "quality-scan"));
+    const warm = await executeCorpusScanner(cache, shouldNotRun);
+    expect(warm.cache).toBe("hit");
+    expect(shouldNotRun).not.toHaveBeenCalled();
+    expect(warm.scope.observation).toEqual(cold.scope.observation);
+    const warmObservation = warm.scope.observation;
+    if (warmObservation?.scanner !== "quality-scan") throw new Error("expected quality observation");
+    expect(warmObservation.knip.populations.map((population) => population.productSources)).toEqual([1_000, 3_000]);
   });
 
   it.each(CORPUS_CACHEABLE_SCANNERS)("preflights %s through the same identity and artifact validator as execution (#2049)", async (scanner) => {
@@ -158,6 +180,8 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     ["missing divergence scope", (observation: MutableQualityObservation) => { delete observation.divergedClones; }],
     ["forged jscpd status", (observation: MutableQualityObservation) => { observation.jscpd.status = "forged"; }],
     ["completed Knip scope absent from discovery", (observation: MutableQualityObservation) => { observation.knip.completed = ["not-discovered"]; }],
+    ["Knip population lost", (observation: MutableQualityObservation) => { observation.knip.populations = []; }],
+    ["Knip population overclaimed", (observation: MutableQualityObservation) => { observation.knip.populations[0]!.productSources += 1; }],
   ])("rejects and recomputes an internally inconsistent quality artifact: %s", async (_name, mutate) => {
     const events: string[] = [];
     const cache = options("quality-scan", { onEvent: (message) => events.push(message) });

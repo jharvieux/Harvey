@@ -11,6 +11,15 @@ export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
 export type CorpusScannerCacheMode = "off" | "read-write" | "verify";
 export type CorpusScannerCacheStatus = "hit" | "miss" | "recomputed" | "non-cacheable";
 
+export interface KnipSourcePopulation {
+  scope: string;
+  productSources: number;
+  pathsDigest: string;
+  status: "completed" | "reduced" | "incomplete";
+  configuration: "root-workspace-config" | "local-config" | "harvey-inferred" | "none";
+  reason?: string;
+}
+
 export type CorpusScannerObservation =
   | {
       scanner: "detect-static";
@@ -21,7 +30,7 @@ export type CorpusScannerObservation =
       scanner: "quality-scan";
       productSources: { count: number; pathsDigest: string };
       jscpd: { status: "completed" | "incomplete"; comparedLines: number };
-      knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[] };
+      knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[]; populations: KnipSourcePopulation[] };
       divergedClones: { securityPathSources: number; wholeRepoEnabled: boolean; complementSources: number };
       zeroSourceDisposition?: {
         status: "not-assessed";

@@ -465,7 +465,7 @@ export function knipUnavailableFinding(reason: string): Finding {
     status: "Open",
     evidence: `knip did not complete: ${reason}`,
     impact: "Dead-code coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero dead code.",
-    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can resolve its config and plugin imports, then re-run `pnpm quality-scan` (raise --timeout if the gap was a timeout).",
+    fix: "Resolve the stated scope gap before rerunning `pnpm quality-scan`: repair a missing dependency or config, include an excluded workspace only if it belongs in the audit, or add a root Knip workspace config for root sources. Raise --timeout only for a measured timeout.",
     value: 1,
     ease: 3,
     safety: 5,
@@ -602,11 +602,8 @@ export function knipReducedTierFinding(reason: string): Finding {
   };
 }
 
-// #505: quality-scan now runs jscpd/knip per workspace (monorepo target) rather than once over the
-// whole target, so their reports need merging back into one before the existing jscpdToFindings /
-// knipToFindings transforms run — those stay single-report, unchanged and still independently
-// tested. Pure concatenation: file paths are already made workspace-relative-to-target by the CLI
-// before merging.
+// Knip reports can come from separate member runs or one root-configured workspace run. Merge
+// them before the existing finding transforms; CLI paths are already target-relative.
 export function mergeJscpdReports(reports: JscpdReport[]): JscpdReport {
   return {
     statistics: {
