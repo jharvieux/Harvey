@@ -784,6 +784,57 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
     }
   };
 
+  it.each([
+    { configName: "knip.json", manifest: "package.json" },
+    { configName: "knip.jsonc", manifest: "pnpm-workspace.yaml" },
+    { configName: "package.json#knip", manifest: "package.json" },
+  ])("preserves global $configName settings on $manifest workspaces without explicit Knip workspace keys", async ({ configName, manifest }) => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-implicit-knip-workspaces-"));
+    dirs.push(repo);
+    const config = { entry: ["src/root-live.ts"], project: ["src/**/*.ts"], ignore: ["apps/web/src/ignored.ts"] };
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true,
+      ...(manifest === "package.json" ? { workspaces: ["apps/*"] } : {}),
+      ...(configName === "package.json#knip" ? { knip: config } : {}),
+    }));
+    if (manifest === "pnpm-workspace.yaml") write(repo, manifest, "packages:\n  - apps/*\n");
+    if (configName !== "package.json#knip") {
+      write(repo, configName, `${configName.endsWith("jsonc") ? "// package-manager workspaces supply the graph\n" : ""}${JSON.stringify(config)}\n`);
+    }
+    writeMember(repo, "apps/web");
+    write(repo, "apps/web/src/index.ts", 'import { live } from "./live.js";\nconsole.log(live);\n');
+    write(repo, "src/root-live.ts", "export const live = true;\n");
+    write(repo, "src/root-dead.ts", "export const dead = true;\n");
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    expect(direct.files.sort()).toEqual(["apps/web/src/dead.ts", "src/root-dead.ts"]);
+
+    for (const target of ["", "apps/web"]) {
+      const receiptPath = join(repo, "scope.json");
+      const findings = await runCli(join(repo, target), ["--scope-out", receiptPath]);
+      const receipt = readCorpusScannerScope(receiptPath, "quality-scan");
+      if (receipt.observation.scanner !== "quality-scan") throw new Error("expected quality-scan receipt");
+      const expectedCount = target ? 4 : 6;
+      expect(receipt.observation.productSources.count).toBe(expectedCount);
+      expect(receipt.observation.knip.populations.reduce((sum, population) => sum + population.productSources, 0)).toBe(expectedCount);
+      const prefix = target ? `${target}/` : "";
+      const unused = findings.filter((finding) => finding.title.startsWith("Unused file"));
+      expect(unused.map((finding) => finding.location).sort())
+        .toEqual(direct.files.filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length)).sort());
+      expect(unused.every((finding) => finding.confidence === "Confirmed")).toBe(true);
+      expect(findings.some((finding) => finding.id === "M5-00" || finding.id === "M5-98")).toBe(false);
+      expect(receipt.observation.knip).toMatchObject({
+        discovered: target ? ["(repo root)"] : ["(repo root)", "apps/web"],
+        completed: target ? ["(repo root)"] : ["(repo root)", "apps/web"], incomplete: [],
+        populations: target
+          ? [{ scope: "(repo root)", productSources: 4, status: "completed", configuration: "root-workspace-config" }]
+          : [
+              { scope: "(repo root)", productSources: 2, status: "completed", configuration: "root-workspace-config" },
+              { scope: "apps/web", productSources: 4, status: "completed", configuration: "root-workspace-config" },
+            ],
+      });
+    }
+  }, 30_000);
+
   it.each(["directory", "file"])("stops unknown ancestor selection at a separate repository .git %s", async (gitKind) => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-knip-repository-boundary-"));
     dirs.push(repo);

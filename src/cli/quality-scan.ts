@@ -37,7 +37,7 @@ import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "n
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, sourceExclusionGlob, type ProductSourceInventory } from "../source-inventory.js";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
@@ -247,7 +247,10 @@ async function configuredKnipWorkspaceDirs(root: string, config: ScopeKnipConfig
   const patterns = Object.keys(config.value.workspaces as Record<string, unknown>).filter((pattern) => pattern !== ".");
   if (patterns.length === 0) return [];
   try {
-    const { _dirGlob } = await import(pathToFileURL(join(repoRoot, "node_modules", "knip", "dist", "util", "glob.js")).href) as {
+    // This fixed module belongs to Harvey's installed toolchain, whose Knip version and lockfile
+    // are already bound into the scanner identity. Never resolve it from the target's dependencies.
+    const knipRequire = createRequire(realpathSync(join(repoRoot, "node_modules", "knip", "package.json")));
+    const { _dirGlob } = knipRequire("./dist/util/glob.js") as {
       _dirGlob: (options: { cwd: string; patterns: string[]; gitignore: boolean }) => Promise<string[]>;
     };
     const physicalRoot = realpathSync(root);
@@ -294,14 +297,20 @@ interface KnipGraph {
 // inferred run or a complete receipt. Only the real Knip child executes that config.
 async function configuredKnipGraph(root: string): Promise<KnipGraph | undefined> {
   const config = scopeKnipConfig(root);
-  if (!config || ("value" in config && (!config.value.workspaces
-    || typeof config.value.workspaces !== "object" || Array.isArray(config.value.workspaces)))) return undefined;
+  if (!config) return undefined;
+  const inventory = discoverWorkspaceInventory(root);
   const exclusions = workspaceExclusions(root);
+  const hasConfiguredWorkspaces = "value" in config && config.value.workspaces
+    && typeof config.value.workspaces === "object" && !Array.isArray(config.value.workspaces);
+  // Knip also builds its graph from package-manager declarations. A static root config's global
+  // entry/project/ignore settings remain authoritative even without an explicit workspaces key.
+  if ("value" in config && !hasConfiguredWorkspaces
+    && !inventory.packages.some((pkg) => pkg.dir !== ".") && exclusions.size === 0) return undefined;
   return {
     root, config, exclusions,
     members: [...new Set([
       root,
-      ...discoverWorkspaceInventory(root).packages.map((pkg) => join(root, pkg.dir)),
+      ...inventory.packages.map((pkg) => join(root, pkg.dir)),
       ...await configuredKnipWorkspaceDirs(root, config),
       ...exclusions.keys(),
     ])].sort((left, right) => right.length - left.length),
