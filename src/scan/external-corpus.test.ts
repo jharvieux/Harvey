@@ -152,7 +152,9 @@ describe("external corpus manifest", () => {
       { slug: "cravab", module: "M5-slop", before: [476, 575], after: [736, 835], added: 260, classes: ["14 ambiguous exception success", "22 empty catch", "31 log-only catch", "183 `as any`", "10 double assertions"] },
       { slug: "flori-web", module: "M5-slop", before: [95, 108], after: [135, 148], added: 40, classes: ["15 ambiguous exception success", "17 empty catch", "7 log-only catch", "1 double assertion"] },
       { slug: "multi-tenant-starter", module: "M5-slop", before: [1, 1], after: [6, 6], added: 5, classes: ["3 `as any`", "2 double assertions"] },
-      { slug: "mvp-boilerplate", module: "M5-slop", before: [24, 29], after: [31, 36], added: 7, classes: ["4 empty catch", "1 log-only catch", "2 double assertions"] },
+      // #2132 later excluded the inactive Monero patch overlay, so the current product-scope
+      // baseline is 22/29. Keep #1948's hosted 24/29 -> 31/36 detector movement intact here.
+      { slug: "mvp-boilerplate", module: "M5-slop", before: [24, 29], after: [31, 36], current: [22, 29], added: 7, classes: ["4 empty catch", "1 log-only catch", "2 double assertions"] },
       { slug: "ghostfolio", module: "M5-slop", before: [51, 52], after: [104, 105], added: 53, classes: ["5 ambiguous exception success", "11 empty catch", "7 log-only catch", "6 `as any`", "23 double assertions", "1 unexplained `@ts-ignore`"] },
       { slug: "rallly", module: "M5-slop", before: [113, 167], after: [137, 191], added: 24, classes: ["10 ambiguous exception success", "4 empty catch", "6 log-only catch", "2 `as any`", "2 double assertions"] },
       { slug: "inbox-zero", module: "M5-slop", before: [1098, 1123], after: [1398, 1423], added: 300, classes: ["93 ambiguous exception success", "21 empty catch", "135 log-only catch", "25 `as any`", "22 double assertions", "4 unexplained `@ts-ignore`"] },
@@ -171,7 +173,9 @@ describe("external corpus manifest", () => {
 
       expect(movement.after[0] - movement.before[0], `${movement.slug}/${movement.module} counted delta`).toBe(movement.added);
       expect(movement.after[1] - movement.before[1], `${movement.slug}/${movement.module} total delta`).toBe(movement.added);
-      expect([baseline.counted, baseline.total], `${movement.slug}/${movement.module}`).toEqual(movement.after);
+      expect([baseline.counted, baseline.total], `${movement.slug}/${movement.module}`).toEqual(
+        movement.current ?? movement.after,
+      );
       expect(baseline.note, `${movement.slug}/${movement.module} provenance`).toContain("#1948 HOSTED REPLAY run 32345629796");
       expect(baseline.note, `${movement.slug}/${movement.module} arithmetic`).toContain(
         `at ${movement.after[0]}/${movement.after[1]} (was ${movement.before[0]}/${movement.before[1]}), +${movement.added}`,
@@ -359,18 +363,27 @@ describe("scoreExternalBaseline", () => {
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
     // #230 demoted exhaustive-deps to Info rather than deleting it. If a future change promotes
-    // it back to a graded severity, proposit's M7 jumps 36 -> 71 and this scorer must catch it.
+    // it back to a graded severity, this target's M7 rises above its two live-product rows and
+    // this scorer must catch it.
     // #1475 gave the class a second Info member on the same principle: state sprawl still emits
     // and still ships, but its render-count claim was false on React >= 18, so it is Info here too.
     const rows = scoreExternalBaseline(target("mvp-boilerplate"), [
-      finding("M7 — Unbounded select"),
       finding("M7 — State sprawl", "Info"),
-      finding("M7 — Client fetch in useEffect"),
       finding("M7 — Client fetch in useEffect"),
       finding("M7 — Nested-loop join"),
       finding("M7 — Missing hook dependencies", "Info"),
     ]);
-    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 4 });
+    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 2 });
+
+    // Failing-direction control: a severity promotion must make the baseline drift rather than
+    // letting a formerly Info-only class re-enter unnoticed.
+    const promoted = scoreExternalBaseline(target("mvp-boilerplate"), [
+      finding("M7 — State sprawl"),
+      finding("M7 — Client fetch in useEffect"),
+      finding("M7 — Nested-loop join"),
+      finding("M7 — Missing hook dependencies", "Info"),
+    ]);
+    expect(promoted.find((r) => r.module === "M7")).toMatchObject({ pass: false, actual: 3, drift: 1 });
   });
 
   it("keeps the #360 diverged-clone pass out of M4's jscpd baseline — shared 'M4 —' prefix, separate modules", () => {
