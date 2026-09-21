@@ -288,20 +288,29 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   });
 
-  it("compares every eligible family, phase and scanner after a same-input local seed", async () => {
+  it.each([
+    ["fixture-first", 22],
+    ["fixture-later", 23],
+  ] as const)("compares every eligible family, phase and scanner for %s after a same-input local seed", async (slug, expectedCount) => {
     const before = artifacts(seedCache);
-    const result = await invoke(copyCache(), ["--force-cold-cache"]);
+    const result = await invoke(copyCache(), ["--force-cold-cache", "--target", slug]);
     expect(result.status, result.output).toBe(0);
     const expected = before.flatMap(({ path, value }) => {
       const component = value.schema === 8 && value.family && value.output ? `semgrep family ${String(value.family)}`
         : value.schema === 5 && value.phase ? String(value.phase)
           : value.schema === 2 && value.scanner ? String(value.scanner) : undefined;
-      const slug = path.startsWith(join(seedCache, "shard1")) ? "fixture-first" : "fixture-later";
-      return component ? [`${slug}: CACHE VERIFY ${component} ${String(value.key).slice(0, 12)}`] : [];
+      const artifactSlug = path.startsWith(join(seedCache, "shard1")) ? "fixture-first" : "fixture-later";
+      return component ? [`${artifactSlug}: CACHE VERIFY ${component} ${String(value.key).slice(0, 12)}`] : [];
     });
     expect(expected).toHaveLength(45);
+    expect(new Set(expected).size).toBe(45);
+    const selected = expected.filter((line) => line.startsWith(`${slug}: `));
+    expect(selected).toHaveLength(expectedCount);
+    const shard = slug === "fixture-first" ? "shard1" : "shard2";
+    expect(new Set(before.filter(({ path, value }) => path.startsWith(join(seedCache, shard)) && value.schema === 2).map(({ value }) => value.scanner)))
+      .toEqual(new Set(["detect-static", "quality-scan", "mutation-detect-only"]));
     const compared = [...result.output.matchAll(/^ {2}(fixture-(?:first|later): CACHE VERIFY .+? [a-f0-9]{12}):/gm)].map((match) => match[1]!);
-    expect(compared.sort()).toEqual(expected.sort());
+    expect(compared.sort()).toEqual(selected.sort());
     expect(new Set(before.filter(({ value }) => value.schema === 2).map(({ value }) => value.scanner)))
       .toEqual(new Set(["detect-static", "quality-scan", "mutation-detect-only"]));
     expect(result.output).not.toContain("CACHE MISS semgrep family");
