@@ -174,7 +174,7 @@ describe("external corpus manifest", () => {
       expect(movement.after[0] - movement.before[0], `${movement.slug}/${movement.module} counted delta`).toBe(movement.added);
       expect(movement.after[1] - movement.before[1], `${movement.slug}/${movement.module} total delta`).toBe(movement.added);
       expect([baseline.counted, baseline.total], `${movement.slug}/${movement.module}`).toEqual(
-        movement.current ?? movement.after,
+        "current" in movement ? movement.current : movement.after,
       );
       expect(baseline.note, `${movement.slug}/${movement.module} provenance`).toContain("#1948 HOSTED REPLAY run 32345629796");
       expect(baseline.note, `${movement.slug}/${movement.module} arithmetic`).toContain(
