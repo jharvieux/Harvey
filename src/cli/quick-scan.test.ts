@@ -245,15 +245,74 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
     for (const module of ["M4", "M6", "M7", "M8", "M9"]) {
       expect(report.scorecard.dimensions.find((row) => row.module === module)?.status).toBe("not-assessed");
     }
-    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as { runs: Array<{ properties: { harveyCoverageAbsent: string } }> };
-    expect(sarif.runs[0]?.properties.harveyCoverageAbsent).toContain("graded M5");
-    expect(sarif.runs[0]?.properties.harveyCoverageAbsent).not.toContain("M4, M5, M6");
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as {
+      runs: Array<{ properties: { harveyCoverageAbsent: string }; results: Array<{ ruleId: string; message: { text: string } }> }>;
+    };
+    const exported = sarif.runs[0]!;
+    const scope = exported.properties.harveyCoverageAbsent;
+    expect(exported.results.map((result) => result.ruleId)).toEqual(expect.arrayContaining([
+      "M5 — Python empty/pass exception handler",
+      "M5 — Source coverage partial: python",
+      "M5 — Hardcoded deployment source coverage not-assessed",
+      "M6 — Source coverage not-assessed: python",
+    ]));
+    expect(exported.results.find((result) => result.ruleId === "M5 — Source coverage partial: python")?.message.text).toContain("All 1 python file(s) were examined");
+    expect(scope).toContain("also includes raw mechanical findings for M5, M6");
+    expect(scope).toContain("including any partial or not-assessed coverage disclosures emitted with those findings");
+    expect(scope).toContain("No assessed scorecard dimension is absent from this SARIF's module findings");
+    expect(scope).not.toContain("M1 mechanical results only");
+    expect(scope).not.toContain("graded M5; produced a High data-exposure rating for M10; those results are in the report");
 
     const textOut = join(repo, "quick.txt");
     await run([CLI, "--dir", repo, "--out", textOut]);
     const rendered = readFileSync(textOut, "utf8");
     expect(rendered).toContain("M5   Dead code & slop — F");
     expect(rendered).toContain("No JS/TS product source was inspected");
+  }, 120000);
+
+  it("retains Python's zero-finding assessment and coverage disclosure in the real SARIF export", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quick-python-zero-"));
+    dirs.push(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "python-zero", private: true }));
+    writeFileSync(join(repo, "worker.py"), "def work():\n    try:\n        run()\n    except Exception as error:\n        log(error)\n");
+
+    const jsonOut = join(repo, "quick.json");
+    const sarifOut = join(repo, "quick.sarif");
+    await run([CLI, "--dir", repo, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const report = JSON.parse(readFileSync(jsonOut, "utf8")) as {
+      scorecard: { dimensions: Array<{ module: string; status: string; count?: number }> };
+    };
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as {
+      runs: Array<{ properties: { harveyCoverageAbsent: string }; results: Array<{ ruleId: string; message: { text: string } }> }>;
+    };
+    const exported = sarif.runs[0]!;
+    expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "graded", count: 0 });
+    expect(exported.results.map((result) => result.ruleId)).not.toContain("M5 — Python empty/pass exception handler");
+    expect(exported.results.find((result) => result.ruleId === "M5 — Source coverage partial: python")?.message.text).toContain("All 1 python file(s) were examined");
+    expect(exported.properties.harveyCoverageAbsent).toContain("also includes raw mechanical findings for M5, M6");
+    expect(exported.properties.harveyCoverageAbsent).not.toContain("graded M5; those dimensions are scorecard-only");
+  }, 120000);
+
+  it("distinguishes a configuration-only scorecard dimension from serialized findings", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quick-config-only-"));
+    dirs.push(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "config-only", private: true }));
+    writeFileSync(join(repo, "next.config.js"), "export default { poweredByHeader: true };\n");
+    mkdirSync(join(repo, "supabase", "migrations"), { recursive: true });
+    writeFileSync(join(repo, "supabase", "migrations", "0001_profiles.sql"), "create table profiles (email text);\n");
+
+    const jsonOut = join(repo, "quick.json");
+    const sarifOut = join(repo, "quick.sarif");
+    await run([CLI, "--dir", repo, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const report = JSON.parse(readFileSync(jsonOut, "utf8")) as {
+      scorecard: { dimensions: Array<{ module: string; status: string; band?: string }> };
+    };
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as { runs: Array<{ properties: { harveyCoverageAbsent: string }; results: Array<{ ruleId: string }> }> };
+    const exported = sarif.runs[0]!;
+    expect(report.scorecard.dimensions.find((row) => row.module === "M10")).toMatchObject({ status: "risk-band" });
+    expect(exported.results.some((result) => /^M10 —/.test(result.ruleId))).toBe(false);
+    expect(exported.properties.harveyCoverageAbsent).toContain("data-exposure rating for M10; those dimensions are scorecard-only because this SARIF contains no matching module finding");
+    expect(exported.properties.harveyCoverageAbsent).not.toContain("M1 mechanical results only");
   }, 120000);
 });
 

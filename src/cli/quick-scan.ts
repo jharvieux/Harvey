@@ -53,6 +53,7 @@ import { productSourceInventoryForTarget } from "../source-inventory.js";
 import { sourcePopulationReceipt } from "../scan/polyglot-quality.js";
 import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
+import type { Finding } from "../findings.js";
 
 // What a quick-scan SARIF export does and does not cover. Stated in the export itself because a
 // SARIF file outlives the terminal session that produced it: an importer who sees only results has
@@ -68,27 +69,44 @@ import { toSarif } from "../sarif.js";
 // partial export to a near-empty one. It captures on --sarif-out alone now, so the sentence is true.
 // Falsifier: `run-audit targets/calibration --sarif-out a.sarif` and check the printed result count
 // against the same run with --findings-out (src/cli/run-audit.test.ts asserts they match).
-function quickScanSarifScope(scorecard: HealthScorecard): string {
+function emittedModule(finding: Pick<Finding, "id">): string | undefined {
+  return /^(M(?:10|[1-9]))(?:\s|$|[—:-])/.exec(finding.id)?.[1];
+}
+
+function scorecardDescription(dimension: HealthDimension): string {
+  if (dimension.status === "graded") return `graded ${dimension.module}`;
+  if (dimension.status === "indicator-only") return `produced indicators for ${dimension.module}`;
+  return `produced a ${dimension.band} data-exposure rating for ${dimension.module}`;
+}
+
+function quickScanSarifScope(scorecard: HealthScorecard, findings: readonly Finding[]): string {
   const m1 = scorecard.dimensions.find((dimension) => dimension.module === "M1");
-  const graded = scorecard.gradedModules.filter((module) => module !== "M1");
-  const indicators = scorecard.dimensions.filter((dimension) => dimension.status === "indicator-only").map((dimension) => dimension.module);
-  const banded = scorecard.dimensions.filter((dimension) => dimension.status === "risk-band");
-  const additional = [
-    ...(graded.length ? [`graded ${graded.join(", ")}`] : []),
-    ...(indicators.length ? [`produced indicators for ${indicators.join(", ")}`] : []),
-    ...banded.map((dimension) => `produced a ${dimension.band} data-exposure rating for ${dimension.module}`),
-  ];
+  const modulesWithResults = new Set(findings.map(emittedModule).filter((module): module is string => module !== undefined));
+  const additionalModulesWithResults = [...modulesWithResults].filter((module) => module !== "M1");
+  const scorecardOnly = scorecard.dimensions.filter(
+    (dimension) => dimension.module !== "M1" && dimension.status !== "not-assessed" && !modulesWithResults.has(dimension.module),
+  );
+  const unassessed = scorecard.dimensions
+    .filter((dimension) => dimension.status === "not-assessed")
+    .map((dimension) => `${dimension.module}${dimension.reason ? `: ${dimension.reason}` : ""}`);
   const m1Scope = m1?.status === "not-assessed"
     ? `This export carries any configuration-only M1 mechanical results, but M1 product-source hygiene was not assessed: ${m1.reason} `
-    : "This export carries the M1 mechanical results only (dependency, secret and dangerous-config hygiene plus static indicators). ";
-  const additionalScope = additional.length
-    ? `The free scan also ${additional.join("; ")}; those results are in the report (` + "`--json` / terminal output), NOT in this SARIF file. "
-    : "No additional health dimension earned a grade, indicator, or data-exposure rating in this run. ";
+    : "This export carries raw M1 mechanical results (dependency, secret and dangerous-config hygiene plus static indicators). ";
+  const includedScope = additionalModulesWithResults.length
+    ? `It also includes raw mechanical findings for ${additionalModulesWithResults.join(", ")}, including any partial or not-assessed coverage disclosures emitted with those findings. `
+    : "No raw mechanical findings for an additional module were serialized in this run. ";
+  const scorecardOnlyScope = scorecardOnly.length
+    ? `The scorecard also ${scorecardOnly.map(scorecardDescription).join("; ")}; those dimensions are scorecard-only because this SARIF contains no matching module finding. `
+    : "No assessed scorecard dimension is absent from this SARIF's module findings. ";
+  const unassessedScope = unassessed.length
+    ? `The scorecard did not assess ${unassessed.join("; ")}. `
+    : "The scorecard assessed every module. ";
   return (
     "This is a free quick-scan, not a Harvey audit. " +
     m1Scope +
-    additionalScope +
-    `${scorecard.unassessedModules.join(", ")} were not run at all. ` +
+    includedScope +
+    scorecardOnlyScope +
+    unassessedScope +
     "Absence of a result here is not evidence of absence of a problem. " +
     "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger."
   );
@@ -545,7 +563,7 @@ async function main(): Promise<void> {
 
   const sarifOut = arg("--sarif-out");
   if (sarifOut) {
-    const sarif = toSarif(rawFindings, { coverageAbsent: quickScanSarifScope(scorecard) }, { baseUri: dir });
+    const sarif = toSarif(rawFindings, { coverageAbsent: quickScanSarifScope(scorecard, rawFindings) }, { baseUri: dir });
     writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
     console.error(`SARIF 2.1.0 (${rawFindings.length} result(s)) → ${sarifOut}`);
   }

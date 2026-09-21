@@ -224,7 +224,7 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
     const owners = sharded ? [shard] : [1, 2, 3, 4];
     const selectedTargets = sharded ? partitionTargets(liveSlugs, 4)[shard - 1]! : liveSlugs;
     expect(expression(shardJob["timeout-minutes"]!, ctx), `${event}/${shard}: event-scoped corpus budget`)
-      .toBe(sharded ? (selectedTargets.includes("carbon") ? 45 : 30) : 120);
+      .toBe(sharded ? (selectedTargets.includes("carbon") ? 45 : shard === 2 ? 35 : 30) : 120);
     expect(active(score, ctx)).toBe(true);
     expect(expression(score.env!.SHARD!, ctx)).toBe(shard);
     expect(active(upload, ctx)).toBe(true);
