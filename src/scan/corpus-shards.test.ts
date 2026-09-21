@@ -74,7 +74,7 @@ function contractErrors(
     if (eventExpression(score?.env?.SHARD_COUNT, event) !== count) errors.push(`${event}: producer count`);
     if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (count === 4 ? "1" : "0")) errors.push(`${event}: producer readiness`);
     if (eventExpression(workflow.jobs["current-replay"].if, event) !== (count === 4)) errors.push(`${event}: replay activation`);
-    const expectedTimeouts = count === 1 ? [120] : [45, 30, 30, 30];
+    const expectedTimeouts = count === 1 ? [120] : [45, 35, 30, 30];
     for (const [index, expectedTimeout] of expectedTimeouts.entries()) {
       if (eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1) !== expectedTimeout) errors.push(`${event}: shard ${index + 1} timeout`);
     }
