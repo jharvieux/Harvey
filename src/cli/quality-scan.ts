@@ -238,19 +238,11 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   };
 }
 
-function hasWorkspaceKnipConfig(dir: string): boolean {
-  const config = scopeKnipConfig(dir);
-  if (config && "unresolved" in config) return true;
-  return !!config && "value" in config && !!config.value.workspaces
-    && typeof config.value.workspaces === "object" && !Array.isArray(config.value.workspaces);
-}
-
 // Knip's configured workspace keys can add directories that the package manager never declared.
 // Use Knip's own glob implementation, as dependency preparation does, so brace/extglob keys and
 // the scan's receipt resolve to the same physical directories as the child process.
-async function configuredKnipWorkspaceDirs(root: string): Promise<string[]> {
-  const config = scopeKnipConfig(root);
-  if (!config || !("value" in config) || !config.value.workspaces
+async function configuredKnipWorkspaceDirs(root: string, config: ScopeKnipConfig): Promise<string[]> {
+  if (!("value" in config) || !config.value.workspaces
     || typeof config.value.workspaces !== "object" || Array.isArray(config.value.workspaces)) return [];
   const patterns = Object.keys(config.value.workspaces as Record<string, unknown>).filter((pattern) => pattern !== ".");
   if (patterns.length === 0) return [];
@@ -274,32 +266,73 @@ async function configuredKnipWorkspaceDirs(root: string): Promise<string[]> {
   }
 }
 
-const workspaceDirs = [...new Set([...packageWorkspaceDirs, ...await configuredKnipWorkspaceDirs(targetDir)])];
-
-// A direct member scan still belongs to the ancestor's configured Knip workspace. Run that graph
-// from its root and select only the member's findings for the requested target.
-async function configuredWorkspaceOwner(dir: string): Promise<{ root: string; member: string } | undefined> {
-  let candidate = dirname(dir);
-  while (candidate !== dirname(candidate)) {
-    if (hasWorkspaceKnipConfig(candidate)) {
-      const member = relative(candidate, dir).replaceAll("\\", "/");
-      if (discoverWorkspaceInventory(candidate).packages.some((pkg) => pkg.dir === member)
-        || (await configuredKnipWorkspaceDirs(candidate)).includes(dir)) {
-        return { root: candidate, member };
-      }
-    }
-    candidate = dirname(candidate);
-  }
-  return undefined;
+function withinDirectory(dir: string, parent: string): boolean {
+  return dir === parent || dir.startsWith(`${parent}/`);
 }
 
-const rootWorkspaceConfig = workspaceDirs.some((dir) => dir !== targetDir) && hasWorkspaceKnipConfig(targetDir);
-const ancestorWorkspaceConfig = rootWorkspaceConfig ? undefined : await configuredWorkspaceOwner(targetDir);
-const scopes = rootWorkspaceConfig
-  ? [targetDir, ...workspaceDirs.filter((dir) => dir !== targetDir)]
-  : ancestorWorkspaceConfig
-    ? [targetDir, ...workspaceDirs.filter((dir) => dir !== targetDir)]
-  : workspaceDirs.length ? workspaceDirs : [targetDir];
+function workspaceExclusions(root: string): Map<string, string> {
+  const exclusions = new Map<string, string>();
+  for (const observation of discoverWorkspaceInventory(root).observations) {
+    if (observation.kind !== "excluded") continue;
+    const dir = observation.path.replace(/\/package\.json$/, "");
+    if (dir === observation.path || dir === ".") continue;
+    exclusions.set(join(root, dir), `${observation.sourcePath} declares ${observation.glob}, which excludes ${dir} (${observation.reason})`);
+  }
+  return exclusions;
+}
+
+interface KnipGraph {
+  root: string;
+  config: ScopeKnipConfig;
+  members: string[];
+  exclusions: Map<string, string>;
+}
+
+// Resolve the graph once, before projecting it onto the requested subtree. Membership and
+// exclusions belong to the configuration root, not to the CLI entry point. An executable config
+// can declare members absent from every manifest, so unknown membership cannot justify a local
+// inferred run or a complete receipt. Only the real Knip child executes that config.
+async function configuredKnipGraph(root: string): Promise<KnipGraph | undefined> {
+  const config = scopeKnipConfig(root);
+  if (!config || ("value" in config && (!config.value.workspaces
+    || typeof config.value.workspaces !== "object" || Array.isArray(config.value.workspaces)))) return undefined;
+  const exclusions = workspaceExclusions(root);
+  return {
+    root, config, exclusions,
+    members: [...new Set([
+      root,
+      ...discoverWorkspaceInventory(root).packages.map((pkg) => join(root, pkg.dir)),
+      ...await configuredKnipWorkspaceDirs(root, config),
+      ...exclusions.keys(),
+    ])].sort((left, right) => right.length - left.length),
+  };
+}
+
+async function effectiveKnipGraph(dir: string): Promise<KnipGraph | undefined> {
+  let candidate = dir;
+  for (;;) {
+    const graph = await configuredKnipGraph(candidate);
+    if (graph && (candidate === dir || "unresolved" in graph.config
+      || graph.members.some((member) => member !== graph.root
+        && (withinDirectory(dir, member) || withinDirectory(member, dir))))) return graph;
+    // Match the product inventory's repository boundary, including worktree .git files. An
+    // unknown config outside a separately rooted target has no authority over that target.
+    if (existsSync(join(candidate, ".git"))) return undefined;
+    const parent = dirname(candidate);
+    if (parent === candidate) return undefined;
+    candidate = parent;
+  }
+}
+
+const knipGraph = await effectiveKnipGraph(targetDir);
+const scopes = knipGraph
+  ? [...new Set([targetDir, ...knipGraph.members.filter((dir) => withinDirectory(dir, targetDir))])]
+  : packageWorkspaceDirs.length ? packageWorkspaceDirs : [targetDir];
+const excludedWorkspaceReasons = new Map<string, string>();
+for (const [dir, reason] of knipGraph?.exclusions ?? workspaceExclusions(targetDir)) {
+  if (withinDirectory(dir, targetDir)) excludedWorkspaceReasons.set(scopeLabel(dir), reason);
+  else if (withinDirectory(targetDir, dir)) excludedWorkspaceReasons.set("(repo root)", reason);
+}
 const workspacePackageNames = new Set<string>();
 for (const scope of scopes) {
   try {
@@ -633,10 +666,11 @@ const knipReducedScopes: ScanGap[] = [];
 
 // A root Knip graph can deliberately omit a workspace. A successful child process alone cannot
 // establish that every member in Harvey's product inventory was examined by that graph.
-function rootGraphExclusion(root: string, scope: string): string | undefined {
-  const config = scopeKnipConfig(root);
-  const member = relative(root, scope).replaceAll("\\", "/") || ".";
-  if (!config || "unresolved" in config) {
+function rootGraphExclusion(graph: KnipGraph, scope: string): string | undefined {
+  const config = graph.config;
+  const owner = graph.members.find((dir) => withinDirectory(scope, dir)) ?? graph.root;
+  const member = relative(graph.root, owner).replaceAll("\\", "/") || ".";
+  if ("unresolved" in config) {
     return `Knip's root workspace configuration could not be inspected for ${member}; its examined population is unverified`;
   }
   const patterns = config.value.ignoreWorkspaces;
@@ -678,25 +712,15 @@ try {
   console.error(`⚠ jscpd ${isTimeout(err) ? "timed out" : "failed"} on the whole repo — M4 coverage incomplete: ${reason}`);
 }
 
-// A root Knip workspace config is a single configuration graph: splitting it into member cwd
-// runs discards root workspaces.entry/project/ignore. A direct member entry point runs the same
-// graph, then selects that member's results. Otherwise retain independent member runs from #505.
-const ancestorMembers = ancestorWorkspaceConfig
-  ? new Set([
-      ...discoverWorkspaceInventory(ancestorWorkspaceConfig.root).packages.map((pkg) => join(ancestorWorkspaceConfig.root, pkg.dir)),
-      ...await configuredKnipWorkspaceDirs(ancestorWorkspaceConfig.root),
-    ])
-  : new Set<string>();
-const ancestorCovered = ancestorWorkspaceConfig
-  ? scopes.filter((dir) => dir === targetDir || ancestorMembers.has(dir)) : [];
-const knipRuns: Array<{ dir: string; covered: string[]; stripPrefix?: string; graphRoot?: string }> = rootWorkspaceConfig
-  ? [{ dir: targetDir, covered: scopes, graphRoot: targetDir }]
-  : ancestorWorkspaceConfig
-    ? [
-        { dir: ancestorWorkspaceConfig.root, covered: ancestorCovered, stripPrefix: `${ancestorWorkspaceConfig.member}/`, graphRoot: ancestorWorkspaceConfig.root },
-        ...scopes.filter((dir) => !ancestorCovered.includes(dir)).map((dir) => ({ dir, covered: [dir] })),
-      ]
-    : scopes.map((dir) => ({ dir, covered: [dir] }));
+// A configured graph has one invocation, even when the requested subtree contains additional
+// package declarations. Re-running a descendant with inferred entries would overwrite the root's
+// entry/project/ignore semantics. Filter the graph's real output to the requested subtree instead.
+const knipRuns: Array<{ dir: string; covered: string[]; stripPrefix?: string; graph?: KnipGraph }> = knipGraph
+  ? [{
+      dir: knipGraph.root, covered: scopes, graph: knipGraph,
+      ...(knipGraph.root === targetDir ? {} : { stripPrefix: `${relative(knipGraph.root, targetDir).replaceAll("\\", "/")}/` }),
+    }]
+  : scopes.map((dir) => ({ dir, covered: [dir] }));
 const deepestScopes = [...scopes].sort((left, right) => right.length - left.length);
 for (const run of knipRuns) {
   const label = run.covered.map(scopeLabel).join(", ");
@@ -777,9 +801,11 @@ for (const run of knipRuns) {
 }
 
 for (const run of knipRuns) {
-  if (!run.graphRoot) continue;
+  if (!run.graph) continue;
   for (const scope of run.covered) {
-    const reason = rootGraphExclusion(run.graphRoot, scope);
+    // The reduced retry executes Harvey's known inferred config, not the unresolved original.
+    if (knipReducedScopes.some((reduced) => reduced.scope === scopeLabel(scope))) continue;
+    const reason = rootGraphExclusion(run.graph, scope);
     if (reason) knipGaps.push({ scope: scopeLabel(scope), reason });
   }
 }
@@ -808,13 +834,6 @@ if (wholeRepoDiverged) {
 const eligibleFileCount = observedProductSources.size;
 const memberScopes = scopes.filter((scope) => scope !== targetDir)
   .sort((left, right) => right.length - left.length);
-const excludedWorkspaceReasons = new Map<string, string>();
-for (const observation of discoverWorkspaceInventory(targetDir).observations) {
-  if (observation.kind !== "excluded") continue;
-  const dir = observation.path.replace(/\/package\.json$/, "");
-  if (dir === observation.path || dir === ".") continue;
-  excludedWorkspaceReasons.set(dir, `${observation.sourcePath} declares ${observation.glob}, which excludes ${dir} (${observation.reason})`);
-}
 const excludedWorkspaceDirs = [...excludedWorkspaceReasons.keys()].sort((left, right) => right.length - left.length);
 const sourcePathsByScope = new Map<string, string[]>(scopes.map((scope) => [scopeLabel(scope), []]));
 for (const path of observedProductSources) {
@@ -856,7 +875,8 @@ const knipPopulations = knipReceiptLabels.map((scope) => {
   const scopeDir = scope === "(repo root)" ? targetDir : join(targetDir, scope);
   const configuration = (scope === "(repo root)" && unexaminedRootPaths.length > 0) || excludedWorkspaceReasons.has(scope)
     ? "none" as const
-    : rootWorkspaceConfig || (ancestorWorkspaceConfig && ancestorCovered.includes(scopeDir))
+    : knipReducedScopeLabels.includes(scope) ? "harvey-inferred" as const
+    : knipGraph
     ? "root-workspace-config" as const
     : scopeKnipConfig(scopeDir) ? "local-config" as const : "harvey-inferred" as const;
   return {
