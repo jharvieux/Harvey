@@ -20,6 +20,7 @@ import {
   checkPassword, isAuthenticated, resolveSupabaseUserId, resolveUserId, sessionCookie,
   type SupabaseAuthLike,
 } from "../lib/auth.js";
+import { POST as login } from "../app/api/login/route.js";
 
 beforeEach(() => {
   boundary.jar.clear();
@@ -79,6 +80,30 @@ describe("shared-password and signed-cookie boundary", () => {
     vi.stubEnv("EPIC_BUILDER_SESSION_SECRET", "");
     expect(await resolveUserId()).toBeNull();
     expect(() => sessionCookie()).toThrow("EPIC_BUILDER_SESSION_SECRET is required");
+  });
+
+  it("makes the real login handler reject bad input and set a protected cookie on success", async () => {
+    const request = (body: string) => new Request("http://localhost/api/login", {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    });
+    const denied = await login(request(JSON.stringify({ password: "wrong" })));
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("set-cookie")).toBeNull();
+    const absent = await login(request("{}"));
+    expect(absent.status).toBe(401);
+    expect(absent.headers.get("set-cookie")).toBeNull();
+    const accepted = await login(request(JSON.stringify({ password: "correct horse battery staple" })));
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ ok: true });
+    const header = accepted.headers.get("set-cookie") ?? "";
+    expect(header).toContain("epic_session=");
+    expect(header).toContain("HttpOnly");
+    expect(header).toContain("Secure");
+    expect(header).toContain("SameSite=strict");
+    expect(header).toContain("Max-Age=43200");
+    const malformed = await login(request("{"));
+    expect(malformed.status).toBe(400);
+    expect(malformed.headers.get("set-cookie")).toBeNull();
   });
 });
 

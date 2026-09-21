@@ -1,7 +1,5 @@
-// Route-handler helper: enforce the auth gate (design §6), run the handler, and turn a thrown error
-// into a JSON 400 whose message carries no secret (the tracker layer already guarantees tokens never
-// reach an error message; this only surfaces the message text). Keeps every route to parse -> call
-// wrap -> return JSON.
+// Authenticate before parsing or invoking core, flush only a successful result, and release
+// request-owned resources on every exit.
 
 import { NextResponse } from "next/server";
 import { resolveUserId } from "./auth.js";
@@ -9,19 +7,26 @@ import { productionDeps } from "./deps.js";
 import type { CoreDeps } from "./core.js";
 
 export async function handle(fn: (deps: CoreDeps) => Promise<unknown>): Promise<NextResponse> {
-  const userId = await resolveUserId();
-  if (!userId) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const { deps, commit } = await productionDeps(userId);
+  let acquired: Awaited<ReturnType<typeof productionDeps>> | undefined;
+  let response: NextResponse | undefined;
+  let failure: unknown;
   try {
-    const result = await fn(deps);
-    // Persist only on success: with the Supabase store this makes each request's writes atomic (a failed
-    // request flushes nothing); with the filesystem store commit is a no-op and the core has already
-    // written to disk.
-    await commit();
-    return NextResponse.json(result);
+    const userId = await resolveUserId();
+    if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    acquired = await productionDeps(userId);
+    const result = await fn(acquired.deps);
+    await acquired.commit();
+    response = NextResponse.json(result);
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+    failure = err;
   }
+  try {
+    await acquired?.release();
+  } catch (err) {
+    if (failure === undefined) failure = err;
+  }
+  if (failure !== undefined) {
+    return NextResponse.json({ error: failure instanceof Error ? failure.message : String(failure) }, { status: 400 });
+  }
+  return response!;
 }
