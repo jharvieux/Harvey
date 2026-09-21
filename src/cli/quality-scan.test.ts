@@ -819,6 +819,160 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
     });
   }, 30_000);
 
+  it("discloses a member omitted by root Knip ignoreWorkspaces from both entry points", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-ignored-root-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"] }));
+    write(repo, "knip.json", JSON.stringify({
+      workspaces: { "apps/*": { entry: ["src/live.ts"], project: ["src/**/*.ts"] } },
+      ignoreWorkspaces: ["apps/{web,api}"],
+    }));
+    for (const name of ["web", "other"]) {
+      write(repo, `apps/${name}/package.json`, JSON.stringify({ name, private: true }));
+      write(repo, `apps/${name}/src/live.ts`, "export const live = true;\n");
+      write(repo, `apps/${name}/src/dead.ts`, "export const dead = true;\n");
+    }
+    write(repo, "src/root-dead.ts", "export const rootDead = true;\n");
+
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    const rootReceiptPath = join(repo, "root-scope.json");
+    const rootFindings = await runCli(repo, ["--scope-out", rootReceiptPath]);
+    expect(rootFindings.filter((finding) => finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location).sort()).toEqual(direct.files.sort());
+    expect(rootFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("ignoreWorkspaces includes apps/web");
+    expect(readCorpusScannerScope(rootReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 5 },
+      knip: {
+        discovered: ["(repo root)", "apps/other", "apps/web"],
+        completed: ["(repo root)", "apps/other"], incomplete: ["apps/web"],
+        populations: [
+          { scope: "(repo root)", productSources: 1, status: "completed" },
+          { scope: "apps/other", productSources: 2, status: "completed" },
+          { scope: "apps/web", productSources: 2, status: "incomplete", configuration: "root-workspace-config", reason: expect.stringContaining("ignoreWorkspaces includes apps/web") },
+        ],
+      },
+    });
+
+    const memberReceiptPath = join(repo, "member-scope.json");
+    const memberFindings = await runCli(join(repo, "apps/web"), ["--scope-out", memberReceiptPath]);
+    expect(memberFindings.some((finding) => finding.title.startsWith("Unused file"))).toBe(false);
+    expect(memberFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("ignoreWorkspaces includes apps/web");
+    expect(readCorpusScannerScope(memberReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 2 }, knip: {
+        discovered: ["(repo root)"], completed: [], incomplete: ["(repo root)"],
+        populations: [{ scope: "(repo root)", productSources: 2, status: "incomplete", reason: expect.stringContaining("ignoreWorkspaces includes apps/web") }],
+      },
+    });
+  }, 30_000);
+
+  it("keeps executable root workspace selection unverified in both receipts", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-root-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"] }));
+    write(repo, "knip.js", "module.exports = () => ({ workspaces: { 'apps/web': { entry: ['src/live.ts'], project: ['src/**/*.ts'] } }, ignoreWorkspaces: ['apps/web'] });\n");
+    write(repo, "apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write(repo, "apps/web/src/live.ts", "export const live = true;\n");
+    write(repo, "apps/web/src/dead.ts", "export const dead = true;\n");
+    const rootReceiptPath = join(repo, "root-scope.json");
+    const rootFindings = await runCli(repo, ["--scope-out", rootReceiptPath]);
+    expect(rootFindings.some((finding) => finding.title.startsWith("Unused file"))).toBe(false);
+    expect(rootFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
+    expect(readCorpusScannerScope(rootReceiptPath, "quality-scan").observation).toMatchObject({
+      knip: { incomplete: ["(repo root)", "apps/web"], populations: [
+        { scope: "(repo root)", status: "incomplete", reason: expect.stringContaining("could not be inspected") },
+        { scope: "apps/web", productSources: 2, status: "incomplete", reason: expect.stringContaining("could not be inspected") },
+      ] },
+    });
+    const memberReceiptPath = join(repo, "member-scope.json");
+    const memberFindings = await runCli(join(repo, "apps/web"), ["--scope-out", memberReceiptPath]);
+    expect(memberFindings.some((finding) => finding.title.startsWith("Unused file"))).toBe(false);
+    expect(memberFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
+    expect(readCorpusScannerScope(memberReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 2 }, knip: { incomplete: ["(repo root)"], populations: [
+        { scope: "(repo root)", productSources: 2, status: "incomplete", reason: expect.stringContaining("could not be inspected") },
+      ] },
+    });
+  }, 30_000);
+
+  it("uses one ancestor Knip graph for a direct member and its declared nested member", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-nested-root-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*", "apps/web/packages/*"] }));
+    write(repo, "knip.json", JSON.stringify({ workspaces: {
+      "apps/web": { entry: ["src/live.ts"], project: ["src/**/*.ts"] },
+      "apps/web/packages/leaf": { entry: ["src/live.ts"], project: ["src/**/*.ts"] },
+    } }));
+    write(repo, "apps/web/package.json", JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }));
+    write(repo, "apps/web/src/live.ts", "export const live = true;\n");
+    write(repo, "apps/web/src/dead.ts", "export const dead = true;\n");
+    write(repo, "apps/web/packages/leaf/package.json", JSON.stringify({ name: "leaf", private: true }));
+    write(repo, "apps/web/packages/leaf/src/live.ts", "export const live = true;\n");
+    write(repo, "apps/web/packages/leaf/src/dead.ts", "export const dead = true;\n");
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    const receiptPath = join(repo, "member-scope.json");
+    const findings = await runCli(join(repo, "apps/web"), ["--scope-out", receiptPath]);
+    expect(findings.filter((finding) => finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location).sort())
+      .toEqual(direct.files.filter((file) => file.startsWith("apps/web/"))
+        .map((file) => file.slice("apps/web/".length)).sort());
+    expect(findings.filter((finding) => finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location).sort()).toEqual(["packages/leaf/src/dead.ts", "src/dead.ts"]);
+    expect(findings.some((finding) => finding.id === "M5-00" || finding.id === "M5-98")).toBe(false);
+    expect(readCorpusScannerScope(receiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 4 }, knip: {
+        discovered: ["(repo root)", "packages/leaf"], completed: ["(repo root)", "packages/leaf"], incomplete: [],
+        populations: [
+          { scope: "(repo root)", productSources: 2, status: "completed", configuration: "root-workspace-config" },
+          { scope: "packages/leaf", productSources: 2, status: "completed", configuration: "root-workspace-config" },
+        ],
+      },
+    });
+  }, 30_000);
+
+  it("counts Knip-only configured workspaces and honors them on direct member scans", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-knip-only-workspace-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/web"] }));
+    const memberConfig = { entry: ["src/live.ts"], project: ["src/**/*.ts"], ignore: ["src/ignored.ts"] };
+    write(repo, "knip.json", JSON.stringify({ workspaces: { "apps/web": memberConfig, "tools/worker": memberConfig } }));
+    for (const scope of ["apps/web", "tools/worker"]) {
+      write(repo, `${scope}/package.json`, JSON.stringify({ name: scope.replace("/", "-"), private: true }));
+      write(repo, `${scope}/src/live.ts`, "export const live = true;\n");
+      write(repo, `${scope}/src/dead.ts`, "export const dead = true;\n");
+      write(repo, `${scope}/src/ignored.ts`, "export const ignored = true;\n");
+    }
+
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    const rootReceiptPath = join(repo, "root-scope.json");
+    const rootFindings = await runCli(repo, ["--scope-out", rootReceiptPath]);
+    expect(rootFindings.filter((finding) => finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location).sort()).toEqual(direct.files.sort());
+    expect(readCorpusScannerScope(rootReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 6 }, knip: {
+        discovered: ["(repo root)", "apps/web", "tools/worker"], completed: ["(repo root)", "apps/web", "tools/worker"], incomplete: [],
+        populations: [
+          { scope: "(repo root)", productSources: 0, status: "completed", configuration: "root-workspace-config" },
+          { scope: "apps/web", productSources: 3, status: "completed", configuration: "root-workspace-config" },
+          { scope: "tools/worker", productSources: 3, status: "completed", configuration: "root-workspace-config" },
+        ],
+      },
+    });
+
+    const memberReceiptPath = join(repo, "member-scope.json");
+    const memberFindings = await runCli(join(repo, "tools/worker"), ["--scope-out", memberReceiptPath]);
+    expect(memberFindings.filter((finding) => finding.title.startsWith("Unused file"))
+      .map((finding) => finding.location)).toEqual(["src/dead.ts"]);
+    expect(readCorpusScannerScope(memberReceiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 3 }, knip: {
+        discovered: ["(repo root)"], completed: ["(repo root)"], incomplete: [],
+        populations: [{ scope: "(repo root)", productSources: 3, status: "completed", configuration: "root-workspace-config" }],
+      },
+    });
+  }, 30_000);
+
   it("discloses root sources left outside member-local Knip runs", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-local-knip-"));
     dirs.push(repo);
