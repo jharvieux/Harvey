@@ -292,9 +292,9 @@ interface KnipGraph {
 }
 
 // Resolve the graph once, before projecting it onto the requested subtree. Membership and
-// exclusions belong to the configuration root, not to the CLI entry point. An executable config
-// can declare members absent from every manifest, so unknown membership cannot justify a local
-// inferred run or a complete receipt. Only the real Knip child executes that config.
+// exclusions belong to the configuration root, not to the CLI entry point. Executable configs
+// may add members beyond manifests. Preserve their execution context and mark unknown membership
+// incomplete; the real Knip child is the sole evaluator of that config.
 async function configuredKnipGraph(root: string): Promise<KnipGraph | undefined> {
   const config = scopeKnipConfig(root);
   if (!config) return undefined;
@@ -673,8 +673,8 @@ const knipUncertainScopes: ScanGap[] = [];
 // #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
 const knipReducedScopes: ScanGap[] = [];
 
-// A root Knip graph can deliberately omit a workspace. A successful child process alone cannot
-// establish that every member in Harvey's product inventory was examined by that graph.
+// Root workspace exclusions survive a successful child exit. Reconcile each product-inventory
+// member with the executed graph before marking its source population examined.
 function rootGraphExclusion(graph: KnipGraph, scope: string): string | undefined {
   const config = graph.config;
   const owner = graph.members.find((dir) => withinDirectory(scope, dir)) ?? graph.root;
