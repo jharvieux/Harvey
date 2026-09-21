@@ -5,8 +5,8 @@ import { runPublish } from "../../../lib/core.js";
 export const runtime = "nodejs";
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const { slug, dryRun } = (await req.json()) as { slug?: string; dryRun?: boolean };
   return handle(async (deps) => {
+    const { slug, dryRun } = (await req.json()) as { slug?: string; dryRun?: boolean };
     if (!slug) throw new Error("slug is required");
     return runPublish(deps, slug, dryRun ?? true);
   });

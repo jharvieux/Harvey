@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 
 // POST: start a new epic from a prompt (returns slug + round-1 clarifying questions).
 export async function POST(req: Request): Promise<NextResponse> {
-  const { prompt } = (await req.json()) as { prompt?: string };
   return handle(async (deps) => {
+    const { prompt } = (await req.json()) as { prompt?: string };
     if (!prompt || !prompt.trim()) throw new Error("a prompt is required");
     return startSession(deps, prompt.trim());
   });

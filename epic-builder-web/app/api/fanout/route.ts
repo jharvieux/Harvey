@@ -15,8 +15,8 @@ export async function GET(req: Request): Promise<NextResponse> {
 
 // POST: draft the kept subset (or all if `keep` is omitted) and enter per-story review.
 export async function POST(req: Request): Promise<NextResponse> {
-  const { slug, keep } = (await req.json()) as { slug?: string; keep?: number[] };
   return handle(async (deps) => {
+    const { slug, keep } = (await req.json()) as { slug?: string; keep?: number[] };
     if (!slug) throw new Error("slug is required");
     return fanOut(deps, slug, keep);
   });
