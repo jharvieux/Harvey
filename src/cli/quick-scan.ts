@@ -35,9 +35,10 @@
 import "./sync-stdio.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
-import { loadSources } from "../detectors/load-sources.js";
+import { loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runJscpd } from "../scan/duplication.js";
@@ -48,6 +49,8 @@ import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
 import { buildSbom } from "../sbom.js";
 import { buildHealthScorecard, type HealthDimension, type HealthScorecard, type PiiTableBand, type ScorecardInput } from "../health-scorecard.js";
 import { duplicationSummary, jscpdToFindings } from "../quality-scan.js";
+import { productSourceInventoryForTarget } from "../source-inventory.js";
+import { sourcePopulationReceipt } from "../scan/polyglot-quality.js";
 import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
@@ -66,18 +69,25 @@ import { toSarif } from "../sarif.js";
 // Falsifier: `run-audit targets/calibration --sarif-out a.sarif` and check the printed result count
 // against the same run with --findings-out (src/cli/run-audit.test.ts asserts they match).
 function quickScanSarifScope(scorecard: HealthScorecard): string {
+  const m1 = scorecard.dimensions.find((dimension) => dimension.module === "M1");
+  const graded = scorecard.gradedModules.filter((module) => module !== "M1");
+  const indicators = scorecard.dimensions.filter((dimension) => dimension.status === "indicator-only").map((dimension) => dimension.module);
+  const banded = scorecard.dimensions.filter((dimension) => dimension.status === "risk-band");
+  const additional = [
+    ...(graded.length ? [`graded ${graded.join(", ")}`] : []),
+    ...(indicators.length ? [`produced indicators for ${indicators.join(", ")}`] : []),
+    ...banded.map((dimension) => `produced a ${dimension.band} data-exposure rating for ${dimension.module}`),
+  ];
+  const m1Scope = m1?.status === "not-assessed"
+    ? `This export carries any configuration-only M1 mechanical results, but M1 product-source hygiene was not assessed: ${m1.reason} `
+    : "This export carries the M1 mechanical results only (dependency, secret and dangerous-config hygiene plus static indicators). ";
+  const additionalScope = additional.length
+    ? `The free scan also ${additional.join("; ")}; those results are in the report (` + "`--json` / terminal output), NOT in this SARIF file. "
+    : "No additional health dimension earned a grade, indicator, or data-exposure rating in this run. ";
   return (
-    "This is a free quick-scan, not a Harvey audit, and THIS EXPORT carries the M1 mechanical " +
-    "results only (dependency, secret and dangerous-config hygiene plus static indicators). " +
-    `The free scan also graded ${scorecard.gradedModules.filter((m) => m !== "M1").join(", ")} and produced indicators for ` +
-    `${scorecard.dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module).join(", ")}` +
-    // The risk band is a rating, not an indicator: naming it separately keeps the export's own scope
-    // note from under-reporting what the scan actually established about the target's data surface.
-    `${scorecard.dimensions
-      .filter((d) => d.status === "risk-band")
-      .map((d) => `, plus a ${d.band} data-exposure rating for ${d.module}`)
-      .join("")}; ` +
-    "those results are in the report (`--json` / terminal output), NOT in this SARIF file. " +
+    "This is a free quick-scan, not a Harvey audit. " +
+    m1Scope +
+    additionalScope +
     `${scorecard.unassessedModules.join(", ")} were not run at all. ` +
     "Absence of a result here is not evidence of absence of a problem. " +
     "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger."
@@ -182,9 +192,9 @@ function declaresTestScript(dir: string): boolean {
   }
 }
 
-function measureDuplication(dir: string, sourceFileCount: number): Pick<ScorecardInput, "duplication" | "duplicationGap" | "duplicationFindings"> {
+function measureDuplication(dir: string, sourceFileCount: number, ignoreGlobs: readonly string[]): Pick<ScorecardInput, "duplication" | "duplicationGap" | "duplicationFindings"> {
   try {
-    const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount });
+    const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount, ignoreGlobs });
     const { percentage, duplicatedLines, totalLines } = duplicationSummary(report);
     return { duplication: { percentage, duplicatedLines, totalLines }, duplicationFindings: jscpdToFindings(report) };
   } catch (err) {
@@ -251,9 +261,11 @@ function renderEvidence(d: HealthDimension): string[] {
   return lines;
 }
 
-function renderScorecard(s: HealthScorecard): string[] {
+export function renderScorecard(s: HealthScorecard): string[] {
   const lines: string[] = [];
-  lines.push(`  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`);
+  lines.push(s.grade && s.score !== undefined
+    ? `  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`
+    : "  Harvey Quick Scan — Codebase Health NOT ASSESSED");
   lines.push("  Ran 100% locally. No source code left your machine.");
   lines.push("");
   lines.push(...wrap(s.scopeSentence, "  "));
@@ -284,7 +296,11 @@ function renderScorecard(s: HealthScorecard): string[] {
   return lines;
 }
 
-function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
+const M1_NOT_ASSESSED_DISCLOSURE =
+  "No M1 hygiene grade was assigned because configured boundaries excluded every discovered " +
+  "product source file. Configuration-only informational results remain visible below and do not establish that product source is clean.";
+
+function render(r: QuickScanReport, scorecard?: HealthScorecard, m1AssessmentGap?: string): string {
   const lines: string[] = [];
   lines.push("");
   if (scorecard) lines.push(...renderScorecard(scorecard));
@@ -292,10 +308,12 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
   // disclosure sits directly under it — a hygiene grade read as a security verdict is the
   // failure mode this tier exists to avoid. Under #1305 this is M1's own dimension rather than the
   // whole report's headline, so it is labelled as such.
-  lines.push(`  ── M1 security & multi-tenant isolation — Hygiene Grade ${r.grade}  (${r.score}/100) ─────────────`);
-  lines.push(`  Scope: ${r.gradeScope}`);
+  lines.push(m1AssessmentGap
+    ? "  ── M1 security & multi-tenant isolation — NOT ASSESSED ─────────────"
+    : `  ── M1 security & multi-tenant isolation — Hygiene Grade ${r.grade}  (${r.score}/100) ─────────────`);
+  lines.push(`  Scope: ${m1AssessmentGap ?? r.gradeScope}`);
   lines.push("");
-  lines.push(...wrap(r.riskDisclosure, "  "));
+  lines.push(...wrap(m1AssessmentGap ? M1_NOT_ASSESSED_DISCLOSURE : r.riskDisclosure, "  "));
   lines.push("");
 
   // #1044: the size and its band, printed with the definition that produced them. The pricing page
@@ -309,7 +327,9 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
     lines.push("");
   }
 
-  if (r.total === 0) {
+  if (m1AssessmentGap) {
+    lines.push(`  M1 hygiene was not assessed: ${m1AssessmentGap}`);
+  } else if (r.total === 0) {
     lines.push("  No hygiene issues found — nothing mechanically verifiable to fix.");
   } else {
     const counts = SEVERITY_ORDER.filter((s) => r.countsBySeverity[s] > 0)
@@ -428,7 +448,9 @@ function render(r: QuickScanReport, scorecard?: HealthScorecard): string {
     lines.push("");
     lines.push(
       `  (${r.reviewTierExcluded} lower-confidence signal${r.reviewTierExcluded === 1 ? "" : "s"} were found and ` +
-        "deliberately left out of your grade — triaged in the deep scan, never counted here.)",
+        (m1AssessmentGap
+          ? "deliberately left out of grading — triaged in the deep scan, never counted here.)"
+          : "deliberately left out of your grade — triaged in the deep scan, never counted here.)"),
     );
   }
   lines.push("");
@@ -452,8 +474,23 @@ async function main(): Promise<void> {
     location: relativizeScanScope(f.location),
   }));
   const absDir = resolve(dir);
-  const size = measureCodebaseSize(absDir);
+  const sourceInventory = productSourceInventoryForTarget(absDir);
+  const size = measureCodebaseSize(absDir, sourceInventory);
+  const configuredExclusions = sourceInventory.excludedDirectories.filter((entry) => ![".git", "node_modules"].includes(entry.path));
+  const sourcePopulationGap = size.files === 0 && size.excludedFiles > 0
+    ? `All ${size.excludedFiles} discovered JS/TS source file(s) were excluded from product input by configuration-derived boundaries: ${
+        (configuredExclusions.length ? configuredExclusions : sourceInventory.excludedDirectories)
+          .map((entry) => `${entry.path} (${entry.reason})`)
+          .join("; ")
+      }. No JS/TS product source was inspected.`
+    : undefined;
   const report = buildQuickScanReport(rawFindings, { size });
+  const m1AssessmentGap = sourcePopulationGap && report.total === 0 ? sourcePopulationGap : undefined;
+  const inventoryGap = sourceInventory.unresolvedConfigurations.length > 0
+    ? sourceInventory.unresolvedConfigurations
+      .map((gap) => `${gap.path}: ${gap.reason}`)
+      .join("; ")
+    : undefined;
 
   // #1305 — the per-dimension health scorecard. Deliberately built from its OWN detector runs rather
   // than from `rawFindings`: that array is the M1 mechanical feed the orchestrator's probe reads
@@ -462,6 +499,28 @@ async function main(): Promise<void> {
   // The FULL set, tests included: buildHealthScorecard splits it (product code for M5/M7/M9, test
   // files for M8's census), so the split lives in one place rather than at each call site.
   const sources = loadSources(absDir);
+  const identifiedSources = loadSourceInventory(absDir);
+  const m5Receipt = sourcePopulationReceipt("M5", identifiedSources);
+  const m5ExaminedLanguages = new Set(
+    m5Receipt.populations.filter((population) => population.examined.count > 0).map((population) => population.language),
+  );
+  const m5ExaminedSources = identifiedSources.filter((source) => {
+    const language = sourceLanguage(source.path);
+    return language !== undefined && m5ExaminedLanguages.has(language);
+  });
+  const m5SourceAssessment = sourcePopulationGap && m5ExaminedSources.length > 0
+    ? {
+        findings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
+        kloc: m5ExaminedSources.reduce(
+          (lines, source) => lines + source.text.split("\n").filter((line) => line.trim() !== "").length,
+          0,
+        ) / 1000,
+        examinedFiles: m5ExaminedSources.length,
+        scope:
+          `Bounded M5 source rules examined ${m5ExaminedSources.length} authored source file(s), with per-language coverage disclosures kept alongside the result. `
+          + sourcePopulationGap,
+      }
+    : undefined;
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
     m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length, findings: selectGradedFindings(rawFindings) },
@@ -470,10 +529,14 @@ async function main(): Promise<void> {
     framework: detectTargetFramework(absDir),
     nonNextWorkspaces: nonNextWorkspaces(absDir),
     orm: detectOrm(absDir),
-    ...measureDuplication(absDir, size.files),
+    ...(inventoryGap
+      ? { duplicationGap: `Product-source configuration is unresolved: ${inventoryGap}. M4 was not graded because configured output cannot be separated from authored source without guessing.` }
+      : measureDuplication(absDir, size.files, sourceInventory.jscpdIgnoreGlobs)),
     handrolledClasses: report.handrolled.length,
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
     testRunnerDeclared: declaresTestScript(absDir),
+    ...(sourcePopulationGap ? { sourcePopulationGap } : {}),
+    ...(m5SourceAssessment ? { m5SourceAssessment } : {}),
     ...("gap" in pii ? { piiGap: pii.gap } : { pii }),
   });
 
@@ -496,12 +559,25 @@ async function main(): Promise<void> {
   }
 
   const out = arg("--out");
-  const body = process.argv.includes("--json") ? JSON.stringify({ ...report, scorecard }, null, 2) : render(report, scorecard);
+  const serializableReport = m1AssessmentGap
+    ? {
+        ...report,
+        grade: undefined,
+        score: undefined,
+        gradeScope: `NOT ASSESSED — ${m1AssessmentGap}`,
+        riskDisclosure: M1_NOT_ASSESSED_DISCLOSURE,
+      }
+    : report;
+  const body = process.argv.includes("--json")
+    ? JSON.stringify({ ...serializableReport, scorecard }, null, 2)
+    : render(report, scorecard, m1AssessmentGap);
   if (out) writeFileSync(out, body);
   else console.log(body);
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

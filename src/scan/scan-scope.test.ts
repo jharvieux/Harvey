@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,20 +98,29 @@ describe("resolveScanScope — git repo target", () => {
 });
 
 describe("resolveScanScope — non-git target (zip export fallback)", () => {
-  it("applies the hard exclude list (node_modules, .claude, .next, dist, build, coverage)", () => {
+  it("excludes only dependency and configured output directories, retaining authored output-like paths", () => {
     const dir = tmp("harvey-scope-plain-");
     writeFileSync(join(dir, "app.ts"), "export const a = 1;");
-    for (const excluded of ["node_modules", ".claude", ".next", "dist", "build", "coverage"]) {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ devDependencies: { vite: "1" }, scripts: { test: "vitest --coverage" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    for (const excluded of ["node_modules", "dist", "coverage", ".pnpm-store"]) {
       mkdirSync(join(dir, excluded, "nested"), { recursive: true });
       writeFileSync(join(dir, excluded, "nested", "f.ts"), "noise");
+    }
+    for (const retained of ["reports", "build", "generated", "vendor"]) {
+      mkdirSync(join(dir, retained, "nested"), { recursive: true });
+      writeFileSync(join(dir, retained, "nested", "f.ts"), "export const authored = true;");
     }
 
     const { scanDir, cleanup } = resolveScanScope(dir);
     scratches.push(scanDir);
     try {
       expect(existsSync(join(scanDir, "app.ts"))).toBe(true);
-      for (const excluded of ["node_modules", ".claude", ".next", "dist", "build", "coverage"]) {
+      for (const excluded of ["node_modules", "dist", "coverage", ".pnpm-store"]) {
         expect(existsSync(join(scanDir, excluded))).toBe(false);
+      }
+      for (const retained of ["reports", "build", "generated", "vendor"]) {
+        expect(existsSync(join(scanDir, retained, "nested", "f.ts"))).toBe(true);
       }
     } finally {
       cleanup();
@@ -131,6 +140,52 @@ describe("resolveScanScope — non-git target (zip export fallback)", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("copies no flat or nested artifacts when an ancestor config excludes the whole workspace", () => {
+    const root = tmp("harvey-scope-whole-workspace-");
+    mkdirSync(join(root, "apps/web/src"), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    writeFileSync(join(root, "apps/web/package.json"), JSON.stringify({ name: "web", private: true }));
+    writeFileSync(join(root, "apps/web/generated.ts"), "export const direct = true;\n");
+    writeFileSync(join(root, "apps/web/src/generated.ts"), "export const nested = true;\n");
+
+    const { scanDir, cleanup } = resolveScanScope(join(root, "apps/web"));
+    scratches.push(scanDir);
+    try {
+      expect(existsSync(join(scanDir, "generated.ts"))).toBe(false);
+      expect(existsSync(join(scanDir, "src/generated.ts"))).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("source alias boundaries in mechanical scratch copies", () => {
+  it.each([false, true])("rebases absolute internal aliases and excludes external and generated targets (git %s)", (git) => {
+    const root = tmp("harvey-scope-alias-"), external = tmp("harvey-scope-external-");
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ devDependencies: { vite: "1" } }));
+    writeFileSync(join(root, "src/live.ts"), "export const live = true;\n");
+    writeFileSync(join(root, "dist/excluded.ts"), "export const generated = true;\n");
+    writeFileSync(join(external, "outside.ts"), "external");
+    symlinkSync(join(root, "src"), join(root, "live-alias"));
+    symlinkSync(join(root, "dist"), join(root, "generated-alias"));
+    symlinkSync(external, join(root, "external-alias"));
+    if (git) {
+      execFileSync("git", ["init", "-q", root]);
+      execFileSync("git", ["-C", root, "add", "-A"]);
+    }
+    const scope = resolveScanScope(root);
+    try {
+      expect(realpathSync(join(scope.scanDir, "live-alias/live.ts"))).toBe(realpathSync(join(scope.scanDir, "src/live.ts")));
+      expect(existsSync(join(scope.scanDir, "generated-alias/excluded.ts"))).toBe(false);
+      expect(existsSync(join(scope.scanDir, "external-alias/outside.ts"))).toBe(false);
+      writeFileSync(join(scope.scanDir, "live-alias/live.ts"), "mutated");
+      expect(readFileSync(join(root, "src/live.ts"), "utf8")).toContain("live = true");
+    } finally { scope.cleanup(); }
   });
 });
 

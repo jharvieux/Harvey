@@ -15,6 +15,7 @@
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { readEntriesSafe } from "./fs-walk.js";
 
 interface WorkspaceManifest {
@@ -259,18 +260,29 @@ function parseWorkspaceGlobs(repoRoot: string): {
   globs: string[];
   source: string;
   sourceField: WorkspaceDiscoveryEvidence["sourceField"];
+  declarationError?: string;
 } {
   const pnpm = join(repoRoot, "pnpm-workspace.yaml");
   if (existsSync(pnpm)) {
-    const globs: string[] = [];
-    let inPackages = false;
-    for (const raw of readFileSync(pnpm, "utf8").split("\n")) {
-      if (/^packages:\s*$/.test(raw)) { inPackages = true; continue; }
-      if (inPackages && /^\S/.test(raw)) break; // dedented → left the packages block
-      const m = raw.match(/^\s*-\s*["']?([^"'\s]+)["']?\s*$/);
-      if (inPackages && m) globs.push(m[1]!);
+    try {
+      const parsed = parseYaml(readFileSync(pnpm, "utf8")) as { packages?: unknown } | null;
+      if (Array.isArray(parsed?.packages) && parsed.packages.every((entry) => typeof entry === "string")) {
+        return { globs: parsed.packages, source: "pnpm-workspace.yaml", sourceField: "packages" };
+      }
+      return {
+        globs: [],
+        source: "pnpm-workspace.yaml",
+        sourceField: "packages",
+        declarationError: "pnpm-workspace.yaml#packages must be a string array",
+      };
+    } catch (err) {
+      return {
+        globs: [],
+        source: "pnpm-workspace.yaml",
+        sourceField: "packages",
+        declarationError: `pnpm-workspace.yaml could not be parsed: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
-    if (globs.length) return { globs, source: "pnpm-workspace.yaml", sourceField: "packages" };
   }
   const pkgPath = join(repoRoot, "package.json");
   if (existsSync(pkgPath)) {
@@ -331,6 +343,52 @@ function childDirs(dir: string, physicalRoot: string): string[] {
   }
 }
 
+function regexEscape(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&");
+}
+
+/** Translate one path segment using the wildcard forms npm/pnpm workspace globs accept. */
+function workspaceSegmentPattern(segment: string): RegExp {
+  const compile = (value: string): string => {
+    let out = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const char = value[index]!;
+      if (char === "*") {
+        out += "[^/]*";
+      } else if (char === "?") {
+        out += "[^/]";
+      } else if (char === "[") {
+        const close = value.indexOf("]", index + 1);
+        if (close < 0) {
+          out += "\\[";
+          continue;
+        }
+        const raw = value.slice(index + 1, close);
+        const negated = raw.startsWith("!") ? `^${raw.slice(1)}` : raw;
+        out += raw.length === 0 ? "\\[\\]" : `[${negated.replace(/\\/g, "\\\\")}]`;
+        index = close;
+      } else if (char === "{") {
+        const close = value.indexOf("}", index + 1);
+        if (close < 0) {
+          out += "\\{";
+          continue;
+        }
+        const alternatives = value.slice(index + 1, close).split(",");
+        if (alternatives.length < 2) {
+          out += regexEscape(value.slice(index, close + 1));
+        } else {
+          out += `(?:${alternatives.map(compile).join("|")})`;
+        }
+        index = close;
+      } else {
+        out += regexEscape(char);
+      }
+    }
+    return out;
+  };
+  return new RegExp(`^${compile(segment)}$`);
+}
+
 // Expand a pnpm/npm workspace glob into candidate directories, matching fast-glob's segment
 // semantics: a literal segment descends into that name, `*` matches exactly one path segment (any
 // dir), and `**` matches zero or more segments (recursive). This is what lets `packages/**` reach a
@@ -364,8 +422,11 @@ function expandGlob(repoRoot: string, glob: string): string[] {
     if (head === "**") {
       walk(dir, rest, nextAncestors); // ** matches zero segments here
       for (const child of childDirs(dir, physicalRoot)) walk(child, segs, nextAncestors); // …or one-plus, keeping ** for depth
-    } else if (head === "*") {
-      for (const child of childDirs(dir, physicalRoot)) walk(child, rest, nextAncestors);
+    } else if (head && /[*?[{]/.test(head)) {
+      const pattern = workspaceSegmentPattern(head);
+      for (const child of childDirs(dir, physicalRoot)) {
+        if (pattern.test(child.slice(child.lastIndexOf(sep) + 1))) walk(child, rest, nextAncestors);
+      }
     } else {
       walk(join(dir, head!), rest, nextAncestors);
     }
@@ -433,9 +494,17 @@ function discoverWorkspaceRecords(repoRoot: string): {
   unreadable: string[];
 } {
   const logicalRoot = resolve(repoRoot);
-  const { globs, source, sourceField } = parseWorkspaceGlobs(logicalRoot);
+  const { globs, source, sourceField, declarationError } = parseWorkspaceGlobs(logicalRoot);
   const sourceDetails = workspaceSourceDetails(source, sourceField);
   const observations: WorkspaceInventoryObservation[] = [];
+  if (declarationError) {
+    observations.push({
+      kind: "invalid-glob",
+      glob: "pnpm-workspace.yaml#packages",
+      sourcePath: sourceDetails.sourcePath,
+      reason: declarationError,
+    });
+  }
   const excluded = new Set<string>();
   for (const declared of globs.filter((glob) => glob.startsWith("!"))) {
     const glob = declared.slice(1);
@@ -456,7 +525,7 @@ function discoverWorkspaceRecords(repoRoot: string): {
   }
   const records: WorkspaceRecord[] = [];
   const inventoryPackages: WorkspaceInventoryPackage[] = [];
-  const unresolvedGlobs: string[] = [];
+  const unresolvedGlobs: string[] = declarationError ? ["pnpm-workspace.yaml#packages"] : [];
   const unreadable: string[] = [];
   const byId = new Map<WorkspaceId, WorkspaceInventoryPackage>();
   const applicationWorkspaceIds = new Set<WorkspaceId>();
@@ -544,8 +613,8 @@ function discoverWorkspaceRecords(repoRoot: string): {
         continue;
       }
       const id = workspaceIdForDir(dir);
-      applicationWorkspaceIds.add(id);
       if (excluded.has(dir)) continue;
+      applicationWorkspaceIds.add(id);
       const discoveredBy: WorkspaceDiscoveryEvidence = source === "no workspace globs declared"
         ? { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }
         : { kind: "workspace-glob", ...sourceDetails, glob };

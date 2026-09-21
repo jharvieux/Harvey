@@ -71,10 +71,11 @@ export function healthGauge(v) {
 
 export function severityDonut(counts) {
   const entries = Object.entries(counts).filter(([, n]) => n > 0).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o);
-  const total = entries.reduce((s, [, n]) => s + n, 0) || 1;
+  const total = entries.reduce((s, [, n]) => s + n, 0);
+  const geometricDivisor = total || 1;
   let a = -90;
   const segs = entries.map(([sev, n]) => {
-    const sweep = (n / total) * 360;
+    const sweep = (n / geometricDivisor) * 360;
     const p = arc(70, 70, 52, a + 1, a + sweep - 1, SEV[sev].c, 16);
     a += sweep;
     return p;

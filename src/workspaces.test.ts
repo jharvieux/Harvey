@@ -21,6 +21,7 @@ vi.mock("./fs-walk.js", async (importOriginal) => {
 });
 
 import { collectWorkspaceManifests, discoverWorkspaceInventory, workspacePackages } from "./workspaces.js";
+import { discoverTargets } from "./pentest/targets.js";
 
 describe("collectWorkspaceManifests", () => {
   let dir: string;
@@ -71,6 +72,50 @@ describe("collectWorkspaceManifests", () => {
     expect(discoverWorkspaceInventory(dir).packages[1]?.discoveredBy[0]?.sourceField).toBe("workspaces");
   });
 
+  it.each([
+    ["packages/{app,lib}", ["packages/app/package.json", "packages/lib/package.json"]],
+    ["packages/a*", ["packages/app/package.json"]],
+    ["packages/?pp", ["packages/app/package.json"]],
+    ["packages/[al]*", ["packages/app/package.json", "packages/lib/package.json"]],
+  ])("resolves package-manager segment glob syntax: %s", (workspaceGlob, expected) => {
+    root({ name: "monorepo", workspaces: [workspaceGlob] });
+    manifest("packages/app", { name: "app" });
+    manifest("packages/lib", { name: "lib" });
+    manifest("packages/tool", { name: "tool" });
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.applicationWorkspaceIds).toEqual(expected.map((path) => `workspace:${path.replace("/package.json", "")}`));
+    expect(collectWorkspaceManifests(dir).manifests.map((entry) => entry.label)).toEqual(["package.json", ...expected]);
+    expect(inventory.observations.some((row) => row.kind === "unresolved-glob")).toBe(false);
+  });
+
+  it("reads an inline pnpm packages array without silently falling back to the root", () => {
+    root({ name: "monorepo" });
+    writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages: ['packages/*']\n");
+    manifest("packages/app", { name: "app" });
+    manifest("packages/lib", { name: "lib" });
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.declarationSource).toBe("pnpm-workspace.yaml");
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:packages/app", "workspace:packages/lib"]);
+    expect(inventory.applicationWorkspaceIds).not.toContain("workspace:root");
+    expect(inventory.packages.slice(1).every((entry) => entry.discoveredBy[0]?.glob === "packages/*")).toBe(true);
+  });
+
+  it("keeps a malformed pnpm packages declaration visible instead of treating it as a single-package repo", () => {
+    root({ name: "monorepo" });
+    writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages: packages/*\n");
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.declarationSource).toBe("pnpm-workspace.yaml");
+    expect(inventory.applicationWorkspaceIds).toEqual([]);
+    expect(inventory.observations).toContainEqual(expect.objectContaining({
+      kind: "invalid-glob",
+      sourcePath: "pnpm-workspace.yaml",
+      reason: expect.stringContaining("string array"),
+    }));
+  });
+
   // THE trap this module exists to avoid. `examples/` and a standalone fixture root are not
   // workspace members, and their manifests pin versions chosen to be wrong.
   it("leaves an unlisted examples/ or fixture manifest out of the member set", () => {
@@ -88,12 +133,21 @@ describe("collectWorkspaceManifests", () => {
   // directory named "!examples" — a silent no-op that keeps the excluded member in scope.
   it("honours a negated glob rather than walking it as a literal directory", () => {
     root({ name: "monorepo" });
-    writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - '!packages/scratch'\n");
+    writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - '!packages/{scratch,temp}'\n");
     manifest("packages/ui", { name: "ui" });
     manifest("packages/scratch", { name: "scratch" });
+    manifest("packages/temp", { name: "temp" });
+    const inventory = discoverWorkspaceInventory(dir);
     const labels = collectWorkspaceManifests(dir).manifests.map((m) => m.label);
     expect(labels).toContain("packages/ui/package.json");
     expect(labels).not.toContain("packages/scratch/package.json");
+    expect(labels).not.toContain("packages/temp/package.json");
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:packages/ui"]);
+    expect(discoverTargets(dir).apps.map((app) => app.name)).toEqual(["packages/ui"]);
+    expect(inventory.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "packages/scratch/package.json" }),
+      expect.objectContaining({ kind: "excluded", path: "packages/temp/package.json" }),
+    ]));
   });
 
   it("names a glob that matched nothing instead of degrading silently to the root", () => {

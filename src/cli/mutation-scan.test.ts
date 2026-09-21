@@ -9,7 +9,7 @@
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -266,6 +266,254 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     // pulled straight from a real --out, instead of the raw Stryker JSON being discarded after parse.
     expect(parsed.rawReport.config).toEqual({ mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" });
   });
+
+  it("keeps all six ATC-shaped product reports routes in configured scope; dropping one is partial (#2125)", async () => {
+    const routes = [
+      "bookings-by-source", "campaigns", "cancellations", "first-vs-last-touch", "leads-by-source", "source-funnel",
+    ].map((name) => `apps/main/src/app/api/reports/${name}/route.ts`);
+    const repo = fixtureRepo(Object.fromEntries(routes.map((path) => [path, "export const GET = () => new Response();\n"])));
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ mutate: ["apps/main/src/**/*.ts"] }));
+    const full = join(repo, "six-routes-full.json");
+    writeFileSync(full, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.map((path) => [path, { mutants: [killed] }])) }));
+    const fullRun = await runCli(repo, ["--report", full]);
+    expect(fullRun.status).toBe(0);
+    const fullScope = JSON.parse(fullRun.out).scope as { expectedFileCount: number; files: Array<{ path: string; reported: boolean }> };
+    expect(fullScope).toMatchObject({ expectedFileCount: 6, verified: true, scoped: false });
+    expect(fullScope.files).toHaveLength(6);
+    expect(fullScope.files.every((file) => file.reported)).toBe(true);
+
+    const dropped = join(repo, "six-routes-dropped.json");
+    writeFileSync(dropped, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(routes.slice(0, -1).map((path) => [path, { mutants: [killed] }])) }));
+    const droppedRun = await runCli(repo, ["--report", dropped]);
+    expect(droppedRun.status).toBe(0);
+    const parsed = JSON.parse(droppedRun.out) as { scope: { expectedFileCount: number; missingCount: number; missing: string[]; files: Array<{ path: string; reported: boolean; absenceReason?: string }> }; moduleRecord?: { status: string } };
+    expect(parsed.scope).toMatchObject({ expectedFileCount: 6, missingCount: 1, missing: [routes[5]] });
+    expect(parsed.scope.files.find((file) => file.path === routes[5])).toMatchObject({
+      reported: false,
+      staged: "unknown for imported report",
+      absenceReason: "configured and inventory-included; staging is unknown for this imported report; absent from the Stryker JSON report",
+    });
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
+
+  it("counts missing compiler-live overlay inputs in the actual imported mutation report", async () => {
+    const repo = fixtureRepo({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }),
+      "outside.ts": "export { one } from './optional/overlay/live/one.js';\nexport { two } from './optional/overlay/live/two.js';\n",
+      "optional/install.sh": [
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+        'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+        'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+        ...["one", "two", "three"].map((name) => `cp "$ROOT_DIR/live/${name}.ts" "$BACKUP_DIR/live/${name}.ts"`),
+        ...["one", "two", "three"].map((name) => `cp "$OVERLAY_DIR/live/${name}.ts" "$ROOT_DIR/live/${name}.ts"`),
+      ].join("\n"),
+      ...Object.fromEntries(["one", "two", "three"].flatMap((name) => [
+        [`live/${name}.ts`, `export const original${name} = true;\n`],
+        [`optional/overlay/live/${name}.ts`, `export const ${name} = true;\n`],
+      ])),
+    });
+    const reportPath = join(repo, "overlay-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", config: { mutate: ["outside.ts", "optional/**/*.ts"] }, files: { "outside.ts": { mutants: [killed] } } }));
+    const result = await runCli(repo, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: { configuredFileCount: number; expectedFileCount: number; verified: boolean; missing: string[]; files: Array<{ path: string; inventory: string }> };
+      moduleRecord?: { status: string };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 4, expectedFileCount: 3, verified: false });
+    expect(parsed.scope.missing).toEqual(["optional/overlay/live/one.ts", "optional/overlay/live/two.ts"]);
+    expect(parsed.scope.files.find((file) => file.path === "optional/overlay/live/three.ts")).toMatchObject({ inventory: "excluded" });
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
+
+  it("inherits root product boundaries when an app workspace is scanned directly (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-workspace-inventory-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write(root, "pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(root, ".npmrc", "store-dir=apps/web/package-cache\n");
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const authored = ["src/index.ts", "src/live.ts", "src/app/reports/dead.ts", "src/app/dist/dead.ts"];
+    for (const path of authored) write(app, path, "export const authored = true;\n");
+    const excluded = [".pnpm-store/v3/pkg/dead.ts", "package-cache/v3/pkg/dead.ts", "compiled/dead.ts"];
+    for (const path of excluded) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(authored.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: {
+        configuredFileCount: number;
+        expectedFileCount: number;
+        missing?: string[];
+        scoped: boolean;
+        files: Array<{ path: string; inventory: string; inventoryReason?: string; reported: boolean }>;
+      };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 7, expectedFileCount: 4, verified: true, scoped: false });
+    expect(parsed.scope.missing).toBeUndefined();
+    for (const path of excluded) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.any(String),
+        reported: false,
+      });
+    }
+    expect(parsed.scope.files.filter((file) => file.reported).map((file) => file.path).sort()).toEqual([...authored].sort());
+  });
+
+  it("records flat and nested files as excluded when root output contains the whole app workspace (#2132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (base: string, rel: string, text: string) => {
+      mkdirSync(dirname(join(base, rel)), { recursive: true });
+      writeFileSync(join(base, rel), text);
+    };
+    write(root, "package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write(app, "package.json", JSON.stringify({ name: "web", private: true }));
+    write(app, "stryker.config.json", JSON.stringify({ mutate: ["**/*.ts"] }));
+    const generated = ["generated.ts", "src/generated.ts"];
+    for (const path of generated) write(app, path, "export const generated = true;\n");
+    const reportPath = join(root, "whole-workspace-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(generated.map((path) => [path, { mutants: [killed] }])) }));
+
+    const result = await runCli(app, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out) as {
+      scope: { configuredFileCount: number; expectedFileCount: number; verified: boolean; files: Array<{ path: string; inventory: string; inventoryReason?: string }> };
+      moduleRecord?: { status: string };
+    };
+    expect(parsed.scope).toMatchObject({ configuredFileCount: 2, expectedFileCount: 0, verified: false });
+    for (const path of generated) {
+      expect(parsed.scope.files.find((file) => file.path === path)).toMatchObject({
+        inventory: "excluded",
+        inventoryReason: expect.stringContaining("tsconfig.json"),
+      });
+    }
+    expect(parsed.moduleRecord?.status).toBe("partial");
+  });
+});
+
+describe("mutation source aliases across discovery and disposable execution", () => {
+  const subject = "export function one() { return 2; }\n";
+  function aliasFixture(): string {
+    const root = fixtureRepo({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }),
+      "outside.ts": "export { one } from './active-alias/one.js';\n",
+      "alias.test.ts": "import { one } from './active-alias/one';\nit('works', () => { expect(one()).toBe(2); });\n",
+      "optional/overlay/live/one.ts": subject,
+      "optional/overlay/live/two.ts": "export const inactive = true;\n",
+      "live/one.ts": "export const originalOne = true;\n",
+      "live/two.ts": "export const originalTwo = true;\n",
+      "optional/install.sh": [
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+        'OVERLAY_DIR="$SCRIPT_DIR/overlay"', 'BACKUP_DIR="$ROOT_DIR/.backup"',
+        ...["one", "two"].map((name) => `cp "$ROOT_DIR/live/${name}.ts" "$BACKUP_DIR/live/${name}.ts"`),
+        ...["one", "two"].map((name) => `cp "$OVERLAY_DIR/live/${name}.ts" "$ROOT_DIR/live/${name}.ts"`),
+      ].join("\n"),
+      "node_modules/pkg/index.js": "module.exports = 1;\n",
+    });
+    symlinkSync("optional/overlay/live", join(root, "active-alias"));
+    return root;
+  }
+
+  it.each(["stub", "coverage", "ts7"])("keeps aliases and baseline/mutation writes inside the filtered %s copy", async (mode) => {
+    const repo = aliasFixture(), receiptsDir = mkdtempSync(join(tmpdir(), "harvey-alias-receipts-"));
+    dirs.push(receiptsDir);
+    const receipt = join(receiptsDir, "rows.jsonl");
+    const record = `const fs = require('node:fs'), path = require('node:path');
+fs.appendFileSync(${JSON.stringify(receipt)}, JSON.stringify({ cwd: process.cwd(), alias: fs.realpathSync('active-alias/one.ts'), inactive: fs.existsSync('active-alias/two.ts'), original: fs.readFileSync(${JSON.stringify(join(repo, "optional/overlay/live/one.ts"))}, 'utf8'), staged: fs.readFileSync('active-alias/one.ts', 'utf8'), dependency: fs.existsSync('node_modules/pkg/index.js') }) + '\\n');\n`;
+    const reportPath = join(receiptsDir, "raw.json");
+    writeFileSync(reportPath, `{ "schemaVersion": "1", "config": { "mutate": ["active-alias/one.ts"] }, "files": { "active-alias/one.ts": { "mutants": [] } } }`);
+    let cliArgs: string[];
+    if (mode === "stub") {
+      const recorder = join(receiptsDir, "record.cjs");
+      writeFileSync(recorder, record);
+      cliArgs = ["--stub-check", "--test-cmd", `node ${recorder}`];
+    } else {
+      const binDir = join(repo, "node_modules/.bin");
+      mkdirSync(binDir, { recursive: true });
+      if (mode === "coverage") {
+        const binary = join(binDir, "vitest");
+        writeFileSync(binary, `#!/usr/bin/env node\n${record}const out = process.argv.find(a => a.includes('Directory=')).split('=')[1]; fs.mkdirSync(out, {recursive:true}); fs.writeFileSync(path.join(out, 'coverage-summary.json'), JSON.stringify({total:{lines:{total:1,covered:1,pct:100}}}));\n`);
+        chmodSync(binary, 0o755);
+        cliArgs = ["--report", reportPath];
+      } else {
+        writeFileSync(join(receiptsDir, "base.json"), JSON.stringify({ compilerOptions: { noEmit: true } }));
+        writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ extends: `${relative(repo, receiptsDir)}/base.json`, files: ["outside.ts"] }));
+        mkdirSync(join(repo, "node_modules/typescript"));
+        writeFileSync(join(repo, "node_modules/typescript/package.json"), JSON.stringify({ name: "typescript", version: "7.0.2" }));
+        writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", mutate: ["active-alias/one.ts"] }));
+        const binary = join(binDir, "stryker");
+        writeFileSync(binary, `#!/usr/bin/env node\n${record}const cfg=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));fs.mkdirSync(path.dirname(cfg.jsonReporter.fileName),{recursive:true});fs.copyFileSync(${JSON.stringify(reportPath)},cfg.jsonReporter.fileName);\n`);
+        chmodSync(binary, 0o755);
+        cliArgs = [];
+      }
+    }
+    const result = await runCli(repo, cliArgs);
+    expect(result.status).toBe(0);
+    const rows = readFileSync(receipt, "utf8").trim().split("\n").map((row) => JSON.parse(row) as { cwd: string; alias: string; inactive: boolean; original: string; staged: string; dependency: boolean });
+    expect(rows.length).toBeGreaterThan(0);
+    if (mode === "stub") expect(rows.some((row) => row.staged !== subject)).toBe(true);
+    for (const row of rows) {
+      expect(row.cwd).not.toBe(realpathSync(repo));
+      expect(row.alias.startsWith(`${row.cwd}/`)).toBe(true);
+      expect(row.inactive).toBe(false);
+      expect(row.original).toBe(subject);
+      expect(row.dependency).toBe(true);
+      expect(existsSync(row.cwd)).toBe(false);
+    }
+    expect(readFileSync(join(repo, "optional/overlay/live/one.ts"), "utf8")).toBe(subject);
+  });
+
+  it("returns an explicit unassessed scope before counting tests through an external alias", async () => {
+    const external = fixtureRepo({ "external.test.ts": REAL_SPEC });
+    const repo = fixtureRepo({ "live.ts": "export const live = true;\n" });
+    symlinkSync(external, join(repo, "external-tests"));
+    const scopePath = join(repo, "scope.json");
+    const result = await runCli(repo, ["--detect-only", "--scope-out", scopePath]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ moduleRecord: { status: "partial" }, sourceScope: { status: "not-assessed", reason: expect.stringContaining("external-tests") } });
+    expect(JSON.parse(readFileSync(scopePath, "utf8"))).toMatchObject({ status: "not-assessed", reason: expect.stringContaining("outside") });
+  });
+
+  it.each(["stub", "coverage", "ts7"])("discloses a missing first-party workspace mirror before the %s runner can escape", async (mode) => {
+    const repo = fixtureRepo({
+      "src/add.ts": "export function add(a: number, b: number) { return a + b; }\n", "src/add.test.ts": REAL_SPEC,
+      "vite.config.ts": "export default { build: { outDir: 'excluded' } };\n",
+      "excluded/index.ts": "export const excluded = true;\n",
+    });
+    mkdirSync(join(repo, "node_modules"));
+    symlinkSync("../excluded", join(repo, "node_modules/workspace"));
+    const reportPath = join(repo, "raw.json");
+    writeFileSync(reportPath, `{ "schemaVersion": "1", "files": { "src/add.ts": { "mutants": [] } } }`);
+    if (mode === "ts7") {
+      const base = mkdtempSync(join(tmpdir(), "harvey-alias-base-")); dirs.push(base);
+      writeFileSync(join(base, "base.json"), JSON.stringify({ compilerOptions: { noEmit: true } }));
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ extends: `${relative(repo, base)}/base.json`, files: ["src/add.ts"] }));
+      mkdirSync(join(repo, "node_modules/typescript"));
+      writeFileSync(join(repo, "node_modules/typescript/package.json"), JSON.stringify({ name: "typescript", version: "7.0.2" }));
+      writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", mutate: ["src/add.ts"] }));
+    }
+    const result = await runCli(repo, mode === "stub" ? ["--stub-check", "--test-cmd", "true"] : mode === "ts7" ? [] : ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.out);
+    if (mode === "stub") expect(parsed).toMatchObject({ runs: [], moduleRecord: { status: "partial", note: expect.stringContaining("workspace") } });
+    else if (mode === "ts7") expect(parsed).toMatchObject({ moduleRecord: { status: "partial", note: expect.stringContaining("workspace") } });
+    else expect(parsed.lineCoverage).toMatchObject({ status: "partial", reason: expect.stringContaining("workspace") });
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via
@@ -277,6 +525,39 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
 describe("mutation-scan --stub-check crash safety (#600)", () => {
   const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
   const COVERING_TEST = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
+
+  it("stages transitive authored inputs and omits exact compiler artifacts in the actual test-runner copy (#2132)", async () => {
+    const paths = ["outside.ts", "src/authored.ts", "src/outside.js", "src/src/authored.js", "src/nested/outside.js"];
+    const repo = fixtureRepo({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src" },
+        files: ["outside.ts"],
+      }),
+      "outside.ts": "import { authored } from './src/authored.js';\nexport function run() { return authored(); }\n",
+      "outside.test.ts": "import { run } from './outside';\nit('runs', () => { expect(run()).toBe(2); });\n",
+      "src/authored.ts": "export function authored() { return 2; }\n",
+      "src/outside.js": "export function generated() { return 0; }\n",
+      "src/src/authored.js": "export function generated() { return 0; }\n",
+      "src/nested/outside.js": "export function handwritten() { return 3; }\n",
+    });
+    const receiptsDir = mkdtempSync(join(tmpdir(), "harvey-m8-exact-stage-"));
+    dirs.push(receiptsDir);
+    const recorder = join(receiptsDir, "record.cjs");
+    const receipt = join(receiptsDir, "receipts.jsonl");
+    writeFileSync(recorder, `const fs = require('node:fs'); fs.appendFileSync(process.env.STAGE_RECEIPT, JSON.stringify({ cwd: process.cwd(), present: ${JSON.stringify(paths)}.filter(path => fs.existsSync(path)) }) + '\\n');\n`);
+
+    const result = await runCli(repo, ["--stub-check", "--test-cmd", `node ${recorder}`], { STAGE_RECEIPT: receipt });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.out).runs.length).toBeGreaterThan(0);
+    const rows = readFileSync(receipt, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { cwd: string; present: string[] });
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row.cwd).not.toBe(repo);
+      expect(row.present).toEqual(["outside.ts", "src/authored.ts", "src/nested/outside.js"]);
+      expect(existsSync(row.cwd)).toBe(false);
+    }
+    for (const path of paths) expect(existsSync(join(repo, path))).toBe(true);
+  });
 
   it("a normal (non-killed) run leaves the target checkout byte-identical, having actually run the stub against a copy", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
@@ -922,8 +1203,23 @@ if (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {
 
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    const parsed = JSON.parse(out) as {
+      summary?: { overall: { totalMutants: number } };
+      scope?: {
+        files: Array<{
+          path: string;
+          staged: string;
+          instrumented: string;
+          reported: boolean;
+        }>;
+      };
+    };
     expect(parsed.summary?.overall.totalMutants).toBe(1); // a real run, not a degrade
+    expect(parsed.scope?.files.find((file) => file.path === "src/add.ts")).toMatchObject({
+      staged: "present in invoked tree",
+      instrumented: "confirmed by report row",
+      reported: true,
+    });
 
     const marked = JSON.parse(readFileSync(marker, "utf8")) as { cwd: string; extends: string };
     expect(marked.cwd).not.toBe(repo); // staged into a disposable copy, not run in-place

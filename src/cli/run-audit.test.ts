@@ -229,7 +229,6 @@ describe("run-audit CLI export capture", () => {
     expect(readinessPlan.schemaVersion).toBe(1);
     expect(readinessPlan.workspaceInventory.applicationWorkspaceIds).toEqual([
       "workspace:apps/api",
-      "workspace:apps/scratch",
       "workspace:apps/web",
     ]);
     expect(readinessPlan.workspaces.map((workspace) => workspace.id)).not.toContain("workspace:apps/scratch");
@@ -307,6 +306,8 @@ $$;`;
 
   it("on a run that cannot export, the last word is DELIVERED NOTHING, not a ledger PASS", () => {
     expect(refused.code).toBe(1);
+    expect(refused.out).toContain("LEDGER PASS");
+    expect(refused.out).not.toContain("LEDGER FAIL");
     expect(refused.out).toMatch(/DELIVERED NOTHING/);
     expect(refused.out).toMatch(/nothing reached the client/);
     // The banner has to come AFTER the ledger, or the reassuring line is still the one left on screen.

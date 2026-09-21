@@ -932,9 +932,11 @@ const m4Run = (ctx: RunContext): ProbeResult => {
   if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const lines = linesCompared(stderr);
   if (!lines) {
+    const sourceGap = (findings.find((finding) => finding.id === "M4-99") as { evidence?: unknown } | undefined)?.evidence;
     return {
       kind: "not-assessed",
-      reason: `quality-scan exited 0 but reported no jscpd line total (${lines === 0 ? "0 lines compared — nothing to duplicate-check" : 'no "M4 duplication: …%(d/t lines)" line on stderr'}) under ${ctx.targetDir} — an exit code alone is not evidence duplication was measured (#350/#1109)`,
+      reason: `quality-scan exited 0 but reported no jscpd line total (${lines === 0 ? "0 lines compared — nothing to duplicate-check" : 'no "M4 duplication: …%(d/t lines)" line on stderr'}) under ${ctx.targetDir} — an exit code alone is not evidence duplication was measured (#350/#1109)`
+        + (typeof sourceGap === "string" && sourceGap.trim() ? ` Source coverage disclosure: ${sourceGap}` : ""),
       provenance: "MEASURED",
       falsifier: `${command} 2>&1 >/dev/null | grep -E "^M4 duplication: [0-9.]+% \\([0-9]+/[1-9][0-9]* lines\\)"`,
     };

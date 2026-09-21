@@ -4,14 +4,15 @@
 // that class of failure loud: the extensions actually loaded, and that a `.js`-only tree produces
 // real findings rather than silence.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectHandrolledFindings } from "./handrolled.js";
-import { loadSources, NON_PRODUCT } from "./load-sources.js";
+import { loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
 import { detectPerfCodeFindings } from "./perf-code.js";
 import { detectSlopFindings } from "./slop.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget } from "../source-inventory.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -30,6 +31,95 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("loadSources extension coverage (#1065)", () => {
+  it("preserves source populations and canonical aliases with a caller's current scope inventory", () => {
+    const root = makeTarget({
+      "tsconfig.json": JSON.stringify({ files: ["src/main.ts"] }),
+      "src/main.ts": "export const value = 1;\n",
+      "src/main.js": "exports.value = 1;\n",
+      "src/app/api/reports/route.ts": "export const GET = () => null;\n",
+      "tool.py": "value = 1\n",
+    });
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias);
+    dirs.push(alias);
+    const scope = { root: realpathSync(root), inventory: productSourceInventoryForTarget(root) };
+    expect(loadSources(alias, scope)).toEqual(loadSources(root));
+    expect(loadSourceInventory(alias, scope)).toEqual(loadSourceInventory(root));
+    const paths = loadSources(root, scope).map((file) => file.path);
+    expect(paths).toContain("src/main.ts");
+    expect(paths).toContain("src/app/api/reports/route.ts");
+    expect(paths).not.toContain("src/main.js");
+  });
+
+  it("rejects a supplied inventory bound to another scope", () => {
+    const root = makeTarget({ "main.ts": "export const live = true;\n" });
+    const other = makeTarget({ "main.ts": "export const other = true;\n" });
+    const scope = { root: other, inventory: productSourceInventoryForTarget(other) };
+    expect(() => loadSources(root, scope)).toThrow("different scope");
+    expect(() => loadSourceInventory(root, scope)).toThrow("different scope");
+  });
+
+  it("keeps complete ordered source contents with a rebased member inventory", () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ files: ["apps/web/src/main.ts"] }),
+      "apps/web/package.json": JSON.stringify({ name: "web" }),
+      "apps/web/src/main.ts": "export const live = true;\n",
+      "apps/web/src/main.js": "exports.live = true;\n",
+      "apps/web/src/dist/authored.ts": "export const authored = true;\n",
+      "apps/web/src/main.test.ts": "test('live', () => expect(true).toBe(true));\n",
+      "apps/web/report.py": "def report():\n    return 1\n",
+    });
+    const member = join(root, "apps/web");
+    const inventory = productSourceInventoryForTarget(root);
+    const scope = { root: member, inventory: productSourceInventoryForScope(root, member, inventory) };
+    expect(loadSources(member, scope)).toEqual(loadSources(member));
+    expect(loadSourceInventory(member, scope)).toEqual(loadSourceInventory(member));
+    expect(loadSources(member, scope).map((file) => file.path)).toEqual([
+      "package.json", "src/dist/authored.ts", "src/main.test.ts", "src/main.ts",
+    ]);
+    expect(loadSourceInventory(member, scope).map((file) => file.path)).toContain("report.py");
+  });
+
+  it("refreshes compiler-live source after dependency preparation on a later standalone call", () => {
+    const root = makeTarget({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "build", moduleResolution: "node" }, files: ["main.ts"] }),
+      "main.ts": 'import "prepared";\n',
+      "build/authored.ts": "export interface Value { value: number }\n",
+    });
+    expect(loadSources(root).map((file) => file.path)).not.toContain("build/authored.ts");
+    mkdirSync(join(root, "node_modules/prepared"), { recursive: true });
+    writeFileSync(join(root, "node_modules/prepared/index.d.ts"), 'export type Value = import("../../build/authored").Value;\n');
+    expect(loadSources(root).map((file) => file.path)).toContain("build/authored.ts");
+  });
+
+  it("keeps authored reports/dist paths while excluding a pnpm store from every loader consumer (#2132/#2125)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ packageManager: "pnpm@9.0.0" }),
+      "src/app/api/reports/route.ts": "export const GET = () => null;\n",
+      "src/dist/handwritten.ts": "export const authored = true;\n",
+      ".pnpm-store/v3/pkg/index.ts": "export const dependency = true;\n",
+    });
+    expect(loadSources(dir).map((file) => file.path).sort()).toEqual([
+      "package.json",
+      "src/app/api/reports/route.ts",
+      "src/dist/handwritten.ts",
+    ]);
+  });
+
+  it("excludes flat and nested files when an ancestor config marks the whole workspace as output", () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "apps" } }),
+      "apps/web/package.json": JSON.stringify({ name: "web", private: true }),
+      "apps/web/generated.ts": "export const direct = true;\n",
+      "apps/web/src/generated.ts": "export const nested = true;\n",
+    });
+    const app = join(root, "apps/web");
+    expect(loadSourceInventory(app)).toEqual([]);
+    expect(loadSources(app)).toEqual([]);
+  });
+
   it("loads the whole JS/TS family, not just the TypeScript half", () => {
     const dir = makeTarget({
       "app/route.js": "export const GET = () => null;\n",

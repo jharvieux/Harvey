@@ -32,14 +32,15 @@
 // that needs no exploitability judgment, which is exactly why the correction put them in the free
 // tier's "real strength" bucket.
 
+import { basename } from "node:path";
 import type { Finding } from "./findings.js";
 import type { SourceInput } from "./detectors/common.js";
-import type { TargetFramework, WorkspaceFramework } from "./scan/framework-detect.js";
+import { FRAMEWORK_LABELS, type TargetFramework, type WorkspaceFramework } from "./scan/framework-detect.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 import { detectAppRouterFindings } from "./detectors/app-router.js";
 import { detectPerfCodeFindings } from "./detectors/perf-code.js";
 import { detectSlopFindings } from "./detectors/slop.js";
-import { NON_PRODUCT } from "./detectors/load-sources.js";
+import { CONFIG_FILE, NON_PRODUCT, SOURCE_FILE } from "./detectors/load-sources.js";
 import { gradeOf, type Grade } from "./quick-scan.js";
 
 type DimensionStatus =
@@ -63,8 +64,8 @@ export interface HealthDimension {
   measure?: string; // the raw fact behind the grade ("3.2 findings per 1k lines"), always shown
   count?: number; // findings/indicators this dimension actually produced
   scope: string; // what this row does and does not cover — travels WITH the number, never separately
-  reason?: string; // not-assessed rows only: why this tier could not answer it
-  needs?: string; // not-assessed rows only: the tier that would
+  reason?: string; // why this tier could not answer all or part of the scope
+  needs?: string; // how the unassessed scope can be answered
   notAssessedRows?: number; // in-dimension disclosure rows (confidence "N/A") the detector emitted
   band?: RiskBand; // risk-band rows only
   bandDerivation?: string; // risk-band rows only: the inputs and the rule that produced the band
@@ -129,8 +130,8 @@ export function rollupExamples(findings: Finding[], limit = EXAMPLES_SHOWN): Exa
 
 export interface HealthScorecard {
   dimensions: HealthDimension[]; // EXHAUSTIVE over M1–M10, in module order
-  grade: Grade;
-  score: number;
+  grade?: Grade; // absent when no dimension produced a grade
+  score?: number; // absent when no dimension produced a grade
   gradedModules: string[];
   unassessedModules: string[];
   composition: string; // how the overall grade was arrived at, in one sentence
@@ -254,7 +255,64 @@ function gradedDensityRow(
     measure: kloc > 0 ? `${round1(defects.length / kloc)} per 1,000 lines (${defects.length} in ${round1(kloc)}k lines)` : `${defects.length} finding(s)`,
     scope: `${scopeTail} Banding: ${DENSITY_BAND_TEXT}.`,
     evidence: rollupExamples(defects),
+    ...(disclosures.length ? {
+      notAssessedRows: disclosures.length,
+      reason: disclosures.map((f) => `${f.location}: ${f.title}. ${f.impact}`).join("\n"),
+      needs: [...new Set(disclosures.map((f) => f.fix))].join("\n"),
+    } : {}),
+  };
+}
+
+// Workspace disclosures can collectively cover the target. Grade a supported remainder only
+// when source exists outside those scopes; zero findings alone does not establish assessment.
+function whollyUnassessedM9Row(spec: { module: string; label: string }, findings: Finding[], sources: SourceInput[]): HealthDimension | undefined {
+  const disclosures = findings.filter(isDisclosureRow);
+  const unsupported = disclosures.filter((f) => f.taxonomy === "M9 — Not assessed (framework unsupported)");
+  const covers = (f: Finding, path: string): boolean => f.location === "(whole target)" || path === f.location || path.startsWith(`${f.location}/`);
+  if (!unsupported.length || !sources.every((source) => unsupported.some((row) => covers(row, source.path)))) return undefined;
+  const defects = findings.filter((f) => !isDisclosureRow(f));
+  if (defects.length > 0) return undefined;
+  return {
+    module: spec.module,
+    label: spec.label,
+    status: "not-assessed",
+    count: 0,
+    scope: unsupported.map((f) => `${f.location}: ${f.impact}`).join("\n"),
+    reason: disclosures.map((f) => `${f.title}. ${f.location}: ${f.impact}`).join("\n"),
+    needs: [...new Set(disclosures.map((f) => f.fix))].join("\n"),
+    notAssessedRows: disclosures.length,
+    evidence: rollupExamples(defects),
+  };
+}
+
+// Configuration files can still produce real M9 findings when configured boundaries exclude the
+// entire JS/TS product population. Preserve those findings for the client without turning them
+// into a density grade whose denominator was never examined.
+function sourcePopulationGapM9Row(
+  spec: { module: string; label: string },
+  findings: Finding[],
+  sourcePopulationGap: string,
+): HealthDimension {
+  const disclosures = findings.filter(isDisclosureRow);
+  const defects = findings.filter((finding) => !isDisclosureRow(finding));
+  return {
+    module: spec.module,
+    label: spec.label,
+    status: "not-assessed",
+    count: defects.length,
+    measure: `${defects.length} configuration-visible finding(s); no product-source density grade assigned`,
+    scope:
+      "Configuration-visible M9 checks ran and their findings remain visible. A density grade was not assigned because configured boundaries excluded the entire JS/TS product population.",
+    reason: [
+      sourcePopulationGap,
+      ...disclosures.map((finding) => `${finding.location}: ${finding.title}. ${finding.impact}`),
+    ].join("\n"),
+    needs: [
+      "re-run after correcting the configured product-source boundary",
+      ...new Set(disclosures.map((finding) => finding.fix)),
+    ].join("\n"),
     ...(disclosures.length ? { notAssessedRows: disclosures.length } : {}),
+    evidence: rollupExamples(defects),
   };
 }
 
@@ -353,6 +411,13 @@ export interface DuplicationMeasure {
   totalLines: number;
 }
 
+export interface SourceDimensionAssessment {
+  findings: Finding[];
+  kloc: number;
+  examinedFiles: number;
+  scope: string;
+}
+
 export interface ScorecardInput {
   // M1's hygiene grade, computed by src/quick-scan.ts on its own severity-weighted curve and passed
   // in verbatim — this module never re-grades M1, so the #244/#996 pinned promises stay pinned.
@@ -383,6 +448,10 @@ export interface ScorecardInput {
   // readable at all — the difference between "no sensitive data" and "no schema to read".
   pii?: { tables: number; columns: number; tableBands?: PiiTableBand[] };
   piiGap?: string;
+  /** Positive evidence that configured exclusions removed every discovered product source file. */
+  sourcePopulationGap?: string;
+  /** A producer-backed M5 assessment that remains valid when the JS/TS pricing population is empty. */
+  m5SourceAssessment?: SourceDimensionAssessment;
 }
 
 export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
@@ -395,19 +464,23 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   // M1 — graded on the severity curve, not the density curve. Security is the one dimension where a
   // single instance is decisive, which is the whole point of the correction's "security is the
   // OUTLIER" sentence: it stays graded, it just stops being the headline.
-  dimensions.push({
-    ...spec("M1"),
-    status: "graded",
-    grade: input.m1.grade,
-    score: input.m1.score,
-    count: input.m1.gradedCount,
-    measure: `${input.m1.gradedCount} mechanically-verified hygiene issue(s)`,
-    scope:
-      "Mechanically-verifiable hygiene only — dependency, secret and dangerous-config classes. " +
-      "Tenant isolation and authorization are NOT graded from source; they ride as indicators below " +
-      `(${input.m1.indicatorCount}) and are confirmed or cleared only by the deep scan. Severity-weighted, not density: one verified Critical is an F.`,
-    ...(input.m1.findings ? { evidence: rollupExamples(input.m1.findings) } : {}),
-  });
+  if (input.sourcePopulationGap && input.m1.gradedCount === 0) {
+    dimensions.push(notAssessedRow(spec("M1"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary"));
+  } else {
+    dimensions.push({
+      ...spec("M1"),
+      status: "graded",
+      grade: input.m1.grade,
+      score: input.m1.score,
+      count: input.m1.gradedCount,
+      measure: `${input.m1.gradedCount} mechanically-verified hygiene issue(s)`,
+      scope:
+        "Mechanically-verifiable hygiene only — dependency, secret and dangerous-config classes. " +
+        "Tenant isolation and authorization are NOT graded from source; they ride as indicators below " +
+        `(${input.m1.indicatorCount}) and are confirmed or cleared only by the deep scan. Severity-weighted, not density: one verified Critical is an F.`,
+      ...(input.m1.findings ? { evidence: rollupExamples(input.m1.findings) } : {}),
+    });
+  }
 
   dimensions.push(
     notAssessedRow(
@@ -426,7 +499,9 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   );
 
   // M4 — the operator's first-named source-gradable dimension.
-  if (input.duplication) {
+  if (input.sourcePopulationGap) {
+    dimensions.push(notAssessedRow(spec("M4"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary"));
+  } else if (input.duplication) {
     const score = duplicationScore(input.duplication.percentage);
     dimensions.push({
       ...spec("M4"),
@@ -448,42 +523,47 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     );
   }
 
-  dimensions.push(
-    gradedDensityRow(
-      spec("M5"),
-      detectSlopFindings(sources),
-      kloc,
-      "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.",
-    ),
-  );
+  dimensions.push(input.sourcePopulationGap && !input.m5SourceAssessment
+    ? notAssessedRow(spec("M5"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary")
+    : gradedDensityRow(
+        spec("M5"),
+        input.m5SourceAssessment?.findings ?? detectSlopFindings(sources),
+        input.m5SourceAssessment?.kloc ?? kloc,
+        input.m5SourceAssessment?.scope
+          ?? "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.",
+      ));
 
   // M6 — indicator-only by the correction's own framing: a hand-rolled shape may be a deliberate
   // choice, so it is surfaced and never composed into the grade.
-  dimensions.push({
-    ...spec("M6"),
-    status: "indicator-only",
-    count: input.handrolledTotal,
-    measure: `${input.handrolledTotal} occurrence(s) across ${input.handrolledClasses} recognised shape(s)`,
-    scope:
-      "Recognisable hand-rolled shapes in your source. NOT composed into the health grade and no " +
-      "defect is asserted — each may be a deliberate choice. The deep scan triages every one.",
-  });
+  dimensions.push(input.sourcePopulationGap && input.handrolledTotal === 0
+    ? notAssessedRow(spec("M6"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary")
+    : {
+        ...spec("M6"),
+        status: "indicator-only",
+        count: input.handrolledTotal,
+        measure: `${input.handrolledTotal} occurrence(s) across ${input.handrolledClasses} recognised shape(s)`,
+        scope:
+          "Recognisable hand-rolled shapes in your source. NOT composed into the health grade and no " +
+          "defect is asserted — each may be a deliberate choice. The deep scan triages every one.",
+      });
 
-  dimensions.push(
-    gradedDensityRow(
-      spec("M7"),
-      detectPerfCodeFindings(sources, input.framework),
-      kloc,
-      "Performance anti-patterns visible in source (N+1 awaits, blocking sync I/O, render-loop allocations). Bundle weight and live vitals are separate tiers and are not in this number.",
-    ),
-  );
+  dimensions.push(input.sourcePopulationGap
+    ? notAssessedRow(spec("M7"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary")
+    : gradedDensityRow(
+        spec("M7"),
+        detectPerfCodeFindings(sources, input.framework),
+        kloc,
+        "Performance anti-patterns visible in source (N+1 awaits, blocking sync I/O, render-loop allocations). Bundle weight and live vitals are separate tiers and are not in this number.",
+      ));
 
   // M8 — the correction's own third bullet: "needs the target's tests to run — BUT 'NO TESTS' IS
   // ITSELF A GRADABLE FINDING". So the absence of tests is graded (it is a fact about the source,
   // decidable with no execution), while their PRESENCE is only an indicator: that files exist says
   // nothing about whether they pass or assert anything, and claiming otherwise from source is the
   // over-reach this tier exists to avoid. Mutation-scored quality stays a connected-tier claim.
-  if (testFiles.length === 0) {
+  if (input.sourcePopulationGap) {
+    dimensions.push(notAssessedRow(spec("M8"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary"));
+  } else if (testFiles.length === 0) {
     dimensions.push({
       ...spec("M8"),
       status: "graded",
@@ -512,14 +592,23 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     });
   }
 
-  dimensions.push(
-    gradedDensityRow(
-      spec("M9"),
-      detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm),
-      kloc,
-      "Framework-boundary correctness — server/client boundary, caching and route-segment configuration read straight from your source.",
-    ),
-  );
+  const m9Findings = detectAppRouterFindings(sources, input.framework, input.nonNextWorkspaces ?? [], input.orm);
+  const m9Sources = sources.filter((source) => SOURCE_FILE.test(source.path) && !CONFIG_FILE.test(basename(source.path)));
+  dimensions.push(input.sourcePopulationGap
+    ? sourcePopulationGapM9Row(spec("M9"), m9Findings, input.sourcePopulationGap)
+    : whollyUnassessedM9Row(spec("M9"), m9Findings, m9Sources) ??
+      (m9Sources.length === 0 && m9Findings.every(isDisclosureRow) ? { ...notAssessedRow(
+        spec("M9"),
+        "No product source files were available for M9 examination in this scan." +
+          (input.nonNextWorkspaces?.length ? ` Workspace configurations: ${input.nonNextWorkspaces.map((w) => `${w.rel} (${FRAMEWORK_LABELS[w.framework]})`).join(", ")}.` : ""),
+        "Supply product source in a supported format or review the framework boundary and rendering behavior directly.",
+      ), count: 0 } : undefined) ??
+      gradedDensityRow(
+        spec("M9"),
+        m9Findings,
+        kloc,
+        "Framework-boundary correctness — server/client boundary, caching and route-segment configuration read straight from your source.",
+      ));
 
   // M10 — a RISK BAND, not a letter and not a bare indicator (operator ruling 2026-07-28 on #1305).
   // A letter would read as a protection verdict only the connected tier can support; a bare
@@ -563,7 +652,7 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   // Equal weight, graded dimensions only. CLAUDE.md: all ten modules carry equal weight — none is
   // the lead. Averaging in a dimension nobody ran would turn a coverage gap into a score, which is
   // the exact inversion #1305 exists to stop.
-  const score = graded.length === 0 ? 0 : Math.round(graded.reduce((sum, d) => sum + (d.score ?? 0), 0) / graded.length);
+  const score = graded.length === 0 ? undefined : Math.round(graded.reduce((sum, d) => sum + (d.score ?? 0), 0) / graded.length);
   const unassessed = dimensions.filter((d) => d.status === "not-assessed").map((d) => d.module);
 
   const banded = dimensions.filter((d) => d.status === "risk-band");
@@ -582,8 +671,7 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
 
   return {
     dimensions,
-    grade: gradeOf(score),
-    score,
+    ...(score === undefined ? {} : { grade: gradeOf(score), score }),
     gradedModules: graded.map((d) => d.module),
     unassessedModules: unassessed,
     composition:

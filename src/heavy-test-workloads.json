@@ -240,7 +240,9 @@
         "src/stub-check.ts",
         "src/stub-worktree.ts",
         "src/workspaces.ts",
-        "tools/pii-classify.mjs"
+        "tools/pii-classify.mjs",
+        "src/source-inventory.ts",
+        "src/source-copy.ts"
       ]
     },
     {
@@ -310,7 +312,9 @@
         "src/stub-check.ts",
         "src/stub-worktree.ts",
         "src/workspaces.ts",
-        "tools/pii-classify.mjs"
+        "tools/pii-classify.mjs",
+        "src/source-inventory.ts",
+        "src/source-copy.ts"
       ]
     },
     {

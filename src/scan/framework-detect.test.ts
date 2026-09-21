@@ -1,13 +1,26 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, nonNextWorkspaces, rawSqlDriver } from "./framework-detect.js";
+import { productSourceInventoryForScope, productSourceInventoryForTarget } from "../source-inventory.js";
+
+vi.mock("../source-inventory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../source-inventory.js")>();
+  return {
+    ...actual,
+    productSourceInventoryForScope: vi.fn(actual.productSourceInventoryForScope),
+    productSourceInventoryForTarget: vi.fn(actual.productSourceInventoryForTarget),
+  };
+});
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
 const dirs: string[] = [];
 afterEach(() => {
+  vi.mocked(productSourceInventoryForScope).mockClear();
+  vi.mocked(productSourceInventoryForTarget).mockClear();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -23,6 +36,58 @@ function makeTarget(files: Record<string, string>): string {
 }
 
 describe("detectTargetFramework (#573)", () => {
+  it("uses the current scope inventory without starting another compiler inventory", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "client" }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true } }),
+      "index.html": "<html></html>",
+      "src/main.ts": "export const mode = import.meta.env.MODE;\n",
+    });
+    const scope = { root: dir, inventory: productSourceInventoryForTarget(dir) };
+    vi.mocked(productSourceInventoryForTarget).mockClear();
+    expect(detectTargetFramework(dir, scope)).toBe("vite");
+    expect(productSourceInventoryForTarget).not.toHaveBeenCalled();
+    expect(detectTargetFramework(dir)).toBe("vite");
+    expect(productSourceInventoryForTarget).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes standalone detection after source, compiler config and package changes", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "client" }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "build" }, files: ["main.ts"] }),
+      "index.html": "<html></html>",
+      "main.ts": "export const value = 1;\n",
+      "build/client.ts": "export const mode = import.meta.env.MODE;\n",
+    });
+    expect(detectTargetFramework(dir)).toBe("other");
+    writeFileSync(join(dir, "main.ts"), "export const mode = import.meta.env.MODE;\n");
+    expect(detectTargetFramework(dir)).toBe("vite");
+    writeFileSync(join(dir, "main.ts"), "export const value = 1;\n");
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+    expect(detectTargetFramework(dir)).toBe("vite");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "1" } }));
+    expect(detectTargetFramework(dir)).toBe("next");
+  });
+
+  it("refreshes compiler-live framework inputs after an external child prepares a dependency", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "client" }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { outDir: "build", moduleResolution: "node" }, files: ["main.ts"] }),
+      "index.html": "<html></html>\n",
+      "main.ts": 'import "prepared";\n',
+      "build/authored.ts": "export interface Value { value: number }\nexport const mode = import.meta.env.MODE;\n",
+    });
+    expect(detectTargetFramework(dir)).toBe("other");
+    execFileSync(process.execPath, ["-e", `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const dependency = path.join(process.argv[1], "node_modules/prepared");
+      fs.mkdirSync(dependency, { recursive: true });
+      fs.writeFileSync(path.join(dependency, "index.d.ts"), 'export type Value = import("../../build/authored").Value;\\n');
+    `, dir]);
+    expect(detectTargetFramework(dir)).toBe("vite");
+  });
+
   it("detects Vite from a vite.config + index.html + import.meta.env SPA export", () => {
     const dir = makeTarget({
       "vite.config.ts": `import { defineConfig } from "vite";\nexport default defineConfig({});\n`,
@@ -119,6 +184,21 @@ describe("detectTargetFramework (#573)", () => {
 // detectors have a surface to analyze. Supabase must win when both signatures are present so a real
 // RLS surface is never suppressed just because Prisma is also a dependency.
 describe("detectOrm (#757)", () => {
+  it("uses a current inventory for ORM detection and refreshes standalone calls after a child changes the manifest", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ dependencies: { "@prisma/client": "1" } }),
+      "source.ts": "export const live = true;\n",
+    });
+    const scope = { root: dir, inventory: productSourceInventoryForTarget(dir) };
+    vi.mocked(productSourceInventoryForTarget).mockClear();
+    expect(detectOrm(dir, scope)).toBe("prisma");
+    expect(productSourceInventoryForTarget).not.toHaveBeenCalled();
+    expect(detectOrm(dir)).toBe("prisma");
+    execFileSync(process.execPath, ["-e", 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({dependencies:{"@supabase/supabase-js":"1"}}))', join(dir, "package.json")]);
+    expect(detectOrm(dir)).toBe("supabase");
+    expect(productSourceInventoryForTarget).toHaveBeenCalledTimes(2);
+  });
+
   it("detects Prisma from a prisma/schema.prisma + @prisma/client dep (Next+Prisma, no Supabase)", () => {
     const dir = makeTarget({
       "package.json": JSON.stringify({ name: "app", dependencies: { next: "14.2.5", "@prisma/client": "^5.18.0" } }),
@@ -307,6 +387,92 @@ describe("monorepo-aware framework resolution (#597)", () => {
     const byRel = new Map(detectWorkspaceFrameworks(monorepo()).map((w) => [w.rel, w.framework]));
     expect(byRel.get("apps/web")).toBe("vite");
     expect(byRel.get("apps/api")).toBe("next");
+  });
+
+  it("rebases one root inventory across members, retaining parent exclusions and canonical aliases", () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"] }),
+      "tsconfig.json": JSON.stringify({ files: ["entry.ts"], compilerOptions: { outDir: "apps/archive" } }),
+      "entry.ts": "export const live = true;\n",
+      "apps/archive/package.json": JSON.stringify({ dependencies: { next: "1" } }),
+      "apps/archive/page.tsx": "export default function Page() { return null; }\n",
+      "apps/api/package.json": JSON.stringify({ dependencies: { next: "1" } }),
+      "apps/client/package.json": JSON.stringify({ name: "client" }),
+      "apps/client/index.html": "<html></html>\n",
+      "apps/client/main.ts": "export const mode = import.meta.env.MODE;\n",
+    });
+    const expected = detectWorkspaceFrameworks(root);
+    expect(expected).toEqual([
+      { rel: "apps/api", framework: "next" },
+      { rel: "apps/archive", framework: "other" },
+      { rel: "apps/client", framework: "vite" },
+    ]);
+    const scope = { root: realpathSync(root), inventory: productSourceInventoryForTarget(root) };
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias);
+    dirs.push(alias);
+    vi.mocked(productSourceInventoryForTarget).mockClear();
+    expect(detectWorkspaceFrameworks(root, scope)).toEqual(expected);
+    expect(detectWorkspaceFrameworks(alias, scope)).toEqual(expected);
+    expect(nonNextWorkspaces(alias, scope)).toEqual([{ rel: "apps/client", framework: "vite" }]);
+    expect(productSourceInventoryForTarget).not.toHaveBeenCalled();
+
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ files: ["entry.ts"], compilerOptions: { noEmit: true } }));
+    expect(detectWorkspaceFrameworks(root).find((member) => member.rel === "apps/archive")?.framework).toBe("next");
+    expect(productSourceInventoryForTarget).toHaveBeenCalled();
+  });
+
+  it("rejects another target's supplied inventory for every framework and ORM reader", () => {
+    const root = monorepo();
+    const other = makeTarget({ "package.json": "{}\n" });
+    const scope = { root: other, inventory: productSourceInventoryForTarget(other) };
+    for (const read of [detectTargetFramework, detectOrm, detectWorkspaceFrameworks, nonNextWorkspaces]) {
+      expect(() => read(root, scope)).toThrow("different scope");
+    }
+  });
+
+  it("runs the actual static CLI with one original inventory and one shared scratch inventory", async () => {
+    const root = makeTarget({
+      "package.json": JSON.stringify({ private: true, workspaces: ["apps/*"], dependencies: { pg: "1" } }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { noEmit: true } }),
+      "apps/api/package.json": JSON.stringify({ dependencies: { next: "1" } }),
+      "apps/api/app/page.tsx": "export const value = input as any;\n",
+      "apps/client/package.json": JSON.stringify({ name: "client" }),
+      "apps/client/index.html": "<html></html>\n",
+      "apps/client/main.ts": "export const mode = import.meta.env.MODE;\n",
+      "test_example.py": "def test_example():\n    assert True\n",
+    });
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "add", "."]);
+    const output = makeTarget({});
+    const findingsPath = join(output, "findings.json");
+    const scopePath = join(output, "scope.json");
+    const argv = process.argv;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.mocked(productSourceInventoryForTarget).mockClear();
+    process.argv = [process.execPath, "static-detect.ts", root, "--out", findingsPath, "--scope-out", scopePath];
+    try {
+      await import("../cli/static-detect.js");
+      const calls = vi.mocked(productSourceInventoryForTarget).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[0]).toBe(root);
+      expect(calls[1]?.[0]).not.toBe(root);
+      expect(calls[1]?.[0]).toContain("harvey-scan-scope-");
+      const scratchInventory = vi.mocked(productSourceInventoryForTarget).mock.results[1]?.value;
+      expect(productSourceInventoryForScope).toHaveBeenCalledTimes(2);
+      for (const [scopeRoot, , inventory] of vi.mocked(productSourceInventoryForScope).mock.calls) {
+        expect(scopeRoot).toBe(calls[1]?.[0]);
+        expect(inventory, "workspace rebase must reuse the scratch root inventory").toBe(scratchInventory);
+      }
+      const findings = JSON.parse(readFileSync(findingsPath, "utf8")) as { taxonomy: string }[];
+      expect(findings.map((finding) => finding.taxonomy)).toEqual(expect.arrayContaining([
+        "M5 — Type escape (`as any`)", "M8 — Production-independent assertion",
+      ]));
+      expect(JSON.parse(readFileSync(scopePath, "utf8"))).toMatchObject({ scanner: "detect-static", unitsExamined: 6 });
+    } finally {
+      process.argv = argv;
+      log.mockRestore();
+    }
   });
 
   it("lists only the non-Next workspaces, with their framework (workspace-relative, POSIX-separated)", () => {

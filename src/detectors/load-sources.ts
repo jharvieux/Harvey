@@ -2,9 +2,10 @@
 // returns SourceInput[] for the detector modules. Extracted from src/cli/static-detect.ts
 // when the M6 free-tier indicator pass (#267) made runMechanicalScan a second consumer.
 
-import { readFileSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
+import { productSourceInventoryForTarget, type ProductSourceInventory } from "../source-inventory.js";
 import type { SourceInput } from "./common.js";
 
 // #1065: plain .js/.cjs (and .mts/.cts) were absent here until 2026-07-25, so every
@@ -80,8 +81,10 @@ export const isGeneratedSource = (name: string, text: string): boolean => {
 // (M9's leak/guard resolution, #1344's request-reachability gate, and #1479's) disconnected,
 // silently, with no row saying so. MEASURED 2026-07-28 on ghostfolio (pinned 7bd6ca6d).
 export const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig(\.[\w.-]+)?\.json|jsconfig(\.[\w.-]+)?\.json)$/;
-export const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|\.turbo|\.vercel|\.svelte-kit|\.nuxt|\.output)$/;
-
+// Compatibility export for independent coverage guards. Context-aware loader consumers use
+// productSourceInventory below; only repository metadata and installed dependencies are globally
+// non-product by name.
+export const EXCLUDED_DIR = /^(node_modules|\.git)$/;
 // Test/story/fixture files — excluded from the product-code detectors (perf, boundary, and
 // indicator findings in test code aren't audit findings); the M8 test-intent pass loads the
 // full set instead, because test files are its subject matter.
@@ -94,14 +97,25 @@ export function isTestSourcePath(path: string): boolean {
     || /(^|\/)tests?\/.*\.rs$/.test(path);
 }
 
-function loadTree(root: string, include: (entry: string) => boolean): SourceInput[] {
+/** A caller-owned inventory for an unchanged scope, consumed synchronously without caching. */
+export interface SourceInventoryScope {
+  root: string;
+  inventory: ProductSourceInventory;
+}
+
+function loadTree(root: string, include: (entry: string) => boolean, scope?: SourceInventoryScope): SourceInput[] {
   const files: SourceInput[] = [];
+  if (scope && resolve(scope.root) !== resolve(root) && realpathSync(scope.root) !== realpathSync(root)) {
+    throw new Error(`Source inventory belongs to a different scope: ${scope.root}; requested ${root}`);
+  }
+  const inventory = scope?.inventory ?? productSourceInventoryForTarget(root);
   const walk = (dir: string) => {
     for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      const path = relative(root, full).split(sep).join("/");
       if (isDirectory) {
-        if (!EXCLUDED_DIR.test(entry)) walk(full);
+        if (!inventory.excludedDirectoryFor(path)) walk(full);
       } else if (include(entry)) {
-        const path = relative(root, full).split(sep).join("/");
+        if (inventory.excludedDirectoryFor(path)) continue;
         const text = readFileSync(full, "utf8");
         if (SOURCE_FILE.test(entry) && !CONFIG_FILE.test(entry) && isGeneratedSource(entry, text)) continue;
         files.push({ path, text });
@@ -113,10 +127,10 @@ function loadTree(root: string, include: (entry: string) => boolean): SourceInpu
 }
 
 /** Exact source-language population for consumers that make polyglot coverage claims. */
-export function loadSourceInventory(root: string): SourceInput[] {
-  return loadTree(root, (entry) => IDENTIFIED_SOURCE_FILE.test(entry));
+export function loadSourceInventory(root: string, scope?: SourceInventoryScope): SourceInput[] {
+  return loadTree(root, (entry) => IDENTIFIED_SOURCE_FILE.test(entry), scope);
 }
 
-export function loadSources(root: string): SourceInput[] {
-  return loadTree(root, (entry) => SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry));
+export function loadSources(root: string, scope?: SourceInventoryScope): SourceInput[] {
+  return loadTree(root, (entry) => SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry), scope);
 }

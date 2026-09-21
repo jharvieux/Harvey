@@ -7,12 +7,14 @@
 // the cross-workspace pair. A regression back to per-workspace jscpd fails this test.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
+import { digestObservedPaths, readCorpusScannerScope } from "../corpus-scanner-scope.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "quality-scan.ts");
@@ -64,7 +66,7 @@ function monorepoFixture(): string {
 // and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
 // here are ~0.7-1.7s each on this hardware, well under the ceiling either way, but the standing
 // constraint is "no single blocking window may approach 60s" for every heavy CLI test.
-function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<void> {
+function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<string> {
   return new Promise((res, rej) => {
     const child = spawn(binPath, args, {
       cwd, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
@@ -78,7 +80,7 @@ function spawnCli(binPath: string, args: string[], cwd: string, input?: string |
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (d: string) => (stderr += d));
     child.on("error", rej);
-    child.on("close", (code) => (code === 0 ? res() : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
+    child.on("close", (code) => (code === 0 ? res(stderr) : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
   });
 }
 
@@ -105,6 +107,466 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
   it("does not raise the M5-99 entry-uncertain disclosure on a normal, non-Vite target", async () => {
     const findings = await runCli(monorepoFixture());
     expect(findings.find((f) => f.id === "M5-99")).toBeUndefined();
+  }, 30000);
+});
+
+describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
+  it.each(["empty", "config-only", "external-only", "positive"] as const)("delivers the requested %s source receipt and its assessment disposition", async (shape) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-quality-zero-receipt-"));
+    dirs.push(fixture);
+    const repo = join(fixture, "target");
+    mkdirSync(repo);
+    if (shape !== "empty") {
+      writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "zero-quality-fixture", private: true }));
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true } }));
+    }
+    if (shape === "external-only") {
+      mkdirSync(join(fixture, "outside"));
+      writeFileSync(join(fixture, "outside", "hidden.ts"), CLONED_BLOCK);
+      symlinkSync(join(fixture, "outside"), join(repo, "external-src"), "dir");
+    } else if (shape === "positive") {
+      writeFileSync(join(repo, "authored.ts"), CLONED_BLOCK);
+    }
+    const scopePath = join(fixture, "scope.json");
+    const outPath = join(fixture, "findings.json");
+    const stderr = await spawnCli("node_modules/.bin/tsx", [CLI, repo, "--degraded-knip-reason", "Explicit source-only receipt control without target dependency installation.", "--scope-out", scopePath, "--out", outPath], REPO_ROOT);
+    const findings = JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
+    const receipt = readCorpusScannerScope(scopePath, "quality-scan");
+    if (receipt.observation.scanner !== "quality-scan") throw new Error("expected quality receipt");
+    if (shape === "positive") {
+      expect(receipt.unitsExamined).toBe(1);
+      expect(receipt.observation.productSources.pathsDigest).toBe(digestObservedPaths(["authored.ts"]));
+      expect(receipt.observation.zeroSourceDisposition).toBeUndefined();
+      expect(findings.some((finding) => finding.id === "M4-99" || finding.id === "M5-00")).toBe(false);
+    } else {
+      expect(receipt.unitsExamined).toBe(0);
+      expect(receipt.observation).toMatchObject({
+        productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+        jscpd: { status: shape === "external-only" ? "incomplete" : "completed", comparedLines: 0 },
+        zeroSourceDisposition: {
+          status: "not-assessed", reason: expect.stringContaining("no eligible"),
+          provenance: expect.stringContaining("0 admitted files"), falsifier: expect.stringContaining("invalidates"),
+        },
+      });
+      for (const id of ["M4-99", "M5-00"]) {
+        const gap = findings.find((finding) => finding.id === id);
+        expect(gap).toBeDefined();
+        expect(gap!.evidence).toContain(shape === "external-only" ? "external-src" : shape === "empty" && id === "M5-00" ? "Unable to find package.json" : "no eligible");
+      }
+      if (shape === "external-only") {
+        expect(receipt.observation.zeroSourceDisposition!.reason).toContain("external-src");
+        const assessment = AUDIT_RUNNERS.find((runner) => runner.module === "M4")!.run({
+          targetDir: repo, env: { connected: false, dynamic: false, llm: false }, exists: existsSync,
+          exec: () => ({ ok: true, output: readFileSync(outPath, "utf8"), stderr }),
+        });
+        expect(assessment).toMatchObject({
+          kind: "not-assessed", reason: expect.stringContaining(findings.find((finding) => finding.id === "M4-99")!.evidence),
+          provenance: "MEASURED", falsifier: expect.stringContaining("quality-scan"),
+        });
+        expect(assessment).not.toHaveProperty("unitsExamined");
+      }
+    }
+  }, 30_000);
+
+  it.each(["imported", "cross-config", "noEmit JavaScript"])("reports authored dead code through %s compiler provenance", async (mode) => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-compiler-cli-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    const authoredPath = mode === "noEmit JavaScript" ? "src/outside.js" : "src/authored.ts";
+    write("package.json", JSON.stringify({ name: "compiler-fixture", private: true }));
+    write("knip.json", JSON.stringify({ entry: ["outside.ts"], project: ["**/*.{ts,js}"] }));
+    write("outside.ts", mode === "cross-config" ? "export const outside = true;\n" : `import { used } from './${authoredPath.replace(/\.ts$/, ".js")}';\nconsole.log(used);\n`);
+    write(authoredPath, "export const used = true;\nexport function unusedAuthoredFunction() { return 'authored'; }\n");
+    write("tsconfig.build.json", JSON.stringify({
+      compilerOptions: { target: "ES2022", module: "ESNext", rootDir: ".", outDir: "src", ...(mode === "noEmit JavaScript" ? { noEmit: true, allowJs: true } : {}) },
+      files: ["outside.ts"],
+    }));
+    if (mode === "cross-config") write("tsconfig.check.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: [authoredPath] }));
+    if (mode !== "noEmit JavaScript") write("src/outside.js", "export function generatedArtifact() { return 'generated'; }\n");
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M5 — Slop / dead code",
+      location: expect.stringContaining(authoredPath),
+      title: expect.stringContaining("Unused"),
+    }));
+    if (mode !== "noEmit JavaScript") {
+      expect(findings.filter((finding) => finding.location.includes("src/outside.js"))).toEqual([]);
+      expect(findings).toContainEqual(expect.objectContaining({
+        id: "M4-SCOPE-00", evidence: expect.stringMatching(/`src\/outside\.js`: 1 file.*TypeScript compiler output/),
+      }));
+    }
+  }, 30000);
+
+  it("excludes a pnpm store clone, retains a real reports-route clone, and discloses the exact store population", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-store-cli-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "store-fixture", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/app/api/reports/one/route.ts", CLONED_BLOCK);
+    write("src/app/api/reports/two/route.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/a/index.ts", CLONED_BLOCK);
+    write(".pnpm-store/v3/b/index.ts", CLONED_BLOCK);
+    const findings = await runCli(repo);
+    const productClone = findings.find((finding) => finding.taxonomy.startsWith("M4 —") && finding.location.includes("reports/one") && finding.location.includes("reports/two"));
+    expect(productClone).toBeDefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("**/.pnpm-store/**");
+    expect(scope?.evidence).toContain("2 files");
+  }, 30000);
+
+  it("excludes a proven inactive install overlay but still scans authored code named patches", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-overlay-cli-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "overlay-fixture", private: true }));
+    write("optional/install.sh", [
+      '#!/usr/bin/env bash',
+      'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+      'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+      'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+      'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+      'cp "$ROOT_DIR/live/one.ts" "$BACKUP_DIR/live/one.ts"',
+      'cp "$ROOT_DIR/live/two.ts" "$BACKUP_DIR/live/two.ts"',
+      'cp "$OVERLAY_DIR/live/one.ts" "$ROOT_DIR/live/one.ts"',
+      'cp "$OVERLAY_DIR/live/two.ts" "$ROOT_DIR/live/two.ts"',
+      'cp "$ROOT_DIR/patches/authored-one.ts" "$BACKUP_DIR/authored-one.ts"',
+      'cp "$ROOT_DIR/patches/authored-two.ts" "$BACKUP_DIR/authored-two.ts"',
+      'cp "$ROOT_DIR/patches/authored-one.ts" "$ROOT_DIR/patches/authored-one.ts"',
+      'cp "$ROOT_DIR/patches/authored-two.ts" "$ROOT_DIR/patches/authored-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-one.ts" "$BACKUP_DIR/cross-one.ts"',
+      'cp "$ROOT_DIR/patches/cross-two.ts" "$BACKUP_DIR/cross-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-one.ts" "$ROOT_DIR/patches/cross-two.ts"',
+      'cp "$ROOT_DIR/patches/cross-two.ts" "$ROOT_DIR/patches/cross-one.ts"',
+      '',
+    ].join("\n"));
+    write("optional/overlay/live/one.ts", CLONED_BLOCK);
+    write("optional/overlay/live/two.ts", CLONED_BLOCK);
+    write("live/one.ts", "export const liveOne = true;\n");
+    write("live/two.ts", "export const liveTwo = false;\n");
+    write("patches/authored-one.ts", CLONED_BLOCK);
+    write("patches/authored-two.ts", CLONED_BLOCK);
+    write("patches/cross-one.ts", "export const crossOne = true;\n");
+    write("patches/cross-two.ts", "export const crossTwo = false;\n");
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings.filter((finding) => finding.location.includes("optional/overlay"))).toEqual([]);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M4 — Duplication",
+      location: expect.stringMatching(/patches\/authored-one\.ts.*patches\/authored-two\.ts|patches\/authored-two\.ts.*patches\/authored-one\.ts/),
+    }));
+    for (const path of ["patches/cross-one.ts", "patches/cross-two.ts"]) {
+      expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: path }));
+    }
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-SCOPE-00",
+      evidence: expect.stringMatching(/`optional\/overlay\/\*\*`: 2 files.*optional\/install\.sh/),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      unitsExamined: number;
+      observation: { productSources: { count: number } };
+    };
+    expect(scope.unitsExamined).toBe(6);
+    expect(scope.observation.productSources.count).toBe(6);
+  }, 30000);
+
+  function compilerLiveOverlayFixture(): string {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-live-overlay-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "live-overlay-fixture", private: true }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["outside.ts"] }));
+    write("knip.json", JSON.stringify({ entry: ["outside.ts"], project: ["**/*.ts"] }));
+    write("outside.ts", "import { one } from './optional/overlay/live/one.js';\nimport { two } from './optional/overlay/live/two.js';\nconsole.log(one(), two());\n");
+    write("optional/install.sh", [
+      'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+      'ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"',
+      'OVERLAY_DIR="$SCRIPT_DIR/overlay"',
+      'BACKUP_DIR="$ROOT_DIR/.optional-backup"',
+      ...["one", "two", "three"].map((name) => `cp "$ROOT_DIR/live/${name}.ts" "$BACKUP_DIR/live/${name}.ts"`),
+      ...["one", "two", "three"].map((name) => `cp "$OVERLAY_DIR/live/${name}.ts" "$ROOT_DIR/live/${name}.ts"`),
+    ].join("\n"));
+    for (const name of ["one", "two", "three"]) {
+      write(`live/${name}.ts`, `export const original${name} = true;\n`);
+      write(`optional/overlay/live/${name}.ts`, `${CLONED_BLOCK}\nexport function ${name}() { throw new Error("Not implemented"); }\n`);
+    }
+    return repo;
+  }
+
+  it("reports compiler-live overlay duplication findings through the quality CLI", async () => {
+    const repo = compilerLiveOverlayFixture();
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      taxonomy: "M4 — Duplication", location: expect.stringMatching(/optional\/overlay\/live\/one\.ts.*optional\/overlay\/live\/two\.ts|optional\/overlay\/live\/two\.ts.*optional\/overlay\/live\/one\.ts/),
+    }));
+    expect(findings.some((finding) => finding.location.includes("optional/overlay/live/three.ts"))).toBe(false);
+  }, 30000);
+
+  it("reports compiler-live overlay dead-code findings through the quick-scan CLI", async () => {
+    const repo = compilerLiveOverlayFixture();
+    const quickPath = join(repo, "quick-out.json");
+    await spawnCli(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/quick-scan.ts"), "--dir", repo, "--json", "--out", quickPath], REPO_ROOT);
+    const quick = JSON.parse(readFileSync(quickPath, "utf8")) as { scorecard: { dimensions: Array<{ module: string; count?: number }> } };
+    expect(quick.scorecard.dimensions.find((dimension) => dimension.module === "M5")).toMatchObject({ count: 2 });
+  }, 120000);
+
+  it("preserves executable Knip config imports while applying package-store exclusions", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-knip-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "executable-knip", private: true, packageManager: "pnpm@9.0.0" }));
+    write("src/index.ts", "export const live = true;\n");
+    write("src/authored-ignore/dead.ts", "export const intentionallyIgnored = true;\n");
+    write("src/cache/.pnpm-store/v3/pkg/unused.ts", "export const dependencyArtifact = true;\n");
+    write("knip-provider.ts", 'import { writeFileSync } from "node:fs"; writeFileSync("provider-consumed", "yes");\n');
+    write("knip.config.ts", 'import "./knip-provider.ts"; const project = ["src/**/*.ts"]; export default () => ({ entry: ["src/index.ts"], project, ignore: "src/authored-ignore/**" });\n');
+    const findings = await runCli(repo);
+    expect(readFileSync(join(repo, "provider-consumed"), "utf8")).toBe("yes");
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes("authored-ignore"))).toBe(false);
+    expect(findings.some((finding) => finding.id === "M5-98" || finding.id === "M5-00")).toBe(false);
+  }, 30000);
+
+  it("retains root-declared stores and generated output for root and direct workspace entry points", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-workspace-inventory-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true, packageManager: "pnpm@9.0.0", workspaces: ["apps/*"] }));
+    write("pnpm-workspace.yaml", "packages:\n  - apps/*\n");
+    write(".npmrc", "store-dir=apps/web/package-cache\n");
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/compiled" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true }));
+    write("apps/web/knip.json", JSON.stringify({ entry: ["src/index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/src/index.ts", 'import { live } from "./live.js"; console.log(live);\n');
+    write("apps/web/src/live.ts", "export const live = true;\n");
+    write("apps/web/src/app/reports/dead.ts", "export const authoredReport = true;\n");
+    write("apps/web/src/app/dist/dead.ts", "export const authoredDist = true;\n");
+    write("apps/web/.pnpm-store/v3/pkg/dead.ts", "export const dependencyArtifact = true;\n");
+    write("apps/web/package-cache/v3/pkg/dead.ts", "export const cachedArtifact = true;\n");
+    write("apps/web/compiled/dead.ts", "export const generatedArtifact = true;\n");
+
+    const findings = await runCli(repo);
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(findings.some((finding) => finding.location.includes(excluded)), excluded).toBe(false);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: `apps/web/${authored}` }));
+    }
+    const scope = findings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(scope?.evidence).toContain("apps/web/package-cache/**");
+    expect(scope?.evidence).toContain("apps/web/compiled/**");
+
+    const directFindings = await runCli(join(repo, "apps/web"));
+    for (const excluded of [".pnpm-store", "package-cache", "compiled/dead.ts"]) {
+      expect(directFindings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code" && finding.location.includes(excluded)), `direct ${excluded}`).toEqual([]);
+    }
+    for (const authored of ["src/app/reports/dead.ts", "src/app/dist/dead.ts"]) {
+      expect(directFindings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: authored }));
+    }
+    const directScope = directFindings.find((finding) => finding.id === "M4-SCOPE-00");
+    expect(directScope?.evidence).toContain("`**/.pnpm-store/**`: 1 file");
+    expect(directScope?.evidence).toContain("`package-cache/**`: 1 file");
+    expect(directScope?.evidence).toContain("`compiled/**`: 1 file");
+  }, 30000);
+
+  it("inherits a root output boundary through a brace-declared direct workspace scan", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-brace-workspace-"));
+    dirs.push(repo);
+    const app = join(repo, "packages/app");
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true, workspaces: ["packages/{app,lib}"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "packages/app/generated" } }));
+    write("packages/app/package.json", JSON.stringify({ name: "app", private: true }));
+    write("packages/app/knip.json", JSON.stringify({ entry: ["src/live.ts"], project: ["**/*.ts"] }));
+    write("packages/app/src/live.ts", "export const live = true;\n");
+    write("packages/app/src/dead.ts", "export const dead = true;\n");
+    write("packages/app/generated/dead.ts", "export const generated = true;\n");
+    write("packages/lib/package.json", JSON.stringify({ name: "lib", private: true }));
+
+    const findings = await runCli(app, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "src/dead.ts" }));
+    expect(findings.some((finding) => finding.location.includes("generated/dead.ts"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-SCOPE-00",
+      evidence: expect.stringMatching(/`generated\/\*\*`: 1 file.*TypeScript compiler output declared by tsconfig\.json/),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as { unitsExamined: number; observation: { productSources: { count: number } } };
+    expect(scope.unitsExamined).toBe(2);
+    expect(scope.observation.productSources.count).toBe(2);
+  }, 30000);
+
+  it("keeps findings and a conserved receipt when a Vite output boundary is unresolved", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-unresolved-vite-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "dynamic-vite", private: true }));
+    write("knip.json", JSON.stringify({ entry: ["src/live.ts"], project: ["src/**/*.ts"] }));
+    write("src/live.ts", "export const live = true;\n");
+    write("src/dead.ts", "export const dead = true;\n");
+    write("vite.config.ts", "const outDir = process.env.OUT_DIR; export default { build: { outDir } };\n");
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "src/dead.ts" }));
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M5-00",
+      evidence: expect.stringContaining("vite.config.ts"),
+    }));
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
+    };
+    expect(scope.observation.knip).toEqual({
+      discovered: ["(repo root)"],
+      completed: [],
+      reduced: [],
+      incomplete: ["(repo root)"],
+    });
+  }, 30000);
+
+  it("does not scan workspace members removed by a negated package-manager glob", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-negated-workspace-"));
+    dirs.push(repo);
+    const scopePath = join(repo, "quality-scope.json");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "root", private: true }));
+    write("pnpm-workspace.yaml", "packages:\n  - packages/*\n  - '!packages/{scratch,temp}'\n");
+    for (const name of ["app", "scratch", "temp"]) {
+      write(`packages/${name}/package.json`, JSON.stringify({ name, private: true }));
+      write(`packages/${name}/knip.json`, JSON.stringify({ entry: ["src/live.ts"], project: ["src/**/*.ts"] }));
+      write(`packages/${name}/src/live.ts`, "export const live = true;\n");
+      write(`packages/${name}/src/dead.ts`, "export const dead = true;\n");
+    }
+
+    const findings = await runCli(repo, ["--scope-out", scopePath]);
+    expect(findings).toContainEqual(expect.objectContaining({ location: "packages/app/src/dead.ts" }));
+    expect(findings.some((finding) => /packages\/(?:scratch|temp)\//.test(finding.location))).toBe(false);
+    const scope = JSON.parse(readFileSync(scopePath, "utf8")) as {
+      observation: { knip: { discovered: string[]; completed: string[]; incomplete: string[] } };
+    };
+    expect(scope.observation.knip).toEqual({
+      discovered: ["packages/app"],
+      completed: ["packages/app"],
+      reduced: [],
+      incomplete: [],
+    });
+  }, 30000);
+
+  it("excludes an entire generated workspace from every M4 source consumer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-whole-workspace-"));
+    dirs.push(root);
+    const app = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "generated", private: true }));
+    write("apps/web/auth-one.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantOne"));
+    write("apps/web/auth-two.ts", CLONED_BLOCK.replace("summarizeOrder", "requireTenantTwo").replace("itemCount", "rowCount"));
+    write("apps/web/plain-one.ts", CLONED_BLOCK.replace("summarizeOrder", "buildOne"));
+    write("apps/web/plain-two.ts", CLONED_BLOCK.replace("summarizeOrder", "buildTwo").replace("itemCount", "rowCount"));
+
+    for (const args of [[], ["--whole-repo-diverged"]]) {
+      rmSync(join(app, "quality-out.json"), { force: true });
+      const scopePath = join(root, "generated-scope.json");
+      const findings = await runCli(app, [...args, "--scope-out", scopePath]);
+      expect(findings.some((finding) => finding.id.startsWith("M4-DIV"))).toBe(false);
+      expect(findings.find((finding) => finding.id === "M4-99")?.evidence).toContain("no eligible");
+      expect(readCorpusScannerScope(scopePath, "quality-scan")).toMatchObject({
+        unitsExamined: 0,
+        observation: { zeroSourceDisposition: { status: "not-assessed" } },
+      });
+      expect(findings.some((finding) => finding.id === "M4-97")).toBe(false);
+      expect(findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code")).toEqual([
+        expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining("no eligible") }),
+      ]);
+      expect(findings).toContainEqual(expect.objectContaining({
+        id: "M4-SCOPE-00",
+        evidence: expect.stringMatching(/`\*\*\/\*`: 5 files.*TypeScript compiler output declared by tsconfig\.json/),
+      }));
+    }
+  }, 30000);
+
+  it("retains outer exclusions through a nested workspace owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-quality-nested-workspace-"));
+    dirs.push(root);
+    const workspace = join(root, "apps/web");
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    write("package.json", JSON.stringify({ private: true, workspaces: ["apps/*"] }));
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "apps/web/packages/leaf" } }));
+    write("apps/web/package.json", JSON.stringify({ name: "web", private: true, workspaces: ["packages/*"] }));
+    write("apps/web/packages/leaf/package.json", JSON.stringify({ name: "leaf", private: true }));
+    write("apps/web/packages/leaf/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/leaf/unused.ts", "export const generated = true;\n");
+    write("apps/web/packages/authored/package.json", JSON.stringify({ name: "authored", private: true }));
+    write("apps/web/packages/authored/knip.json", JSON.stringify({ entry: ["index.ts"], project: ["**/*.ts"] }));
+    write("apps/web/packages/authored/unused.ts", "export const authored = true;\n");
+
+    const findings = await runCli(workspace);
+    expect(findings.some((finding) => finding.location.includes("packages/leaf/unused.ts"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ taxonomy: "M5 — Slop / dead code", location: "packages/authored/unused.ts" }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M4-SCOPE-00", evidence: expect.stringContaining("`packages/leaf/**`: 3 files") }));
+  }, 30000);
+
+  it("discloses an existing malformed jscpd config instead of replacing it", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-malformed-jscpd-"));
+    dirs.push(repo);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(repo, rel)), { recursive: true });
+      writeFileSync(join(repo, rel), text);
+    };
+    write("package.json", JSON.stringify({ name: "malformed-jscpd", private: true }));
+    write(".jscpd.json", '{"ignore": [ BROKEN }\n');
+    write("src/one.ts", CLONED_BLOCK);
+    write("src/two.ts", CLONED_BLOCK);
+
+    const findings = await runCli(repo);
+    expect(findings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid \.jscpd\.json/),
+    }));
+    expect(findings.some((finding) => finding.id === "M4-01")).toBe(false);
+
+    write(".jscpd.json", JSON.stringify({ ignore: "src/one.ts" }));
+    const invalidShapeFindings = await runCli(repo);
+    expect(invalidShapeFindings).toContainEqual(expect.objectContaining({
+      id: "M4-99",
+      evidence: expect.stringMatching(/Invalid jscpd ignore configuration/),
+    }));
   }, 30000);
 });
 
@@ -255,7 +717,14 @@ describe("quality-scan CLI — M5 resolves Vite entries (index.html/main/vite.co
 function ownKnipConfigFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-ownknip-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "ownknip", private: true, version: "0.0.0", type: "module" }));
+  write(repo, "package.json", JSON.stringify({
+    name: "ownknip",
+    private: true,
+    version: "0.0.0",
+    type: "module",
+    packageManager: "pnpm@9.0.0",
+    knip: { ignore: "src/package-ignored/**" },
+  }));
   // The target's OWN knip config names a NON-standard entry Harvey's inferred globs would never
   // declare. If Harvey overrode entries, custom-entry.ts (and reachable.ts) would show unused.
   write(repo, "knip.json", JSON.stringify({ entry: ["custom-entry.ts"] }));
@@ -264,6 +733,8 @@ function ownKnipConfigFixture(): string {
   // happens even though entries are the target's own.
   write(repo, "reachable.ts", "export interface LocalProps {\n  x: number;\n}\nexport const thing: LocalProps = { x: 1 };\n");
   write(repo, "dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/package-ignored/dead.ts", 'export const packageIgnored = "ignored";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -274,6 +745,8 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 
     // reachable via the TARGET's own custom entry — proves Harvey did not override entries.
     expect(unusedFile("reachable.ts")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes("package-ignored"))).toBe(false);
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
 
     // dead file surfaces at Confirmed tier — the target supplied its own entry graph, so its file
     // findings are NOT the review-tier inferred kind.
@@ -297,13 +770,14 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
 function noNodeModulesViteFixture(): string {
   const repo = mkdtempSync(join(tmpdir(), "harvey-quality-noinstall-cli-"));
   dirs.push(repo);
-  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
+  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", packageManager: "pnpm@9.0.0", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
   // Imports an uninstalled plugin → knip can't load this config without the target's node_modules.
   write(repo, "vite.config.cjs", 'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("@vitejs/plugin-react");\nmodule.exports = {};\n');
   write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
   write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
   write(repo, "src/used.ts", 'export const used = "u";\n');
   write(repo, "src/dead.ts", 'export const dead = "d";\n');
+  write(repo, "src/cache/.pnpm-store/v3/pkg/dead.ts", 'export const dependencyArtifact = "ignored";\n');
   return repo;
 }
 
@@ -375,6 +849,45 @@ function degradedWorkspaceResolverFixture(): string {
 }
 
 describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
+  it("refreshes framework inventory after a failed target config changes compiler inputs", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-retry-fresh-"));
+    const observer = mkdtempSync(join(tmpdir(), "harvey-quality-retry-observer-"));
+    dirs.push(repo, observer);
+    write(repo, "package.json", JSON.stringify({ name: "retry-fresh", private: true, type: "module" }));
+    write(repo, "tsconfig.json", JSON.stringify({ compilerOptions: { outDir: "generated" }, files: ["main.ts"] }));
+    write(repo, "main.ts", "export const main = true;\n");
+    write(repo, "generated/client.ts", "export const mode = import.meta.env.MODE;\n");
+    write(repo, "index.html", '<script type="module" src="/ui/start.ts"></script>\n');
+    write(repo, "ui/start.ts", "export const start = true;\n");
+    write(repo, "knip.config.ts", `import { writeFileSync } from "node:fs";
+export default () => {
+  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+  throw new Error("fixture changes compiler scope before failing");
+};\n`);
+    const observedConfig = join(observer, "retry-config.json");
+    const preload = join(observer, "observe.cjs");
+    writeFileSync(preload, `const cp = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const original = cp.execFileSync;
+cp.execFileSync = function (file, args, options) {
+  const config = args && args[args.indexOf("-c") + 1];
+  if (path.basename(file) === "knip" && config && config.endsWith(".json")) {
+    fs.writeFileSync(${JSON.stringify(observedConfig)}, fs.readFileSync(path.resolve(options.cwd, config)));
+  }
+  return original.apply(this, arguments);
+};
+require("node:module").syncBuiltinESMExports();\n`);
+    const output = join(repo, "quality-out.json");
+    await spawnCli(process.execPath, ["--require", preload, "--import", "tsx", CLI, repo, "--out", output], REPO_ROOT);
+    const config = JSON.parse(readFileSync(observedConfig, "utf8")) as { entry: string[]; vite: boolean };
+    expect(config.entry).toContain("index.html");
+    expect(config.vite).toBe(false);
+    const findings = JSON.parse(readFileSync(output, "utf8")) as Finding[];
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
   it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", async () => {
     const findings = await runCli(noNodeModulesViteFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
@@ -395,6 +908,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(reduced?.taxonomy).toContain("M5");
     expect(reduced?.fix).toContain("dependencies");
     expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("starts directly in the source-only tier when dependency preparation rejected the installed tree", async () => {
@@ -405,6 +919,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
     expect(findings.find((finding) => finding.id === "M5-98")?.evidence).not.toContain("canary-quality-unrequested-stdin");
     expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+    expect(findings.some((finding) => finding.location.includes(".pnpm-store"))).toBe(false);
   }, 30000);
 
   it("preserves an explicit stdin reason byte-for-byte in M5-98 without executing the target provider (#1778)", async () => {

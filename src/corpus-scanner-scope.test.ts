@@ -5,6 +5,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { digestObservedPaths, readCorpusScannerScope, writeCorpusScannerScope } from "./corpus-scanner-scope.js";
 import type { CorpusScannerObservation } from "./corpus-scanner-cache.js";
 
+function zeroQualityScope() {
+  const observation: Extract<CorpusScannerObservation, { scanner: "quality-scan" }> = {
+    scanner: "quality-scan",
+    productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+    jscpd: { status: "incomplete", comparedLines: 0 },
+    knip: { discovered: ["(repo root)"], completed: [], reduced: [], incomplete: ["(repo root)"] },
+    divergedClones: { securityPathSources: 0, wholeRepoEnabled: true, complementSources: 0 },
+    zeroSourceDisposition: {
+      status: "not-assessed",
+      reason: "No eligible product sources remained after excluding the external source alias",
+      provenance: "quality-scan walked the target inventory and read zero admitted product sources",
+      falsifier: "An admitted product source read on a subsequent run invalidates this zero-source observation",
+    },
+  };
+  return { unitsExamined: 0, description: "zero product sources read by quality-scan", observation };
+}
+
 interface MutableQualityObservation {
   scanner: "quality-scan";
   productSources: { count: number; pathsDigest: string };
@@ -96,6 +113,56 @@ describe("scanner-owned examined-scope receipts", () => {
     expect(scope.unitsExamined).toBe(0);
     if (scope.observation.scanner !== "mutation-detect-only") throw new Error("expected mutation observation");
     expect(scope.observation.zeroTestDisposition).toMatchObject({ status: "no-suite" });
+  });
+
+  it.each(["completed", "incomplete"] as const)("round-trips zero-quality not-assessed alongside %s configuration measurements", (status) => {
+    const path = receiptPath();
+    const scope = zeroQualityScope();
+    scope.observation.jscpd = { status, comparedLines: 9 };
+    scope.observation.knip = { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] };
+    writeCorpusScannerScope(path, "quality-scan", scope);
+    expect(readCorpusScannerScope(path, "quality-scan")).toEqual(scope);
+  });
+
+  it.each([
+    ["missing disposition", (scope: ReturnType<typeof zeroQualityScope>) => { delete scope.observation.zeroSourceDisposition; }],
+    ...(["reason", "provenance", "falsifier"] as const).flatMap((field) => [
+      [`missing ${field}`, (scope: ReturnType<typeof zeroQualityScope>) => { Reflect.deleteProperty(scope.observation.zeroSourceDisposition!, field); }],
+      [`short ${field}`, (scope: ReturnType<typeof zeroQualityScope>) => { scope.observation.zeroSourceDisposition![field] = "none"; }],
+    ] as const),
+    ["assessed disposition", (scope: ReturnType<typeof zeroQualityScope>) => { Reflect.set(scope.observation.zeroSourceDisposition!, "status", "assessed"); }],
+    ["nonempty path digest", (scope: ReturnType<typeof zeroQualityScope>) => { scope.observation.productSources.pathsDigest = digestObservedPaths(["hidden.ts"]); }],
+    ["negative compared lines", (scope: ReturnType<typeof zeroQualityScope>) => { scope.observation.jscpd.comparedLines = -1; }],
+    ["positive divergence population", (scope: ReturnType<typeof zeroQualityScope>) => { scope.observation.divergedClones.securityPathSources = 1; }],
+    ["undiscovered Knip scope", (scope: ReturnType<typeof zeroQualityScope>) => { scope.observation.knip.completed = ["ghost"]; }],
+    ["positive scope retaining disposition", (scope: ReturnType<typeof zeroQualityScope>) => {
+      scope.unitsExamined = scope.observation.productSources.count = 1;
+      scope.observation.productSources.pathsDigest = digestObservedPaths(["source.ts"]);
+      scope.observation.divergedClones.complementSources = 1;
+    }],
+    ["forged positive count over an empty digest", (scope: ReturnType<typeof zeroQualityScope>) => {
+      scope.unitsExamined = scope.observation.productSources.count = 1;
+      scope.observation.divergedClones.complementSources = 1;
+      delete scope.observation.zeroSourceDisposition;
+    }],
+  ] as const)("rejects a contradictory zero-quality receipt in both writer and reader: %s", (_name, mutate) => {
+    const path = receiptPath();
+    const scope = zeroQualityScope();
+    mutate(scope);
+    expect(() => writeCorpusScannerScope(path, "quality-scan", scope)).toThrow(/incomplete or zero/);
+    writeFileSync(path, JSON.stringify({ schema: 1, scanner: "quality-scan", ...scope }));
+    expect(() => readCorpusScannerScope(path, "quality-scan")).toThrow(/malformed/);
+  });
+
+  it("retains the detect-static guard against a zero examined population", () => {
+    expect(() => writeCorpusScannerScope(receiptPath(), "detect-static", {
+      unitsExamined: 0,
+      description: "zero static sources",
+      observation: {
+        scanner: "detect-static", loadedSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+        ancillary: { productSources: 0, configSources: 0, testStorySources: 0 },
+      },
+    })).toThrow(/incomplete or zero/);
   });
 
   it("rejects mutation zero without a complete disposition or with a signal claiming a suite", () => {

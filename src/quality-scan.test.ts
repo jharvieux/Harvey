@@ -21,7 +21,6 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   matchesGlob,
-  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
@@ -412,20 +411,19 @@ describe("duplicationSummary", () => {
 });
 
 describe("JSCPD_IGNORE_GLOBS", () => {
-  it("excludes the #232-evidenced generated/vendored/demo FP shapes on top of the standard build dirs", () => {
-    expect(JSCPD_IGNORE_GLOBS).toEqual(expect.arrayContaining(["**/node_modules/**", "**/dist/**", "**/.next/**", "**/generated/**"]));
+  it("keeps only stable generated-file and dependency exclusions; directory output is contextual", () => {
+    expect(JSCPD_IGNORE_GLOBS).toEqual(expect.arrayContaining(["**/node_modules/**", "**/.git/**"]));
     expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("database.types.ts"))).toBe(true);
-    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("vendor"))).toBe(true);
-    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("demo"))).toBe(true);
+    expect(JSCPD_IGNORE_GLOBS.some((g) => /(?:dist|vendor|demo|generated)/.test(g))).toBe(false);
   });
 });
 
 // #1080: the ignore globs are never disclosed to the reader — this exercises the glob matcher and
 // the M4-SCOPE-00 disclosure row built from it.
-describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
+describe("matchesGlob (#1080)", () => {
   it("matches a build-artifact path via a leading **/ + trailing /** glob", () => {
-    expect(matchesJscpdIgnoreGlob("apps/main/node_modules/foo/bar.ts")).toBe(true);
-    expect(matchesJscpdIgnoreGlob("src/normal/file.ts")).toBe(false);
+    expect(matchesGlob("**/node_modules/**", "apps/main/node_modules/foo/bar.ts")).toBe(true);
+    expect(matchesGlob("**/node_modules/**", "src/normal/file.ts")).toBe(false);
   });
 
   it("requires an exact basename match for a literal glob, not a substring", () => {
@@ -433,8 +431,9 @@ describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
     expect(matchesGlob("**/database.types.ts", "src/foodatabase.types.ts")).toBe(false);
   });
 
-  it("the demo glob is a SUBSTRING match — a shipped demos/ directory is excluded by it too", () => {
+  it("shows why generic demo globs cannot define product scope", () => {
     expect(matchesGlob("**/*demo*/**", "apps/demos/product-tour.tsx")).toBe(true);
+    expect(matchesGlob("**/*demo*/**", "apps/main/src/app/api/reports/route.ts")).toBe(false);
   });
 });
 
@@ -444,16 +443,27 @@ describe("jscpdIgnoreScopeFinding (#1080)", () => {
     expect(jscpdIgnoreScopeFinding(matches)).toBeUndefined();
   });
 
-  it("names the matched globs, their counts, and an example, naming the demos/ substring risk", () => {
+  it("names the matched configured path, count, example, and exclusion reason", () => {
     const matches: JscpdGlobMatch[] = JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob, count: 0 }));
-    const demoGlob = matches.find((m) => m.glob === "**/*demo*/**")!;
-    demoGlob.count = 3;
-    demoGlob.example = "apps/demos/tour.tsx";
+    matches.push({ glob: "**/.pnpm-store/**", count: 3, example: ".pnpm-store/v3/pkg/index.js", reason: "pnpm package store declared by workspace/package-manager metadata" });
     const finding = jscpdIgnoreScopeFinding(matches);
     expect(finding?.id).toBe("M4-SCOPE-00");
-    expect(finding?.evidence).toContain("apps/demos/tour.tsx");
+    expect(finding?.evidence).toContain(".pnpm-store/v3/pkg/index.js");
     expect(finding?.evidence).toContain("3 files");
-    expect(finding?.evidence).toContain("SUBSTRING match");
+    expect(finding?.evidence).toContain("pnpm package store");
+  });
+
+  it("explains installation overlays as evidenced scope without granting directory-name exclusions", () => {
+    const finding = jscpdIgnoreScopeFinding([{
+      glob: "optional/overlay/**",
+      count: 2,
+      example: "optional/overlay/live/one.ts",
+      reason: "2 staged overlay files are copied over backed-up live product files by optional/install.sh",
+    }]);
+    expect(finding?.evidence).toContain("exact evidenced paths");
+    expect(finding?.evidence).toContain("optional/install.sh");
+    expect(finding?.evidence).toContain("Directory names alone do not narrow");
+    expect(finding?.impact).toContain("static installation-copy provenance");
   });
 });
 

@@ -289,6 +289,65 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     }
   }, 30_000);
 
+  it.each(["external-only", "config-only"] as const)("retains actual zero-quality findings and not-assessed disposition on cold, warm, and verified child runs for %s", async (shape) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-zero-quality-"));
+    dirs.push(fixture);
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    mkdirSync(targetDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"zero-quality-cache-fixture","private":true}\n');
+    await execFileAsync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir });
+    if (shape === "external-only") {
+      mkdirSync(join(fixture, "outside"));
+      writeFileSync(join(fixture, "outside", "hidden.ts"), "export function hiddenSource() { throw new Error('not implemented'); }\n");
+      symlinkSync(join(fixture, "outside"), join(targetDir, "external-src"), "dir");
+    }
+    const identity = { targetRevision: "zero-quality-pin", targetTree: "zero-quality-tree" };
+    const preparation = prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
+    expect(preparation).toMatchObject({ complete: true, cacheable: true });
+    try {
+      const events: string[] = [];
+      const run = (mode: "read-write" | "verify" = "read-write") => runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: `${shape} quality source`,
+        script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+        cache: { dir: cacheDir, mode, ...identity, dependencyPreparation: preparation },
+        onEvent: (message) => events.push(message),
+      });
+      const cold = await run();
+      expect(cold.cacheRecord?.cache, events.join("\n")).toBe("miss");
+      const callsAfterCold = vi.mocked(spawn).mock.calls.length;
+      const warm = await run();
+      expect(vi.mocked(spawn).mock.calls).toHaveLength(callsAfterCold);
+      const verified = await run("verify");
+      expect([cold.cacheRecord?.cache, warm.cacheRecord?.cache, verified.cacheRecord?.cache]).toEqual(["miss", "hit", "recomputed"]);
+      const gapReason = shape === "external-only" ? "external-src" : "no eligible";
+      expect(cold.findings.find((finding) => finding.id === "M4-99")?.evidence).toContain(gapReason);
+      expect(cold.findings.find((finding) => finding.id === "M5-00")?.evidence).toContain(gapReason);
+      expect(cold.cacheRecord?.scope).toMatchObject({
+        unitsExamined: 0,
+        observation: {
+          scanner: "quality-scan", productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+          jscpd: { status: shape === "external-only" ? "incomplete" : "completed" },
+          zeroSourceDisposition: {
+            status: "not-assessed", reason: expect.stringContaining(gapReason),
+            provenance: expect.stringContaining("0 admitted files"), falsifier: expect.stringContaining("invalidates"),
+          },
+        },
+      });
+      const observed = cold.cacheRecord!.scope.observation!;
+      if (observed.scanner !== "quality-scan") throw new Error("expected quality observation");
+      expect(observed.jscpd.comparedLines).toBeGreaterThan(0);
+      if (shape === "config-only") expect(observed.knip).toEqual({ discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] });
+      for (const replay of [warm, verified]) {
+        expect(replay.findings).toEqual(cold.findings);
+        expect(replay.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
+      }
+      expect(spawnState.active).toBe(0);
+    } finally {
+      releaseCorpusDependencies(preparation);
+    }
+  }, 30_000);
+
   it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);
