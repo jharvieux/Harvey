@@ -274965,7 +274965,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-08-20",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/mvp-boilerplate/M5-slop:runtime:historical-node-runtime",
@@ -275018,7 +275018,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-08-20",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/mvp-boilerplate/M5-slop:source-revision:mvp-boilerplate@M5-slop",
@@ -275185,7 +275185,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-07-30",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/mvp-boilerplate/M7:runtime:historical-node-runtime",
@@ -275238,7 +275238,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-07-30",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/mvp-boilerplate/M7:source-revision:mvp-boilerplate@M7",
@@ -279050,7 +279050,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-08-04",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/saas-lite/M4:runtime:historical-node-runtime",
@@ -279103,7 +279103,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-08-04",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/saas-lite/M4:source-revision:saas-lite@M4",
@@ -279160,7 +279160,7 @@
       "freshness": {
         "enforcedBy": null,
         "expiresAt": null,
-        "observedAt": "2026-08-04",
+        "observedAt": "2026-09-20",
         "requirement": "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement."
       },
       "id": "src/scan/external-corpus.ts#EXTERNAL_CORPUS/saas-lite/M4:tool:jscpd",
@@ -358250,8 +358250,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "e39ffb0e2cd820aa09a99b5e9ddaf8bdd4bbbf20",
-    "commitPayload": "dHJlZSBlOThmODk3NzFiYTYwYmU1OTM3ZTg0NjdjNDA1NzFiNzE5YWQxODkyCnBhcmVudCBmMDhhNTA0MWRjYTczZDM1ZTFhYzg2M2JlN2FiZTQ0MmUwZGFmNDk3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODc1MDU2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5ODc1MTk0IC0wNTAwCgpSZXVzZSBzdGF0aWMgc2NhbiBpbnZlbnRvcmllcyB3aXRoaW4gZWFjaCBzY29wZSAoIzIxMzIpCg==",
+    "commit": "71f3b222c7c04b097cf0fb6dd0a999a5fe83c3f0",
+    "commitPayload": "dHJlZSBmZTIwOTZmYzVhNDRmZjRjM2NlM2RlOWIxZWNmNzdhOTI0Mjg5NDhmCnBhcmVudCAxODIyNjU5NTNhNWIzM2U4NWFiNTkxZTYyMDM1NzZmMDE4M2E3Mjc3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5OTUyOTQ1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzg5OTUyOTQ1IC0wNTAwCgpDb3JyZWN0IG1lYXN1cmVkIHByb2R1Y3Qtc2NvcGUgYmFzZWxpbmVzICgjMjEzMikK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -358260,13 +358260,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "fdca1dff4ab2b1c2367cbd62b446c60a182ec1cb",
+        "gitOid": "44b69a2b842a16032824f7eacbe8da599eef5632",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "269fa983b6fb801359ec95513201c8330e0ca57f2661b9852e049b748a9cd698",
-    "tree": "e98f89771ba60be5937e8467c40571b719ad1892"
+    "populationSha256": "f4d8501e7693aaaed03aa2103c43ed9e899ee38dadd42731b9d5f37ad61e62ae",
+    "tree": "fe2096fc5a44ff4c3ce3de9b1ecf77a92428948f"
   },
   "venues": [
     {
@@ -382180,19 +382180,19 @@
       "sha256": "09e6c13b4f3b0cb5a2034ef262b8be6b1dc508f86b84fa62ef332a2a2326ea98"
     },
     {
-      "bytes": 328042,
+      "bytes": 331391,
       "disposition": "authoritative-adapter",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "3f8ca03eb15429348ff9c9c317f048eda8a1f0c0",
+      "gitOid": "a7fc8da9fe3e1c96fbb32e19dfbdebb37ce9f588",
       "id": "src/scan/external-corpus.ts",
       "kind": "source",
       "literalCount": 1121,
-      "literalSha256": "4bde171e6b6d600824d6cae82b6beb1e6685d2df6ae5f8f4979364590186fecb",
+      "literalSha256": "4ba02f9cef0a041319739c0b74d3ffd22687ec9594bdbfe29876d9ff6ab87464",
       "owner": "#1853 external-corpus baselines",
       "path": "src/scan/external-corpus.ts",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "921927bd88690fd5016b708d2e8f00d9c3e0d45163e2c435b53ae7497c2155e3"
+      "sha256": "4ccb6cab113c0ed0d14f061a8bac7f2df87dc90bf4904d349315e4c4e9726244"
     },
     {
       "bytes": 30124,
