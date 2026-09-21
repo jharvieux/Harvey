@@ -358287,8 +358287,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "0e43eb93dd2bfafe4e13a4d856f02c882cdcc226",
-    "commitPayload": "dHJlZSBiZWQzMDllYTg3YTJhNmYwZjdkMzFiMDdhODU2YjIzMmM1NzNkMjM0CnBhcmVudCBkNmI3ZjBjZTI0Y2NmMmE2NjhhODQzMzMwOGZhNGI4OTUyNjU2Y2M2CnBhcmVudCBjNDFjZjg2NThkOWI2NDRhOTY3MzRmMTFlYTQwZDYyM2UyMmRkN2NkCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDIzMjUyIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDIzMjUyIC0wNTAwCgpJbnRlZ3JhdGUgdmVyaWZpZWQgbWFpbiBiZWZvcmUgS25pcCBhY2NlcHRhbmNlICgjMjE1MSkK",
+    "commit": "2488c65278e02506fa4b787ac4638f1ec8b9bda1",
+    "commitPayload": "dHJlZSBhM2NmMzY1NGY5NTIxZjhmNGQyZTI2NWRlNGZjOWNlY2ViYzcyYTExCnBhcmVudCA0MzM5NzNmMzFiMTdlZTdhMGRhZGE4MWE1MzJhMGVlZTE1YTNmZjgxCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDI3MTI2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDI3MTI2IC0wNTAwCgpEZXNjcmliZSBLbmlwIHJlY2VpcHQgY2hlY2tzIHByZWNpc2VseSAoIzIxNTEpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -358297,13 +358297,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "c576deed9e7ddc57cc72fb7d0fd03f955ab0b152",
+        "gitOid": "43ca60021eb002ba8a95ef0190dc9f1089c41e91",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "d958c56678ceb266bec517dc828c27151eec782426ea300dd9e1c2f07d925de6",
-    "tree": "bed309ea87a2a6f0f7d31b07a856b232c573d234"
+    "populationSha256": "7a6ca0fccc1d3a73d06c4256c61cc08a28f08f7aa1ef0119c63b3aa61eecc54c",
+    "tree": "a3cf3654f9521f8f4d2e265de4fc9cecebc72a11"
   },
   "venues": [
     {
@@ -365537,11 +365537,11 @@
       "sha256": "71b77e76866028bee8c18b75b24d38bd1eb826686b3498d391d34da04d7f7e79"
     },
     {
-      "bytes": 56186,
+      "bytes": 56164,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "a584a49b17abec4f2f9c7380e43bfb923ff870af",
+      "gitOid": "e48557759cc838a4a0f7178727fdcdabb5029b4f",
       "id": "src/cli/quality-scan.ts",
       "kind": "source",
       "literalCount": 272,
@@ -365549,7 +365549,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/quality-scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "9516701d5968eae5aadf974fb28a853efaf880e44b1cbc3370be9320fa1576dc"
+      "sha256": "5485dcd165fd04be48c9aa40bda526ee7ad30b2df961d1c3a3d709cbd3ea9815"
     },
     {
       "bytes": 1104,
