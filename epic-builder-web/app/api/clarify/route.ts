@@ -5,8 +5,8 @@ import { submitClarify } from "../../../lib/core.js";
 export const runtime = "nodejs";
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const { slug, answers } = (await req.json()) as { slug?: string; answers?: string };
   return handle(async (deps) => {
+    const { slug, answers } = (await req.json()) as { slug?: string; answers?: string };
     if (!slug) throw new Error("slug is required");
     return submitClarify(deps, slug, answers ?? "defaults");
   });

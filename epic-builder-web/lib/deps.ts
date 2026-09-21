@@ -68,25 +68,31 @@ function supabaseServiceClient(): SupabaseLike {
 }
 
 // Assemble the wrap-layer deps for one authenticated request, partitioned by userId (design §4, §6), plus
-// a commit() the route runs after the handler succeeds.
+// a commit() the route runs after the handler succeeds and release() for every outcome.
 //   - filesystem (default): cwd is the user's durable dir; commit is a no-op (the core writes it directly).
 //   - supabase (EPIC_BUILDER_STORAGE=supabase): the user's rows are hydrated into a per-request temp copy,
-//     the core runs against it, and commit flushes the copy back to Postgres and removes the temp dir.
+//     the core runs against it, commit flushes the copy back to Postgres, and release removes scratch.
 export async function productionDeps(
   userId: string,
-): Promise<{ deps: CoreDeps; commit: () => Promise<void> }> {
+): Promise<{ deps: CoreDeps; commit: () => Promise<void>; release: () => Promise<void> }> {
   const base = { model: selectModel(), templates: loadTemplates(), makeTracker };
   if (process.env.EPIC_BUILDER_STORAGE !== "supabase") {
-    return { deps: { ...base, cwd: join(dataRoot(), userId) }, commit: async () => {} };
+    return { deps: { ...base, cwd: join(dataRoot(), userId) }, commit: async () => {}, release: async () => {} };
   }
   const store = supabaseStore(supabaseServiceClient());
   const cwd = mkdtempSync(join(tmpdir(), "epic-web-"));
-  await store.hydrate(userId, cwd);
+  const release = async () => {
+    rmSync(cwd, { recursive: true, force: true });
+  };
+  try {
+    await store.hydrate(userId, cwd);
+  } catch (error) {
+    await release();
+    throw error;
+  }
   return {
     deps: { ...base, cwd },
-    commit: async () => {
-      await store.flush(userId, cwd);
-      rmSync(cwd, { recursive: true, force: true });
-    },
+    commit: async () => store.flush(userId, cwd),
+    release,
   };
 }
