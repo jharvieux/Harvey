@@ -13,12 +13,14 @@ import { createClient } from "@supabase/supabase-js";
 const COOKIE = "epic_session";
 const VALUE = "operator";
 
-function signingKey(): string {
-  return process.env.EPIC_BUILDER_SESSION_SECRET ?? "dev-insecure-session-secret";
+function signingKey(): string | null {
+  return process.env.EPIC_BUILDER_SESSION_SECRET || null;
 }
 
 function sign(value: string): string {
-  return createHmac("sha256", signingKey()).update(value).digest("hex");
+  const key = signingKey();
+  if (!key) throw new Error("EPIC_BUILDER_SESSION_SECRET is required");
+  return createHmac("sha256", key).update(value).digest("hex");
 }
 
 function tokenFor(value: string): string {
@@ -33,8 +35,8 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 export function checkPassword(password: string): boolean {
-  const expected = process.env.EPIC_BUILDER_PASSWORD ?? "dev-password";
-  return constantTimeEqual(password, expected);
+  const expected = process.env.EPIC_BUILDER_PASSWORD;
+  return typeof expected === "string" && expected.length > 0 && constantTimeEqual(password, expected);
 }
 
 export function sessionCookie(): { name: string; value: string; options: Record<string, unknown> } {
@@ -46,8 +48,10 @@ export function sessionCookie(): { name: string; value: string; options: Record<
 }
 
 function sharedSecretUserId(token: string | undefined): string | null {
-  if (!token) return null;
-  const [value, mac] = token.split(".");
+  if (!token || !signingKey()) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [value, mac] = parts;
   if (value !== VALUE || !mac) return null;
   return constantTimeEqual(mac, sign(VALUE)) ? VALUE : null;
 }
@@ -66,9 +70,13 @@ export async function resolveSupabaseUserId(
   client: SupabaseAuthLike,
 ): Promise<string | null> {
   if (!token) return null;
-  const { data, error } = await client.auth.getUser(token);
-  if (error || !data.user) return null;
-  return data.user.id;
+  try {
+    const { data, error } = await client.auth.getUser(token);
+    if (error || !data?.user || typeof data.user.id !== "string" || !data.user.id) return null;
+    return data.user.id;
+  } catch {
+    return null;
+  }
 }
 
 function supabaseAuthClient(): SupabaseAuthLike {
@@ -84,7 +92,8 @@ export async function resolveUserId(): Promise<string | null> {
   const jar = await cookies();
   if (process.env.EPIC_BUILDER_AUTH === "supabase") {
     const cookieName = process.env.SUPABASE_AUTH_COOKIE ?? "sb-access-token";
-    return resolveSupabaseUserId(jar.get(cookieName)?.value, supabaseAuthClient());
+    const token = jar.get(cookieName)?.value;
+    return token ? resolveSupabaseUserId(token, supabaseAuthClient()) : null;
   }
   return sharedSecretUserId(jar.get(COOKIE)?.value);
 }
