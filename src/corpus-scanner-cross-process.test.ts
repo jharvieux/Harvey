@@ -453,6 +453,43 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     expect(spawnState.active).toBe(0);
   }, 30_000);
 
+  it("delivers changed Knip retry population counts and digests into HTML (#2151)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-knip-retry-population-"));
+    dirs.push(targetDir);
+    mkdirSync(join(targetDir, "generated"));
+    mkdirSync(join(targetDir, "ui"));
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "retry-population", private: true, type: "module" }));
+    writeFileSync(join(targetDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { outDir: "generated" }, files: ["main.ts"] }));
+    writeFileSync(join(targetDir, "main.ts"), "export const main = true;\n");
+    writeFileSync(join(targetDir, "generated/client.ts"), "export const mode = import.meta.env.MODE;\n");
+    writeFileSync(join(targetDir, "index.html"), '<script type="module" src="/ui/start.ts"></script>\n');
+    writeFileSync(join(targetDir, "ui/start.ts"), "export const start = true;\n");
+    writeFileSync(join(targetDir, "knip.config.ts"), `import { writeFileSync } from "node:fs";
+export default () => {
+  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+  throw new Error("fixture changes compiler scope before failing");
+};\n`);
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "changing retry population",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+    });
+    const initialDigest = digestObservedPaths(["knip.config.ts", "main.ts", "ui/start.ts"]);
+    const retryDigest = digestObservedPaths(["knip.config.ts", "main.ts", "ui/start.ts", "generated/client.ts"]);
+    const initialPopulation = `initial 3 file(s), paths SHA-256 ${initialDigest}`;
+    const retryPopulation = `retry 4 file(s), paths SHA-256 ${retryDigest}`;
+    const gap = result.findings.find((finding) => finding.id === "M5-00");
+    expect(gap?.evidence).toContain(initialPopulation);
+    expect(gap?.evidence).toContain(retryPopulation);
+    expect(result.findings).toContainEqual(expect.objectContaining({ location: "generated/client.ts", confidence: "Review", precisionTier: "review" }));
+    const meta = { client: "Retry population evidence", subtitle: "#2151", date: "2026-09-21", commit: "control", auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Changed source population", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
+    const html = buildHtml({ meta, findings: result.findings });
+    expect(html).toContain(initialPopulation);
+    expect(html).toContain(retryPopulation);
+    expect(html).toContain("original population receipt is incomplete");
+    expect(html).toContain("generated/client.ts");
+    expect(spawnState.active).toBe(0);
+  }, 30_000);
+
   it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);

@@ -451,11 +451,19 @@ function sourceOnlyKnipConfig(dir: string, inventory: ProductSourceInventory, gr
 // that supplied its own config keeps confirmed file findings.
 // #810: `pluginsDisabled`/`reducedReason` mark a scope that only ran after the degraded retry
 // (knip couldn't load the target's config/plugin configs — the missing-node_modules case).
+interface KnipRunResult {
+  report: KnipReport;
+  entriesInferred: boolean;
+  pluginsDisabled: boolean;
+  reducedReason?: string;
+  populationChange?: string;
+}
+
 function runKnip(
   dir: string,
   inventory: ProductSourceInventory,
   graph?: KnipGraph,
-): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
+): KnipRunResult {
   // First-attempt config: an inferred config for a config-less scope (#696), the
   // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
   // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
@@ -497,6 +505,7 @@ function runKnip(
     config = undefined;
     entriesInferred = false;
   }
+  const initialPaths = sourceFilePaths(dir, inventory);
   try {
     if (configurationError) throw configurationError;
     return {
@@ -522,6 +531,12 @@ function runKnip(
     // An executed target config may have changed source or dependency inputs. Keep framework
     // detection fresh here instead of reusing the pre-child inventory across that boundary.
     const retryInventory = productSourceInventoryForTarget(dir);
+    const retryPaths = sourceFilePaths(dir, retryInventory);
+    const initialDigest = digestObservedPaths(initialPaths);
+    const retryDigest = digestObservedPaths(retryPaths);
+    const populationChange = initialDigest !== retryDigest
+      ? `Knip's product source population changed before its source-only retry: initial ${initialPaths.length} file(s), paths SHA-256 ${initialDigest}; retry ${retryPaths.length} file(s), paths SHA-256 ${retryDigest}. The original population receipt is incomplete; retry findings remain available for review. Rerun after source and configuration inputs are stable.`
+      : undefined;
     const report = execKnip(
       dir,
       sourceOnlyKnipConfig(dir, retryInventory, graph),
@@ -529,7 +544,7 @@ function runKnip(
       {},
       retryInventory,
     );
-    return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
+    return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err), populationChange };
   }
 }
 
@@ -543,7 +558,7 @@ function runKnipDegraded(
   reason: string,
   inventory: ProductSourceInventory,
   graph?: KnipGraph,
-): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+): KnipRunResult {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
     report: execKnip(
@@ -625,16 +640,20 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
 // count instead of a security-relevant subset) so the ratio denominator matches what knip could
 // plausibly have scanned.
 function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInventory = sourceInventory): number {
-  let count = 0;
+  return sourceFilePaths(dir, inventory, rel).length;
+}
+
+function sourceFilePaths(dir: string, inventory: ProductSourceInventory, rel = ""): string[] {
+  const paths: string[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!inventory.excludedDirectoryFor(relPath)) count += countSourceFiles(dir, relPath, inventory);
+      if (!inventory.excludedDirectoryFor(relPath)) paths.push(...sourceFilePaths(dir, inventory, relPath));
     } else if (!inventory.excludedDirectoryFor(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
-      count += 1;
+      paths.push(relPath);
     }
   }
-  return count;
+  return paths;
 }
 
 // #1080: deliberately its OWN walk, not countSourceFiles'/securityPathFiles' — those already skip
@@ -782,9 +801,12 @@ for (const run of knipRuns) {
     return prefixed(relative(targetDir, run.dir), path);
   };
   try {
-    const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
+    const { report, entriesInferred, pluginsDisabled, reducedReason, populationChange } = degradedKnipReason
       ? runKnipDegraded(run.dir, degradedKnipReason, runInventory, run.graph)
       : runKnip(run.dir, runInventory, run.graph);
+    if (populationChange) {
+      for (const covered of run.covered) knipGaps.push({ scope: scopeLabel(covered), reason: populationChange });
+    }
     const ownedByRun = (path: string): boolean => {
       if (run.stripPrefix && !path.startsWith(run.stripPrefix)) return false;
       const targetPath = targetRelativePath(path).replaceAll("\\", "/");

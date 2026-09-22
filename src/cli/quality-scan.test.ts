@@ -1436,7 +1436,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     });
   }, 30_000);
 
-  it("refreshes framework inventory after a failed target config changes compiler inputs", async () => {
+  it.each(["growth", "replacement"] as const)("discloses retry source population %s after refreshing framework inventory", async (change) => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-retry-fresh-"));
     const observer = mkdtempSync(join(tmpdir(), "harvey-quality-retry-observer-"));
     dirs.push(repo, observer);
@@ -1446,9 +1446,10 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     write(repo, "generated/client.ts", "export const mode = import.meta.env.MODE;\n");
     write(repo, "index.html", '<script type="module" src="/ui/start.ts"></script>\n');
     write(repo, "ui/start.ts", "export const start = true;\n");
+    const retryCompilerOptions = change === "growth" ? { noEmit: true } : { outDir: "ui" };
     write(repo, "knip.config.ts", `import { writeFileSync } from "node:fs";
 export default () => {
-  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: ${JSON.stringify(retryCompilerOptions)}, files: ["main.ts"] }));
   throw new Error("fixture changes compiler scope before failing");
 };\n`);
     const observedConfig = join(observer, "retry-config.json");
@@ -1472,11 +1473,29 @@ require("node:module").syncBuiltinESMExports();\n`);
     expect(config.entry).toContain("index.html");
     expect(config.vite).toBe(false);
     const findings = JSON.parse(readFileSync(output, "utf8")) as Finding[];
+    const initialPaths = ["knip.config.ts", "main.ts", "ui/start.ts"];
+    const retryPaths = ["knip.config.ts", "main.ts", "generated/client.ts", ...(change === "growth" ? ["ui/start.ts"] : [])];
+    const initialDigest = digestObservedPaths(initialPaths);
+    const retryDigest = digestObservedPaths(retryPaths);
+    const reason = findings.find((finding) => finding.id === "M5-00")?.evidence;
+    expect(reason).toContain(`initial 3 file(s), paths SHA-256 ${initialDigest}`);
+    expect(reason).toContain(`retry ${retryPaths.length} file(s), paths SHA-256 ${retryDigest}`);
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
-    expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+    expect(findings).toContainEqual(expect.objectContaining({ location: "generated/client.ts", confidence: "Review", precisionTier: "review" }));
     expect(readCorpusScannerScope(receiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 3, pathsDigest: initialDigest },
+      knip: { completed: [], reduced: [], incomplete: ["(repo root)"], populations: [
+        { scope: "(repo root)", productSources: 3, pathsDigest: initialDigest, status: "incomplete", configuration: "harvey-inferred",
+          reason: expect.stringContaining(`retry ${retryPaths.length} file(s), paths SHA-256 ${retryDigest}`) },
+      ] },
+    });
+    const stableFindings = await runCli(repo, ["--scope-out", receiptPath]);
+    expect(stableFindings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+    expect(stableFindings).toContainEqual(expect.objectContaining({ location: "generated/client.ts", confidence: "Review", precisionTier: "review" }));
+    expect(readCorpusScannerScope(receiptPath, "quality-scan").observation).toMatchObject({
+      productSources: { count: retryPaths.length, pathsDigest: retryDigest },
       knip: { completed: ["(repo root)"], reduced: ["(repo root)"], incomplete: [], populations: [
-        { scope: "(repo root)", status: "reduced", configuration: "harvey-inferred" },
+        { scope: "(repo root)", productSources: retryPaths.length, pathsDigest: retryDigest, status: "reduced", configuration: "harvey-inferred" },
       ] },
     });
   }, 30000);
