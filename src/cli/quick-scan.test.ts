@@ -410,6 +410,43 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("M9 workspace assessment at quick-
 
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan M5 Python evidence (#2156)", () => {
   it.each([
+    { shape: "Python product and Python tests", product: true, jsTests: false },
+    { shape: "Python product and JS tests", product: true, jsTests: true },
+    { shape: "Python tests only", product: false, jsTests: false },
+  ])("keeps the assessed population honest for $shape", async ({ product, jsTests }) => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-m5-product-population-"));
+    dirs.push(target);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m5-product-population", private: true }));
+    const python = "def work():\n    try:\n        run()\n    except Exception:\n        pass\n";
+    if (product) writeFileSync(join(target, "worker.py"), python);
+    writeFileSync(join(target, jsTests ? "index.test.ts" : "test_worker.py"), jsTests ? "export const ready = true;\n" : python);
+    const jsonOut = join(target, "quick.json");
+    const sarifOut = join(target, "quick.sarif");
+    await run([CLI, "--dir", target, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const scorecard = (JSON.parse(readFileSync(jsonOut, "utf8")) as { scorecard: HealthScorecard }).scorecard;
+    const m5 = scorecard.dimensions.find((row) => row.module === "M5")!;
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as { runs: Array<{ results: Array<{ ruleId: string; message: { text: string } }> }> };
+    const m5Results = sarif.runs[0]!.results.filter((result) => result.ruleId.startsWith("M5 — "));
+    expect(m5.grade).toBeUndefined();
+    expect(m5.score).toBeUndefined();
+    expect(scorecard.gradedModules).not.toContain("M5");
+    if (product) {
+      expect(m5).toMatchObject({ status: "indicator-only", count: 1 });
+      expect(m5.scope).toContain("python: 1/1 examined (partial");
+      expect(m5.scope).not.toContain("javascript/typescript: 1/1");
+      expect(m5.evidence?.examples.map((example) => example.location)).toEqual(["worker.py:4"]);
+      expect(m5Results.filter((result) => result.ruleId === "M5 — Python empty/pass exception handler")).toHaveLength(1);
+      const assessmentText = m5Results.find((result) => result.ruleId === "M5 — Source coverage partial: python")?.message.text;
+      expect(assessmentText).toContain("Identified=1 (");
+      expect(assessmentText).toContain("examined=1 (");
+    } else {
+      expect(m5.status).toBe("not-assessed");
+      expect(m5.reason).toContain("No authored product source files");
+      expect(m5Results).toHaveLength(0);
+    }
+  }, 120000);
+
+  it.each([
     { shape: "positive Python", python: "def work():\n    try:\n        run()\n    except Exception:\n        pass\n", js: false, count: 1, scorecardCount: 1 },
     { shape: "zero-finding Python", python: "def work():\n    return 42\n", js: false, count: 0, scorecardCount: 0 },
     { shape: "mixed JS/Python", python: "def work():\n    try:\n        run()\n    except Exception:\n        pass\n", js: true, count: 1, scorecardCount: 2 },

@@ -38,7 +38,7 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
-import { loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
+import { isTestSourcePath, loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runJscpd } from "../scan/duplication.js";
@@ -520,7 +520,8 @@ async function main(): Promise<void> {
   // The FULL set, tests included: buildHealthScorecard splits it (product code for M5/M7/M9, test
   // files for M8's census), so the split lives in one place rather than at each call site.
   const sources = loadSources(absDir);
-  const identifiedSources = loadSourceInventory(absDir);
+  // Match the mechanical M5 producer's product population; test files are assessed by M8.
+  const identifiedSources = loadSourceInventory(absDir).filter((source) => !isTestSourcePath(source.path));
   const m5Receipt = sourcePopulationReceipt("M5", identifiedSources);
   const m5ExaminedLanguages = new Set(
     m5Receipt.populations.filter((population) => population.examined.count > 0).map((population) => population.language),
@@ -530,20 +531,20 @@ async function main(): Promise<void> {
     return language !== undefined && m5ExaminedLanguages.has(language);
   });
   const m5JsFiles = m5Receipt.populations.find((population) => population.language === "javascript/typescript")?.examined.count ?? 0;
-  const m5SourceAssessment = m5ExaminedSources.length > 0
-    ? {
-        reviewFindings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
-        kloc: size.loc / 1000,
-        examinedFiles: m5ExaminedSources.length,
-        gradedFiles: m5JsFiles,
-        scope:
-          `M5 source rules examined ${m5ExaminedSources.length} authored source file(s). `
-          + m5Receipt.populations.filter((population) => population.identified.count > 0)
-            .map((population) => `${population.language}: ${population.examined.count}/${population.identified.count} examined (${population.status}${population.reason ? `; ${population.reason}` : ""})`)
-            .join("; ")
-          + (sourcePopulationGap ? `. ${sourcePopulationGap}` : "."),
-      }
-    : undefined;
+  const m5SourceAssessment = {
+    reviewFindings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
+    kloc: m5ExaminedSources.filter((source) => sourceLanguage(source.path) === "javascript/typescript")
+      .reduce((lines, source) => lines + source.text.split("\n").filter((line) => line.trim() !== "").length, 0) / 1000,
+    examinedFiles: m5ExaminedSources.length,
+    gradedFiles: m5JsFiles,
+    scope:
+      (identifiedSources.length === 0 ? "No authored product source files were admitted to the M5 source rules. "
+        : `M5 source rules examined ${m5ExaminedSources.length} authored product source file(s). `)
+      + m5Receipt.populations.filter((population) => population.identified.count > 0)
+        .map((population) => `${population.language}: ${population.examined.count}/${population.identified.count} examined (${population.status}${population.reason ? `; ${population.reason}` : ""})`)
+        .join("; ")
+      + (sourcePopulationGap ? `. ${sourcePopulationGap}` : "."),
+  };
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
     m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length, findings: selectGradedFindings(rawFindings) },

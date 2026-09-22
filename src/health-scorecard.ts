@@ -538,7 +538,9 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     const scope = assessment?.scope
       ?? "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.";
     const reviewScope = " Bounded source-rule signals marked review-tier are shown as evidence but excluded from the density grade until triaged.";
-    if (assessment?.gradedFiles === 0) {
+    if (assessment?.examinedFiles === 0) {
+      dimensions.push(notAssessedRow(spec("M5"), scope, "provide supported authored product source files for the M5 source rules"));
+    } else if (assessment?.gradedFiles === 0) {
       dimensions.push({
         ...spec("M5"),
         status: "indicator-only",
