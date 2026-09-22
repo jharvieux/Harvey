@@ -239,7 +239,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
     expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
       status: "indicator-only",
       count: 1,
-      scope: expect.stringMatching(/examined 1 authored source file.*No JS\/TS product source was inspected/),
+      scope: expect.stringMatching(/examined 1 authored product source file.*No JS\/TS product source was inspected/),
     });
     for (const module of ["M4", "M6", "M7", "M8", "M9"]) {
       expect(report.scorecard.dimensions.find((row) => row.module === module)?.status).toBe("not-assessed");
