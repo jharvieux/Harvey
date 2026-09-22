@@ -9,6 +9,8 @@
 // Plain .mjs (not src/*.ts) because render.mjs consumes it directly at render time; TS callers get
 // types from sections.d.mts.
 
+import { findingAnchor, findingIdAttribute } from "./navigation.mjs";
+
 export const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m]);
 
 // ---------------------------------------------------------------------------
@@ -242,7 +244,7 @@ export function draftTermsBadge(data) {
 // applicability finding sets one.
 export function notApplicableSection(na) {
   if (!na.length) return "";
-  const rows = na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? x.evidence ?? "Not applicable in context.")}</div>`).join("");
+  const rows = na.map((x) => `<div class="na" id="${findingAnchor(x.id)}" data-finding-id="${findingIdAttribute(x.id)}" tabindex="-1"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? x.evidence ?? "Not applicable in context.")}</div>`).join("");
   return `<h2>Checked &amp; ruled out (not applicable)</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture), plus every row a module recorded as NOT assessed. Shown for transparency — an item here was not cleared, it was not reached.</div>
     ${rows}`;

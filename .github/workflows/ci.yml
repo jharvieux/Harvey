@@ -167,6 +167,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+      - name: Verify shipping HTML navigation and PDF delivery
+        timeout-minutes: 5
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          python3 -m venv "$RUNNER_TEMP/report-pdf-venv"
+          "$RUNNER_TEMP/report-pdf-venv/bin/pip" install pypdf==6.10.0
+          HARVEY_PDF_PYTHON="$RUNNER_TEMP/report-pdf-venv/bin/python" node tools/report-pdf-acceptance.mjs "$RUNNER_TEMP/report-pdf-acceptance"
 
   # #1120: the heavy child-process test files vitest.config.ts keeps out of `pnpm verify`'s shared
   # worker pool. Pull requests run only workloads with explicit changed-path ownership; unmapped
