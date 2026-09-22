@@ -12,7 +12,9 @@
 // KNIP per workspace — discovered from the target's pnpm-workspace.yaml / package.json workspaces
 // field via the same enumeration src/pentest/targets.ts already uses for M2 target coverage (a
 // target with no workspace file still gets exactly one scope, its own root, so a plain
-// non-monorepo target's behavior and output are unchanged) — with a hard per-invocation timeout. A
+// non-monorepo target's behavior and output are unchanged) — with a hard per-invocation timeout.
+// A configured root Knip workspace graph is run from that root so its overrides remain effective.
+// A
 // workspace that times out or crashes never takes the whole run down with it: it's recorded as a
 // disclosed coverage gap (knipUnavailableFinding) alongside whatever the other workspaces
 // produced — partial, not a silent stall or a silent skip.
@@ -30,7 +32,8 @@
 
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { productSourceInventoryForScope, productSourceInventoryForTarget, readStaticConfigObject, sourceExclusionGlob, type ProductSourceInventory } from "../source-inventory.js";
@@ -38,6 +41,7 @@ import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { discoverWorkspaceInventory } from "../workspaces.js";
 import { runJscpd as runJscpdLive } from "../scan/duplication.js";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
 import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
@@ -145,17 +149,8 @@ const sourceInventory = productSourceInventoryForTarget(targetDir);
 // non-empty; it only degrades to [targetDir] itself when the root carries no package.json at all
 // (e.g. a bare source directory, as some calibration fixtures are) — same tree quality-scan always
 // scanned in that case.
-const workspaceDirs = discoverTargets(targetDir).apps.map((a) => a.path);
-const scopes = workspaceDirs.length ? workspaceDirs : [targetDir];
-const workspacePackageNames = new Set<string>();
-for (const scope of scopes) {
-  try {
-    const parsed = JSON.parse(readFileSync(join(scope, "package.json"), "utf8")) as { name?: unknown };
-    if (typeof parsed.name === "string") workspacePackageNames.add(parsed.name);
-  } catch {
-    // A missing/malformed manifest asserts no workspace package identity.
-  }
-}
+const packageWorkspaceDirs = discoverTargets(targetDir).apps.map((a) => a.path);
+const knipWorkspaceDiscoveryFailures: string[] = [];
 
 interface ScanGap {
   scope: string;
@@ -205,10 +200,8 @@ function runJscpd(dir: string): JscpdReport {
 // replace it: replacing would drop the target's entry config and re-flood the unused-files list.
 const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 
-// The scope's own knip config as a mergeable object, or "unmergeable" for a comment-bearing/code
-// config we won't risk re-serializing, or undefined when there is none. A root config in an
-// ANCESTOR dir is deliberately not consulted: knip run per-workspace treats the scope dir as its
-// own root and auto-detects entries, so there is nothing there to preserve.
+// JSON/JSONC is statically mergeable. Executable configs must be evaluated by Knip, and their
+// final workspace selection depends on evaluating all executable statements.
 type ScopeKnipConfig =
   | { value: Record<string, unknown>; executablePath?: string; packageConfig?: Record<string, unknown> }
   | { unresolved: string; executablePath?: string; packageConfig?: Record<string, unknown> };
@@ -227,12 +220,19 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   const configNames = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"];
   const configPath = configNames.map((name) => join(dir, name)).find(existsSync);
   if (!configPath) return packageConfig ? { value: packageConfig } : undefined;
+  if ([".js", ".ts"].includes(extname(configPath))) {
+    // Even a literal may be mutated later or passed through an executable defineConfig wrapper.
+    // Keep the real config authoritative and report uncertainty about its final selection.
+    return {
+      unresolved: `${basename(configPath)}: executable configuration may change the exported object`,
+      executablePath: configPath,
+      ...(packageConfig ? { packageConfig } : {}),
+    };
+  }
   const parsed = readStaticConfigObject(configPath);
   if (!parsed.value) {
-    const executablePath = [".js", ".ts"].includes(extname(configPath)) ? configPath : undefined;
     return {
       unresolved: `${basename(configPath)}: ${parsed.error}`,
-      ...(executablePath ? { executablePath } : {}),
       ...(packageConfig ? { packageConfig } : {}),
     };
   }
@@ -240,9 +240,122 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   // exact precedence before Harvey adds its product-inventory ignores.
   return {
     value: { ...packageConfig, ...parsed.value },
-    ...(parsed.executable ? { executablePath: configPath } : {}),
     ...(packageConfig ? { packageConfig } : {}),
   };
+}
+
+// Knip's configured workspace keys can add directories that the package manager never declared.
+// Use Knip's own glob implementation, as dependency preparation does, so brace/extglob keys and
+// the scan's receipt resolve to the same physical directories as the child process.
+async function configuredKnipWorkspaceDirs(root: string, config: ScopeKnipConfig): Promise<string[]> {
+  if (!("value" in config) || !config.value.workspaces
+    || typeof config.value.workspaces !== "object" || Array.isArray(config.value.workspaces)) return [];
+  const patterns = Object.keys(config.value.workspaces as Record<string, unknown>).filter((pattern) => pattern !== ".");
+  if (patterns.length === 0) return [];
+  try {
+    // This fixed module belongs to Harvey's installed toolchain, whose Knip version and lockfile
+    // are already bound into the scanner identity. Never resolve it from the target's dependencies.
+    const knipRequire = createRequire(realpathSync(join(repoRoot, "node_modules", "knip", "package.json")));
+    const { _dirGlob } = knipRequire("./dist/util/glob.js") as {
+      _dirGlob: (options: { cwd: string; patterns: string[]; gitignore: boolean }) => Promise<string[]>;
+    };
+    const physicalRoot = realpathSync(root);
+    const dirs = await _dirGlob({ cwd: root, patterns, gitignore: false });
+    return dirs.map((dir) => {
+      const absolute = resolve(root, dir);
+      const physical = realpathSync(absolute);
+      if (physical !== physicalRoot && !physical.startsWith(`${physicalRoot}/`)) {
+        throw new Error(`Knip configured workspace escapes its root: ${dir}`);
+      }
+      return absolute;
+    });
+  } catch (err) {
+    knipWorkspaceDiscoveryFailures.push(`Knip configured workspace discovery at ${root} failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+function withinDirectory(dir: string, parent: string): boolean {
+  return dir === parent || dir.startsWith(`${parent}/`);
+}
+
+function workspaceExclusions(root: string): Map<string, string> {
+  const exclusions = new Map<string, string>();
+  for (const observation of discoverWorkspaceInventory(root).observations) {
+    if (observation.kind !== "excluded") continue;
+    const dir = observation.path.replace(/\/package\.json$/, "");
+    if (dir === observation.path || dir === ".") continue;
+    exclusions.set(join(root, dir), `${observation.sourcePath} declares ${observation.glob}, which excludes ${dir} (${observation.reason})`);
+  }
+  return exclusions;
+}
+
+interface KnipGraph {
+  root: string;
+  config: ScopeKnipConfig;
+  members: string[];
+  exclusions: Map<string, string>;
+}
+
+// Resolve the graph once, before projecting it onto the requested subtree. Membership and
+// exclusions belong to the configuration root, not to the CLI entry point. Executable configs
+// may add members beyond manifests. Preserve their execution context and mark unknown membership
+// incomplete; the real Knip child is the sole evaluator of that config.
+async function configuredKnipGraph(root: string): Promise<KnipGraph | undefined> {
+  const config = scopeKnipConfig(root);
+  if (!config) return undefined;
+  const inventory = discoverWorkspaceInventory(root);
+  const exclusions = workspaceExclusions(root);
+  const hasConfiguredWorkspaces = "value" in config && config.value.workspaces
+    && typeof config.value.workspaces === "object" && !Array.isArray(config.value.workspaces);
+  // Knip also builds its graph from package-manager declarations. A static root config's global
+  // entry/project/ignore settings remain authoritative even without an explicit workspaces key.
+  if ("value" in config && !hasConfiguredWorkspaces
+    && !inventory.packages.some((pkg) => pkg.dir !== ".") && exclusions.size === 0) return undefined;
+  return {
+    root, config, exclusions,
+    members: [...new Set([
+      root,
+      ...inventory.packages.map((pkg) => join(root, pkg.dir)),
+      ...await configuredKnipWorkspaceDirs(root, config),
+      ...exclusions.keys(),
+    ])].sort((left, right) => right.length - left.length),
+  };
+}
+
+async function effectiveKnipGraph(dir: string): Promise<KnipGraph | undefined> {
+  let candidate = dir;
+  for (;;) {
+    const graph = await configuredKnipGraph(candidate);
+    if (graph && (candidate === dir || "unresolved" in graph.config
+      || graph.members.some((member) => member !== graph.root
+        && (withinDirectory(dir, member) || withinDirectory(member, dir))))) return graph;
+    // Match the product inventory's repository boundary, including worktree .git files. An
+    // unknown config outside a separately rooted target has no authority over that target.
+    if (existsSync(join(candidate, ".git"))) return undefined;
+    const parent = dirname(candidate);
+    if (parent === candidate) return undefined;
+    candidate = parent;
+  }
+}
+
+const knipGraph = await effectiveKnipGraph(targetDir);
+const scopes = knipGraph
+  ? [...new Set([targetDir, ...knipGraph.members.filter((dir) => withinDirectory(dir, targetDir))])]
+  : packageWorkspaceDirs.length ? packageWorkspaceDirs : [targetDir];
+const excludedWorkspaceReasons = new Map<string, string>();
+for (const [dir, reason] of knipGraph?.exclusions ?? workspaceExclusions(targetDir)) {
+  if (withinDirectory(dir, targetDir)) excludedWorkspaceReasons.set(scopeLabel(dir), reason);
+  else if (withinDirectory(targetDir, dir)) excludedWorkspaceReasons.set("(repo root)", reason);
+}
+const workspacePackageNames = new Set<string>();
+for (const scope of scopes) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(scope, "package.json"), "utf8")) as { name?: unknown };
+    if (typeof parsed.name === "string") workspacePackageNames.add(parsed.name);
+  } catch {
+    // A missing/malformed manifest asserts no workspace package identity.
+  }
 }
 
 // One knip invocation against `dir`. `config`, when given, is written as HARVEY_KNIP_CONFIG and
@@ -310,15 +423,47 @@ function withProductInventoryIgnore(config: Record<string, unknown>, inventory: 
   return { ...config, ignore: [...new Set([...existing, ...generated])] };
 }
 
+function sourceOnlyKnipConfig(dir: string, inventory: ProductSourceInventory, graph?: KnipGraph): Record<string, unknown> {
+  const config = buildDegradedKnipConfig(detectTargetFramework(dir, { root: dir, inventory }), KNIP_PLUGIN_NAMES);
+  const project = ["**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}"];
+  const members = graph?.members ?? discoverTargets(dir).apps.map((app) => app.path);
+  const workspaces = Object.fromEntries([...new Set([dir, ...members])].map((member) => {
+    const memberInventory = productSourceInventoryForScope(dir, member, inventory);
+    const inferred = member === dir ? config
+      : buildDegradedKnipConfig(detectTargetFramework(member, { root: member, inventory: memberInventory }), KNIP_PLUGIN_NAMES);
+    return [relative(dir, member).replaceAll("\\", "/") || ".", { entry: inferred.entry, project }];
+  }));
+  // Knip shallow-merges package.json#knip even with -c. Reset authored selection/report settings
+  // and replace every workspace override to keep member plugins disabled and cover the declared
+  // source-only population. Explicit '.' preserves root entries.
+  return withProductInventoryIgnore({
+    ...config, project, workspaces,
+    include: [], exclude: [], rules: {}, paths: {},
+    ignore: [], ignoreFiles: [], ignoreWorkspaces: [], ignoreIssues: {},
+    ignoreDependencies: [], ignoreBinaries: [], ignoreMembers: [], ignoreUnresolved: [],
+    compilers: {}, syncCompilers: {}, asyncCompilers: {}, tags: [],
+    includeEntryExports: false, treatConfigHintsAsErrors: false,
+  }, inventory);
+}
+
 // #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
 // so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
 // that supplied its own config keeps confirmed file findings.
 // #810: `pluginsDisabled`/`reducedReason` mark a scope that only ran after the degraded retry
 // (knip couldn't load the target's config/plugin configs — the missing-node_modules case).
+interface KnipRunResult {
+  report: KnipReport;
+  entriesInferred: boolean;
+  pluginsDisabled: boolean;
+  reducedReason?: string;
+  populationChange?: string;
+}
+
 function runKnip(
   dir: string,
   inventory: ProductSourceInventory,
-): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
+  graph?: KnipGraph,
+): KnipRunResult {
   // First-attempt config: an inferred config for a config-less scope (#696), the
   // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
   // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
@@ -360,6 +505,7 @@ function runKnip(
     config = undefined;
     entriesInferred = false;
   }
+  const initialPaths = sourceFilePaths(dir, inventory);
   try {
     if (configurationError) throw configurationError;
     return {
@@ -384,14 +530,21 @@ function runKnip(
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
     // An executed target config may have changed source or dependency inputs. Keep framework
     // detection fresh here instead of reusing the pre-child inventory across that boundary.
+    const retryInventory = productSourceInventoryForTarget(dir);
+    const retryPaths = sourceFilePaths(dir, retryInventory);
+    const initialDigest = digestObservedPaths(initialPaths);
+    const retryDigest = digestObservedPaths(retryPaths);
+    const populationChange = initialDigest !== retryDigest
+      ? `Knip's product source population changed before its source-only retry: initial ${initialPaths.length} file(s), paths SHA-256 ${initialDigest}; retry ${retryPaths.length} file(s), paths SHA-256 ${retryDigest}. The original population receipt is incomplete; retry findings remain available for review. Rerun after source and configuration inputs are stable.`
+      : undefined;
     const report = execKnip(
       dir,
-      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      sourceOnlyKnipConfig(dir, retryInventory, graph),
       undefined,
       {},
-      inventory,
+      retryInventory,
     );
-    return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
+    return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err), populationChange };
   }
 }
 
@@ -404,12 +557,13 @@ function runKnipDegraded(
   dir: string,
   reason: string,
   inventory: ProductSourceInventory,
-): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+  graph?: KnipGraph,
+): KnipRunResult {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
     report: execKnip(
       dir,
-      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir, { root: dir, inventory }), KNIP_PLUGIN_NAMES), inventory),
+      sourceOnlyKnipConfig(dir, inventory, graph),
       undefined,
       {},
       inventory,
@@ -486,16 +640,20 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
 // count instead of a security-relevant subset) so the ratio denominator matches what knip could
 // plausibly have scanned.
 function countSourceFiles(dir: string, rel = "", inventory: ProductSourceInventory = sourceInventory): number {
-  let count = 0;
+  return sourceFilePaths(dir, inventory, rel).length;
+}
+
+function sourceFilePaths(dir: string, inventory: ProductSourceInventory, rel = ""): string[] {
+  const paths: string[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!inventory.excludedDirectoryFor(relPath)) count += countSourceFiles(dir, relPath, inventory);
+      if (!inventory.excludedDirectoryFor(relPath)) paths.push(...sourceFilePaths(dir, inventory, relPath));
     } else if (!inventory.excludedDirectoryFor(relPath) && SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
-      count += 1;
+      paths.push(relPath);
     }
   }
-  return count;
+  return paths;
 }
 
 // #1080: deliberately its OWN walk, not countSourceFiles'/securityPathFiles' — those already skip
@@ -557,7 +715,7 @@ function isViteResolvable(dir: string): boolean {
 const jscpdReports: JscpdReport[] = [];
 const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
-const knipGaps: ScanGap[] = [];
+const knipGaps: ScanGap[] = knipWorkspaceDiscoveryFailures.map((reason) => ({ scope: "(repo root)", reason }));
 for (const gap of sourceInventory.unresolvedConfigurations) {
   const reason = `${gap.path}: ${gap.reason}`;
   jscpdGaps.push({ scope: "(whole repo product inventory)", reason });
@@ -565,6 +723,31 @@ for (const gap of sourceInventory.unresolvedConfigurations) {
 const knipUncertainScopes: ScanGap[] = [];
 // #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
 const knipReducedScopes: ScanGap[] = [];
+
+// Root workspace exclusions survive a successful child exit. Reconcile each product-inventory
+// member with the executed graph before marking its source population examined.
+function rootGraphExclusion(graph: KnipGraph, scope: string): string | undefined {
+  const config = graph.config;
+  const owner = graph.members.find((dir) => withinDirectory(scope, dir)) ?? graph.root;
+  const member = relative(graph.root, owner).replaceAll("\\", "/") || ".";
+  if ("unresolved" in config) {
+    return `Knip's root workspace configuration could not be inspected for ${member}; its examined population is unverified`;
+  }
+  const patterns = config.value.ignoreWorkspaces;
+  if (!Array.isArray(patterns)) return undefined;
+  const active = patterns.filter((pattern): pattern is string => typeof pattern === "string" && !pattern.endsWith("!"));
+  const exceptions = active.filter((pattern) => pattern.startsWith("!")).map((pattern) => pattern.slice(1));
+  let matcher: { isMatch: (path: string, pattern: string, options?: { ignore?: string[] }) => boolean };
+  try {
+    const knipRequire = createRequire(realpathSync(join(repoRoot, "node_modules", "knip", "package.json")));
+    matcher = knipRequire("picomatch") as typeof matcher;
+  } catch (err) {
+    return `Knip's workspace matcher could not be loaded for ${member}; its examined population is unverified: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  const ignored = active.find((pattern) => !pattern.startsWith("!")
+    && matcher.isMatch(member, pattern.replace(/^\.\//, ""), { ignore: exceptions }));
+  return ignored ? `Knip root configuration ignoreWorkspaces includes ${member} via ${ignored}; this product source population was not assessed` : undefined;
+}
 // #696: files whose scope had Harvey-inferred entries — their unused-FILE findings are review tier.
 const inferredEntryFiles = new Set<string>();
 // #1050: the same scopes' package.json paths — their unused-DEPENDENCY findings are review tier for
@@ -589,29 +772,60 @@ try {
   console.error(`⚠ jscpd ${isTimeout(err) ? "timed out" : "failed"} on the whole repo — M4 coverage incomplete: ${reason}`);
 }
 
-// #223/#505: knip has no dependency on M4 and runs per workspace — a knip gap on one workspace
-// must not cost any other workspace's (or jscpd's) findings.
-for (const scope of scopes) {
-  const label = scopeLabel(scope);
-  const workspaceRel = relative(targetDir, scope);
-  const scopeInventory = productSourceInventoryForScope(targetDir, scope, sourceInventory);
-  for (const gap of scopeInventory.unresolvedConfigurations) {
-    knipGaps.push({ scope: label, reason: `${gap.path}: ${gap.reason}` });
+// A configured graph has one invocation, even when the requested subtree contains additional
+// package declarations. Re-running a descendant with inferred entries would overwrite the root's
+// entry/project/ignore semantics. Filter the graph's real output to the requested subtree instead.
+const knipRuns: Array<{ dir: string; covered: string[]; stripPrefix?: string; graph?: KnipGraph }> = knipGraph
+  ? [{
+      dir: knipGraph.root, covered: scopes, graph: knipGraph,
+      ...(knipGraph.root === targetDir ? {} : { stripPrefix: `${relative(knipGraph.root, targetDir).replaceAll("\\", "/")}/` }),
+    }]
+  : scopes.map((dir) => ({ dir, covered: [dir] }));
+const deepestScopes = [...scopes].sort((left, right) => right.length - left.length);
+for (const run of knipRuns) {
+  const label = run.covered.map(scopeLabel).join(", ");
+  // Descendants project the already-built target inventory; rediscovering their ancestor would
+  // rebuild every TypeScript project once per member. An ancestor Knip graph still needs its own
+  // full-root inventory to describe graph exclusions outside the requested subtree.
+  const runInventory = withinDirectory(run.dir, targetDir)
+    ? productSourceInventoryForScope(targetDir, run.dir, sourceInventory)
+    : productSourceInventoryForTarget(run.dir);
+  for (const gap of runInventory.unresolvedConfigurations) {
+    for (const covered of run.covered) knipGaps.push({ scope: scopeLabel(covered), reason: `${gap.path}: ${gap.reason}` });
   }
+  const targetRelativePath = (path: string): string => {
+    if (run.stripPrefix) {
+      if (!path.startsWith(run.stripPrefix)) throw new Error(`Knip emitted a path outside ${run.stripPrefix}: ${path}`);
+      return path.slice(run.stripPrefix.length);
+    }
+    return prefixed(relative(targetDir, run.dir), path);
+  };
   try {
-    const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
-      ? runKnipDegraded(scope, degradedKnipReason, scopeInventory)
-      : runKnip(scope, scopeInventory);
+    const { report, entriesInferred, pluginsDisabled, reducedReason, populationChange } = degradedKnipReason
+      ? runKnipDegraded(run.dir, degradedKnipReason, runInventory, run.graph)
+      : runKnip(run.dir, runInventory, run.graph);
+    if (populationChange) {
+      for (const covered of run.covered) knipGaps.push({ scope: scopeLabel(covered), reason: populationChange });
+    }
+    const ownedByRun = (path: string): boolean => {
+      if (run.stripPrefix && !path.startsWith(run.stripPrefix)) return false;
+      const targetPath = targetRelativePath(path).replaceAll("\\", "/");
+      const owner = deepestScopes.find((scope) => scope !== targetDir
+        && targetPath.startsWith(`${relative(targetDir, scope).replaceAll("\\", "/")}/`)) ?? targetDir;
+      return run.covered.includes(owner);
+    };
+    report.files = report.files.filter(ownedByRun);
+    report.issues = report.issues.filter((issue) => ownedByRun(issue.file));
     if (pluginsDisabled) {
       for (const issue of report.issues) {
         let source: string | undefined;
         try {
-          source = readFileSync(join(scope, issue.file), "utf8");
+          source = readFileSync(join(run.dir, issue.file), "utf8");
         } catch {
           // A source read failure leaves the narrow boundary unclassified.
         }
         if (unlistedImportNeedsResolvedConfig(issue, source, workspacePackageNames)) {
-          unresolvedUnlistedImportPaths.add(prefixed(workspaceRel, issue.file));
+          unresolvedUnlistedImportPaths.add(targetRelativePath(issue.file));
         }
       }
     }
@@ -620,7 +834,7 @@ for (const scope of scopes) {
     // entry-uncertain heuristic is skipped for it — its high unused ratio is the EXPECTED cost of a
     // plugins-disabled run, already explained by M5-98, not a separate mis-resolution signal.
     if (pluginsDisabled) {
-      knipReducedScopes.push({ scope: label, reason: reducedReason ?? "knip could not load the target's config" });
+      for (const covered of run.covered) knipReducedScopes.push({ scope: scopeLabel(covered), reason: reducedReason ?? "knip could not load the target's config" });
       console.error(
         degradedKnipReason
           ? `⚠ dependency preparation was incomplete for ${label} — ran knip directly with target configs/plugins disabled; M5 file findings for it are source-only review tier (#1871, see M5-98)`
@@ -628,13 +842,15 @@ for (const scope of scopes) {
       );
     } else {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
-      // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
-      // operate on the real scope dir, not the merged-report-relative path.
-      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope, "", scopeInventory), hasViteEntryMarkers(scope), isViteResolvable(scope));
+      // only cares about the count. A root-config run spans its whole repo; direct member output
+      // is selected first and uses the member's product population for that denominator.
+      const observedDir = run.stripPrefix ? targetDir : run.dir;
+      const observedInventory = run.stripPrefix ? sourceInventory : runInventory;
+      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(observedDir, "", observedInventory), hasViteEntryMarkers(observedDir), isViteResolvable(observedDir));
       if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     }
-    report.files = report.files.map((f) => prefixed(workspaceRel, f));
-    for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
+    report.files = report.files.map(targetRelativePath);
+    for (const issue of report.issues) issue.file = targetRelativePath(issue.file);
     if (pluginsDisabled && degradedKnipUnresolvedDependencySurface) {
       for (const issue of report.issues) unresolvedDependencySurfacePaths.add(issue.file);
     }
@@ -647,8 +863,18 @@ for (const scope of scopes) {
     knipReports.push(report);
   } catch (err) {
     const reason = degradedKnipReason ? `${degradedKnipReason}; source-only Knip failed: ${gapReason(err)}` : gapReason(err);
-    knipGaps.push({ scope: label, reason });
+    for (const covered of run.covered) knipGaps.push({ scope: scopeLabel(covered), reason });
     console.error(`⚠ knip ${isTimeout(err) ? "timed out" : "failed"} on ${label} — M5 dead-code coverage skipped for this scope: ${reason}`);
+  }
+}
+
+for (const run of knipRuns) {
+  if (!run.graph) continue;
+  for (const scope of run.covered) {
+    // The reduced retry executes Harvey's known inferred config, not the unresolved original.
+    if (knipReducedScopes.some((reduced) => reduced.scope === scopeLabel(scope))) continue;
+    const reason = rootGraphExclusion(run.graph, scope);
+    if (reason) knipGaps.push({ scope: scopeLabel(scope), reason });
   }
 }
 
@@ -674,6 +900,30 @@ if (wholeRepoDiverged) {
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
 const eligibleFileCount = observedProductSources.size;
+const memberScopes = scopes.filter((scope) => scope !== targetDir)
+  .sort((left, right) => right.length - left.length);
+const excludedWorkspaceDirs = [...excludedWorkspaceReasons.keys()].sort((left, right) => right.length - left.length);
+const sourcePathsByScope = new Map<string, string[]>(scopes.map((scope) => [scopeLabel(scope), []]));
+for (const path of observedProductSources) {
+  const member = memberScopes.find((scope) => path.startsWith(`${relative(targetDir, scope).replaceAll("\\", "/")}/`));
+  const excluded = excludedWorkspaceDirs.find((dir) => path.startsWith(`${dir}/`));
+  const label = member ? scopeLabel(member) : excluded ?? "(repo root)";
+  const paths = sourcePathsByScope.get(label);
+  if (paths) paths.push(path);
+  else sourcePathsByScope.set(label, [path]);
+}
+for (const [dir, reason] of excludedWorkspaceReasons) {
+  const paths = sourcePathsByScope.get(dir) ?? [];
+  if (paths.length > 0) knipGaps.push({ scope: dir, reason: `${paths.length} product source file(s) were not assessed by Knip: ${reason}` });
+}
+const unexaminedRootPaths = scopes.includes(targetDir) ? [] : sourcePathsByScope.get("(repo root)") ?? [];
+if (unexaminedRootPaths.length > 0) {
+  knipGaps.push({
+    scope: "(repo root)",
+    reason: `${unexaminedRootPaths.length} root or undeclared product source file(s) were not assessed by Knip: this target has member-scoped runs and no root Knip workspace configuration; rerun after adding a root workspace config or a root-only Knip scope.`,
+  });
+}
+const knipReceiptLabels = [...new Set([...scopes.map(scopeLabel), ...knipGaps.map((gap) => gap.scope)])].sort();
 const zeroSourceDisposition = eligibleFileCount === 0 ? {
   status: "not-assessed" as const,
   reason: [
@@ -685,6 +935,23 @@ const zeroSourceDisposition = eligibleFileCount === 0 ? {
 } : undefined;
 const knipIncompleteScopeLabels = [...new Set(knipGaps.map((gap) => gap.scope))].sort();
 const knipReducedScopeLabels = [...new Set(knipReducedScopes.map((scope) => scope.scope))].sort();
+const knipPopulations = knipReceiptLabels.map((scope) => {
+  const paths = sourcePathsByScope.get(scope) ?? [];
+  const gaps = knipGaps.filter((gap) => gap.scope === scope);
+  const status = gaps.length > 0 ? "incomplete" as const
+    : knipReducedScopeLabels.includes(scope) ? "reduced" as const : "completed" as const;
+  const scopeDir = scope === "(repo root)" ? targetDir : join(targetDir, scope);
+  const configuration = (scope === "(repo root)" && unexaminedRootPaths.length > 0) || excludedWorkspaceReasons.has(scope)
+    ? "none" as const
+    : knipReducedScopeLabels.includes(scope) ? "harvey-inferred" as const
+    : knipGraph
+    ? "root-workspace-config" as const
+    : scopeKnipConfig(scopeDir) ? "local-config" as const : "harvey-inferred" as const;
+  return {
+    scope, productSources: paths.length, pathsDigest: digestObservedPaths(paths), status, configuration,
+    ...(gaps.length > 0 ? { reason: gaps.map((gap) => gap.reason).join("; ") } : {}),
+  };
+});
 const divergedScopeDisclosure = wholeRepoDiverged || eligibleFileCount === 0
   ? undefined
   : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
@@ -775,10 +1042,11 @@ writeCorpusScannerScope(scopeOutPath, "quality-scan", {
     productSources: { count: eligibleFileCount, pathsDigest: digestObservedPaths([...observedProductSources]) },
     jscpd: { status: jscpdGaps.length > 0 ? "incomplete" : "completed", comparedLines: dup.totalLines },
     knip: {
-      discovered: scopes.map(scopeLabel).sort(),
-      completed: scopes.map(scopeLabel).filter((scope) => !knipIncompleteScopeLabels.includes(scope)).sort(),
+      discovered: knipReceiptLabels,
+      completed: knipReceiptLabels.filter((scope) => !knipIncompleteScopeLabels.includes(scope)),
       reduced: knipReducedScopeLabels.filter((scope) => !knipIncompleteScopeLabels.includes(scope)),
       incomplete: knipIncompleteScopeLabels,
+      populations: knipPopulations,
     },
     divergedClones: {
       securityPathSources: narrowFiles.length,

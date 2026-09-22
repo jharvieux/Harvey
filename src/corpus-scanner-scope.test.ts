@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { digestObservedPaths, readCorpusScannerScope, writeCorpusScannerScope } from "./corpus-scanner-scope.js";
-import type { CorpusScannerObservation } from "./corpus-scanner-cache.js";
+import type { CorpusScannerObservation, KnipSourcePopulation } from "./corpus-scanner-cache.js";
 
 function zeroQualityScope() {
   const observation: Extract<CorpusScannerObservation, { scanner: "quality-scan" }> = {
     scanner: "quality-scan",
     productSources: { count: 0, pathsDigest: digestObservedPaths([]) },
     jscpd: { status: "incomplete", comparedLines: 0 },
-    knip: { discovered: ["(repo root)"], completed: [], reduced: [], incomplete: ["(repo root)"] },
+    knip: { discovered: ["(repo root)"], completed: [], reduced: [], incomplete: ["(repo root)"], populations: [{ scope: "(repo root)", productSources: 0, pathsDigest: digestObservedPaths([]), status: "incomplete", configuration: "none", reason: "No eligible product source files were present for the root Knip scope" }] },
     divergedClones: { securityPathSources: 0, wholeRepoEnabled: true, complementSources: 0 },
     zeroSourceDisposition: {
       status: "not-assessed",
@@ -26,7 +26,7 @@ interface MutableQualityObservation {
   scanner: "quality-scan";
   productSources: { count: number; pathsDigest: string };
   jscpd: { status: string; comparedLines: number };
-  knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[] };
+  knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[]; populations: KnipSourcePopulation[] };
   divergedClones?: { securityPathSources: number; wholeRepoEnabled: boolean; complementSources: number };
 }
 
@@ -71,7 +71,7 @@ describe("scanner-owned examined-scope receipts", () => {
         scanner: "quality-scan",
         productSources: { count: 3_055, pathsDigest: "b".repeat(64) },
         jscpd: { status: "completed", comparedLines: 8_000 },
-        knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] },
+        knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [], populations: [{ scope: "(repo root)", productSources: 3_055, pathsDigest: "b".repeat(64), status: "completed", configuration: "local-config" }] },
         divergedClones: { securityPathSources: 1, wholeRepoEnabled: false, complementSources: 0 },
       },
     });
@@ -86,7 +86,7 @@ describe("scanner-owned examined-scope receipts", () => {
         scanner: "quality-scan",
         productSources: { count: 0, pathsDigest: "none" },
         jscpd: { status: "completed", comparedLines: 0 },
-        knip: { discovered: [], completed: [], reduced: [], incomplete: [] },
+        knip: { discovered: [], completed: [], reduced: [], incomplete: [], populations: [] },
         divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
       },
     })).toThrow(/incomplete or zero/);
@@ -119,7 +119,7 @@ describe("scanner-owned examined-scope receipts", () => {
     const path = receiptPath();
     const scope = zeroQualityScope();
     scope.observation.jscpd = { status, comparedLines: 9 };
-    scope.observation.knip = { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] };
+    scope.observation.knip = { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [], populations: [{ scope: "(repo root)", productSources: 0, pathsDigest: digestObservedPaths([]), status: "completed", configuration: "local-config" }] };
     writeCorpusScannerScope(path, "quality-scan", scope);
     expect(readCorpusScannerScope(path, "quality-scan")).toEqual(scope);
   });
@@ -233,6 +233,15 @@ describe("scanner-owned examined-scope receipts", () => {
     ["completed and incomplete overlap", (observation: MutableQualityObservation) => { observation.knip.incomplete = ["(repo root)"]; }],
     ["reduced scope not completed", (observation: MutableQualityObservation) => { observation.knip.reduced = ["ghost"]; }],
     ["non-canonical duplicate scope set", (observation: MutableQualityObservation) => { observation.knip.discovered = ["(repo root)", "(repo root)"]; }],
+    ["missing Knip population", (observation: MutableQualityObservation) => { observation.knip.populations = []; }],
+    ["overclaimed Knip population", (observation: MutableQualityObservation) => { observation.knip.populations[0]!.productSources = 6; }],
+    ["mislabelled Knip population", (observation: MutableQualityObservation) => { observation.knip.populations[0]!.scope = "ghost"; }],
+    ["false reduced status", (observation: MutableQualityObservation) => { observation.knip.populations[0]!.status = "reduced"; }],
+    ["false unexplained gap", (observation: MutableQualityObservation) => {
+      observation.knip.completed = [];
+      observation.knip.incomplete = ["(repo root)"];
+      observation.knip.populations[0]!.status = "incomplete";
+    }],
     ["negative divergence count", (observation: MutableQualityObservation) => { observation.divergedClones!.securityPathSources = -1; }],
     ["false whole-repo complement", (observation: MutableQualityObservation) => { observation.divergedClones!.complementSources = 1; }],
   ])("rejects a semantically inconsistent quality receipt: %s", (_name, mutate) => {
@@ -240,7 +249,7 @@ describe("scanner-owned examined-scope receipts", () => {
       scanner: "quality-scan" as const,
       productSources: { count: 5, pathsDigest: "d".repeat(64) },
       jscpd: { status: "completed" as const, comparedLines: 100 },
-      knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] },
+      knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [], populations: [{ scope: "(repo root)", productSources: 5, pathsDigest: "d".repeat(64), status: "completed", configuration: "local-config" }] },
       divergedClones: { securityPathSources: 2, wholeRepoEnabled: false, complementSources: 0 },
     };
     mutate(observation);

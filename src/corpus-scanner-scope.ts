@@ -60,6 +60,7 @@ export function isCorpusScannerOwnedScope(scope: Partial<CorpusScannerOwnedScope
       || !canonicalStringSet(observation.knip.completed)
       || !canonicalStringSet(observation.knip.reduced)
       || !canonicalStringSet(observation.knip.incomplete)
+      || !Array.isArray(observation.knip.populations)
       || !nonNegativeInteger(observation.divergedClones?.securityPathSources)
       || typeof observation.divergedClones.wholeRepoEnabled !== "boolean"
       || !nonNegativeInteger(observation.divergedClones.complementSources)
@@ -72,6 +73,22 @@ export function isCorpusScannerOwnedScope(scope: Partial<CorpusScannerOwnedScope
       || observation.knip.incomplete.some((scope) => !discovered.has(scope))
       || observation.knip.completed.some((scope) => !discovered.has(scope))
       || discovered.size !== completed.size + incomplete.size) return false;
+    const populations = observation.knip.populations;
+    if (populations.length !== discovered.size
+      || populations.reduce((sum, population) => sum + population.productSources, 0) !== units
+      || populations.some((population, index) => {
+        if (typeof population.scope !== "string" || population.scope.length === 0
+          || population.scope !== observation.knip.discovered[index]
+          || !nonNegativeInteger(population.productSources)
+          || !sha256Digest(population.pathsDigest)
+          || !["root-workspace-config", "local-config", "harvey-inferred", "none"].includes(population.configuration)) return true;
+        const expectedStatus = incomplete.has(population.scope) ? "incomplete"
+          : observation.knip.reduced.includes(population.scope) ? "reduced" : "completed";
+        return population.status !== expectedStatus
+          || (population.status === "incomplete" && !completeExplanation(population.reason))
+          || (population.status !== "incomplete" && population.reason !== undefined)
+          || (population.configuration === "none" && population.status !== "incomplete");
+      })) return false;
     if (observation.divergedClones.complementSources !== (observation.divergedClones.wholeRepoEnabled
       ? units! - observation.divergedClones.securityPathSources
       : 0)) return false;

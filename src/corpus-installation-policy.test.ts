@@ -124,7 +124,8 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(JSON.parse(readFileSync(join(f.targetDir, "corpus-policy.json"), "utf8")).dependencyPreparations[f.targetSlug][0]).toEqual(JSON.parse(JSON.stringify(second)));
     expect(JSON.parse(readFileSync(join(f.targetDir, "selector-args.json"), "utf8"))).toEqual(["pnpm@11.1.3", "--version"]);
     const success = await second.runQualityScan();
-    expect(success.findings.some((row) => ["M5-98", "M5-00"].includes(row.id))).toBe(false);
+    expect(success.findings.some((row) => row.id === "M5-98")).toBe(false);
+    expect(success.findings.find((row) => row.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(success.cacheRecord).toBeUndefined();
     expect(readFileSync(join(f.targetDir, "provider-consumed"), "utf8")).toBe("yes");
     rmSync(join(f.targetDir, "provider-consumed"));

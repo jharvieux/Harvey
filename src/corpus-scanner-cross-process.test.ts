@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +66,7 @@ function syntheticScope(scanner: SyntheticScanner): Record<string, unknown> {
         scanner,
         productSources: { count: 1, pathsDigest },
         jscpd: { status: "completed", comparedLines: 1 },
-        knip: { discovered: [], completed: [], reduced: [], incomplete: [] },
+        knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [], populations: [{ scope: "(repo root)", productSources: 1, pathsDigest, status: "completed", configuration: "local-config" }] },
         divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
       },
     };
@@ -337,7 +337,10 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       const observed = cold.cacheRecord!.scope.observation!;
       if (observed.scanner !== "quality-scan") throw new Error("expected quality observation");
       expect(observed.jscpd.comparedLines).toBeGreaterThan(0);
-      if (shape === "config-only") expect(observed.knip).toEqual({ discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] });
+      if (shape === "config-only") expect(observed.knip).toMatchObject({
+        discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [],
+        populations: [{ scope: "(repo root)", productSources: 0, status: "completed" }],
+      });
       for (const replay of [warm, verified]) {
         expect(replay.findings).toEqual(cold.findings);
         expect(replay.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
@@ -346,6 +349,145 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     } finally {
       releaseCorpusDependencies(preparation);
     }
+  }, 30_000);
+
+  it("retains actual root Knip findings, populations, and exclusion reasons through cache replay and verification (#2151)", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-root-knip-cache-"));
+    dirs.push(fixture);
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    const write = (path: string, content: string): void => {
+      const absolute = join(targetDir, path);
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, content);
+    };
+    write("package.json", JSON.stringify({ name: "root-knip-cache", private: true, workspaces: ["apps/*"] }));
+    write("knip.json", JSON.stringify({
+      entry: ["src/root-live.ts"], project: ["src/**/*.ts"], ignore: ["apps/web/src/ignored.ts"], ignoreWorkspaces: ["apps/ignored"],
+    }));
+    write("src/root-live.ts", "export const live = true;\n");
+    write("src/root-dead.ts", "export const dead = true;\n");
+    for (const member of ["web", "ignored"]) {
+      write(`apps/${member}/package.json`, JSON.stringify({ name: member, private: true }));
+      write(`apps/${member}/src/dead.ts`, "export const dead = true;\n");
+    }
+    write("apps/web/src/index.ts", 'import { live } from "./live.js";\nconsole.log(live);\n');
+    write("apps/web/src/live.ts", "export const live = true;\n");
+    write("apps/web/src/ignored.ts", "export const ignored = true;\n");
+    await execFileAsync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir });
+    const identity = { targetRevision: "root-knip-pin", targetTree: "root-knip-tree" };
+    const preparation = prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
+    expect(preparation).toMatchObject({ complete: true, cacheable: true });
+    try {
+      const events: string[] = [];
+      const run = (mode: "read-write" | "verify" = "read-write") => runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: "static root Knip graph",
+        script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+        cache: { dir: cacheDir, mode, ...identity, dependencyPreparation: preparation },
+        onEvent: (message) => events.push(message),
+      });
+      const cold = await run();
+      expect(cold.cacheRecord?.cache, events.join("\n")).toBe("miss");
+      expect(cold.findings.filter((finding) => finding.title.startsWith("Unused file")).map((finding) => finding.location).sort())
+        .toEqual(["apps/web/src/dead.ts", "src/root-dead.ts"]);
+      expect(cold.findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("ignoreWorkspaces includes apps/ignored");
+      expect(cold.cacheRecord!.scope.observation).toMatchObject({
+        scanner: "quality-scan", productSources: { count: 7 },
+        knip: {
+          discovered: ["(repo root)", "apps/ignored", "apps/web"], completed: ["(repo root)", "apps/web"], incomplete: ["apps/ignored"],
+          populations: [
+            { scope: "(repo root)", productSources: 2, status: "completed", configuration: "root-workspace-config" },
+            { scope: "apps/ignored", productSources: 1, status: "incomplete", configuration: "root-workspace-config", reason: expect.stringContaining("ignoreWorkspaces includes apps/ignored") },
+            { scope: "apps/web", productSources: 4, status: "completed", configuration: "root-workspace-config" },
+          ],
+        },
+      });
+      const callsAfterCold = vi.mocked(spawn).mock.calls.length;
+      const warm = await run();
+      expect(vi.mocked(spawn).mock.calls).toHaveLength(callsAfterCold);
+      const verified = await run("verify");
+      expect([cold.cacheRecord?.cache, warm.cacheRecord?.cache, verified.cacheRecord?.cache]).toEqual(["miss", "hit", "recomputed"]);
+      for (const replay of [warm, verified]) {
+        expect(replay.findings).toEqual(cold.findings);
+        expect(replay.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
+      }
+      expect(events.some((event) => event.includes("closure is non-cacheable"))).toBe(false);
+
+      const artifactPath = join(cacheDir, "corpus-scanners", "quality-scan", `${cold.cacheRecord!.key}.json`);
+      const artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
+      artifact.scope.observation.knip.populations.pop();
+      writeFileSync(artifactPath, JSON.stringify(artifact));
+      const restored = await run();
+      expect(restored.cacheRecord?.cache).toBe("miss");
+      expect(restored.findings).toEqual(cold.findings);
+      expect(restored.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
+      expect(events).toContainEqual(expect.stringMatching(/CACHE REJECT quality-scan .*examined-scope metadata/));
+      expect(spawnState.active).toBe(0);
+    } finally {
+      releaseCorpusDependencies(preparation);
+    }
+  }, 30_000);
+
+  it("delivers executable Knip selection uncertainty through the corpus consumer into HTML (#2151)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-executable-knip-selection-"));
+    dirs.push(targetDir);
+    mkdirSync(join(targetDir, "apps/web/src"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "executable-selection", private: true, workspaces: ["apps/*"] }));
+    writeFileSync(join(targetDir, "knip.js"), `module.exports = { workspaces: {
+      "apps/web": { entry: ["src/live.ts"], project: ["src/**/*.ts"] }
+    } }; module.exports.ignoreWorkspaces = ["apps/web"];\n`);
+    writeFileSync(join(targetDir, "root-dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(targetDir, "apps/web/package.json"), '{"name":"web","private":true}\n');
+    writeFileSync(join(targetDir, "apps/web/src/live.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "apps/web/src/dead.ts"), "export const dead = true;\n");
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "executable root selection",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+    });
+    expect(result.findings.filter((finding) => finding.title.startsWith("Unused file")).map((finding) => finding.location))
+      .toEqual(["root-dead.ts"]);
+    expect(result.findings.find((finding) => finding.id === "M5-00")?.evidence)
+      .toContain("configuration could not be inspected for apps/web");
+    const meta = { client: "Selection evidence", subtitle: "#2151", date: "2026-09-21", commit: "control", auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Unverified selection", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
+    expect(buildHtml({ meta, findings: result.findings })).toContain("configuration could not be inspected for apps/web");
+    expect(spawnState.active).toBe(0);
+  }, 30_000);
+
+  it("delivers changed Knip retry population counts and digests into HTML (#2151)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-knip-retry-population-"));
+    dirs.push(targetDir);
+    mkdirSync(join(targetDir, "generated"));
+    mkdirSync(join(targetDir, "ui"));
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "retry-population", private: true, type: "module" }));
+    writeFileSync(join(targetDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { outDir: "generated" }, files: ["main.ts"] }));
+    writeFileSync(join(targetDir, "main.ts"), "export const main = true;\n");
+    writeFileSync(join(targetDir, "generated/client.ts"), "export const mode = import.meta.env.MODE;\n");
+    writeFileSync(join(targetDir, "index.html"), '<script type="module" src="/ui/start.ts"></script>\n');
+    writeFileSync(join(targetDir, "ui/start.ts"), "export const start = true;\n");
+    writeFileSync(join(targetDir, "knip.config.ts"), `import { writeFileSync } from "node:fs";
+export default () => {
+  writeFileSync("tsconfig.json", JSON.stringify({ compilerOptions: { noEmit: true }, files: ["main.ts"] }));
+  throw new Error("fixture changes compiler scope before failing");
+};\n`);
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "changing retry population",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+    });
+    const initialDigest = digestObservedPaths(["knip.config.ts", "main.ts", "ui/start.ts"]);
+    const retryDigest = digestObservedPaths(["knip.config.ts", "main.ts", "ui/start.ts", "generated/client.ts"]);
+    const initialPopulation = `initial 3 file(s), paths SHA-256 ${initialDigest}`;
+    const retryPopulation = `retry 4 file(s), paths SHA-256 ${retryDigest}`;
+    const gap = result.findings.find((finding) => finding.id === "M5-00");
+    expect(gap?.evidence).toContain(initialPopulation);
+    expect(gap?.evidence).toContain(retryPopulation);
+    expect(result.findings).toContainEqual(expect.objectContaining({ location: "generated/client.ts", confidence: "Review", precisionTier: "review" }));
+    const meta = { client: "Retry population evidence", subtitle: "#2151", date: "2026-09-21", commit: "control", auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Changed source population", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
+    const html = buildHtml({ meta, findings: result.findings });
+    expect(html).toContain(initialPopulation);
+    expect(html).toContain(retryPopulation);
+    expect(html).toContain("original population receipt is incomplete");
+    expect(html).toContain("generated/client.ts");
+    expect(spawnState.active).toBe(0);
   }, 30_000);
 
   it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
@@ -781,7 +923,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     writeFileSync(join(targetDir, "src", "dead.ts"), "export const dead = true;\n");
     writeFileSync(join(targetDir, "knip.js"), 'module.exports = require("partial-provider");\n');
     writeFileSync(join(targetDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
-    writeFileSync(join(targetDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
+    writeFileSync(join(targetDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").appendFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "consumed\\n"); module.exports = { entry: ["src/index.ts"] };\n');
     const incompletePreparation = {
       status: "incomplete" as const,
       complete: false as const,
@@ -851,8 +993,14 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
         },
       },
     });
-    expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
-    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
+    // A complete install permits provider execution; it does not prove the graph selected by an
+    // executable config. Preserve the positive result and disclose that distinct scope uncertainty.
+    expect(completeResult.findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
+    expect(completeResult.findings.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(completeResult.findings).toContainEqual(expect.objectContaining({
+      taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: "src/dead.ts", confidence: "Confirmed",
+    }));
+    expect(readFileSync(join(targetDir, "partial-provider-consumed"), "utf8")).toBe("consumed\n");
     const completeInvocation = vi.mocked(spawn).mock.calls.at(-1)!;
     expect(completeInvocation[1]).not.toContain("--degraded-knip-reason-stdin");
     expect(completeInvocation[2]?.stdio).toEqual(["ignore", "ignore", "inherit"]);
@@ -1024,7 +1172,8 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     const complete = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
     const control = await run(complete);
     expect(complete.complete).toBe(true);
-    expect(control.some((finding) => ["M5-00", "M5-98"].includes(finding.id))).toBe(false);
+    expect(control.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(control.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(true);
     rmSync(join(f.targetDir, "provider-consumed"));
     writeFileSync(join(f.targetDir, "control-mode"), "fail");
