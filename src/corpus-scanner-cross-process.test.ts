@@ -428,6 +428,31 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     }
   }, 30_000);
 
+  it("delivers executable Knip selection uncertainty through the corpus consumer into HTML (#2151)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-executable-knip-selection-"));
+    dirs.push(targetDir);
+    mkdirSync(join(targetDir, "apps/web/src"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "executable-selection", private: true, workspaces: ["apps/*"] }));
+    writeFileSync(join(targetDir, "knip.js"), `module.exports = { workspaces: {
+      "apps/web": { entry: ["src/live.ts"], project: ["src/**/*.ts"] }
+    } }; module.exports.ignoreWorkspaces = ["apps/web"];\n`);
+    writeFileSync(join(targetDir, "root-dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(targetDir, "apps/web/package.json"), '{"name":"web","private":true}\n');
+    writeFileSync(join(targetDir, "apps/web/src/live.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "apps/web/src/dead.ts"), "export const dead = true;\n");
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "executable root selection",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+    });
+    expect(result.findings.filter((finding) => finding.title.startsWith("Unused file")).map((finding) => finding.location))
+      .toEqual(["root-dead.ts"]);
+    expect(result.findings.find((finding) => finding.id === "M5-00")?.evidence)
+      .toContain("configuration could not be inspected for apps/web");
+    const meta = { client: "Selection evidence", subtitle: "#2151", date: "2026-09-21", commit: "control", auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Unverified selection", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
+    expect(buildHtml({ meta, findings: result.findings })).toContain("configuration could not be inspected for apps/web");
+    expect(spawnState.active).toBe(0);
+  }, 30_000);
+
   it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);
@@ -1110,7 +1135,8 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     const complete = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
     const control = await run(complete);
     expect(complete.complete).toBe(true);
-    expect(control.some((finding) => ["M5-00", "M5-98"].includes(finding.id))).toBe(false);
+    expect(control.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(control.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(true);
     rmSync(join(f.targetDir, "provider-consumed"));
     writeFileSync(join(f.targetDir, "control-mode"), "fail");

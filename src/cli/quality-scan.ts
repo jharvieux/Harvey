@@ -200,8 +200,8 @@ function runJscpd(dir: string): JscpdReport {
 // replace it: replacing would drop the target's entry config and re-flood the unused-files list.
 const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 
-// The scope's own knip config as a mergeable object, or "unmergeable" for a comment-bearing/code
-// config we won't risk re-serializing, or undefined when there is none.
+// JSON/JSONC is statically mergeable. Executable configs must be evaluated by Knip, and their
+// final workspace selection cannot be inferred from an initial literal export.
 type ScopeKnipConfig =
   | { value: Record<string, unknown>; executablePath?: string; packageConfig?: Record<string, unknown> }
   | { unresolved: string; executablePath?: string; packageConfig?: Record<string, unknown> };
@@ -220,12 +220,19 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   const configNames = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"];
   const configPath = configNames.map((name) => join(dir, name)).find(existsSync);
   if (!configPath) return packageConfig ? { value: packageConfig } : undefined;
+  if ([".js", ".ts"].includes(extname(configPath))) {
+    // Even a literal may be mutated later or passed through an executable defineConfig wrapper.
+    // Keep the real config authoritative and disclose that its final selection is unverified.
+    return {
+      unresolved: `${basename(configPath)}: executable configuration may change the exported object`,
+      executablePath: configPath,
+      ...(packageConfig ? { packageConfig } : {}),
+    };
+  }
   const parsed = readStaticConfigObject(configPath);
   if (!parsed.value) {
-    const executablePath = [".js", ".ts"].includes(extname(configPath)) ? configPath : undefined;
     return {
       unresolved: `${basename(configPath)}: ${parsed.error}`,
-      ...(executablePath ? { executablePath } : {}),
       ...(packageConfig ? { packageConfig } : {}),
     };
   }
@@ -233,7 +240,6 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   // exact precedence before Harvey adds its product-inventory ignores.
   return {
     value: { ...packageConfig, ...parsed.value },
-    ...(parsed.executable ? { executablePath: configPath } : {}),
     ...(packageConfig ? { packageConfig } : {}),
   };
 }
@@ -417,6 +423,29 @@ function withProductInventoryIgnore(config: Record<string, unknown>, inventory: 
   return { ...config, ignore: [...new Set([...existing, ...generated])] };
 }
 
+function sourceOnlyKnipConfig(dir: string, inventory: ProductSourceInventory, graph?: KnipGraph): Record<string, unknown> {
+  const config = buildDegradedKnipConfig(detectTargetFramework(dir, { root: dir, inventory }), KNIP_PLUGIN_NAMES);
+  const project = ["**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}"];
+  const members = graph?.members ?? discoverTargets(dir).apps.map((app) => app.path);
+  const workspaces = Object.fromEntries([...new Set([dir, ...members])].map((member) => {
+    const memberInventory = productSourceInventoryForScope(dir, member, inventory);
+    const inferred = member === dir ? config
+      : buildDegradedKnipConfig(detectTargetFramework(member, { root: member, inventory: memberInventory }), KNIP_PLUGIN_NAMES);
+    return [relative(dir, member).replaceAll("\\", "/") || ".", { entry: inferred.entry, project }];
+  }));
+  // Knip shallow-merges package.json#knip even with -c. Reset authored selection/report settings
+  // and replace every workspace override so a member cannot re-enable a disabled plugin or remain
+  // excluded while the receipt claims source-only assessment. Explicit '.' preserves root entries.
+  return withProductInventoryIgnore({
+    ...config, project, workspaces,
+    include: [], exclude: [], rules: {}, paths: {},
+    ignore: [], ignoreFiles: [], ignoreWorkspaces: [], ignoreIssues: {},
+    ignoreDependencies: [], ignoreBinaries: [], ignoreMembers: [], ignoreUnresolved: [],
+    compilers: {}, syncCompilers: {}, asyncCompilers: {}, tags: [],
+    includeEntryExports: false, treatConfigHintsAsErrors: false,
+  }, inventory);
+}
+
 // #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
 // so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
 // that supplied its own config keeps confirmed file findings.
@@ -425,6 +454,7 @@ function withProductInventoryIgnore(config: Record<string, unknown>, inventory: 
 function runKnip(
   dir: string,
   inventory: ProductSourceInventory,
+  graph?: KnipGraph,
 ): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
   // First-attempt config: an inferred config for a config-less scope (#696), the
   // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
@@ -491,12 +521,13 @@ function runKnip(
     if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
     // An executed target config may have changed source or dependency inputs. Keep framework
     // detection fresh here instead of reusing the pre-child inventory across that boundary.
+    const retryInventory = productSourceInventoryForTarget(dir);
     const report = execKnip(
       dir,
-      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES), inventory),
+      sourceOnlyKnipConfig(dir, retryInventory, graph),
       undefined,
       {},
-      inventory,
+      retryInventory,
     );
     return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
   }
@@ -511,12 +542,13 @@ function runKnipDegraded(
   dir: string,
   reason: string,
   inventory: ProductSourceInventory,
+  graph?: KnipGraph,
 ): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
   if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
   return {
     report: execKnip(
       dir,
-      withProductInventoryIgnore(buildDegradedKnipConfig(detectTargetFramework(dir, { root: dir, inventory }), KNIP_PLUGIN_NAMES), inventory),
+      sourceOnlyKnipConfig(dir, inventory, graph),
       undefined,
       {},
       inventory,
@@ -733,7 +765,12 @@ const knipRuns: Array<{ dir: string; covered: string[]; stripPrefix?: string; gr
 const deepestScopes = [...scopes].sort((left, right) => right.length - left.length);
 for (const run of knipRuns) {
   const label = run.covered.map(scopeLabel).join(", ");
-  const runInventory = run.dir === targetDir ? sourceInventory : productSourceInventoryForTarget(run.dir);
+  // Descendants project the already-built target inventory; rediscovering their ancestor would
+  // rebuild every TypeScript project once per member. An ancestor Knip graph still needs its own
+  // full-root inventory because the requested subtree cannot describe that graph's exclusions.
+  const runInventory = withinDirectory(run.dir, targetDir)
+    ? productSourceInventoryForScope(targetDir, run.dir, sourceInventory)
+    : productSourceInventoryForTarget(run.dir);
   for (const gap of runInventory.unresolvedConfigurations) {
     for (const covered of run.covered) knipGaps.push({ scope: scopeLabel(covered), reason: `${gap.path}: ${gap.reason}` });
   }
@@ -746,8 +783,8 @@ for (const run of knipRuns) {
   };
   try {
     const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
-      ? runKnipDegraded(run.dir, degradedKnipReason, runInventory)
-      : runKnip(run.dir, runInventory);
+      ? runKnipDegraded(run.dir, degradedKnipReason, runInventory, run.graph)
+      : runKnip(run.dir, runInventory, run.graph);
     const ownedByRun = (path: string): boolean => {
       if (run.stripPrefix && !path.startsWith(run.stripPrefix)) return false;
       const targetPath = targetRelativePath(path).replaceAll("\\", "/");

@@ -784,6 +784,73 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
     }
   };
 
+  it("projects one root compiler inventory across real member Knip children", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-quality-knip-inventory-cost-"));
+    dirs.push(fixture);
+    const repo = join(fixture, "target");
+    const members = ["packages/one", "packages/three", "packages/two"];
+    write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
+    write(repo, "tsconfig.json", JSON.stringify({
+      compilerOptions: { outDir: "packages/one/root-generated", skipLibCheck: true }, include: ["root/**/*.ts"],
+    }));
+    write(repo, "root/sentinel.ts", CLONED_BLOCK);
+    write(repo, "packages/one/root-generated/artifact.ts", CLONED_BLOCK);
+    for (const member of members) {
+      write(repo, `${member}/package.json`, JSON.stringify({ name: member.replaceAll("/", "-"), private: true }));
+      write(repo, `${member}/tsconfig.json`, JSON.stringify({ compilerOptions: { skipLibCheck: true }, include: ["src/**/*.ts"] }));
+      write(repo, `${member}/src/index.ts`, "export const entry = true;\n");
+      write(repo, `${member}/src/dead.ts`, CLONED_BLOCK);
+    }
+    write(repo, "packages/one/knip.json", JSON.stringify({ entry: ["src/index.ts"], project: ["**/*.ts"] }));
+    const tracePath = join(fixture, "children.jsonl");
+    const preloadPath = join(fixture, "observe.cjs");
+    // Observe the shipping parent and real children without replacing their results. Reading the
+    // root-only compiler input before every child is the expensive whole-graph rebuild, regardless
+    // of machine speed or how long the child's own analysis takes.
+    writeFileSync(preloadPath, [
+      'const fs = require("node:fs");',
+      'const cp = require("node:child_process");',
+      'const { syncBuiltinESMExports } = require("node:module");',
+      `const sentinel = ${JSON.stringify(join(repo, "root/sentinel.ts"))};`,
+      `const trace = ${JSON.stringify(tracePath)};`,
+      "const read = fs.readFileSync;",
+      "const exec = cp.execFileSync;",
+      "let rootReads = 0;",
+      "fs.readFileSync = function(path, ...args) {",
+      "  if (path === sentinel) rootReads++;",
+      "  return read.call(this, path, ...args);",
+      "};",
+      "cp.execFileSync = function(bin, args, options) {",
+      '  fs.appendFileSync(trace, JSON.stringify({ bin, args, cwd: options.cwd, rootReads }) + "\\n");',
+      "  return exec.call(this, bin, args, options);",
+      "};",
+      "syncBuiltinESMExports();",
+    ].join("\n"));
+    const scopePath = join(fixture, "scope.json");
+    const outPath = join(fixture, "findings.json");
+    await spawnCli(process.execPath, ["--require", preloadPath, "--import", "tsx", CLI, repo, "--scope-out", scopePath, "--out", outPath], REPO_ROOT);
+    const calls = readFileSync(tracePath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as {
+      bin: string; args: string[]; cwd: string; rootReads: number;
+    }).filter((call) => call.bin.endsWith("/knip"));
+    expect(calls.map((call) => call.cwd)).toEqual(members.map((member) => join(repo, member)));
+    expect(calls.map((call) => call.args)).toEqual(members.map(() => ["-c", ".knip.harvey.json", "--reporter", "json", "--no-exit-code"]));
+    expect(calls.map((call) => call.rootReads)).toEqual(members.map(() => 1));
+    const findings = JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
+    expect(findings.filter((finding) => finding.title.startsWith("Unused file")).map((finding) => finding.location).sort())
+      .toEqual(members.map((member) => `${member}/src/dead.ts`));
+    expect(findings.some((finding) => finding.location.includes("root-generated/artifact.ts"))).toBe(false);
+    expect(findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("root or undeclared product source");
+    expect(readCorpusScannerScope(scopePath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 7 },
+      knip: { completed: members, incomplete: ["(repo root)"], populations: [
+        { scope: "(repo root)", productSources: 1, status: "incomplete" },
+        { scope: "packages/one", productSources: 2, status: "completed", configuration: "local-config" },
+        { scope: "packages/three", productSources: 2, status: "completed", configuration: "harvey-inferred" },
+        { scope: "packages/two", productSources: 2, status: "completed", configuration: "harvey-inferred" },
+      ] },
+    });
+  }, 30_000);
+
   it.each([
     { configName: "knip.json", manifest: "package.json" },
     { configName: "knip.jsonc", manifest: "pnpm-workspace.yaml" },
@@ -931,17 +998,24 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
     }
   }, 30_000);
 
-  it.each([false, true])("retains one executable ancestor graph with unverified Knip-only membership (package workspaces: %s)", async (packageWorkspaces) => {
+  it.each([
+    { packageWorkspaces: false, expression: "function" },
+    { packageWorkspaces: true, expression: "function" },
+    { packageWorkspaces: false, expression: "literal mutation" },
+    { packageWorkspaces: true, expression: "literal mutation" },
+  ])("retains one executable ancestor graph with unverified Knip-only membership ($expression, package workspaces: $packageWorkspaces)", async ({ packageWorkspaces, expression }) => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-dynamic-knip-only-"));
     dirs.push(repo);
     write(repo, "package.json", JSON.stringify({ name: "root", private: true,
       ...(packageWorkspaces ? { workspaces: ["apps/web"] } : {}),
     }));
     const config = { workspaces: { "apps/web": memberConfig, "tools/worker": memberConfig }, ignoreWorkspaces: ["tools/worker"] };
-    write(repo, "knip.js", `module.exports = () => {
+    write(repo, "knip.js", expression === "function" ? `module.exports = () => {
       require("node:fs").appendFileSync(require("node:path").join(__dirname, "executions.txt"), "executed\\n");
       return ${JSON.stringify(config)};
-    };\n`);
+    };\n` : `module.exports = {};
+      require("node:fs").appendFileSync(require("node:path").join(__dirname, "executions.txt"), "executed\\n");
+      Object.assign(module.exports, ${JSON.stringify(config)});\n`);
     for (const member of ["apps/web", "tools/worker"]) writeMember(repo, member);
     const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
       ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
@@ -1065,16 +1139,32 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
     });
   }, 30_000);
 
-  it("keeps executable root workspace selection unverified in both receipts", async () => {
+  it.each(["function", "literal mutation", "provider wrapper"])("keeps %s root workspace selection unverified in both receipts", async (expression) => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-executable-root-knip-"));
     dirs.push(repo);
     write(repo, "package.json", JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"] }));
-    write(repo, "knip.js", "module.exports = () => ({ workspaces: { 'apps/web': { entry: ['src/live.ts'], project: ['src/**/*.ts'] } }, ignoreWorkspaces: ['apps/web'] });\n");
+    const config = { workspaces: { "apps/web": { entry: ["src/live.ts"], project: ["src/**/*.ts"] } } };
+    const mutation = 'require("node:fs").appendFileSync(require("node:path").join(__dirname, "executions.txt"), "executed\\n");';
+    write(repo, "knip.js", expression === "function"
+      ? `module.exports = () => { ${mutation} return ${JSON.stringify({ ...config, ignoreWorkspaces: ["apps/web"] })}; };\n`
+      : expression === "literal mutation"
+      ? `module.exports = ${JSON.stringify(config)}; ${mutation} module.exports.ignoreWorkspaces = ['apps/web'];\n`
+      : `module.exports = require('./provider.js').defineConfig(${JSON.stringify(config)});\n`);
+    if (expression === "provider wrapper") write(repo, "provider.js", `exports.defineConfig = (config) => {
+      ${mutation}
+      return { ...config, ignoreWorkspaces: ['apps/web'] };
+    };\n`);
     write(repo, "apps/web/package.json", JSON.stringify({ name: "web", private: true }));
     write(repo, "apps/web/src/live.ts", "export const live = true;\n");
     write(repo, "apps/web/src/dead.ts", "export const dead = true;\n");
+    const direct = JSON.parse(execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+      ["--reporter", "json", "--no-exit-code"], { cwd: repo, encoding: "utf8" })) as { files: string[] };
+    expect(direct.files).toEqual([]);
+    expect(readFileSync(join(repo, "executions.txt"), "utf8")).toBe("executed\n");
+    rmSync(join(repo, "executions.txt"));
     const rootReceiptPath = join(repo, "root-scope.json");
     const rootFindings = await runCli(repo, ["--scope-out", rootReceiptPath]);
+    expect(readFileSync(join(repo, "executions.txt"), "utf8")).toBe("executed\n");
     expect(rootFindings.some((finding) => finding.title.startsWith("Unused file"))).toBe(false);
     expect(rootFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(readCorpusScannerScope(rootReceiptPath, "quality-scan").observation).toMatchObject({
@@ -1083,8 +1173,10 @@ describe("quality-scan CLI — root Knip workspace configuration (#2151)", () =>
         { scope: "apps/web", productSources: 2, status: "incomplete", reason: expect.stringContaining("could not be inspected") },
       ] },
     });
+    rmSync(join(repo, "executions.txt"));
     const memberReceiptPath = join(repo, "member-scope.json");
     const memberFindings = await runCli(join(repo, "apps/web"), ["--scope-out", memberReceiptPath]);
+    expect(readFileSync(join(repo, "executions.txt"), "utf8")).toBe("executed\n");
     expect(memberFindings.some((finding) => finding.title.startsWith("Unused file"))).toBe(false);
     expect(memberFindings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(readCorpusScannerScope(memberReceiptPath, "quality-scan").observation).toMatchObject({
@@ -1289,6 +1381,61 @@ function degradedWorkspaceResolverFixture(): string {
 }
 
 describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
+  it.each(["forced", "retry"])("isolates %s source-only scans from package Knip plugin and exclusion overrides", async (mode) => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-quality-degraded-package-knip-"));
+    dirs.push(repo);
+    write(repo, "package.json", JSON.stringify({ name: "source-only-root", private: true,
+      workspaces: ["apps/*", "!apps/negative"],
+      knip: {
+        entry: ["absent-entry.ts"], project: ["absent-project/**/*.ts"],
+        ignore: ["**"], ignoreFiles: ["**"], ignoreIssues: { "**": ["files"] },
+        exclude: ["files"], rules: { files: "off" }, ignoreWorkspaces: ["apps/ignored"], vite: {},
+        workspaces: { ".": { vite: {} }, "apps/web": { vite: {} }, "tools/worker": { vite: {} } },
+      },
+    }));
+    write(repo, "vite.config.cjs", 'require("node:fs").appendFileSync("root-provider-consumed", "executed\\n"); throw new Error("root provider deliberately unavailable"); module.exports = {};\n');
+    write(repo, "root-dead.ts", "export const rootDead = true;\n");
+    for (const member of ["apps/web", "apps/ignored", "apps/negative", "tools/worker"]) {
+      write(repo, `${member}/package.json`, JSON.stringify({ name: member.replaceAll("/", "-"), private: true }));
+      write(repo, `${member}/src/index.ts`, "export const entry = true;\n");
+      write(repo, `${member}/src/dead.ts`, "export const dead = true;\n");
+      write(repo, `${member}/vite.config.cjs`, `require("node:fs").appendFileSync(${JSON.stringify(join(repo, "member-provider-consumed"))}, "executed\\n"); module.exports = {};\n`);
+    }
+    let initialProviderExecutions: string | undefined;
+    if (mode === "retry") {
+      // Knip's loader can evaluate a throwing module more than once within its first attempt.
+      // Establish that actual failed-attempt count, then prove Harvey's retry adds no executions.
+      expect(() => execFileSync(join(REPO_ROOT, "node_modules/.bin/knip"),
+        ["--reporter", "json", "--no-exit-code"], { cwd: repo, stdio: "pipe" }))
+        .toThrow("root provider deliberately unavailable");
+      initialProviderExecutions = readFileSync(join(repo, "root-provider-consumed"), "utf8");
+      rmSync(join(repo, "root-provider-consumed"));
+    }
+    const scopePath = join(repo, "scope.json");
+    const findings = await runCli(repo, ["--scope-out", scopePath,
+      ...(mode === "forced" ? ["--degraded-knip-reason", "Dependency preparation rejected the target tree."] : []),
+    ]);
+    expect(existsSync(join(repo, "member-provider-consumed"))).toBe(false);
+    expect(existsSync(join(repo, "root-provider-consumed"))).toBe(mode === "retry");
+    if (mode === "retry") expect(readFileSync(join(repo, "root-provider-consumed"), "utf8")).toBe(initialProviderExecutions);
+    const expectedDead = ["apps/ignored/src/dead.ts", "apps/web/src/dead.ts", "root-dead.ts", "tools/worker/src/dead.ts"];
+    expect(findings.filter((finding) => finding.title.startsWith("Unused file")).map((finding) => finding.location).sort()).toEqual(expectedDead);
+    expect(findings.filter((finding) => expectedDead.includes(finding.location)).every((finding) => finding.confidence === "Review")).toBe(true);
+    expect(findings.find((finding) => finding.id === "M5-98")?.evidence)
+      .toContain(mode === "forced" ? "Dependency preparation rejected" : "root provider deliberately unavailable");
+    expect(findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("negative-workspace-glob");
+    expect(readCorpusScannerScope(scopePath, "quality-scan").observation).toMatchObject({
+      productSources: { count: 14 },
+      knip: { completed: ["(repo root)", "apps/ignored", "apps/web", "tools/worker"], incomplete: ["apps/negative"], populations: [
+        { scope: "(repo root)", productSources: 2, status: "reduced", configuration: "harvey-inferred" },
+        { scope: "apps/ignored", productSources: 3, status: "reduced", configuration: "harvey-inferred" },
+        { scope: "apps/negative", productSources: 3, status: "incomplete", reason: expect.stringContaining("negative-workspace-glob") },
+        { scope: "apps/web", productSources: 3, status: "reduced", configuration: "harvey-inferred" },
+        { scope: "tools/worker", productSources: 3, status: "reduced", configuration: "harvey-inferred" },
+      ] },
+    });
+  }, 30_000);
+
   it("refreshes framework inventory after a failed target config changes compiler inputs", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-quality-retry-fresh-"));
     const observer = mkdtempSync(join(tmpdir(), "harvey-quality-retry-observer-"));
