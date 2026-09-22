@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,6 +55,25 @@ describe("schema-v3 route graph", () => {
     expect(changed.venues[0]!.routes).toEqual([]);
     expect(changed.venues[1]!.routes).toHaveLength(1);
     expect(changed.venues[1]!.routes[0]!.rootId).toBe("src/venue-b.ts");
+  });
+
+  it("does not borrow a typed command executor from another venue", () => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    writeFileSync(join(root, "src", "invoke.ts"), 'export interface Runner { run: (bin: string, args: string[]) => unknown; }\nexport function invoke(runner: Runner) { runner.run("node", ["src/child.ts"]); }\n');
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { execFileSync } from "node:child_process";\nimport { invoke, type Runner } from "./invoke.js";\nconst runner: Runner = { run: execFileSync };\ninvoke(runner);\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { invoke, type Runner } from "./invoke.js";\nconst runner: Runner = { run: () => [] };\ninvoke(runner);\n');
+    const venueRoots = ["src/venue-a.ts", "src/venue-b.ts"];
+    const batch = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    for (const [index, venueRoot] of venueRoots.entries()) {
+      expect(batch.venues[index]).toEqual(discoverEffectivenessRouteGraph(root, [implementation], [venueRoot], { detectUnknown: false }));
+    }
+    expect(batch.venues.map((graph) => graph.routes.length)).toEqual([1, 0]);
+    expect(batch.venues[0]!.calls.map((call) => call.id)).toContain("command:src/invoke.ts->src/child.ts");
+    expect(batch.venues[1]!.calls.map((call) => call.id)).not.toContain("command:src/invoke.ts->src/child.ts");
   });
 
   it("accepts every frozen ordered runtime edge kind without collapsing them", () => {

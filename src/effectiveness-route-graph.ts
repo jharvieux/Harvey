@@ -77,10 +77,10 @@ interface PackageManifest {
   readonly scripts?: Readonly<Record<string, string>>;
 }
 
-function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker): Set<ts.Symbol> {
+function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker, scope?: ReadonlySet<string>): Set<ts.Symbol> {
   const result = new Set<ts.Symbol>();
   for (const source of program.getSourceFiles()) {
-    if (source.isDeclarationFile) continue;
+    if (source.isDeclarationFile || (scope && !scope.has(source.fileName))) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isImportDeclaration(node)
         && ts.isStringLiteral(node.moduleSpecifier)
@@ -102,7 +102,7 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker):
   while (changed) {
     changed = false;
     for (const source of program.getSourceFiles()) {
-      if (source.isDeclarationFile) continue;
+      if (source.isDeclarationFile || (scope && !scope.has(source.fileName))) continue;
       const visit = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
           const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
@@ -397,7 +397,7 @@ export function discoverEffectivenessRouteGraph(
   return routeGraphForReachability(root, implementations, roots, reachability, program, options);
 }
 
-/** Reuse the route-traversal program within one inventory build; preserve independent reachability. */
+/** Reuse the route-analysis program within one inventory build; preserve independent reachability. */
 export function discoverEffectivenessRouteGraphs(
   root: string,
   implementations: readonly RouteGraphImplementation[],
@@ -411,23 +411,28 @@ export function discoverEffectivenessRouteGraphs(
     ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
     : {};
   let program = programForSources(allRoots);
-  let executionSymbols: Set<ts.Symbol>;
   while (true) {
-    executionSymbols = importedExecutionSymbols(program, program.getTypeChecker());
-    const union = reachableSourcesWithProgram(root, allRoots, program, manifest, executionSymbols);
+    const union = reachableSourcesWithProgram(root, allRoots, program, manifest);
     if ([...union.files].every((file) => program.getSourceFile(file))) break;
     program = programForSources([...union.files]);
   }
-  const graph = (roots: readonly string[], detectUnknown: boolean): EffectivenessRouteGraph =>
-    routeGraphForReachability(
-      root,
-      implementations,
-      roots,
-      reachableSourcesWithProgram(root, roots, program, manifest, executionSymbols),
-      program,
-      { detectUnknown },
-    );
-  return { production: graph(production, true), venues: venues.map((roots) => graph(roots, false)) };
+  const scopedReachability = (roots: readonly string[]): ReachableSources => {
+    // Start from imports alone, then add command targets until the root-local source set closes.
+    // A shared execution-symbol set would let one venue's typed executor activate another venue.
+    let scope = reachableSourcesWithProgram(root, roots, program, manifest, new Set()).files;
+    while (true) {
+      const symbols = importedExecutionSymbols(program, program.getTypeChecker(), scope);
+      const reached = reachableSourcesWithProgram(root, roots, program, manifest, symbols);
+      if (reached.files.size === scope.size && [...reached.files].every((file) => scope.has(file))) return reached;
+      scope = reached.files;
+    }
+  };
+  const productionReachability = scopedReachability(production);
+  const venueReachabilities = venues.map((roots) => scopedReachability(roots));
+  return {
+    production: routeGraphForReachability(root, implementations, production, productionReachability, program, { detectUnknown: true }),
+    venues: venues.map((roots, index) => routeGraphForReachability(root, implementations, roots, venueReachabilities[index]!, program, { detectUnknown: false })),
+  };
 }
 
 function routeGraphForReachability(
