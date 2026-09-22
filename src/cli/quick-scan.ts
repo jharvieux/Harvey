@@ -38,7 +38,7 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
-import { loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
+import { isTestSourcePath, loadSourceInventory, loadSources, sourceLanguage } from "../detectors/load-sources.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runJscpd } from "../scan/duplication.js";
@@ -187,13 +187,15 @@ function tableBands(dataMap: PiiDataMap): PiiTableBand[] {
 function classifySchema(dir: string): { tables: number; columns: number; tableBands: PiiTableBand[] } | { gap: string } {
   const sql = readSchemaSql(dir);
   if (sql.trim()) {
-    const { dataMap, columns } = classifyMigrationSql(sql);
-    return { tables: Object.keys(dataMap).length, columns: columns.length, tableBands: tableBands(dataMap as PiiDataMap) };
+    const { dataMap } = classifyMigrationSql(sql);
+    const bands = tableBands(dataMap as PiiDataMap);
+    return { tables: bands.length, columns: bands.reduce((total, band) => total + band.columns, 0), tableBands: bands };
   }
   const prismaSchema = join(dir, "prisma", "schema.prisma");
   if (existsSync(prismaSchema)) {
-    const { dataMap, columns } = classifyPrismaSchema(readFileSync(prismaSchema, "utf8"));
-    return { tables: Object.keys(dataMap).length, columns: columns.length, tableBands: tableBands(dataMap as PiiDataMap) };
+    const { dataMap } = classifyPrismaSchema(readFileSync(prismaSchema, "utf8"));
+    const bands = tableBands(dataMap as PiiDataMap);
+    return { tables: bands.length, columns: bands.reduce((total, band) => total + band.columns, 0), tableBands: bands };
   }
   return { gap: "No SQL migrations under supabase/migrations and no prisma/schema.prisma were found, so there was no schema to classify." };
 }
@@ -258,20 +260,21 @@ function renderEvidence(d: HealthDimension): string[] {
   const e = d.evidence;
   if (!e) return [];
   const unit = d.status === "risk-band" ? "table" : "shape";
+  const total = d.status === "risk-band" ? `${e.totalFindings} classified columns in total` : `${e.totalFindings} in total`;
   if (e.totalFindings === 0) return [`         Examples: none — this dimension produced no findings.`];
   const header = e.capped
-    ? `Examples — showing ${e.examples.length} of ${e.totalShapes} distinct ${unit}s (${e.totalFindings} in total):`
-    : `Examples — all ${e.totalShapes} ${unit}${e.totalShapes === 1 ? "" : "s"} found (${e.totalFindings} in total):`;
+    ? `Examples — showing ${e.examples.length} of ${e.totalShapes} distinct ${unit}s (${total}):`
+    : `Examples — all ${e.totalShapes} ${unit}${e.totalShapes === 1 ? "" : "s"} found (${total}):`;
   const lines = [`         ${header}`];
   for (const ex of e.examples) {
     // Always print the count, including "1 time": a collapsed row with no count reads as singular,
     // leaving "one occurrence" and "one shown of twenty-three" indistinguishable to a reader.
-    lines.push(`           • ${ex.shape} — ${ex.location}  (appears ${ex.occurrences} time${ex.occurrences === 1 ? "" : "s"})`);
+    lines.push(`           • ${ex.shape} — ${ex.location}  (${d.status === "risk-band" ? `${ex.occurrences} classified column${ex.occurrences === 1 ? "" : "s"}` : `appears ${ex.occurrences} time${ex.occurrences === 1 ? "" : "s"}`})`);
   }
   if (e.capped) {
     lines.push(
       ...wrap(
-        `… and ${e.hiddenShapes} further ${unit}${e.hiddenShapes === 1 ? "" : "s"} (${e.hiddenFindings} more) are NOT listed here — every one of them, with all its locations, is in the paid report.`,
+        `… and ${e.hiddenShapes} further ${unit}${e.hiddenShapes === 1 ? "" : "s"} (${e.hiddenFindings} more${d.status === "risk-band" ? " classified columns" : ""}) are NOT listed here — every one of them, with all its locations, is in the paid report.`,
         "           ",
       ),
     );
@@ -517,7 +520,8 @@ async function main(): Promise<void> {
   // The FULL set, tests included: buildHealthScorecard splits it (product code for M5/M7/M9, test
   // files for M8's census), so the split lives in one place rather than at each call site.
   const sources = loadSources(absDir);
-  const identifiedSources = loadSourceInventory(absDir);
+  // Match the mechanical M5 producer's product population; test files are assessed by M8.
+  const identifiedSources = loadSourceInventory(absDir).filter((source) => !isTestSourcePath(source.path));
   const m5Receipt = sourcePopulationReceipt("M5", identifiedSources);
   const m5ExaminedLanguages = new Set(
     m5Receipt.populations.filter((population) => population.examined.count > 0).map((population) => population.language),
@@ -526,19 +530,21 @@ async function main(): Promise<void> {
     const language = sourceLanguage(source.path);
     return language !== undefined && m5ExaminedLanguages.has(language);
   });
-  const m5SourceAssessment = sourcePopulationGap && m5ExaminedSources.length > 0
-    ? {
-        findings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
-        kloc: m5ExaminedSources.reduce(
-          (lines, source) => lines + source.text.split("\n").filter((line) => line.trim() !== "").length,
-          0,
-        ) / 1000,
-        examinedFiles: m5ExaminedSources.length,
-        scope:
-          `Bounded M5 source rules examined ${m5ExaminedSources.length} authored source file(s), with per-language coverage disclosures kept alongside the result. `
-          + sourcePopulationGap,
-      }
-    : undefined;
+  const m5JsFiles = m5Receipt.populations.find((population) => population.language === "javascript/typescript")?.examined.count ?? 0;
+  const m5SourceAssessment = {
+    reviewFindings: rawFindings.filter((finding) => finding.taxonomy.startsWith("M5 — ")),
+    kloc: m5ExaminedSources.filter((source) => sourceLanguage(source.path) === "javascript/typescript")
+      .reduce((lines, source) => lines + source.text.split("\n").filter((line) => line.trim() !== "").length, 0) / 1000,
+    examinedFiles: m5ExaminedSources.length,
+    gradedFiles: m5JsFiles,
+    scope:
+      (identifiedSources.length === 0 ? "No authored product source files were admitted to the M5 source rules. "
+        : `M5 source rules examined ${m5ExaminedSources.length} authored product source file(s). `)
+      + m5Receipt.populations.filter((population) => population.identified.count > 0)
+        .map((population) => `${population.language}: ${population.examined.count}/${population.identified.count} examined (${population.status}${population.reason ? `; ${population.reason}` : ""})`)
+        .join("; ")
+      + (sourcePopulationGap ? `. ${sourcePopulationGap}` : "."),
+  };
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
     m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length, findings: selectGradedFindings(rawFindings) },

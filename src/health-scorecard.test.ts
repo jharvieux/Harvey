@@ -221,15 +221,15 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
       kloc: 0,
       sourcePopulationGap: reason,
       m5SourceAssessment: {
-        findings: [finding],
+        reviewFindings: [finding],
         kloc: 0.004,
         examinedFiles: 1,
+        gradedFiles: 0,
         scope: `Bounded M5 source rules examined 1 authored source file. ${reason}`,
       },
     }));
     expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
-      status: "graded",
-      grade: "F",
+      status: "indicator-only",
       count: 1,
       scope: expect.stringContaining(reason),
     });
@@ -245,10 +245,11 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
         findings: [],
         kloc: 0.004,
         examinedFiles: 1,
+        gradedFiles: 0,
         scope: "A bounded M5 rule set examined one Python file.",
       },
     }));
-    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "graded", grade: "A", count: 0 });
+    expect(scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "indicator-only", count: 0 });
   });
 
   it("weights every graded dimension equally — security is one dimension, not the subject", () => {
@@ -436,6 +437,25 @@ describe("M10 risk band — exposure surface, never a protection verdict", () =>
     expect(m10.bandCaveat).toContain("NOT a verdict on your access controls");
     expect(m10.bandCaveat).toMatch(/`Low` band does NOT mean your data is protected/);
     expect(m10.bandDerivation).toBeTruthy();
+  });
+
+  it("keeps the selected table identities and column totals when the evidence cap is reached", () => {
+    const tableBands = [
+      band("Medium", { table: "accounts", columns: 2 }),
+      band("Critical", { table: "patients", columns: 3 }),
+      band("Critical", { table: "cards", columns: 2 }),
+      band("Low", { table: "contacts", columns: 1 }),
+      band("Medium", { table: "members", columns: 3 }),
+      band("Low", { table: "audit_users", columns: 1 }),
+      band("High", { table: "secrets", columns: 1 }),
+    ];
+    const m10 = buildHealthScorecard(input({ pii: { tables: 7, columns: 13, tableBands } })).dimensions.find((row) => row.module === "M10")!;
+    expect(m10.evidence?.examples.map(({ location, occurrences }) => [location, occurrences])).toEqual([
+      ["patients", 3], ["cards", 2], ["secrets", 1], ["members", 3], ["accounts", 2],
+    ]);
+    expect(m10.evidence).toMatchObject({ totalShapes: 7, totalFindings: 13, hiddenShapes: 2, hiddenFindings: 2, capped: true });
+    const zero = buildHealthScorecard(input({ pii: { tables: 0, columns: 0, tableBands: [] } })).dimensions.find((row) => row.module === "M10")!;
+    expect(zero.evidence).toMatchObject({ examples: [], totalShapes: 0, totalFindings: 0, hiddenShapes: 0, hiddenFindings: 0, capped: false });
   });
 
   it("sits beside the letter grades and is never averaged into them", () => {
