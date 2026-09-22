@@ -73924,7 +73924,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 49,
+        "line": 50,
         "path": "epic-builder-web/README.md"
       },
       "freshness": {
@@ -73961,7 +73961,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 74,
+        "line": 75,
         "path": "epic-builder-web/README.md"
       },
       "freshness": {
@@ -358731,8 +358731,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "ddd561c9c8beda11be37e5e1b8c145f5563ed42f",
-    "commitPayload": "dHJlZSBlYzY4NWFhMWEwMDNlNDE4MDVhOTRhNTNjOTg0NjMxMjJmNGY2OWZhCnBhcmVudCBlZGNiN2Y5ZTU2NGEwYmNkNjBlNjg2OWExMDI3NTllOThmNDU1OWNkCnBhcmVudCBmNjZmNjYwNTFjYzUzY2ZjNzZiYTZjNDQ1MjZjNjU5MmYwYmVhMDZhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDMzMTgxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDMzMTgxIC0wNTAwCgpJbnRlZ3JhdGUgdmVyaWZpZWQgRXBpYyB3b3JrIGJlZm9yZSBLbmlwIGRlbGl2ZXJ5ICgjMjE1MSkK",
+    "commit": "119df7a5bd263792e278666b226f93cd6f14d1f6",
+    "commitPayload": "dHJlZSBkNjY0YTgwYjkyNWE5MDE5NmVlNDdhNjQwZDI5MmIzNjE1YjVmM2FmCnBhcmVudCAxM2NhZTdiOWI2NTU0ZjRjYWFlOTg1MTg1M2Y0NmUxYzQ3MGRlZWNhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDM1NjgxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDM1NjgxIC0wNTAwCgpCaW5kIHJldmlld2VkIEtuaXAgc291cmNlcyBhbmQgZG9jdW1lbnQgRXBpYyBzZWNyZXRzICgjMjE1MSwgIzIxNTgpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -358741,13 +358741,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "92c16040f727d1dcc79f893a53cc5aca52cf31b6",
+        "gitOid": "2c325f3d8bc922193b546771a9d7607f3aea3bd0",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "0d481505a5a838a9d75910ba9e1075d69871c71451268a04d5a63909f025399b",
-    "tree": "ec685aa1a003e41805a94a53c98463122f4f69fa"
+    "populationSha256": "2a5520b7c39fb90329848d1142b19ebc9f725f15efd8dc12b1c1cea30a11b1fd",
+    "tree": "d664a80b925a90196ee47a640d292b3615b5f3af"
   },
   "venues": [
     {
@@ -362351,11 +362351,11 @@
       "sha256": "5d56415e29699d20cb7c208e3e367e778ce2b3c409601d5bfe073d2dfe9c55bb"
     },
     {
-      "bytes": 5711,
+      "bytes": 5904,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "9d94bd2db84eecc9bfd6a1dc6167d9bdbbfe8e4d",
+      "gitOid": "fffd977253bc562acc475f914669901a98d28aa9",
       "id": "epic-builder-web/README.md",
       "kind": "document",
       "literalCount": 0,
@@ -362363,7 +362363,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "epic-builder-web/README.md",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "7d7b9a288f075b613de06d57517a3e6eed7c052672d2fee4aad506e8122dd513"
+      "sha256": "78a1274c1b93d7ac610211e6d9a0421d54b9ab403d044f90c18b601a1b4bceae"
     },
     {
       "bytes": 491,
@@ -385275,7 +385275,7 @@
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "e09f729377c4f464683e96ba29f0a8321179ab44",
+      "gitOid": "ed3f00d5409dbd053b6a575c03d20351cf279432",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -385283,7 +385283,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "9f757c2f69f30be96a5762a5d55137461ce9131fe05cae1af83e1f8c82b93171"
+      "sha256": "f0a2bfff791c19a03c2e5f33e7b806e93901cd0a0d4f95c070dcc016ccf98a96"
     },
     {
       "bytes": 10289,
