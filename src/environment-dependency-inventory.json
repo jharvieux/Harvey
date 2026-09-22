@@ -162544,7 +162544,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 267,
+        "line": 277,
         "path": "src/heavy-test-plan.test.ts"
       },
       "freshness": {
@@ -360279,8 +360279,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "42c25eb3353eacda1b3a1e0c2b3e3031b33dd6ad",
-    "commitPayload": "dHJlZSBjNDk4YTcxMTViOTkwZGU5MGM5MzYyZGIwNjBlNWEyN2ZiMDdhNmU3CnBhcmVudCA2MmI4NThlOWRhMGMwYjIwMjhjMDI3MDFmMTU4ZWVjZDJiMTExNzI3CnBhcmVudCA1ZGMwNGQ5Nzk0MzE2YjQwNmIxOTZiZTk1MzkxMjU4NjJhNjUyZWM1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk1NzY3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk1NzY3IC0wNTAwCgpJbnRlZ3JhdGUgaXNvbGF0ZWQgZ3JhcGggcHJvZ3JhbSByZXVzZSAoIzIxNTIpCg==",
+    "commit": "8fd2a32daaaf93215cbaa860df6473c72b0361b0",
+    "commitPayload": "dHJlZSBkOGQ4YjJlZWM2NGMxMTUzMGQ1MjE4MWU2MmMxYmZmNTAxZjJlYjc4CnBhcmVudCA5YWFhMzI2NDAwNTA1NmU4NzRkMTk5MDRlMjk0OTA4Njk2YTgwZTA0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMTAyNTMxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMTAyNTMxIC0wNTAwCgpSZWJhbGFuY2UgbWVhc3VyZWQgcXVpY2stc2NhbiB0ZXN0IGNvc3QgKCMyMTY4KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -360289,13 +360289,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "017632b4c3134aa905740b8581bf38fc24763172",
+        "gitOid": "7dd29c742c71f0710e27bf6964a126080ee441b6",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "727e72a5f8795021c194e30d2d83e900522ed858a6edea5028d065de39e1b4ae",
-    "tree": "c498a7115b990de90c9362db060e5a27fb07a6e7"
+    "populationSha256": "545ebe0f9797cd766d22fe491fef37834d256b85243dfd021d7721e4aaa8095c",
+    "tree": "d8d8b2eec64c11530d52181e62c1bff501f2eb78"
   },
   "venues": [
     {
@@ -379529,26 +379529,26 @@
       "sha256": "8edfdf2a3cad18646a28508554366e2ae05f485e3558d4e9e4e89bd6626a49a0"
     },
     {
-      "bytes": 17160,
+      "bytes": 17889,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "578843ba7cbf21b2e169781d8bae5d211b23de0a",
+      "gitOid": "f7510c8c96414fe418c3b753f1be666aaaf0176a",
       "id": "src/heavy-test-plan.test.ts",
       "kind": "source",
-      "literalCount": 290,
-      "literalSha256": "75cb05b785599e7c6a702eb8c64f414bd4dea890e234f3cf925741ecc32c8f53",
+      "literalCount": 299,
+      "literalSha256": "3ff299c00c6ad3e3f0086f71365a5632c23fe92f8c2164d30e942ec40998ef68",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-plan.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f507366b5b2b48f65dc37e45f57622a3720881792a7e36ab74f2d1d6cfa04f6e"
+      "sha256": "2daae98376ae72df1a136177185117438dd28fd460c4b5d5ef89c8590371d2cb"
     },
     {
       "bytes": 11142,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "6a105790f88e1e23c15f4e2dc0baec6647420763",
+      "gitOid": "c2944ea867bd9b9cfca3569d9afdbaf005e57444",
       "id": "src/heavy-test-workloads.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -379556,7 +379556,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-workloads.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "006c76964c0130a4ec23c90a0b42807ffb4cbed24ed3d061b113f430d290b0e1"
+      "sha256": "f1044cbc1f761e6c73503351198e09017c2038e00fe65f6e0e211902c2a12a69"
     },
     {
       "bytes": 33588,
