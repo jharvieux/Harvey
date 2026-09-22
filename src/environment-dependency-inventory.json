@@ -359829,8 +359829,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "e010458560831e3f25594ba6153b50953c27646b",
-    "commitPayload": "dHJlZSBjMzA3Zjg2OTc1OGY5MDA2MWZlOWZmMzZjY2JlYjZhMWZmOTU1NTIwCnBhcmVudCA2OWI2YmI0ZGNmZTdhMjA5YjYwMjU1MDY2ODk1ZDgwOGRkNzhjOTc1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk0NjcxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk0NjcxIC0wNTAwCgpCaW5kIGNvcnB1cyBhZ2dyZWdhdGlvbiB0byByZXBvc2l0b3J5IHNhZmV0eSBnYXRlcyAoIzIxNTMpCg==",
+    "commit": "399f5a5c7b7522de9d5fd6e3145b29baf0261221",
+    "commitPayload": "dHJlZSBkYmM5MzI5MjM3NmEyOTdkZTRjNjNlMTMwMTI1MGJlMmM1ZTgzY2U3CnBhcmVudCBlYzAyZTQ4NjhjZGNhMGYyZjFhZjVjOWIwZjNmMjc5OTY5NjlhNDQyCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk1MTQ2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMDk1MTQ2IC0wNTAwCgpBbGlnbiByZW1haW5pbmcgY29ycHVzIHJvdXRpbmcgZ3VpZGFuY2UgKCMyMTUzKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -359839,13 +359839,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "64e5099d307d758bd4b1b8382dc8da4bd4c97e9e",
+        "gitOid": "e50addd3875658699a1259032291845fbe0c921b",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "d64255bb73a7ce7fc4fad663ce111083fa63594012e56fd681fa57404caa7906",
-    "tree": "c307f869758f90061fe9ff36ccbeb6a1ff955520"
+    "populationSha256": "b2d7b59385762a482a61444a8345b69a9e7d1ec749c1022f9cf2d6fcedf59122",
+    "tree": "dbc93292376a297de4c63e1301250be2c5e83ce7"
   },
   "venues": [
     {
@@ -361289,11 +361289,11 @@
       "sha256": "ff9717a5cd5b025dae8521ce4878b39248eb664a2102b8a6d83b5780b71dc064"
     },
     {
-      "bytes": 28384,
+      "bytes": 28405,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "22ca46759ce00814c838e14d8d0319497a3e7984",
+      "gitOid": "cd0d17921d47676b23a97bf9cb18dcae81b1a343",
       "id": "docs/design/corpus-phase-cache.md",
       "kind": "document",
       "literalCount": 0,
@@ -361301,7 +361301,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "docs/design/corpus-phase-cache.md",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "0c638b2d14cf3a66eb6bb1593170a6054348171be46061cc2939dc24c56779b4"
+      "sha256": "d0613f7567cf8da106265ff046686c3ab2e332477dedeceb15f05123e26973a4"
     },
     {
       "bytes": 22829,
