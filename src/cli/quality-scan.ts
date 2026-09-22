@@ -201,7 +201,7 @@ function runJscpd(dir: string): JscpdReport {
 const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
 
 // JSON/JSONC is statically mergeable. Executable configs must be evaluated by Knip, and their
-// final workspace selection cannot be inferred from an initial literal export.
+// final workspace selection depends on evaluating all executable statements.
 type ScopeKnipConfig =
   | { value: Record<string, unknown>; executablePath?: string; packageConfig?: Record<string, unknown> }
   | { unresolved: string; executablePath?: string; packageConfig?: Record<string, unknown> };
@@ -434,8 +434,8 @@ function sourceOnlyKnipConfig(dir: string, inventory: ProductSourceInventory, gr
     return [relative(dir, member).replaceAll("\\", "/") || ".", { entry: inferred.entry, project }];
   }));
   // Knip shallow-merges package.json#knip even with -c. Reset authored selection/report settings
-  // and replace every workspace override so a member cannot re-enable a disabled plugin or remain
-  // excluded while the receipt claims source-only assessment. Explicit '.' preserves root entries.
+  // and replace every workspace override to keep member plugins disabled and cover the declared
+  // source-only population. Explicit '.' preserves root entries.
   return withProductInventoryIgnore({
     ...config, project, workspaces,
     include: [], exclude: [], rules: {}, paths: {},
@@ -767,7 +767,7 @@ for (const run of knipRuns) {
   const label = run.covered.map(scopeLabel).join(", ");
   // Descendants project the already-built target inventory; rediscovering their ancestor would
   // rebuild every TypeScript project once per member. An ancestor Knip graph still needs its own
-  // full-root inventory because the requested subtree cannot describe that graph's exclusions.
+  // full-root inventory to describe graph exclusions outside the requested subtree.
   const runInventory = withinDirectory(run.dir, targetDir)
     ? productSourceInventoryForScope(targetDir, run.dir, sourceInventory)
     : productSourceInventoryForTarget(run.dir);
