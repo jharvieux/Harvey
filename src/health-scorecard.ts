@@ -345,7 +345,7 @@ export function riskBandOf(pii: { tables: number; columns: number; tableBands?: 
   if (pii.tables === 0 || rated.length === 0) {
     return {
       band: "Low",
-      derivation: `No table in your schema carries a column this tier classifies as personal, health, payment or secret data (${pii.columns} column(s) were read and classified).`,
+      derivation: `No table in your schema carries a column this tier classifies as personal, health, payment or secret data (${pii.columns} classified column(s)).`,
     };
   }
   const peakIndex = Math.max(...rated.map((b) => BAND_ORDER.indexOf(b.severity as RiskBand)));
@@ -412,9 +412,13 @@ export interface DuplicationMeasure {
 }
 
 export interface SourceDimensionAssessment {
-  findings: Finding[];
+  findings?: Finding[];
+  /** Findings from bounded source rules that require review and do not earn a density grade. */
+  reviewFindings?: Finding[];
   kloc: number;
   examinedFiles: number;
+  /** Files admitted to the source population used for the density grade. */
+  gradedFiles?: number;
   scope: string;
 }
 
@@ -523,15 +527,48 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     );
   }
 
-  dimensions.push(input.sourcePopulationGap && !input.m5SourceAssessment
-    ? notAssessedRow(spec("M5"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary")
-    : gradedDensityRow(
-        spec("M5"),
-        input.m5SourceAssessment?.findings ?? detectSlopFindings(sources),
-        input.m5SourceAssessment?.kloc ?? kloc,
-        input.m5SourceAssessment?.scope
-          ?? "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.",
-      ));
+  if (input.sourcePopulationGap && !input.m5SourceAssessment) {
+    dimensions.push(notAssessedRow(spec("M5"), input.sourcePopulationGap, "re-run after correcting the configured product-source boundary"));
+  } else {
+    const assessment = input.m5SourceAssessment;
+    const gradedFindings = assessment?.findings ?? detectSlopFindings(sources);
+    const reviewFindings = assessment?.reviewFindings ?? [];
+    const reviewDefects = reviewFindings.filter((finding) => !isDisclosureRow(finding));
+    const disclosures = reviewFindings.filter(isDisclosureRow);
+    const scope = assessment?.scope
+      ?? "Unused/unreachable code and machine-authored slop, from your source. A count, not a judgment call — no verification needed.";
+    const reviewScope = " Bounded source-rule signals marked review-tier are shown as evidence but excluded from the density grade until triaged.";
+    if (assessment?.gradedFiles === 0) {
+      dimensions.push({
+        ...spec("M5"),
+        status: "indicator-only",
+        count: reviewDefects.length,
+        measure: `${reviewDefects.length} review-tier signal(s); no JS/TS source population for a density grade`,
+        scope: scope + reviewScope,
+        reason: [
+          "No JS/TS product source population was admitted for a density grade; bounded source rules may still report review signals.",
+          ...disclosures.map((finding) => `${finding.location}: ${finding.title}. ${finding.impact}`),
+        ].join("\n"),
+        needs: [
+          "triage the review-tier signals in the deep scan; add admitted JS/TS product source for a density grade",
+          ...new Set(disclosures.map((finding) => finding.fix)),
+        ].join("\n"),
+        evidence: rollupExamples(reviewDefects),
+        ...(disclosures.length ? { notAssessedRows: disclosures.length } : {}),
+      });
+    } else {
+      const row = gradedDensityRow(spec("M5"), gradedFindings, assessment?.kloc ?? kloc, scope + reviewScope);
+      row.count = gradedFindings.length + reviewDefects.length;
+      row.measure += `; ${reviewDefects.length} review-tier signal(s) shown separately from the grade`;
+      row.evidence = rollupExamples([...gradedFindings, ...reviewDefects]);
+      if (disclosures.length) {
+        row.notAssessedRows = (row.notAssessedRows ?? 0) + disclosures.length;
+        row.reason = [row.reason, ...disclosures.map((finding) => `${finding.location}: ${finding.title}. ${finding.impact}`)].filter(Boolean).join("\n");
+        row.needs = [row.needs, ...new Set(disclosures.map((finding) => finding.fix))].filter(Boolean).join("\n");
+      }
+      dimensions.push(row);
+    }
+  }
 
   // M6 — indicator-only by the correction's own framing: a hand-rolled shape may be a deliberate
   // choice, so it is surfaced and never composed into the grade.
