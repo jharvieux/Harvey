@@ -133,8 +133,15 @@ main producer leg saves only its corresponding trusted namespace after scoring, 
 compares the two executions. Pull requests and merge groups use the required aggregate's
 declared-no-op path and read or write no corpus phase transport; this moves the external-app proof
 out of the merge critical path.
-Scheduled/manual validation remains single-shard for canonical scorecard and clone-cache lineage,
-but is warm by default; an explicit `force_cold_cache` dispatch input requests
+Scheduled/manual validation uses the same four canonical owners as other full-population runs,
+while retaining live provider verification and the existing timeout ceilings. Each scorer reads
+and writes only its own phase-cache namespace. The shared preparation job seeds and verifies the
+complete pinned clone cache before partitioning; scorer legs only restore it. The aggregate checks
+all scorecard fields and the complete live target population before publishing the canonical
+scorecard. It also assembles the raw advisory observations, checks their run, pin, registry and
+committed snapshot identities, and preserves interrupted observations as explicitly incomplete.
+Artifact assembly precedes the final liveness and alert checks, so real drift retains diagnostics.
+Validation is warm by default; an explicit `force_cold_cache` dispatch input requests
 cold-versus-restored equivalence only if the preflight finds matching seeds. A trusted main
 transport proves its origin, not its compatibility: main's snapshot-mode options differ from
 manual `live-verify` options, and a source, runtime, target, rule/config, or planned-ownership change

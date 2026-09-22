@@ -74,6 +74,14 @@ third-party corpus runner, and does not represent a zero-drift scan. Pushes to `
 manual dispatches bypass the classifier and always run the full pinned population as the hosted
 backstop.
 
+Every full scan uses the same exhaustive four-way partition. Schedule/manual scans retain
+`live-verify`: each owner observes its targets' current provider state against the committed OSV
+snapshot, while all owners consume one shared Semgrep registry artifact. Live inputs are not
+relabelled as deterministic replay inputs. Unique scorecard and observation parts are validated
+and assembled into the canonical artifacts before final liveness and alert checks. A missing
+target, conflicting input identity, or incomplete observation fails the run; a delivered finding
+change remains a drift failure with its raw and semantic evidence intact.
+
 For a focused local investigation, select a target explicitly:
 
 ```bash
