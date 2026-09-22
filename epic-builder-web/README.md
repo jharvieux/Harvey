@@ -19,6 +19,7 @@ UI renders whatever screen the persisted `session.state` calls for.
 
 ```bash
 pnpm install            # in this directory (its own package.json, separate from the root toolkit)
+export EPIC_BUILDER_SESSION_SECRET="$(openssl rand -hex 32)"
 EPIC_BUILDER_PASSWORD=secret pnpm dev
 ```
 
@@ -41,8 +42,8 @@ idempotent re-run without a live model, a live tracker, or a running server.
 
 | Var | Purpose |
 |---|---|
-| `EPIC_BUILDER_PASSWORD` | Operator sign-in secret (shared-secret auth, the default). |
-| `EPIC_BUILDER_SESSION_SECRET` | HMAC key for the session cookie. |
+| `EPIC_BUILDER_PASSWORD` | Required, nonempty operator sign-in secret for shared-secret auth (the default). No development fallback. |
+| `EPIC_BUILDER_SESSION_SECRET` | Required, nonempty HMAC key for shared-secret session cookies; use a separate random secret. No development fallback. |
 | `EPIC_BUILDER_DATA_DIR` | Where per-user workspaces are stored on the filesystem store (default `./.data`). |
 | `GITHUB_TOKEN` / `GITHUB_OWNER` / `GITHUB_REPO` | Per-engagement publish target (real publish only). |
 | `EPIC_BUILDER_MODEL=anthropic` + `ANTHROPIC_API_KEY` | Selects the live Anthropic model client (`lib/model-anthropic.ts`, issue #102) in place of the scaffold. Standard tier calls use Haiku 4.5, flagship tier calls use Sonnet 5 (per `docs/design/model-routing.md` §6); the key must belong to a ZDR-eligible account and is read only server-side. Falls back to the scaffold if either var is missing. |
