@@ -1,11 +1,12 @@
 import "./sync-stdio.js";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { corpusAdvisoryObservationProvenance, mergeCorpusAdvisoryObservations } from "../corpus-advisory-observation.js";
 import { CORPUS_ADVISORY_SNAPSHOT_DIR, loadCorpusAdvisorySnapshot, parseCorpusAdvisorySnapshotManifest, writeCorpusAdvisoryObservation } from "../corpus-advisory-snapshot.js";
 import { validateRestoredSemgrepPackArtifact } from "../corpus-mechanical-readiness.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
+import { readEntriesLstatSafe } from "../fs-walk.js";
 
 try {
   const args = process.argv.slice(2);
@@ -18,7 +19,9 @@ try {
   const partsDir = value("--parts");
   const output = value("--out");
   const registry = validateRestoredSemgrepPackArtifact(value("--registry-dir"));
-  const files = readdirSync(partsDir).sort();
+  const entries = readEntriesLstatSafe(partsDir);
+  if (entries.some((entry) => !entry.isFile || entry.isSymbolicLink)) throw new Error("advisory observation parts must be regular files");
+  const files = entries.map((entry) => entry.name).sort();
   if (JSON.stringify(files) !== JSON.stringify([1, 2, 3, 4].map((index) => `corpus-advisory-observation-shard${index}.json`))) throw new Error("expected exactly four canonical advisory observation files");
   const manifest = parseCorpusAdvisorySnapshotManifest(JSON.parse(readFileSync(join(CORPUS_ADVISORY_SNAPSHOT_DIR, "manifest.json"), "utf8")));
   const artifact = mergeCorpusAdvisoryObservations(
