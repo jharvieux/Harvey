@@ -162,7 +162,8 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(existsSync(join(f.targetDir, "node_modules/local-provider/index.js"))).toBe(true);
     expect(names.map((name) => readFileSync(join(f.targetDir, name)))).toEqual(originals);
     const scan = await runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "native declared npm", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation: warm });
-    expect(scan.findings.some((finding) => ["M5-00", "M5-98"].includes(finding.id))).toBe(false);
+    expect(scan.findings.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(scan.findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(readFileSync(join(f.targetDir, "provider-consumed"), "utf8")).toBe("yes");
     const failed = prepareCorpusDependencies({ ...f, environment: { ...environment, COREPACK_HOME: join(f.root, "empty-cache") } });
     expect(failed).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("Network access disabled") });

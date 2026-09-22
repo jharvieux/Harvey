@@ -222,7 +222,7 @@ function scopeKnipConfig(dir: string): ScopeKnipConfig | undefined {
   if (!configPath) return packageConfig ? { value: packageConfig } : undefined;
   if ([".js", ".ts"].includes(extname(configPath))) {
     // Even a literal may be mutated later or passed through an executable defineConfig wrapper.
-    // Keep the real config authoritative and disclose that its final selection is unverified.
+    // Keep the real config authoritative and report uncertainty about its final selection.
     return {
       unresolved: `${basename(configPath)}: executable configuration may change the exported object`,
       executablePath: configPath,
