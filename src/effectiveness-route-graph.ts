@@ -77,10 +77,10 @@ interface PackageManifest {
   readonly scripts?: Readonly<Record<string, string>>;
 }
 
-function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker, scope?: ReadonlySet<string>): Set<ts.Symbol> {
+function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker): Set<ts.Symbol> {
   const result = new Set<ts.Symbol>();
   for (const source of program.getSourceFiles()) {
-    if (source.isDeclarationFile || (scope && !scope.has(source.fileName))) continue;
+    if (source.isDeclarationFile) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isImportDeclaration(node)
         && ts.isStringLiteral(node.moduleSpecifier)
@@ -102,7 +102,7 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker, 
   while (changed) {
     changed = false;
     for (const source of program.getSourceFiles()) {
-      if (source.isDeclarationFile || (scope && !scope.has(source.fileName))) continue;
+      if (source.isDeclarationFile) continue;
       const visit = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
           const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
@@ -241,11 +241,12 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
   }
 }
 
-function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest, executionSymbols = importedExecutionSymbols(program, program.getTypeChecker())): ReachableSources {
+function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest): ReachableSources {
   const reached = new Set<string>();
   const rootsByFile = new Map<string, Set<string>>();
   const commandReceiptsByFile = new Map<string, readonly EffectivenessCallReceipt[]>();
   const checker = program.getTypeChecker();
+  const executionSymbols = importedExecutionSymbols(program, checker);
   const pending = roots.map((file) => ({ file, root: file, commands: [] as readonly EffectivenessCallReceipt[] }));
   while (pending.length > 0) {
     const { file, root: routeRoot, commands } = pending.shift()!;
@@ -342,10 +343,11 @@ function typeContainsFinding(checker: ts.TypeChecker, type: ts.Type, seen = new 
   return properties.has("id") && properties.has("taxonomy") && properties.has("severity") && properties.has("location");
 }
 
-function programForSources(sources: readonly string[]): ts.Program {
+function programForSources(sources: readonly string[], oldProgram?: ts.Program): ts.Program {
   return ts.createProgram({
     rootNames: [...sources],
     options: { allowJs: true, checkJs: false, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, target: ts.ScriptTarget.ES2023, skipLibCheck: true },
+    oldProgram,
   });
 }
 
@@ -397,7 +399,7 @@ export function discoverEffectivenessRouteGraph(
   return routeGraphForReachability(root, implementations, roots, reachability, program, options);
 }
 
-/** Reuse the route-analysis program within one inventory build; preserve independent reachability. */
+/** Reuse parsed source within one inventory build, with independent root and venue checkers. */
 export function discoverEffectivenessRouteGraphs(
   root: string,
   implementations: readonly RouteGraphImplementation[],
@@ -405,34 +407,25 @@ export function discoverEffectivenessRouteGraphs(
 ): { readonly production: EffectivenessRouteGraph; readonly venues: readonly EffectivenessRouteGraph[] } {
   const production = productionRoots(root, implementations).map((file) => resolve(root, file));
   const venues = venueRoots.map((file) => [resolve(root, file)]);
-  const allRoots = [...new Set([...production, ...venues.flat()])];
   const packagePath = join(root, "package.json");
   const manifest = existsSync(packagePath)
     ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
     : {};
-  let program = programForSources(allRoots);
-  while (true) {
-    const union = reachableSourcesWithProgram(root, allRoots, program, manifest);
-    if ([...union.files].every((file) => program.getSourceFile(file))) break;
-    program = programForSources([...union.files]);
-  }
-  const scopedReachability = (roots: readonly string[]): ReachableSources => {
-    // Start from imports alone, then add command targets until the root-local source set closes.
-    // A shared execution-symbol set would let one venue's typed executor activate another venue.
-    let scope = reachableSourcesWithProgram(root, roots, program, manifest, new Set()).files;
+  let previousProgram: ts.Program | undefined;
+  const graph = (roots: readonly string[], detectUnknown: boolean): EffectivenessRouteGraph => {
+    let program = programForSources(roots, previousProgram);
     while (true) {
-      const symbols = importedExecutionSymbols(program, program.getTypeChecker(), scope);
-      const reached = reachableSourcesWithProgram(root, roots, program, manifest, symbols);
-      if (reached.files.size === scope.size && [...reached.files].every((file) => scope.has(file))) return reached;
-      scope = reached.files;
+      const reachability = reachableSourcesWithProgram(root, roots, program, manifest);
+      if ([...reachability.files].every((file) => program.getSourceFile(file))) {
+        // Each graph owns its checker while TypeScript reuses unchanged parsed source files.
+        // The completed program already contains every file examined by this root.
+        previousProgram = program;
+        return routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown });
+      }
+      program = programForSources([...reachability.files], program);
     }
   };
-  const productionReachability = scopedReachability(production);
-  const venueReachabilities = venues.map((roots) => scopedReachability(roots));
-  return {
-    production: routeGraphForReachability(root, implementations, production, productionReachability, program, { detectUnknown: true }),
-    venues: venues.map((roots, index) => routeGraphForReachability(root, implementations, roots, venueReachabilities[index]!, program, { detectUnknown: false })),
-  };
+  return { production: graph(production, true), venues: venues.map((roots) => graph(roots, false)) };
 }
 
 function routeGraphForReachability(
