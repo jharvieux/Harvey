@@ -126,7 +126,7 @@ const fixedFinding = (): Finding =>
 /** The document under test: the disclosure family, an Info row, and a shape above the rollup threshold. */
 function deliverable(): FindingsDocument {
   const rolled = Array.from({ length: 14 }, (_, i) =>
-    finding({ id: `M4-${i}`, title: "Duplicated block", severity: "Medium", taxonomy: "M4 — Duplication", category: "Quality", location: `src/dup/${i}.ts:3` }),
+    finding({ id: `M4-${i}`, title: "Duplicated block", severity: "Medium", taxonomy: "M4 — Duplication", category: "Quality", location: `src/dup/${i}.ts:3`, value: 1, ease: 1, safety: 1 }),
   );
   const findings: Finding[] = [
     finding({ id: "M1-01" }),
@@ -612,26 +612,26 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
       taxonomy: "M1 — Multi-tenant security",
       severity: "High",
       location: `supabase/policies/t${i}.sql:1`,
-      evidence: i === 0 || i === 11 ? TWIN_EVIDENCE : `the policy on t${i} restricts to auth.uid() but not to the tenant`,
+      evidence: i === 0 || i === 46 ? TWIN_EVIDENCE : `the policy on t${i} restricts to auth.uid() but not to the tenant`,
     });
-  const members = Array.from({ length: 12 }, (_, i) => twin(i));
+  const members = Array.from({ length: 47 }, (_, i) => twin(i));
   const doc = assembleEngagementDocument(RECORDED, ENV, [...members], META);
   const html = buildHtml(doc);
   const withheldBlock = /<div class="group-rest">[\s\S]*?<\/details>/.exec(html)?.[0] ?? "";
 
   it("the fixture actually collides — one evidence string across a rendered row AND a withheld one", () => {
-    expect(doc.findings.filter((f) => f.taxonomy === "M1 — Multi-tenant security")).toHaveLength(12);
-    // 12 members, 5 rendered in full ⇒ 7 withheld. The count is the renderer's, and it is correct.
+    expect(doc.findings.filter((f) => f.taxonomy === "M1 — Multi-tenant security")).toHaveLength(47);
+    // 47 members, 40 linked action details rendered in full ⇒ 7 withheld. The count is the renderer's, and it is correct.
     expect(html).toContain("7 more High finding(s) of this shape are not individually rendered");
-    // t0 renders a full card; t11 is withheld — and they share one evidence string, so a text search
-    // over the whole document reads t11 as rendered, because t0's card carries the same words.
-    expect(withheldBlock).toContain("SB-RLS-POLICY-public.t11.t11_read");
+    // t0 renders a full card; t46 is withheld — and they share one evidence string, so a text search
+    // over the whole document reads t46 as rendered, because t0's card carries the same words.
+    expect(withheldBlock).toContain("SB-RLS-POLICY-public.t46.t46_read");
     expect(withheldBlock).not.toContain("SB-RLS-POLICY-public.t0.t0_read");
-    expect(members[0]?.evidence).toBe(members[11]?.evidence);
+    expect(members[0]?.evidence).toBe(members[46]?.evidence);
   });
 
   it("scores no breach when the renderer discloses the right count", () => {
-    // Pre-#1627 this reported MISCOUNTED-ROLLUP: t11 counted as rendered because t0's card carries
+    // Pre-#1627 this reported MISCOUNTED-ROLLUP: t46 counted as rendered because t0's card carries
     // its words, so six absentees were scored against a correctly-disclosed seven.
     expect(renderFidelityBreaches(doc, html)).toEqual([]);
   });
@@ -647,14 +647,14 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
   });
 
   it("CONTROL — the shared evidence string does not save a twin dropped from the withheld list", () => {
-    // Identity by region must not become a way to LOSE a finding. t11's row is removed from the
+    // Identity by region must not become a way to LOSE a finding. t46's row is removed from the
     // <details> list; its words are still in the document, on t0's card. Nothing is attributed to
-    // t11, so it is an undisclosed omission — and a text search over the whole document reports none.
-    const broken = html.replace(/<div><span class="fid">SB-RLS-POLICY-public\.t11\.t11_read<\/span>[\s\S]*?<\/div>/, "");
+    // t46, so it is an undisclosed omission — and a text search over the whole document reports none.
+    const broken = html.replace(/<div><span class="fid">SB-RLS-POLICY-public\.t46\.t46_read<\/span>[\s\S]*?<\/div>/, "");
     expect(broken, "the control must actually remove the row").not.toBe(html);
     expect(broken).toContain(esc(TWIN_EVIDENCE));
     const breaches = renderFidelityBreaches(doc, broken);
-    expect(breaches.some((b) => b.kind === "undisclosed-omission" && b.id.includes("SB-RLS-POLICY-public.t11.t11_read"))).toBe(true);
+    expect(breaches.some((b) => b.kind === "undisclosed-omission" && b.id.includes("SB-RLS-POLICY-public.t46.t46_read"))).toBe(true);
   });
 });
 
@@ -698,7 +698,7 @@ describe("#1730 the nested-PII review table is scored per row, not against the w
   });
 
   it("CONTROL — removing ONE row is caught, even though its location and columns still appear (on the surviving twin's row)", () => {
-    const broken = html.replace(/<tr><td class="b"><span class="fid">M10-PII-02<\/span>[\s\S]*?<\/tr>/, "");
+    const broken = html.replace(/<tr[^>]*><td class="b"><span class="fid">M10-PII-02<\/span>[\s\S]*?<\/tr>/, "");
     expect(broken, "the control must actually remove a row").not.toBe(html);
     // The words are still IN the document (twinA's row), which is exactly why the old whole-
     // document scoring missed this — proving the fixture is a real collision, not just an absence.

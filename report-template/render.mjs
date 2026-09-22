@@ -21,6 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
+import { assertFindingNavigation, findingAnchor, findingIdAttribute } from "./navigation.mjs";
 import { draftTermsBadge, esc, legalTermsSection, notApplicableSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
 
 const SEV = {
@@ -48,6 +49,8 @@ const readableOn = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) > 150 ? "#1f2937" : "#fff";
 };
+
+const findingLink = (f, text) => `<a class="finding-link" href="#${findingAnchor(f.id)}" data-finding-link="${findingIdAttribute(f.id)}">${esc(text)}</a>`;
 
 // SVG arc helper (degrees; 0 = +x axis, sweeps clockwise in screen coords).
 const pol = (cx, cy, r, deg) => [cx + r * Math.cos((deg * Math.PI) / 180), cy + r * Math.sin((deg * Math.PI) / 180)];
@@ -90,7 +93,7 @@ function bftbBars(items) {
     const s = bftb(f);
     return `<div class="bar-row"><div class="bar-score" style="color:${bftbColor(s)}">${s}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${s}%;background:${bftbColor(s)}"></div></div>
-      <div class="bar-label">${esc(f.title)}</div></div>`;
+      <div class="bar-label">${findingLink(f, f.title)}</div></div>`;
   }).join("");
 }
 
@@ -140,7 +143,7 @@ function suggestedFixBlock(f) {
 function findingCard(f) {
   const s = bftb(f);
   const sc = SEV[f.severity]?.c ?? "#64748b";
-  return `<div class="finding">
+  return `<div class="finding" id="${findingAnchor(f.id)}" data-finding-id="${findingIdAttribute(f.id)}" tabindex="-1">
     <div class="finding-head">
       <span class="fid">${esc(f.id)}</span>
       <span class="ftitle">${esc(f.title)}</span>
@@ -168,29 +171,29 @@ function findingCard(f) {
   </div>`;
 }
 
-// #935: a rolled-up shape — same taxonomy + severity, more findings than the rollup threshold
-// (rollup.mjs). The top members render as full cards; the remainder is disclosed BY COUNT, with
-// every withheld location present in a collapsed <details> (the PDF prints its summary line, the
-// HTML expands to the full list) and in the machine-readable findings.json/SARIF. The count line
-// is the no-silent-cap contract: what is not individually rendered is stated, never absorbed.
+// Keep large groups bounded, but every summary destination needs its own usable detail.
+// Linked members beyond the representatives expand on navigation and are opened for PDF export.
 function groupCard(g) {
   const sc = SEV[g.severity]?.c ?? "#64748b";
-  const withheldLocs = g.withheld
+  const linked = g.withheld.filter((f) => f._linked);
+  const withheld = g.withheld.filter((f) => !f._linked);
+  const withheldLocs = withheld
     .map((f) => `<div><span class="fid">${esc(f.id)}</span> <code>${esc(f.location)}</code></div>`)
     .join("");
   return `<div class="group">
     <div class="group-head">
       <span class="badge" style="background:${sc}">${esc(g.severity)}</span>
       <span class="group-title">${esc(g.taxonomy)}</span>
-      <span class="group-count">${g.count} findings of this shape — top ${g.representatives.length} shown in full</span>
+      <span class="group-count">${g.count} findings of this shape — ${g.representatives.length + linked.length} available in full</span>
     </div>
     ${g.representatives.map(findingCard).join("")}
-    <div class="group-rest">
-      <b>${g.withheld.length} more ${esc(g.severity)} finding(s) of this shape are not individually rendered.</b>
+    ${linked.length ? `<details class="linked-findings"><summary>${linked.length} additional finding details referenced by recommendations</summary>${linked.map(findingCard).join("")}</details>` : ""}
+    ${withheld.length ? `<div class="group-rest">
+      <b>${withheld.length} more ${esc(g.severity)} finding(s) of this shape are not individually rendered.</b>
       Every one is in the machine-readable findings.json (and the SARIF export when produced) with its
       full evidence and fix; locations below.
-      <details><summary>All ${g.withheld.length} withheld locations</summary>${withheldLocs}</details>
-    </div>
+      <details><summary>All ${withheld.length} withheld locations</summary>${withheldLocs}</details>
+    </div>` : ""}
   </div>`;
 }
 
@@ -380,9 +383,9 @@ function reviewFlagSection(items) {
   // row's text to. Before this, the loop scored against the whole document, so two rows sharing a
   // location and column set covered for each other (the #1062 masking shape #1627 closed
   // everywhere else this table's own siblings render).
-  const rows = items.map((x) => `<tr><td class="b"><span class="fid">${esc(x.id)}</span> ${esc(x.location)}</td>
+  const rows = items.map((x) => `<tr${x.reviewFlagOnly && x.confidence !== "N/A" ? ` id="${findingAnchor(x.id)}" data-finding-id="${findingIdAttribute(x.id)}" tabindex="-1"` : ""}><td class="b"><span class="fid">${esc(x.id)}</span> ${esc(x.location)}</td>
     <td>${x.reviewFlagColumns.map(esc).join(", ")}</td>
-    <td>${x.reviewFlagOnly ? "No" : "Yes — see Findings"}</td></tr>`).join("");
+    <td>${x.reviewFlagOnly ? "No" : findingLink(x, "Yes — see finding details")}</td></tr>`).join("");
   return `<h2>Review for nested PII</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">JSON/JSONB container column(s) whose name suggests they may hold nested PII (#377) — flagged for review, not asserted as classified PII, and excluded from the severity counts and action plan.</div>
     <table class="cov"><tr><th>Table</th><th>Column(s) to review</th><th>Also holds asserted PII?</th></tr>${rows}</table>`;
@@ -410,15 +413,16 @@ function fixBadge(status) {
   const s = FIX_STATUS[status] ?? FIX_STATUS["not-approved"];
   return `<span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span>`;
 }
-function fixSection(h) {
+function fixSection(h, findings) {
   const rows = h.rows ?? [];
   if (!rows.length) return "";
   const delivered = rows.filter((r) => DELIVERABLE_FIX.has(r.status)).sort((a, b) => (a.mergeRank ?? 99) - (b.mergeRank ?? 99));
   const downgraded = rows.filter((r) => !DELIVERABLE_FIX.has(r.status));
   const prCell = (r) => (r.prUrl ? `<a href="${esc(r.prUrl)}">${esc(r.prUrl)}</a>` : "—");
+  const findingCell = (r) => findings.has(r.findingId) ? findingLink(findings.get(r.findingId), r.findingId) : `${esc(r.findingId)} (details not in this report)`;
   const deliveredTable = delivered.length
     ? `<table class="cov"><tr><th>Merge #</th><th>Finding</th><th>Status</th><th>PR</th><th>Verification</th></tr>${delivered
-        .map((r) => `<tr><td class="b">${r.mergeRank ?? "—"}</td><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${prCell(r)}</td><td>${esc(r.verification ?? "—")}</td></tr>`)
+        .map((r) => `<tr><td class="b">${r.mergeRank ?? "—"}</td><td class="b">${findingCell(r)}</td><td>${fixBadge(r.status)}</td><td>${prCell(r)}</td><td>${esc(r.verification ?? "—")}</td></tr>`)
         .join("")}</table>`
     : `<div class="kv">No automated fixes delivered this engagement.</div>`;
   const notesBlock = h.mergeOrder?.notes?.length
@@ -428,7 +432,7 @@ function fixSection(h) {
     ? `<h2>Recommended fixes (why not automated)</h2>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Approved findings that did NOT become an automated PR — downgraded, blocked, or awaiting review. Each is listed with its reason; none is silently dropped.</div>
       <table class="cov"><tr><th>Finding</th><th>Status</th><th>Reason</th></tr>${downgraded
-        .map((r) => `<tr><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${esc(r.reason ?? "—")}</td></tr>`)
+        .map((r) => `<tr><td class="b">${findingCell(r)}</td><td>${fixBadge(r.status)}</td><td>${esc(r.reason ?? "—")}</td></tr>`)
         .join("")}</table>`
     : "";
   return `<h2>Fix delivery</h2>
@@ -440,6 +444,10 @@ function fixSection(h) {
 
 export function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
+  const byId = new Map(all.map((x) => [x.id, x]));
+  if (byId.size !== all.length || all.some((x) => typeof x.id !== "string" || !x.id.trim())) {
+    throw new Error("Report findings require nonempty unique identities for navigation");
+  }
   const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
   const na = all.filter((x) => x.confidence === "N/A"); // checked & ruled out (applicability gate)
   const reviewFlagged = all.filter((x) => (x.reviewFlagColumns?.length ?? 0) > 0); // #459
@@ -457,6 +465,9 @@ export function buildHtml(data) {
   // #935: the action plan caps with a DISCLOSED remainder — at carbon-scale volume an unbounded
   // Critical/High table stops being a plan, but a silently truncated one is worse.
   const { shown: action, withheldCount: actionWithheld } = capActionPlan(actionAll);
+  const linkedIds = new Set([...top, ...action, ...reviewFlagged.filter((x) => !x.reviewFlagOnly)].map((x) => x.id));
+  for (const row of data.fixHandoff?.rows ?? []) linkedIds.add(row.findingId);
+  for (const x of all) x._linked = linkedIds.has(x.id);
   // Findings lead with the most critical (severity desc), then hotspot, then BFTB as the tiebreak.
   const sorted = [...f].sort((a, b) => (sevRank(b) - sevRank(a)) || (hot(b) - hot(a)) || (b._bftb - a._bftb));
   // #935: same-shape volume rolls up for presentation; every finding stays in the data.
@@ -467,7 +478,7 @@ export function buildHtml(data) {
     .map(([s, n]) => `<span class="leg"><i style="background:${SEV[s].c}"></i>${s} ${n}</span>`).join("");
 
   const m = data.meta;
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   :root{--ink:#0f172a;--muted:#64748b;--line:#e5e7eb;--accent:#2563eb}
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);font-size:12px;line-height:1.5}
@@ -490,6 +501,11 @@ export function buildHtml(data) {
   .bar-track{background:#f1f5f9;border-radius:5px;height:12px;overflow:hidden}
   .bar-fill{height:100%;border-radius:5px}
   .bar-label{font-size:11.5px}
+  .finding-link{color:#1d4ed8;text-decoration:underline;text-underline-offset:2px}
+  .finding-link:focus-visible,summary:focus-visible{outline:3px solid #2563eb;outline-offset:3px;border-radius:2px}
+  [data-finding-id]{scroll-margin-top:16px}
+  [data-finding-id]:target{outline:2px solid #2563eb;outline-offset:3px}
+  .linked-findings>summary{cursor:pointer;font-weight:700;color:#1d4ed8;padding:8px}
   table{width:100%;border-collapse:collapse;margin-top:6px}
   th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);font-size:11.5px;vertical-align:top}
   th{background:#f8fafc;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
@@ -569,7 +585,7 @@ export function buildHtml(data) {
     <h2>Action plan</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Everything BFTB &gt; 75, plus every Critical/High security finding. ${action.length === 0 ? "" : ""}</div>
     <table class="action"><tr><th>#</th><th>Action</th><th>Why</th><th>BFTB</th><th>Owner</th></tr>
-    ${action.length ? action.map((x, i) => `<tr><td>${i + 1}</td><td class="b">${esc(x.fix)}</td><td>${esc(x.title)} — ${esc(x.severity)}</td><td class="b" style="color:${bftbColor(x._bftb)}">${x._bftb}</td><td>${x.category === "Security" ? "Operator" : "Eng"}</td></tr>`).join("")
+    ${action.length ? action.map((x, i) => `<tr><td>${i + 1}</td><td class="b">${findingLink(x, x.fix)}</td><td>${esc(x.title)} — ${esc(x.severity)}</td><td class="b" style="color:${bftbColor(x._bftb)}">${x._bftb}</td><td>${x.category === "Security" ? "Operator" : "Eng"}</td></tr>`).join("")
       : '<tr><td colspan="5">No critical/high security findings and nothing above BFTB 75.</td></tr>'}
     ${actionWithheld ? `<tr><td colspan="5"><b>+ ${actionWithheld} more qualifying action(s) beyond this table's ${action.length}-row cap</b> — every one appears in the Findings section and in the machine-readable findings.json (#935: a capped table always states what it capped).</td></tr>` : ""}
     </table>
@@ -584,15 +600,32 @@ export function buildHtml(data) {
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
     ${testQualityBlock(data)}
     <h2>Findings</h2>
-    ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — top instances in full, the rest disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
+    ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — representatives and linked members in full, the remaining members disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
     ${findingItems.map((item) => (item.kind === "group" ? groupCard(item) : findingCard(item.finding))).join("")}
-    ${data.fixHandoff ? fixSection(data.fixHandoff) : ""}
+    ${data.fixHandoff ? fixSection(data.fixHandoff, byId) : ""}
     ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${notApplicableSection(na)}
     ${legalTermsSection(data)}
   </div>
-  </body></html>`;
+  <script>
+  const revealFinding = () => {
+    const target = document.getElementById(location.hash.slice(1));
+    if (!target?.hasAttribute('data-finding-id')) return;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    target.scrollIntoView();
+    target.focus({ preventScroll: true });
+  };
+  addEventListener('hashchange', revealFinding);
+  addEventListener('DOMContentLoaded', revealFinding);
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('.finding-link')) setTimeout(revealFinding, 0);
+  });
+  </script></body></html>`;
+  assertFindingNavigation(html);
+  return html;
 }
 
 function sevRank(f) {
@@ -607,12 +640,15 @@ if (isMain) {
   const data = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
   const outDir = outDirArg ?? path.join(path.dirname(findingsPath), "out");
   fs.mkdirSync(outDir, { recursive: true });
+  fs.rmSync(path.join(outDir, "report.pdf"), { force: true });
   const html = buildHtml(data);
   fs.writeFileSync(path.join(outDir, "report.html"), html);
 
   const browser = await chromium.launch();
+  try {
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: "networkidle" });
+  await page.locator("details.linked-findings").evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
   await page.pdf({
     path: path.join(outDir, "report.pdf"),
     format: "A4",
@@ -624,6 +660,8 @@ if (isMain) {
   });
   await page.setViewportSize({ width: 880, height: 1100 });
   await page.screenshot({ path: path.join(outDir, "page1.png"), clip: { x: 0, y: 0, width: 880, height: 1080 } });
-  await browser.close();
   console.log("wrote", path.join(outDir, "report.pdf"));
+  } finally {
+    await browser.close();
+  }
 }
