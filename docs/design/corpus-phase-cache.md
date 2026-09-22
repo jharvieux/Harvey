@@ -113,8 +113,8 @@ installation are not cache-equivalence proof.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
-the aggregate result of every shard on full-corpus events. On every pull request it reports the
-declared deferral directly, without allocating a producer shard.
+the aggregate result of every shard on full-corpus events. Pull requests proven irrelevant by the
+dependency classifier report an explicit no-op without allocating a producer shard.
 
 ## Falsifiers
 
