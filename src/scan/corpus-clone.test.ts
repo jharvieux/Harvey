@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readNamesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { SecretInArgvError } from "../secret-argv.js";
-import { cloneAtPin, cloneAtPinCached, isFreshClone } from "./corpus-clone.js";
+import { cloneAtPin, cloneAtPinCached, ensureCorpusCloneCache, isFreshClone } from "./corpus-clone.js";
 
 const dirs: string[] = [];
 function tmp(prefix: string): string {
@@ -90,6 +90,24 @@ function expectNoMaintenance(trace: GitTraceEvent[]): void {
     && event.argv?.some((arg) => /(?:^|[\\/])(?:git-)?(?:maintenance|gc|repack)(?:\.exe)?$/.test(arg)));
   expect(maintenance.map((event) => event.argv)).toEqual([]);
 }
+
+describe("whole-pin seed cache slot (#2153)", () => {
+  it("seeds a pristine exact pin without an unused copy and reuses it without another fetch", () => {
+    const { repo, pin } = offlineOrigin();
+    const cache = tmp("whole-pin-seed-");
+    const trace = join(tmp("whole-pin-trace-"), "git.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const slot = ensureCorpusCloneCache(repo, pin, cache);
+    expect(slot).toBe(join(cache, repo.replaceAll("/", "__")));
+    expect(isFreshClone(slot, pin)).toBe(true);
+    expect(readNamesSafe(cache)).toEqual([repo.replaceAll("/", "__")]);
+    const fetches = () => readGitTrace(trace).filter((entry) => entry.event === "start" && entry.argv?.includes("fetch")).length;
+    expect(fetches()).toBe(1);
+    expect(ensureCorpusCloneCache(repo, pin, cache)).toBe(slot);
+    expect(fetches()).toBe(1);
+    expectNoMaintenance(readGitTrace(trace));
+  });
+});
 
 function recordingCloneGit(pin: string): { calls: () => string[][]; root: string } {
   const root = tmp("clone-argv-boundary-");

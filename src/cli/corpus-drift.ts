@@ -48,6 +48,7 @@
 // a target are scope-invalid by construction.
 
 import "./sync-stdio.js";
+import { corpusAdvisoryObservationProvenance } from "../corpus-advisory-observation.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -681,6 +682,7 @@ const advisoryObservation: CorpusAdvisoryObservationArtifact | undefined = advis
   liveOsvScannerVersion: binaryVersion("osv-scanner"),
   expectedTargets: targets.map(({ slug, repo, commit }) => ({ slug, repo, pin: commit })),
   targets: {},
+  ...(sharedRegistry ? { provenance: corpusAdvisoryObservationProvenance(sharedRegistry.identity!), shard: currentShard } : {}),
 } : undefined;
 const advisoryFindingChanges: { slug: string; detail: string }[] = [];
 const persistAdvisoryObservation = (): void => {

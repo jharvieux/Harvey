@@ -68,13 +68,14 @@ function contractErrors(
   const score = workflow.jobs.shard.steps.find((step) => step.name === "Score the corpus against its baselines");
   const replay = workflow.jobs["current-replay"].steps.find((step) => step.name === "Execute the independent exact-head replay");
   for (const event of ["push", "pull_request", "merge_group", "schedule", "workflow_dispatch"]) {
-    const count = ["push", "pull_request", "merge_group"].includes(event) ? 4 : 1;
+    const count = 4;
+    const snapshot = ["push", "pull_request", "merge_group"].includes(event);
     const expected = Array.from({ length: count }, (_, index) => index + 1);
     if (JSON.stringify(eventExpression(workflow.jobs.shard.strategy.matrix.shard, event)) !== JSON.stringify(expected)) errors.push(`${event}: producer matrix`);
     if (eventExpression(score?.env?.SHARD_COUNT, event) !== count) errors.push(`${event}: producer count`);
-    if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (count === 4 ? "1" : "0")) errors.push(`${event}: producer readiness`);
-    if (eventExpression(workflow.jobs["current-replay"].if, event) !== (count === 4)) errors.push(`${event}: replay activation`);
-    const expectedTimeouts = count === 1 ? [120] : [45, 35, 30, 30];
+    if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (snapshot ? "1" : "0")) errors.push(`${event}: producer readiness`);
+    if (eventExpression(workflow.jobs["current-replay"].if, event) !== snapshot) errors.push(`${event}: replay activation`);
+    const expectedTimeouts = snapshot ? [45, 35, 30, 30] : [120, 120, 120, 120];
     for (const [index, expectedTimeout] of expectedTimeouts.entries()) {
       if (eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1) !== expectedTimeout) errors.push(`${event}: shard ${index + 1} timeout`);
     }
@@ -189,7 +190,7 @@ describe("the weight table tracks the corpus (#1586)", () => {
 });
 
 describe("corpus workflow four-shard production contract", () => {
-  it("keeps push/PR/queue producer and replay four-way while schedule/manual stay single", () => {
+  it("keeps all producers four-way and live provider runs separate from snapshot replay", () => {
     expect(contractErrors()).toEqual([]);
   });
 
@@ -209,16 +210,16 @@ describe("corpus workflow four-shard production contract", () => {
 
   it.each([
     ["old weights", WORKFLOW_TEXT, SLUGS, { ...EXPECTED_WEIGHTS, carbon: 564, documenso: 119, "inbox-zero": 95 }],
-    ["producer 4→3", WORKFLOW_TEXT.replace("'[1,2,3,4]'", "'[1,2,3]'").replace("&& 4 || 1", "&& 3 || 1"), SLUGS, EXPECTED_WEIGHTS],
-    ["replay 4→3", WORKFLOW_TEXT.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]").replace("SHARD_COUNT: 4", "SHARD_COUNT: 3"), SLUGS, EXPECTED_WEIGHTS],
+    ["producer 4→3", WORKFLOW_TEXT.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]").replace("SHARD_COUNT: 4", "SHARD_COUNT: 3"), SLUGS, EXPECTED_WEIGHTS],
+    ["replay 4→3", WORKFLOW_TEXT.replaceAll("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]").replaceAll("SHARD_COUNT: 4", "SHARD_COUNT: 3"), SLUGS, EXPECTED_WEIGHTS],
     ["producer/replay mismatch", WORKFLOW_TEXT.replace("SHARD_COUNT: 4", "SHARD_COUNT: 2"), SLUGS, EXPECTED_WEIGHTS],
     ["readiness restricted to push", WORKFLOW_TEXT.replace("(github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0'", "github.event_name == 'push' && '1' || '0'"), SLUGS, EXPECTED_WEIGHTS],
     ["replay restricted to push", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')", "needs.prepare-current-inputs.outputs.relevant == 'true' && github.event_name == 'push'"), SLUGS, EXPECTED_WEIGHTS],
     ["schedule/manual timeout restored to 30m", WORKFLOW_TEXT.replace("&& 120 ||", "&& 30 ||"), SLUGS, EXPECTED_WEIGHTS],
     ["dropped target", WORKFLOW_TEXT, SLUGS.slice(1), EXPECTED_WEIGHTS],
     ["duplicated target", WORKFLOW_TEXT, [...SLUGS, SLUGS[0]!], EXPECTED_WEIGHTS],
-    ["PR/queue matrix alone reverted", WORKFLOW_TEXT.replace("fromJSON((github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')", "fromJSON((github.event_name == 'push')"), SLUGS, EXPECTED_WEIGHTS],
-    ["PR/queue count alone reverted", WORKFLOW_TEXT.replace("(github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4", "(github.event_name == 'push') && 4"), SLUGS, EXPECTED_WEIGHTS],
+    ["PR/queue matrix alone reverted", WORKFLOW_TEXT.replace("shard: [1, 2, 3, 4]", "shard: [1]"), SLUGS, EXPECTED_WEIGHTS],
+    ["PR/queue count alone reverted", WORKFLOW_TEXT.replace("SHARD_COUNT: 4", "SHARD_COUNT: 1"), SLUGS, EXPECTED_WEIGHTS],
   ] as const)("turns red in a disposable %s reversion", (_name, workflow, slugs, weights) => {
     expect(contractErrors(workflow, slugs, weights)).not.toEqual([]);
   });
