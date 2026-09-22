@@ -343,10 +343,11 @@ function typeContainsFinding(checker: ts.TypeChecker, type: ts.Type, seen = new 
   return properties.has("id") && properties.has("taxonomy") && properties.has("severity") && properties.has("location");
 }
 
-function programForSources(sources: readonly string[]): ts.Program {
+function programForSources(sources: readonly string[], oldProgram?: ts.Program): ts.Program {
   return ts.createProgram({
     rootNames: [...sources],
     options: { allowJs: true, checkJs: false, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, target: ts.ScriptTarget.ES2023, skipLibCheck: true },
+    oldProgram,
   });
 }
 
@@ -394,8 +395,48 @@ export function discoverEffectivenessRouteGraph(
 ): EffectivenessRouteGraph {
   const roots = (requestedRoots ?? productionRoots(root, implementations)).map((file) => resolve(root, file));
   const reachability = reachableSources(root, roots);
+  const program = programForSources([...reachability.files]);
+  return routeGraphForReachability(root, implementations, roots, reachability, program, options);
+}
+
+/** Reuse parsed source within one inventory build, with independent root and venue checkers. */
+export function discoverEffectivenessRouteGraphs(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  venueRoots: readonly string[],
+): { readonly production: EffectivenessRouteGraph; readonly venues: readonly EffectivenessRouteGraph[] } {
+  const production = productionRoots(root, implementations).map((file) => resolve(root, file));
+  const venues = venueRoots.map((file) => [resolve(root, file)]);
+  const packagePath = join(root, "package.json");
+  const manifest = existsSync(packagePath)
+    ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
+    : {};
+  let previousProgram: ts.Program | undefined;
+  const graph = (roots: readonly string[], detectUnknown: boolean): EffectivenessRouteGraph => {
+    let program = programForSources(roots, previousProgram);
+    while (true) {
+      const reachability = reachableSourcesWithProgram(root, roots, program, manifest);
+      if ([...reachability.files].every((file) => program.getSourceFile(file))) {
+        // Each graph owns its checker while TypeScript reuses unchanged parsed source files.
+        // The completed program already contains every file examined by this root.
+        previousProgram = program;
+        return routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown });
+      }
+      program = programForSources([...reachability.files], program);
+    }
+  };
+  return { production: graph(production, true), venues: venues.map((roots) => graph(roots, false)) };
+}
+
+function routeGraphForReachability(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  roots: readonly string[],
+  reachability: ReachableSources,
+  program: ts.Program,
+  options: { readonly detectUnknown?: boolean },
+): EffectivenessRouteGraph {
   const reachable = reachability.files;
-  const program = programForSources([...reachable]);
   const checker = program.getTypeChecker();
   const implementationByIdentity = new Map(implementations.map((item) => [`${item.file}#${item.symbol}`, item]));
   const calls = new Map<string, EffectivenessCallReceipt>();

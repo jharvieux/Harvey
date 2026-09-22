@@ -237,10 +237,9 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
       scorecard: { dimensions: Array<{ module: string; status: string; grade?: string; count?: number; scope: string }> };
     };
     expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({
-      status: "graded",
-      grade: "F",
+      status: "indicator-only",
       count: 1,
-      scope: expect.stringMatching(/examined 1 authored source file.*No JS\/TS product source was inspected/),
+      scope: expect.stringMatching(/examined 1 authored product source file.*No JS\/TS product source was inspected/),
     });
     for (const module of ["M4", "M6", "M7", "M8", "M9"]) {
       expect(report.scorecard.dimensions.find((row) => row.module === module)?.status).toBe("not-assessed");
@@ -266,7 +265,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
     const textOut = join(repo, "quick.txt");
     await run([CLI, "--dir", repo, "--out", textOut]);
     const rendered = readFileSync(textOut, "utf8");
-    expect(rendered).toContain("M5   Dead code & slop — F");
+    expect(rendered).toContain("M5   Dead code & slop — indicators only — not graded");
     expect(rendered).toContain("No JS/TS product source was inspected");
   }, 120000);
 
@@ -286,7 +285,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — unresolved pro
       runs: Array<{ properties: { harveyCoverageAbsent: string }; results: Array<{ ruleId: string; message: { text: string } }> }>;
     };
     const exported = sarif.runs[0]!;
-    expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "graded", count: 0 });
+    expect(report.scorecard.dimensions.find((row) => row.module === "M5")).toMatchObject({ status: "indicator-only", count: 0 });
     expect(exported.results.map((result) => result.ruleId)).not.toContain("M5 — Python empty/pass exception handler");
     expect(exported.results.find((result) => result.ruleId === "M5 — Source coverage partial: python")?.message.text).toContain("All 1 python file(s) were examined");
     expect(exported.properties.harveyCoverageAbsent).toContain("also includes raw mechanical findings for M5, M6");
@@ -406,5 +405,148 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("M9 workspace assessment at quick-
       const graded = scorecard.dimensions.filter((d) => d.status === "graded" && d.module !== "M9");
       expect(scorecard.score).toBe(Math.round(graded.reduce((sum, d) => sum + d.score!, 0) / graded.length));
     }
+  }, 120000);
+});
+
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan M5 Python evidence (#2156)", () => {
+  it.each([
+    { shape: "Python product and Python tests", product: true, jsTests: false },
+    { shape: "Python product and JS tests", product: true, jsTests: true },
+    { shape: "Python tests only", product: false, jsTests: false },
+  ])("keeps the assessed population honest for $shape", async ({ product, jsTests }) => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-m5-product-population-"));
+    dirs.push(target);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m5-product-population", private: true }));
+    const python = "def work():\n    try:\n        run()\n    except Exception:\n        pass\n";
+    if (product) writeFileSync(join(target, "worker.py"), python);
+    writeFileSync(join(target, jsTests ? "index.test.ts" : "test_worker.py"), jsTests ? "export const ready = true;\n" : python);
+    const jsonOut = join(target, "quick.json");
+    const sarifOut = join(target, "quick.sarif");
+    await run([CLI, "--dir", target, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const scorecard = (JSON.parse(readFileSync(jsonOut, "utf8")) as { scorecard: HealthScorecard }).scorecard;
+    const m5 = scorecard.dimensions.find((row) => row.module === "M5")!;
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as { runs: Array<{ results: Array<{ ruleId: string; message: { text: string } }> }> };
+    const m5Results = sarif.runs[0]!.results.filter((result) => result.ruleId.startsWith("M5 — "));
+    expect(m5.grade).toBeUndefined();
+    expect(m5.score).toBeUndefined();
+    expect(scorecard.gradedModules).not.toContain("M5");
+    if (product) {
+      expect(m5).toMatchObject({ status: "indicator-only", count: 1 });
+      expect(m5.scope).toContain("python: 1/1 examined (partial");
+      expect(m5.scope).not.toContain("javascript/typescript: 1/1");
+      expect(m5.evidence?.examples.map((example) => example.location)).toEqual(["worker.py:4"]);
+      expect(m5Results.filter((result) => result.ruleId === "M5 — Python empty/pass exception handler")).toHaveLength(1);
+      const assessmentText = m5Results.find((result) => result.ruleId === "M5 — Source coverage partial: python")?.message.text;
+      expect(assessmentText).toContain("Identified=1 (");
+      expect(assessmentText).toContain("examined=1 (");
+    } else {
+      expect(m5.status).toBe("not-assessed");
+      expect(m5.reason).toContain("No authored product source files");
+      expect(m5Results).toHaveLength(0);
+    }
+  }, 120000);
+
+  it.each([
+    { shape: "positive Python", python: "def work():\n    try:\n        run()\n    except Exception:\n        pass\n", js: false, count: 1, scorecardCount: 1 },
+    { shape: "zero-finding Python", python: "def work():\n    return 42\n", js: false, count: 0, scorecardCount: 0 },
+    { shape: "mixed JS/Python", python: "def work():\n    try:\n        run()\n    except Exception:\n        pass\n", js: true, count: 1, scorecardCount: 2 },
+  ])("carries $shape assessment through JSON and SARIF", async ({ python, js, count, scorecardCount }) => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-m5-python-scorecard-"));
+    dirs.push(target);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m5-python-evidence", private: true }));
+    writeFileSync(join(target, "worker.py"), python);
+    if (js) writeFileSync(join(target, "index.ts"), "// TODO fix\nexport const ready = true;\n");
+    const jsonOut = join(target, "quick.json");
+    const sarifOut = join(target, "quick.sarif");
+    await run([CLI, "--dir", target, "--json", "--out", jsonOut, "--sarif-out", sarifOut]);
+    const scorecard = (JSON.parse(readFileSync(jsonOut, "utf8")) as { scorecard: HealthScorecard }).scorecard;
+    const m5 = scorecard.dimensions.find((row) => row.module === "M5")!;
+    const sarif = JSON.parse(readFileSync(sarifOut, "utf8")) as {
+      runs: Array<{ results: Array<{ ruleId: string; properties: { location?: string; precisionTier?: string } }> }>;
+    };
+    const results = sarif.runs[0]!.results;
+    const pythonHits = results.filter((result) => result.ruleId === "M5 — Python empty/pass exception handler");
+    expect(pythonHits).toHaveLength(count);
+    expect(results.some((result) => result.ruleId === "M5 — Source coverage partial: python")).toBe(true);
+    expect(m5.count).toBe(scorecardCount);
+    expect(m5.evidence?.totalFindings).toBe(scorecardCount);
+    expect(m5.evidence?.examples.map((example) => example.location)).toEqual(js ? ["index.ts:1", "worker.py:4"] : count ? ["worker.py:4"] : []);
+    expect(m5.scope).toContain("python: 1/1 examined (partial");
+    expect(m5.scope).toContain("review-tier");
+    if (count) expect(pythonHits[0]!.properties).toMatchObject({ location: "worker.py:4", precisionTier: "review" });
+    if (js) {
+      expect(m5).toMatchObject({ status: "graded", grade: "F" });
+      expect(m5.measure).toContain("(1 in");
+      expect(m5.measure).toContain("1 review-tier signal(s) shown separately from the grade");
+      expect(m5.scope).toContain("javascript/typescript: 1/1 examined");
+    } else {
+      expect(m5.status).toBe("indicator-only");
+      expect(m5.grade).toBeUndefined();
+      expect(m5.score).toBeUndefined();
+      expect(scorecard.gradedModules).not.toContain("M5");
+    }
+  }, 120000);
+});
+
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan M10 evidence delivery (#2091)", () => {
+  const tables = [
+    ["accounts", "email text, first_name text"],
+    ["patients", "ssn text, date_of_birth date, diagnosis text"],
+    ["cards", "card_number text, cvv text"],
+    ["contacts", "phone text"],
+    ["members", "email text, phone text, date_of_birth date"],
+    ["audit_users", "ip_address inet"],
+    ["secrets", "ai_api_key text"],
+  ] as const;
+
+  it("delivers ordered table identities, classified-column totals, and the hidden-cap explanation", async () => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-pii-evidence-"));
+    dirs.push(target);
+    mkdirSync(join(target, "supabase/migrations"), { recursive: true });
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "pii-evidence", private: true }));
+    writeFileSync(join(target, "index.ts"), "export const ready = true;\n");
+    writeFileSync(join(target, "supabase/migrations/0001_tables.sql"), tables.map(([name, columns]) =>
+      `create table public.${name} (\n  id uuid primary key,\n  ${columns.split(", ").join(",\n  ")}\n);`,
+    ).join("\n\n"));
+    const jsonOut = join(target, "quick.json");
+    await run([CLI, "--dir", target, "--json", "--out", jsonOut]);
+    const scorecard = (JSON.parse(readFileSync(jsonOut, "utf8")) as { scorecard: HealthScorecard }).scorecard;
+    const m10 = scorecard.dimensions.find((row) => row.module === "M10")!;
+    expect(m10).toMatchObject({ status: "risk-band", band: "Critical", count: 7, measure: "7 table(s) holding 13 classified PII/PHI/PCI column(s)" });
+    expect(m10.evidence).toMatchObject({ totalShapes: 7, totalFindings: 13, hiddenShapes: 2, hiddenFindings: 2, capped: true });
+    expect(m10.evidence?.examples.map(({ location, occurrences }) => [location, occurrences])).toEqual([
+      ["patients", 3], ["cards", 2], ["secrets", 1], ["members", 3], ["accounts", 2],
+    ]);
+    const rendered = (await run([CLI, "--dir", target])).stdout;
+    expect(rendered).toContain("showing 5 of 7 distinct tables (13 classified columns in total)");
+    expect(rendered).toContain("2 further tables (2 more classified columns) are NOT listed here");
+    for (const table of ["patients", "cards", "secrets", "members", "accounts"]) expect(rendered).toMatch(new RegExp(`— ${table}  \\(\\d+ classified columns?\\)`));
+    expect(rendered).not.toContain("— contacts  (");
+  }, 120000);
+
+  it("shows zero table evidence for a parsed schema with no classified columns", async () => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-pii-zero-"));
+    dirs.push(target);
+    mkdirSync(join(target, "supabase/migrations"), { recursive: true });
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "pii-zero", private: true }));
+    writeFileSync(join(target, "supabase/migrations/0001_tables.sql"), "create table public.logs (\n  id uuid primary key,\n  created_at timestamp\n);\n");
+    const report = JSON.parse((await run([CLI, "--dir", target, "--json"])).stdout) as { scorecard: HealthScorecard };
+    const m10 = report.scorecard.dimensions.find((row) => row.module === "M10")!;
+    expect(m10).toMatchObject({ status: "risk-band", band: "Low", count: 0, measure: "0 table(s) holding 0 classified PII/PHI/PCI column(s)" });
+    expect(m10.evidence).toMatchObject({ examples: [], totalShapes: 0, totalFindings: 0, hiddenShapes: 0, hiddenFindings: 0, capped: false });
+    expect(m10.bandDerivation).toContain("0 classified column(s)");
+  }, 120000);
+
+  it("counts classified Prisma columns rather than every declared column", async () => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-pii-prisma-"));
+    dirs.push(target);
+    mkdirSync(join(target, "prisma"), { recursive: true });
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "pii-prisma", private: true }));
+    writeFileSync(join(target, "prisma/schema.prisma"), "model Profile {\n  id String @id\n  email String\n  customer_ssn String\n}\n");
+    const report = JSON.parse((await run([CLI, "--dir", target, "--json"])).stdout) as { scorecard: HealthScorecard };
+    const m10 = report.scorecard.dimensions.find((row) => row.module === "M10")!;
+    expect(m10).toMatchObject({ count: 1, measure: "1 table(s) holding 2 classified PII/PHI/PCI column(s)" });
+    expect(m10.evidence).toMatchObject({ totalShapes: 1, totalFindings: 2, hiddenShapes: 0 });
+    expect(m10.evidence?.examples[0]).toMatchObject({ location: "Profile", occurrences: 2 });
   }, 120000);
 });

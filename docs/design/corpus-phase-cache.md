@@ -113,8 +113,8 @@ installation are not cache-equivalence proof.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
-the aggregate result of every shard on full-corpus events. On every pull request it reports the
-declared deferral directly, without allocating a producer shard.
+the aggregate result of every shard on full-corpus events. Pull requests proven irrelevant by the
+dependency classifier report an explicit no-op without allocating a producer shard.
 
 ## Falsifiers
 
@@ -122,19 +122,27 @@ declared deferral directly, without allocating a producer shard.
 
 The `corpus-phase-run-v6` and `corpus-phase-main-v6` transports carry a context-bound provenance
 manifest. Scheduled/manual retries can use their exact run family; a rolling-prefix lookup is
-restricted to the trusted default-branch family. Pull requests never restore or save either
-transport. The key encodes family, platform, shard namespace, run,
+restricted to the trusted default-branch family. Relevant pull requests and merge groups use
+their exact run family and may restore compatible trusted-main seeds; classified no-op runs use
+neither transport. The key encodes family, platform, shard namespace, run,
 attempt, and head SHA. The validator reconstructs that key, checks the matched source key/current
 namespace, then checks the source event/ref/SHA trust relationship before any inner artifact is
 read. Missing, corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
 Default-branch pushes use four producer shards and four independent replay shards. Each successful
 main producer leg saves only its corresponding trusted namespace after scoring, and the aggregate
-compares the two executions. Pull requests and merge groups use the required aggregate's
-declared-no-op path and read or write no corpus phase transport; this moves the external-app proof
-out of the merge critical path.
-Scheduled/manual validation remains single-shard for canonical scorecard and clone-cache lineage,
-but is warm by default; an explicit `force_cold_cache` dispatch input requests
+compares the two executions. Relevant pull requests and merge groups use the same snapshot
+producer/replay proof. Only changes classified as irrelevant use the required aggregate's
+declared-no-op path and read or write no corpus phase transport.
+Scheduled/manual validation uses the same four canonical owners as other full-population runs,
+while retaining live provider verification and the existing timeout ceilings. Each scorer reads
+and writes only its own phase-cache namespace. The shared preparation job seeds and verifies the
+complete pinned clone cache before partitioning; scorer legs only restore it. The aggregate checks
+all scorecard fields and the complete live target population before publishing the canonical
+scorecard. It also assembles the raw advisory observations, checks their run, pin, registry and
+committed snapshot identities, and preserves interrupted observations as explicitly incomplete.
+Artifact assembly precedes the final liveness and alert checks, so real drift retains diagnostics.
+Validation is warm by default; an explicit `force_cold_cache` dispatch input requests
 cold-versus-restored equivalence only if the preflight finds matching seeds. A trusted main
 transport proves its origin, not its compatibility: main's snapshot-mode options differ from
 manual `live-verify` options, and a source, runtime, target, rule/config, or planned-ownership change

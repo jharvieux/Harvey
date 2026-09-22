@@ -54,9 +54,8 @@ export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
 // wrong is asymmetric, so the default leans to the safe side rather than to the median.
 export const DEFAULT_SCAN_SECONDS = 120;
 
-// The scoring topology may be one job (schedule/manual) or four jobs (PR/queue/push), but cache
-// ownership is deliberately invariant. A target always reads and writes the same one of these four
-// roots, and the all-target scorer uses those same four transports.
+// Hosted scoring uses four jobs on every full-population event. Local all-target runs retain
+// the same canonical ownership: a target always reads and writes one of these four roots.
 export const CORPUS_CACHE_SHARD_COUNT = 4;
 export const CORPUS_CACHE_PARTITION_POLICY = "corpus-lpt-four-owner-v1";
 

@@ -7,7 +7,7 @@ import { AUDIT_MODULES, type AuditModule } from "./audit-coverage.js";
 import { CALIBRATION_PLANTS } from "./audit-conservation.js";
 import type { ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
-import { discoverEffectivenessRouteGraph, type RouteGraphImplementation } from "./effectiveness-route-graph.js";
+import { discoverEffectivenessRouteGraphs, type RouteGraphImplementation } from "./effectiveness-route-graph.js";
 import { HEURISTIC_CORPUS } from "./scan/heuristic-precision.js";
 import { CORPUS, mechanicalCorpus } from "./scan/calibration.js";
 import { m6HandrolledEntries } from "./scan/calibration/m6-handrolled.entries.js";
@@ -526,20 +526,21 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
     deliveryKind: binding.deliveryKind,
     endpoint: binding.deliveryKind === "conservation" ? "conservation" : binding.populationClass === "true-finding-producer" ? "client-finding-delivery" : "coverage-disclosure",
   })));
-  const routeGraph = discoverEffectivenessRouteGraph(root, routeImplementations);
-  const semanticVenues: SemanticVenueInput[] = scoredGates.flatMap((gate): SemanticVenueInput[] => {
-    if (gate.cadence.kind === "none") return [];
+  const scoredVenues = scoredGates.filter((gate) => gate.cadence.kind !== "none");
+  const graphs = discoverEffectivenessRouteGraphs(root, routeImplementations, scoredVenues.map((gate) => `src/cli/${gate.id}.ts`));
+  const routeGraph = graphs.production;
+  const semanticVenues: SemanticVenueInput[] = scoredVenues.map((gate, index): SemanticVenueInput => {
     const rootId = `src/cli/${gate.id}.ts`;
-    const graph = discoverEffectivenessRouteGraph(root, routeImplementations, [rootId], { detectUnknown: false });
+    const graph = graphs.venues[index]!;
     const corpusRows = scorerCorpus(gate.id);
-    return [{
+    return {
       gate,
       rootId,
       producerIds: new Set(graph.routes.map((route) => route.producerId)),
       callReceiptIds: graph.calls.map((call) => call.id),
       corpusIds: corpusRows.map((row) => row.id),
       corpusRows,
-    }];
+    };
   });
   const venuesByFamily = new Map<string, string[]>();
   const familyCorpusByVenue = new Map<string, readonly string[]>();

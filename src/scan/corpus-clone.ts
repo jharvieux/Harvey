@@ -51,6 +51,19 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     cloneAtPin(repo, commit, into);
     return;
   }
+  const cached = ensureCorpusCloneCache(repo, commit, cacheDir);
+  cpSync(cached, into, { recursive: true, verbatimSymlinks: true });
+  if (verifyRemote) {
+    // A cache proves only that we fetched this commit once. Corpus drift must also prove the
+    // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
+    // Fetch in the disposable copy to keep the shared cache read-only during scoring.
+    execFileSync("git", ["-C", into, ...PINNED_FETCH_ARGS, `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
+  }
+}
+
+/** Populate one pristine cache slot without an unused working copy during whole-pin seeding. */
+export function ensureCorpusCloneCache(repo: string, commit: string, cacheDir: string): string {
+  assertCorpusRepoSlug(repo);
   const cached = join(cacheDir, repo.replace(/\//g, "__"));
   if (!isFreshClone(cached, commit)) {
     console.error(`  corpus-clone-cache: ${repo}@${commit.slice(0, 8)} not cached (or stale) — cloning fresh`);
@@ -60,13 +73,7 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     rmSync(cached, { recursive: true, force: true });
     cloneAtPin(repo, commit, cached);
   }
-  cpSync(cached, into, { recursive: true, verbatimSymlinks: true });
-  if (verifyRemote) {
-    // A cache proves only that we fetched this commit once. Corpus drift must also prove the
-    // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
-    // Fetch in the disposable copy to keep the shared cache read-only during scoring.
-    execFileSync("git", ["-C", into, ...PINNED_FETCH_ARGS, `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
-  }
+  return cached;
 }
 
 // Exported so the validity check itself is directly testable without a network clone (see

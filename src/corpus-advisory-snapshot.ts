@@ -102,6 +102,15 @@ export interface CorpusAdvisoryObservationArtifact {
   liveOsvScannerVersion: string;
   expectedTargets: { slug: string; repo: string; pin: string }[];
   targets: Record<string, CorpusAdvisoryObservationTarget>;
+  /** Hosted parts share these exact inputs; live provider results remain target-local. */
+  provenance?: {
+    headSha: string;
+    runId: string;
+    runAttempt: string;
+    registrySha256: string;
+    snapshotManifestSha256: string;
+  };
+  shard?: { index: number; count: number };
 }
 
 export class CorpusAdvisoryFindingChangeError extends Error {

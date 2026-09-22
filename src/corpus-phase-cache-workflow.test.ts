@@ -32,15 +32,15 @@ function transportWorkflowErrors(text: string, cli = corpusCli): string[] {
     if (!text.includes(`shard${namespace}-scope\${{ steps.phase-cache-scopes.outputs.scope${namespace} }}`)) errors.push(`owner ${namespace} scope`);
   }
   if (text.includes("corpus-phase-run-v5-") || text.includes("corpus-phase-main-v5-")) errors.push("legacy v5 fallback");
-  if ((text.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length < 12) errors.push("schedule four-owner activation");
+  if (JSON.stringify((parse(text) as WorkflowDocument).jobs.shard?.strategy?.matrix.shard) !== "[1,2,3,4]") errors.push("all-event four-owner activation");
   if (!/name: Upload drift scorecard\n\s+if: always\(\)/.test(text)) errors.push("scorecard failure delivery");
   const scorecardUpload = artifactUploads(text).find((step) => String(step.with.name).includes("corpus-drift-scorecard"));
   if (scorecardUpload?.with["if-no-files-found"] !== "error") errors.push("scorecard missing evidence");
   if (!scorecardUpload?.if?.includes("!inputs.liveness_drill") || !scorecardUpload.if.includes("!inputs.alert_drill")) errors.push("scorecard drill isolation");
   if (!/name: Upload live advisory observation\n\s+if: always\(\).*github\.event_name == 'schedule'.*github\.event_name == 'workflow_dispatch'/.test(text)) errors.push("live advisory failure delivery");
-  const advisoryUpload = artifactUploads(text).find((step) => step.with.name === "corpus-advisory-observation");
+  const advisoryUpload = artifactUploads(text).find((step) => step.with.name === "corpus-advisory-observation-part-${{ matrix.shard }}");
   if (advisoryUpload?.uses !== "actions/upload-artifact@v4") errors.push("live advisory action version");
-  if (advisoryUpload?.with.path !== "corpus-advisory-observation.json") errors.push("live advisory exact path");
+  if (advisoryUpload?.with.path !== "corpus-advisory-observation-shard${{ matrix.shard }}.json") errors.push("live advisory exact path");
   if (advisoryUpload?.with["if-no-files-found"] !== "error") errors.push("live advisory missing evidence");
   if (!advisoryUpload?.if?.includes("!inputs.liveness_drill") || !advisoryUpload.if.includes("!inputs.alert_drill")) errors.push("live advisory drill isolation");
   if (!/name: Gate liveness — did this job actually score anything\?\n\s+if: always\(\)/.test(text)) errors.push("liveness failure delivery");
@@ -208,35 +208,37 @@ function shell(step: WorkflowStep, ctx: Context, options: { dir?: string; env?: 
 
 function assertTopology(doc: WorkflowDocument, event: string, relevant = true, executeTransport = false): void {
   const ctx = context(event, relevant);
-  const sharded = ["push", "pull_request", "merge_group"].includes(event);
+  const snapshot = ["push", "pull_request", "merge_group"].includes(event);
   const shardJob = doc.jobs.shard!;
   const matrix = expression(shardJob.strategy!.matrix.shard, ctx);
-  expect(matrix).toEqual(sharded ? [1, 2, 3, 4] : [1]);
+  expect(matrix).toEqual([1, 2, 3, 4]);
   expect(active(shardJob, ctx)).toBe(relevant);
   const score = named(doc, "shard", "Score the corpus against its baselines");
-  expect(expression(score.env!.SHARD_COUNT!, ctx)).toBe(sharded ? 4 : 1);
-  expect(expression(score.env!.HARVEY_CURRENT_MECHANICAL_READINESS!, ctx)).toBe(sharded ? "1" : "0");
+  expect(expression(score.env!.SHARD_COUNT!, ctx)).toBe(4);
+  expect(expression(score.env!.HARVEY_CURRENT_MECHANICAL_READINESS!, ctx)).toBe(snapshot ? "1" : "0");
+  expect(expression(score.env!.HARVEY_CORPUS_EXTERNAL_STATE_MODE!, ctx)).toBe(snapshot ? "snapshot" : "live-verify");
   const upload = named(doc, "shard", "Upload drift scorecard");
   const advisoryUpload = named(doc, "shard", "Upload live advisory observation");
   const artifactNames: string[] = [];
   for (const shard of active(shardJob, ctx) ? matrix as number[] : []) {
     ctx.matrix.shard = shard;
-    const owners = sharded ? [shard] : [1, 2, 3, 4];
-    const selectedTargets = sharded ? partitionTargets(liveSlugs, 4)[shard - 1]! : liveSlugs;
+    const owners = [shard];
+    const selectedTargets = partitionTargets(liveSlugs, 4)[shard - 1]!;
     expect(expression(shardJob["timeout-minutes"]!, ctx), `${event}/${shard}: event-scoped corpus budget`)
-      .toBe(sharded ? (selectedTargets.includes("carbon") ? 45 : shard === 2 ? 35 : 30) : 120);
+      .toBe(snapshot ? (selectedTargets.includes("carbon") ? 45 : shard === 2 ? 35 : 30) : 120);
     expect(active(score, ctx)).toBe(true);
     expect(expression(score.env!.SHARD!, ctx)).toBe(shard);
     expect(active(upload, ctx)).toBe(true);
     expect(active(advisoryUpload, ctx)).toBe(event === "schedule" || event === "workflow_dispatch");
     expect(advisoryUpload.uses).toBe("actions/upload-artifact@v4");
     expect(advisoryUpload.with).toMatchObject({
-      name: "corpus-advisory-observation",
-      path: "corpus-advisory-observation.json",
+      name: "corpus-advisory-observation-part-${{ matrix.shard }}",
+      path: "corpus-advisory-observation-shard${{ matrix.shard }}.json",
       "if-no-files-found": "error",
     });
     artifactNames.push(render(String(upload.with!.name), ctx));
-    expect(artifactNames.at(-1)).toBe(sharded ? `corpus-drift-scorecard-part-${shard}` : "corpus-drift-scorecard");
+    expect(artifactNames.at(-1)).toBe(`corpus-drift-scorecard-part-${shard}`);
+    expect(render(String(advisoryUpload.with!.name), ctx)).toBe(`corpus-advisory-observation-part-${shard}`);
     for (const n of [1, 2, 3, 4]) {
       const own = owners.includes(n);
       for (const [name, expected] of [
@@ -279,27 +281,29 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
       expect(targetScope.output).toBe("scope=all\n");
       const scored = shell(score, ctx, { dir, env: { CALLS: calls }, prelude: 'pnpm() { printf "%s\\n" "$*" >> "$CALLS"; }' });
       expect(scored.status, scored.stderr).toBe(0);
-      expect(readFileSync(calls, "utf8").trim()).toBe(`corpus-drift --install --shard ${shard}/${sharded ? 4 : 1} --json corpus-drift${sharded ? `-shard${shard}` : ""}.json`);
+      expect(readFileSync(calls, "utf8").trim()).toBe(`corpus-drift --install --shard ${shard}/4 --json corpus-drift-shard${shard}.json${snapshot ? "" : ` --advisory-observation corpus-advisory-observation-shard${shard}.json`}`);
     }
   }
   expect(new Set(artifactNames).size).toBe(artifactNames.length);
-  expect(active(doc.jobs["current-replay"]!, ctx)).toBe(relevant && sharded);
+  expect(active(doc.jobs["current-replay"]!, ctx)).toBe(relevant && snapshot);
   expect(doc.jobs["current-replay"]!.strategy!.matrix.shard).toEqual([1, 2, 3, 4]);
   expect(named(doc, "current-replay", "Execute the independent exact-head replay").env!.SHARD_COUNT).toBe(4);
   for (const name of ["Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"]) {
-    expect(active(named(doc, "drift", name), ctx), name).toBe(relevant && sharded);
+    expect(active(named(doc, "drift", name), ctx), name).toBe(relevant);
   }
   expect(named(doc, "drift", "Collect the shard scorecards").with).toMatchObject({ pattern: "corpus-drift-scorecard-part-*", "merge-multiple": true, path: "parts" });
-  expect(active(named(doc, "drift", "Collect the independent replay parts"), ctx)).toBe(relevant && sharded);
+  expect(active(named(doc, "drift", "Collect the independent replay parts"), ctx)).toBe(relevant && snapshot);
   const mergeIndex = doc.jobs.drift!.steps.findIndex((step) => step.id === "merge");
   const setup = doc.jobs.drift!.steps.slice(mergeIndex + 1, mergeIndex + 5);
   expect(setup.map((step) => step.uses ?? step.run)).toEqual(["actions/checkout@v4", "pnpm/action-setup@v4", "actions/setup-node@v4", "pnpm install --frozen-lockfile"]);
   const readiness = named(doc, "drift", "Current registry producer ↔ independent replay equivalence/readiness");
-  for (const step of [...setup, readiness]) {
-    expect(active(step, ctx)).toBe(relevant && sharded);
-    const unmerged = structuredClone(ctx);
-    unmerged.steps.merge!.outputs!.merged = "false";
-    expect(active(step, unmerged)).toBe(false);
+  for (const step of setup) expect(active(step, ctx)).toBe(relevant);
+  expect(active(readiness, ctx)).toBe(relevant && snapshot);
+  const unmerged = structuredClone(ctx);
+  unmerged.steps.merge!.outputs!.merged = "false";
+  expect(active(readiness, unmerged)).toBe(false);
+  for (const name of ["Collect live advisory observation parts", "Merge and validate the complete live advisory population", "Upload the canonical live advisory observation"]) {
+    expect(active(named(doc, "drift", name), ctx)).toBe(relevant && !snapshot);
   }
   const mergedUpload = named(doc, "drift", "Upload the merged drift scorecard");
   expect(mergedUpload.with).toMatchObject({ name: "corpus-drift-scorecard", "if-no-files-found": "error" });
@@ -321,6 +325,7 @@ interface Scorecard {
   findings: Record<string, unknown[]>;
   detectors: Record<string, unknown>;
   mechanicalContexts: Record<string, unknown>;
+  dependencyPreparations: Record<string, unknown>;
 }
 
 function scorecardParts(): Record<string, Scorecard> {
@@ -330,6 +335,7 @@ function scorecardParts(): Record<string, Scorecard> {
       { slug, check: "M8 baseline", pass: false, detail: `counted drift: ${slug}` },
     ]),
     findings: Object.fromEntries(slugs.map((slug, n) => [slug, n % 2 ? [] : [{ id: `${slug}-finding`, sourceModule: "M8", location: { file: "src/example.ts", startLine: 7 }, evidence: { snippet: "uncovered branch" } }]])),
+    dependencyPreparations: Object.fromEntries(slugs.map((slug) => [slug, [{ mode: "prepared", identity: `${slug}-dependency-inputs` }]])),
     detectors: Object.fromEntries(slugs.map((slug) => [slug, [{ detector: "fixture-producer", status: "ran", unitsExamined: 9, scope: `${slug} source` }]])),
     mechanicalContexts: Object.fromEntries(slugs.map((slug) => [slug, { target: slug, contentDigest: `${slug}-digest`, execution: { preparedRoot: `/prepared/${slug}`, unchanged: true } }])),
   }]));
@@ -360,6 +366,7 @@ function assertCompleteMerge(parts: Record<string, Scorecard>, run?: string): vo
     findings: Object.assign({}, ...Object.values(parts).map((part) => part.findings)),
     detectors: Object.assign({}, ...Object.values(parts).map((part) => part.detectors)),
     mechanicalContexts: Object.assign({}, ...Object.values(parts).map((part) => part.mechanicalContexts)),
+    dependencyPreparations: Object.assign({}, ...Object.values(parts).map((part) => part.dependencyPreparations)),
   });
   expect(Object.keys(merged.findings).sort()).toEqual(liveSlugs);
 }
@@ -430,6 +437,9 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       expect(active(named(document, "shard", "Upload live advisory observation"), ctx))
         .toBe(event === "schedule" || event === "workflow_dispatch");
       expect(active(named(document, "shard", "Gate liveness — did this job actually score anything?"), ctx)).toBe(true);
+      for (const name of ["Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json", "Upload the merged drift scorecard"]) {
+        expect(active(named(document, "drift", name), ctx), `${event}: preserve evidence after ${result}`).toBe(true);
+      }
     }
   });
 
@@ -515,7 +525,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const slug = Object.keys(part.findings)[0]!;
     const replacement = mode === "duplicate" ? Object.keys(parts["corpus-drift-shard1.json"]!.findings)[0]! : "not-a-live-target";
     part.rows = part.rows.flatMap((row) => row.slug !== slug ? [row] : mode === "missing" ? [] : [{ ...row, slug: replacement }]);
-    for (const map of [part.findings, part.detectors, part.mechanicalContexts]) {
+    for (const map of [part.findings, part.detectors, part.mechanicalContexts, part.dependencyPreparations]) {
       if (mode !== "missing") map[replacement] = map[slug]!;
       delete map[slug];
     }
@@ -527,13 +537,14 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     ["findings", {}], ["findings", []], ["findings", null],
     ["detectors", {}], ["detectors", []], ["detectors", null],
     ["mechanicalContexts", {}], ["mechanicalContexts", []], ["mechanicalContexts", null],
+    ["dependencyPreparations", {}], ["dependencyPreparations", []], ["dependencyPreparations", null],
   ])("rejects malformed or empty %s=%j", (field, value) => {
     const parts = scorecardParts();
     const file = "corpus-drift-shard1.json";
     assertRejectedMerge(runMerge({ ...parts, [file]: { ...parts[file], [String(field)]: value } }));
   });
 
-  it.each(["rows", "findings", "detectors", "mechanicalContexts"] as const)("rejects loss of one target from %s", (field) => {
+  it.each(["rows", "findings", "detectors", "mechanicalContexts", "dependencyPreparations"] as const)("rejects loss of one target from %s", (field) => {
     const parts = scorecardParts();
     const part = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(part.findings)[0]!;
@@ -556,14 +567,13 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
 
   // Mutate only disposable parsed YAML / extracted shell. These are the same assertions used
   // above: each independent reversion must make the positive production contract go red.
-  it.each(["pull_request", "merge_group"])("detects independent matrix and count regressions for %s", (event) => {
+  it.each(events)("detects independent matrix and count regressions for %s", (event) => {
     for (const field of ["matrix", "count"]) {
       const changed = structuredClone(document);
-      const removeEvent = (value: string) => value.replace(` || github.event_name == '${event}'`, "");
-      if (field === "matrix") changed.jobs.shard!.strategy!.matrix.shard = removeEvent(String(changed.jobs.shard!.strategy!.matrix.shard));
+      if (field === "matrix") changed.jobs.shard!.strategy!.matrix.shard = [1];
       else {
         const score = named(changed, "shard", "Score the corpus against its baselines");
-        score.env!.SHARD_COUNT = removeEvent(String(score.env!.SHARD_COUNT));
+        score.env!.SHARD_COUNT = 1;
       }
       expect(() => assertTopology(changed, event)).toThrow();
     }
@@ -575,11 +585,11 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     "Save current-run corpus phase results for an exact retry — owner 4",
     "Validate corpus phase-cache transport provenance",
     "Record corpus phase-cache transport provenance",
-  ])("detects lost schedule/manual owner activation in %s", (name) => {
+  ])("detects schedule/manual transport spilling into other owners at %s", (name) => {
     const changed = structuredClone(document);
     const step = named(changed, "shard", name);
-    if (step.run) step.run = step.run.split("\n").filter((line) => !line.includes("= schedule")).join("\n");
-    else step.if = step.if!.replaceAll(" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "");
+    if (step.run) step.run = step.run.replace("active=false", "active=true");
+    else step.if = step.if!.replace("matrix.shard == 4", "true");
     expect(step).not.toEqual(named(document, "shard", name));
     for (const event of ["schedule", "workflow_dispatch"]) expect(() => assertTopology(changed, event, true, true)).toThrow();
   });
@@ -591,12 +601,12 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     expect(() => assertTopology(changed, "push")).toThrow();
   });
 
-  it.each(["Upload drift scorecard", "Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"])("detects independent PR/queue part routing loss at %s", (name) => {
+  it.each(["Upload drift scorecard", "Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"])("detects independent event part routing loss at %s", (name) => {
     const changed = structuredClone(document);
     const step = named(changed, name === "Upload drift scorecard" ? "shard" : "drift", name);
-    if (name === "Upload drift scorecard") step.with!.name = String(step.with!.name).replace(" || github.event_name == 'pull_request' || github.event_name == 'merge_group'", "");
-    else step.if = step.if!.replace(" || github.event_name == 'pull_request' || github.event_name == 'merge_group'", "");
-    for (const event of ["pull_request", "merge_group"]) expect(() => assertTopology(changed, event)).toThrow();
+    if (name === "Upload drift scorecard") step.with!.name = "corpus-drift-scorecard";
+    else step.if += " && github.event_name == 'push'";
+    for (const event of ["pull_request", "merge_group", "schedule", "workflow_dispatch"]) expect(() => assertTopology(changed, event)).toThrow();
   });
 
   it("detects producer/replay proof disappearing from a relevant PR or queue head", () => {
@@ -623,7 +633,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const part = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(part.findings)[0]!;
     part.rows = part.rows.filter((row) => row.slug !== slug);
-    for (const map of [part.findings, part.detectors, part.mechanicalContexts]) delete map[slug];
+    for (const map of [part.findings, part.detectors, part.mechanicalContexts, part.dependencyPreparations]) delete map[slug];
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace(/^jq -e -s[\s\S]*?\n\}\n/m, "");
     expect(changed).not.toBe(run);
@@ -639,7 +649,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const into = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(from.findings)[0]!;
     into.rows.push(...from.rows);
-    for (const field of ["findings", "detectors", "mechanicalContexts"] as const) into[field][slug] = from[field][slug]!;
+    for (const field of ["findings", "detectors", "mechanicalContexts", "dependencyPreparations"] as const) into[field][slug] = from[field][slug]!;
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace("([.[].findings | keys[]] | sort)", "([.[].findings | keys[]] | unique)");
     expect(changed).not.toBe(run);
@@ -649,11 +659,21 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     expect(() => assertRejectedMerge(deduplicated)).toThrow();
   });
 
-  it.each(["detectors", "mechanicalContexts"])("goes red if the merger loses %s values", (field) => {
+  it.each(["findings", "detectors", "mechanicalContexts", "dependencyPreparations"])("goes red if the merger loses %s values", (field) => {
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace(`(map(.${field}) | add)`, "{}");
     expect(changed).not.toBe(run);
     expect(() => assertCompleteMerge(scorecardParts(), changed)).toThrow();
+  });
+
+  it("keeps evidence assembly ahead of final liveness and the only scheduled alert", () => {
+    const steps = document.jobs.drift!.steps;
+    const index = (name: string) => steps.findIndex((step) => step.name === name);
+    const deliver = index("Upload the merged drift scorecard");
+    expect(deliver).toBeGreaterThan(index("Merge and validate the complete live advisory population"));
+    expect(index("Every required corpus execution must have succeeded")).toBeGreaterThan(deliver);
+    expect(index("Record the measured full-population outcome")).toBeGreaterThan(deliver);
+    expect(index("Open or update the drift tracking issue")).toBeGreaterThan(index("Gate liveness — did this required context declare its outcome?"));
   });
 });
 
@@ -666,7 +686,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     ["v5 key fallback", workflow.replace("corpus-phase-run-v6-", "corpus-phase-run-v5-")],
     ["missing owner restore", workflow.replace("Restore content-addressed corpus phase results — owner 4", "Restore content-addressed corpus phase results — missing")],
     ["shared parent path", workflow.replace("path: .harvey-corpus-phase-cache/shard3", "path: .harvey-corpus-phase-cache")],
-    ["scheduled single transport", workflow.replaceAll(" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "")],
+    ["scheduled single transport", workflow.replace("shard: [1, 2, 3, 4]", "shard: [1]")],
     ["scorecard success-only", workflow.replace("name: Upload drift scorecard\n        if: always()", "name: Upload drift scorecard\n        if: success()")],
     ["scorecard missing file is tolerated", workflow.replace("path: corpus-drift*.json\n          if-no-files-found: error", "path: corpus-drift*.json\n          if-no-files-found: warn")],
     ["scorecard includes alert drills", workflow.replace(
@@ -678,8 +698,8 @@ describe("#1864 corpus phase-cache workflow contract", () => {
       "if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.alert_drill",
     )],
     ["advisory observation success-only", workflow.replace("name: Upload live advisory observation\n        if: always()", "name: Upload live advisory observation\n        if: success()")],
-    ["advisory observation missing file is tolerated", workflow.replace("name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: error", "name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: warn")],
-    ["advisory observation includes alert drills", workflow.replace(" && !inputs.alert_drill", "")],
+    ["advisory observation missing file is tolerated", workflow.replace("name: corpus-advisory-observation-part-${{ matrix.shard }}\n          path: corpus-advisory-observation-shard${{ matrix.shard }}.json\n          if-no-files-found: error", "name: corpus-advisory-observation-part-${{ matrix.shard }}\n          path: corpus-advisory-observation-shard${{ matrix.shard }}.json\n          if-no-files-found: warn")],
+    ["advisory observation includes alert drills", workflow.replaceAll(" && !inputs.alert_drill", "")],
   ] as const)("turns red under the disposable %s workflow reversion", (_name, reverted) => {
     expect(transportWorkflowErrors(reverted)).not.toEqual([]);
   });
@@ -745,16 +765,14 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) && matrix\.shard == [1-4]/g)).toHaveLength(4);
   });
 
-  it("keeps schedule/manual to one scorer while activating all four canonical transports", () => {
-    expect(workflow).toContain("scheduled/manual leg touches all four");
-    expect((workflow.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length).toBeGreaterThanOrEqual(12);
-    expect(workflow).toContain("&& 4 || 1");
+  it("keeps every event in four isolated owners and seeds the whole-pin cache before partitioning", () => {
+    for (const event of events) assertTopology(document, event);
     expect(workflow).toContain('pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT"');
-    expect(workflow).toContain("|| 'corpus-drift-scorecard'");
-    expect(workflow).toContain("mode: save");
+    expect(named(document, "prepare-current-inputs", "Seed every pinned clone before partitioning").run).toContain('--seed-cache "$CORPUS_CLONE_SEED_DIR"');
+    expect(named(document, "prepare-current-inputs", "Save the complete pinned clone cache").with).toEqual({ mode: "save" });
+    expect(document.jobs.shard!.steps.some((step) => step.uses === "./.github/actions/corpus-clone-cache" && step.with?.mode === "save")).toBe(false);
     expect(corpusCli).toContain("corpusCacheNamespaceForTarget");
     expect(corpusCli).toContain("targetPhaseCacheDir");
-    expect(corpusCli).toContain("cacheDir: targetPhaseCacheDir");
   });
 
   it("keeps scorecard and liveness delivery fail-closed after transport failure", () => {
@@ -898,8 +916,9 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(capture, "utf8").trim().split("\n")).toEqual([
-      "live-verify", "0", "reuse", "corpus-drift", "--install", "--shard", "1/1", "--json", "corpus-drift.json",
+      "live-verify", "0", "reuse", "corpus-drift", "--install", "--shard", "1/4", "--json", "corpus-drift-shard1.json",
       ...(forceCold ? ["--force-cold-cache"] : []),
+      "--advisory-observation", "corpus-advisory-observation-shard1.json",
     ]);
     if (forceCold) {
       expect(result.stdout).toContain("mechanical/family seeds before scanning");

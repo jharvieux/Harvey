@@ -4,7 +4,7 @@
 // construction, and (b) verify a restored cache reproduces every pinned clone exactly — never a
 // second, hand-maintained pin list in the workflow YAML that could drift from the manifest.
 //
-//   pnpm corpus-pins --out <path>
+//   pnpm corpus-pins --out <path> [--seed-cache <directory>]
 //
 // Written to a FILE rather than printed to stdout on purpose: `pnpm exec`/`pnpm run` can emit its
 // own banner lines to stdout ahead of a script's own output (MEASURED in this repo's own sandbox —
@@ -15,6 +15,7 @@
 import "./sync-stdio.js";
 import { writeFileSync } from "node:fs";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
+import { ensureCorpusCloneCache } from "../scan/corpus-clone.js";
 
 const outFlag = process.argv.indexOf("--out");
 const out = outFlag >= 0 ? process.argv[outFlag + 1] : undefined;
@@ -25,3 +26,14 @@ if (!out) {
 
 const lines = [...EXTERNAL_CORPUS].sort((a, b) => a.slug.localeCompare(b.slug)).map((t) => `${t.slug} ${t.repo}@${t.commit}`);
 writeFileSync(out, `${lines.join("\n")}\n`);
+
+const seedFlag = process.argv.indexOf("--seed-cache");
+if (seedFlag >= 0) {
+  const cacheDir = process.argv[seedFlag + 1];
+  if (!cacheDir || cacheDir.startsWith("--")) {
+    console.error("--seed-cache needs a directory");
+    process.exit(2);
+  }
+  for (const target of EXTERNAL_CORPUS) ensureCorpusCloneCache(target.repo, target.commit, cacheDir);
+  console.error(`Seeded the complete pinned clone population: ${EXTERNAL_CORPUS.length} target(s).`);
+}
