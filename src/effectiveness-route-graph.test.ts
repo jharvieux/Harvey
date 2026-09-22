@@ -1,12 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
+import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
 
 function fixture(rootBody: string): string {
   const root = mkdtempSync(join(tmpdir(), "effectiveness-route-v3-"));
@@ -32,6 +35,120 @@ describe("schema-v3 route graph", () => {
     expect(live.routes).toHaveLength(1);
     writeFileSync(join(root, "src", "root.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     expect(discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]).routes).toEqual([]);
+  });
+
+  it("batches separate root and venue reachability without retaining stale source", () => {
+    const root = fixture('import { produce } from "./producer.js"; export const findings = produce();\n');
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), 'import { produce } from "../producer.js"; export const findings = produce();\n');
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; void produce;\n');
+    const venueRoots = ["src/venue-a.ts", "src/venue-b.ts"];
+    const first = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    expect(first.production).toEqual(discoverEffectivenessRouteGraph(root, [implementation]));
+    for (const [index, venueRoot] of venueRoots.entries()) {
+      expect(first.venues[index]).toEqual(discoverEffectivenessRouteGraph(root, [implementation], [venueRoot], { detectUnknown: false }));
+    }
+    expect(first.venues[0]!.routes).toHaveLength(1);
+    expect(first.venues[1]!.routes).toEqual([]);
+    expect(first.venues[0]!.routes[0]!.rootId).toBe("src/venue-a.ts");
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; void produce;\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
+    const changed = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    expect(changed.venues[0]!.routes).toEqual([]);
+    expect(changed.venues[1]!.routes).toHaveLength(1);
+    expect(changed.venues[1]!.routes[0]!.rootId).toBe("src/venue-b.ts");
+  });
+
+  it("does not borrow a typed command executor from another venue", () => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    writeFileSync(join(root, "src", "invoke.ts"), 'export interface Runner { run: (bin: string, args: string[]) => unknown; }\nexport function invoke(runner: Runner) { runner.run("node", ["src/child.ts"]); }\n');
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { execFileSync } from "node:child_process";\nimport { invoke, type Runner } from "./invoke.js";\nconst runner: Runner = { run: execFileSync };\ninvoke(runner);\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { invoke, type Runner } from "./invoke.js";\nconst runner: Runner = { run: () => [] };\ninvoke(runner);\n');
+    const venueRoots = ["src/venue-a.ts", "src/venue-b.ts"];
+    const batch = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    for (const [index, venueRoot] of venueRoots.entries()) {
+      expect(batch.venues[index]).toEqual(discoverEffectivenessRouteGraph(root, [implementation], [venueRoot], { detectUnknown: false }));
+    }
+    expect(batch.venues.map((graph) => graph.routes.length)).toEqual([1, 0]);
+    expect(batch.venues[0]!.calls.map((call) => call.id)).toContain("command:src/invoke.ts->src/child.ts");
+    expect(batch.venues[1]!.calls.map((call) => call.id)).not.toContain("command:src/invoke.ts->src/child.ts");
+  });
+
+  it("keeps compiler-resolved package imports in a venue's executor scope", () => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", imports: { "#runner": "./src/runner.ts" } }));
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    writeFileSync(join(root, "src", "runner.ts"), 'import { execFileSync } from "node:child_process"; export function run(bin: string, args: string[]) { return execFileSync(bin, args); }\n');
+    writeFileSync(join(root, "src", "venue.ts"), 'import { run } from "#runner"; run("node", ["src/child.ts"]);\n');
+    const single = discoverEffectivenessRouteGraph(root, [implementation], ["src/venue.ts"], { detectUnknown: false });
+    const batch = discoverEffectivenessRouteGraphs(root, [implementation], ["src/venue.ts"]).venues[0]!;
+    expect(batch).toEqual(single);
+    expect(batch.routes).toHaveLength(1);
+    expect(batch.calls.map((call) => call.id)).toContain("command:src/venue.ts->src/child.ts");
+  });
+
+  it.each([
+    { name: "named package re-export", packageType: "module", index: 'export { run } from "#runner";\n', venue: 'import { run } from "./index.js"; run("node", ["src/child.ts"]);\n' },
+    { name: "star package re-export", packageType: "module", index: 'export * from "#runner";\n', venue: 'import { run } from "./index.js"; run("node", ["src/child.ts"]);\n' },
+    { name: "dynamic import", packageType: "module", index: "", venue: 'const runner = await import("./runner.js"); runner.run("node", ["src/child.ts"]); export {};\n' },
+    { name: "import-equals", packageType: "commonjs", index: "", venue: 'import runner = require("./runner"); runner.run("node", ["src/child.ts"]);\n' },
+  ])("preserves $name command evidence", ({ packageType, index, venue }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ type: packageType, imports: { "#runner": "./src/runner.ts" } }));
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    writeFileSync(join(root, "src", "runner.ts"), 'import { execFileSync } from "node:child_process"; export function run(bin: string, args: string[]) { return execFileSync(bin, args); }\n');
+    if (index) writeFileSync(join(root, "src", "index.ts"), index);
+    writeFileSync(join(root, "src", "venue.ts"), venue);
+    const single = discoverEffectivenessRouteGraph(root, [implementation], ["src/venue.ts"], { detectUnknown: false });
+    const batch = discoverEffectivenessRouteGraphs(root, [implementation], ["src/venue.ts"]).venues[0]!;
+    expect(batch).toEqual(single);
+    expect(batch.routes).toHaveLength(1);
+    expect(batch.calls.map((call) => call.id)).toContain("command:src/venue.ts->src/child.ts");
+  });
+
+  it("does not borrow a venue-only type augmentation for production inference", () => {
+    const root = fixture("export {};\n");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), 'import { getOutput } from "../base.js"; getOutput();\n');
+    writeFileSync(join(root, "src", "base.ts"), 'export interface Data { id: string; severity: string; location: string; } export function getOutput(): Data { return { id: "x", severity: "info", location: "x" }; }\n');
+    writeFileSync(join(root, "src", "augmentation.ts"), 'import "./base.js"; declare module "./base.js" { interface Data { taxonomy?: string; } }\n');
+    writeFileSync(join(root, "src", "venue.ts"), 'import "./augmentation.js"; export {};\n');
+    const single = discoverEffectivenessRouteGraph(root, [implementation]);
+    const batch = discoverEffectivenessRouteGraphs(root, [implementation], ["src/venue.ts"]);
+    expect(batch.production).toEqual(single);
+    expect(batch.production.unresolvedFindingDispatches).toEqual([]);
+  });
+
+  it("rebuilds command routes after package scripts change between invocations", () => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    const manifest = (target: string): string => JSON.stringify({ type: "module", packageManager: "pnpm@11.1.3", scripts: { launch: `node ${target}` } });
+    writeFileSync(join(root, "package.json"), manifest("src/child-a.ts"));
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+    for (const suffix of ["a", "b"]) {
+      writeFileSync(join(root, "src", `producer-${suffix}.ts`), `export function produce() { return ["${suffix}"]; }\n`);
+      writeFileSync(join(root, "src", `child-${suffix}.ts`), `import { produce } from "./producer-${suffix}.js"; produce();\n`);
+    }
+    writeFileSync(join(root, "src", "venue.ts"), 'import { execFileSync } from "node:child_process"; execFileSync("pnpm", ["launch"]);\n');
+    const implementations = ["a", "b"].map((suffix) => ({ ...implementation, producerId: suffix, file: `src/producer-${suffix}.ts` }));
+    const first = discoverEffectivenessRouteGraphs(root, implementations, ["src/venue.ts"]).venues[0]!;
+    writeFileSync(join(root, "package.json"), manifest("src/child-b.ts"));
+    const changed = discoverEffectivenessRouteGraphs(root, implementations, ["src/venue.ts"]).venues[0]!;
+    expect(first.routes.map((route) => route.producerId)).toEqual(["a"]);
+    expect(changed.routes.map((route) => route.producerId)).toEqual(["b"]);
+    expect(changed).toEqual(discoverEffectivenessRouteGraph(root, implementations, ["src/venue.ts"], { detectUnknown: false }));
   });
 
   it("accepts every frozen ordered runtime edge kind without collapsing them", () => {
