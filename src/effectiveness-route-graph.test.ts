@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
+import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
@@ -32,6 +32,29 @@ describe("schema-v3 route graph", () => {
     expect(live.routes).toHaveLength(1);
     writeFileSync(join(root, "src", "root.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     expect(discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]).routes).toEqual([]);
+  });
+
+  it("batches separate root and venue reachability without retaining stale source", () => {
+    const root = fixture('import { produce } from "./producer.js"; export const findings = produce();\n');
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), 'import { produce } from "../producer.js"; export const findings = produce();\n');
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; void produce;\n');
+    const venueRoots = ["src/venue-a.ts", "src/venue-b.ts"];
+    const first = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    expect(first.production).toEqual(discoverEffectivenessRouteGraph(root, [implementation]));
+    for (const [index, venueRoot] of venueRoots.entries()) {
+      expect(first.venues[index]).toEqual(discoverEffectivenessRouteGraph(root, [implementation], [venueRoot], { detectUnknown: false }));
+    }
+    expect(first.venues[0]!.routes).toHaveLength(1);
+    expect(first.venues[1]!.routes).toEqual([]);
+    expect(first.venues[0]!.routes[0]!.rootId).toBe("src/venue-a.ts");
+    writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; void produce;\n');
+    writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
+    const changed = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    expect(changed.venues[0]!.routes).toEqual([]);
+    expect(changed.venues[1]!.routes).toHaveLength(1);
+    expect(changed.venues[1]!.routes[0]!.rootId).toBe("src/venue-b.ts");
   });
 
   it("accepts every frozen ordered runtime edge kind without collapsing them", () => {
