@@ -54,7 +54,7 @@
     {
       "id": "quick-scan",
       "testFile": "src/cli/quick-scan.test.ts",
-      "weightSeconds": 28.4,
+      "weightSeconds": 1332,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",

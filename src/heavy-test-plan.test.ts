@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
+import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
 import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads } from "./heavy-test-plan.mjs";
 import { MEASURED_OUTSIDE_DISCOVERY, SCORED_GATES } from "./scored-gates.js";
 
@@ -234,6 +234,16 @@ describe("heavy PR impact planner", () => {
     const plan = buildHeavyPlan(registry, ["package.json"], { maxShards: 3 });
     expect(plan.mode).toBe("full");
     expect(plan.matrix.include.find((group) => group.workloadIds.includes("run-audit"))?.workloadIds).toEqual(["run-audit"]);
+  });
+
+  it("isolates the measured 22-minute quick-scan suite in the full plan (#2168)", () => {
+    // Runs 35757706257 and 35764439204 measured 1299s and 1331s, respectively.
+    // The old 28.4s estimate crowded other suites into its 30-minute job and
+    // prevented the full main population from reaching its liveness checks.
+    const plan = buildHeavyPlan(registry, [], { forceFull: true, maxShards: 3 });
+    expect(plan.mode).toBe("full");
+    expect(plan.matrix.include.find((group) => group.workloadIds.includes("quick-scan"))?.workloadIds).toEqual(["quick-scan"]);
+    expect(shardHeavyTests(3).find((files) => files.includes("src/cli/quick-scan.test.ts"))).toEqual(["src/cli/quick-scan.test.ts"]);
   });
 
   it("produces a stable digest for the same exact plan", () => {
