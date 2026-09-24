@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import type { Finding } from "./findings.js";
+import type { Finding, TestQuality } from "./findings.js";
 import {
   assertProducerExecutionReceipt,
   assertUniqueProducerExecutionReceipts,
@@ -37,6 +37,8 @@ export interface RecordedPass {
   // produced. Surfaced by the m3 probe so the cross-module enrichment (#515) also fires when M3 ran
   // via a pass artifact (vitals off PATH during run-audit), not only the in-process capture path.
   hotspots?: string[];
+  /** A measured M8 table travels with the pass, not only with a fresh mutation invocation. */
+  testQuality?: TestQuality;
   /** Actual executions that produced this pass. Absence is legacy evidence, never effectiveness liveness. */
   producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
@@ -154,6 +156,7 @@ export function buildPassArtifact(parts: {
   findings?: Finding[];
   hotspotFocus?: boolean;
   hotspots?: string[];
+  testQuality?: TestQuality;
   producerExecutionReceipts?: readonly ProducerExecutionReceipt[];
 }): PassArtifact {
   if (!parts.target.trim()) throw new Error("pass artifact needs a non-empty target (the audited directory)");
@@ -174,6 +177,7 @@ export function buildPassArtifact(parts: {
     ...(parts.findings?.length ? { findings: parts.findings } : {}),
     ...(parts.hotspotFocus !== undefined ? { hotspotFocus: parts.hotspotFocus } : {}),
     ...(parts.hotspots?.length ? { hotspots: parts.hotspots } : {}),
+    ...(parts.testQuality ? { testQuality: parts.testQuality } : {}),
     ...(producerExecutionReceipts?.length ? { producerExecutionReceipts } : {}),
   };
 }

@@ -28,6 +28,7 @@ import { buildPassArtifact, type PassArtifact, writePassArtifact } from "../audi
 import type { Finding } from "../findings.js";
 import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
 import { findingsFromRecordPassInput } from "../triage-findings.js";
+import { testQualityFromArtifact } from "../mutation-scan.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -42,6 +43,7 @@ const out = flag("--out");
 const summary = flag("--summary");
 const findingsPath = flag("--findings");
 const executionReceiptsPath = flag("--execution-receipts");
+const mutationArtifactPath = flag("--mutation-artifact");
 // #502: for an M1 semantic pass, record whether an M3 hotspot focus brief (scan-focus) was supplied
 // to /vuln-scan. Presence of the flag ⇒ true; absence ⇒ left unrecorded (surfaced as "no focus").
 const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
@@ -113,6 +115,8 @@ if (args.includes("--require-effectiveness-receipts") && !producerExecutionRecei
 }
 
 try {
+  const testQuality = mutationArtifactPath ? testQualityFromArtifact(JSON.parse(readFileSync(mutationArtifactPath, "utf8"))) : undefined;
+  if (mutationArtifactPath && !testQuality) throw new Error("--mutation-artifact contains no measured M8 test-quality table");
   const artifact = buildPassArtifact({
     module: module as AuditModule,
     target: resolve(target),
@@ -123,6 +127,7 @@ try {
     hotspotFocus,
     hotspots,
     producerExecutionReceipts,
+    testQuality,
   });
   const path = writePassArtifact(resolve(out), artifact);
   console.error(`Recorded ${module} ${pass} pass for ${resolve(target)}${findings ? ` (${findings.length} finding(s))` : ""} → ${path}`);

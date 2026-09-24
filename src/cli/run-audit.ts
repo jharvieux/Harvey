@@ -85,7 +85,8 @@
 // Exit 1 on any coverage gap, never-run module, or crashed runner.
 
 import "./sync-stdio.js";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
@@ -97,6 +98,8 @@ import { applyBaseline } from "../audit-diff.js";
 import { briefFreshnessBanner } from "../brief-freshness.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, formatIdCollisions, runAudit, type RunContext } from "../audit-runner.js";
+import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
+import { deliverAuditReplay } from "../audit-replay-delivery.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { probeExec } from "../probe-exec.js";
@@ -137,6 +140,10 @@ const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const sarifOut = flagValue("--sarif-out");
 const sbomOut = flagValue("--sbom-out");
+const htmlOut = flagValue("--html-out");
+const pdfOut = flagValue("--pdf-out");
+const assembleDir = flagValue("--assemble");
+const retainDir = flagValue("--retain-artifacts");
 const readinessPlanOut = flagValue("--readiness-plan-out");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
@@ -186,6 +193,18 @@ if (baselinePath && !findingsOut) {
 
 const targetDir = resolve(targetArg);
 
+// The assembly branch is before discovery, probing and execution. Tier flags authorize fresh
+// execution; importing existing evidence never needs them and refuses them to avoid ambiguity.
+if (assembleDir) {
+  const incompatible = ["--connected", "--dynamic", "--llm", "--allow-target-install", "--record", "--artifacts-dir", "--retain-artifacts", "--baseline", "--schema", "--supabase", "--readiness-plan-out"].filter((flag) => args.includes(flag));
+  if (incompatible.length) { console.error(`--assemble cannot be combined with execution/discovery flags: ${incompatible.join(", ")}`); process.exit(2); }
+  try {
+    await deliverAuditReplay({ target: targetDir, bundle: resolve(assembleDir), findingsOut, coverageOut: outPath, sarifOut, sbomOut, htmlOut, pdfOut, metaPath, conservationOut: flagValue("--conservation-out"), configPath: flagValue("--replay-config") });
+  } catch (error) { console.error(`ASSEMBLY FAIL — ${error instanceof Error ? error.message : String(error)}`); process.exit(1); }
+  process.exit(0);
+}
+if (htmlOut || pdfOut) { console.error("--html-out/--pdf-out require --assemble; retain fresh evidence with --retain-artifacts first"); process.exit(2); }
+
 // #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
 // tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
 // enumerates one app and the tiers behave exactly as before (no per-instance rows).
@@ -211,12 +230,19 @@ const env: EngagementEnv = {
 // Falsifier: run with --sarif-out alone and with both flags, and diff the printed result counts.
 // A coverage-only run (no findings-consuming export) keeps its prior behaviour and never asks the
 // module CLIs for their --out artifacts.
-const captureDir = findingsOut || sarifOut ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
+const captureDir = findingsOut || sarifOut || retainDir ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
+const replayBinding = retainDir ? createAuditReplayBinding(targetDir, { env, schemaHint: schemaHint ?? null, schemaHints, apps: appList, supabaseRefs: supabaseRefsArg, allowTargetInstall: args.includes("--allow-target-install"), runtime: { node: process.version, platform: process.platform, arch: process.arch }, environmentSha256: createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b)))).digest("hex") }) : undefined;
+const retainedPasses: AuditEvidenceInput[] = [];
+let commandReceipts: { command: string; args: string[]; result: ReturnType<RunContext["exec"]> }[] = [];
 
 const ctx: RunContext = {
   targetDir,
   env,
-  exec: probeExec,
+  exec: (command, argv, options) => {
+    const result = probeExec(command, argv, options);
+    if (retainDir) commandReceipts.push({ command, args: argv, result });
+    return result;
+  },
   exists: existsSync,
   captureDir,
   readFindings: (p) => {
@@ -241,6 +267,13 @@ const ctx: RunContext = {
   discoverSchemaFiles,
   supabaseDbUrls,
   isGitRepoRoot,
+  ...(retainDir ? { retainModuleResult: ((module, reports) => {
+    const raw = join(captureDir!, `${module}-owning-run.json`);
+    writeFileSync(raw, `${JSON.stringify({ module, reports, commands: commandReceipts }, null, 2)}\n`);
+    commandReceipts = [];
+    const artifacts = [raw, ...readdirSync(captureDir!).filter((name) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map((name) => join(captureDir!, name))];
+    for (const result of reports) retainedPasses.push({ scope: { module, workspace: result.instance ?? ".", tier: "orchestrated", surface: "module", wholeModule: true }, generatedAt: new Date().toISOString(), producer: { name: `audit-runner:${module}`, version: replayBinding!.engine.sha256 }, result, rawArtifacts: artifacts });
+  }) satisfies NonNullable<RunContext["retainModuleResult"]> } : {}),
 };
 
 console.log(`\nFull audit — ${targetDir}`);
@@ -398,6 +431,16 @@ if (sbomOut) {
   writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
   console.log(`\nCycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
   if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
+}
+
+if (retainDir && replayBinding) {
+  if (failures.length) { console.error("RETENTION FAIL — a runner crashed; repair that failure before retaining reusable execution evidence"); process.exit(1); }
+  const after = createAuditReplayBinding(targetDir, replayBinding.effectiveConfig);
+  if (JSON.stringify(after.target) !== JSON.stringify(replayBinding.target)) { console.error("RETENTION FAIL — target changed during execution; do not reuse these passes"); process.exit(1); }
+  const retainedSbom = sbomOut ?? join(captureDir!, "sbom.json");
+  if (!sbomOut) writeFileSync(retainedSbom, `${JSON.stringify(buildSbom(targetDir, { targetName: basename(targetDir) }).bom, null, 2)}\n`);
+  const path = writeAuditReplayBundle(resolve(retainDir), { binding: replayBinding, scopes: retainedPasses.map((pass) => pass.scope), passes: retainedPasses, sbomPath: retainedSbom, meta: metaPath ? JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta : placeholderMeta(targetDir) });
+  console.log(`Bound module evidence retained → ${path}`);
 }
 
 // Write readiness only after M1–M10 have finished. The operator may intentionally put this JSON

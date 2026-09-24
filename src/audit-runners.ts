@@ -412,6 +412,12 @@ const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
     // #1522: the slot accumulates, so fold EVERY fresh pass it holds — a superseded tier's findings
     // are evidence in the same way the newest tier's are, and used to be deleted at the write side.
     let first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    if (pass.fresh && "kind" in first && first.kind === "examined") {
+      const measured = passSlotCensus(pass.artifact, ctx.now ?? Date.now()).fresh
+        .filter((recorded) => recorded.testQuality)
+        .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt))[0];
+      if (measured?.testQuality) first = { ...first, testQuality: measured.testQuality };
+    }
     if (pass.fresh && pass.artifact.producerExecutionReceipts?.length && "kind" in first && first.kind === "examined") {
       first = { ...first, producerExecutionReceipts: ingestPassArtifactReceipts(pass.artifact, `audit-runner:${runner.module}`) };
     }
@@ -849,7 +855,8 @@ const m3: ModuleRunner = {
     };
     if (ok && ranked && /M3 hotspot table/.test(output)) {
       const artifact = readArtifact(ctx, outPath);
-      const findings = artifactFindings(artifact);
+      const pass = findFreshPass(ctx, "M3");
+      const findings = [...artifactFindings(artifact), ...(pass.fresh ? ranFromPass(pass.artifact, "recorded M3 specialist evidence", ctx.now ?? Date.now()).findings ?? [] : [])];
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
       const rankedTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over });

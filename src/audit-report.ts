@@ -63,7 +63,9 @@ export function assembleEngagementDocument(recorded: ModuleCoverage[], env: Enga
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
   const weighted = dataMap
     ? escalateFindingsByDataClass(enriched, dataMap)
-    : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
+    : enriched.some((finding) => finding.id === "M10-ESCALATION-00")
+      ? enriched
+      : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
   return { meta, coverage: coverageLedger(recorded, env), findings: weighted, ...(testQuality ? { testQuality } : {}) };
 }
 
