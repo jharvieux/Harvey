@@ -155014,7 +155014,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 257,
+        "line": 376,
         "path": "src/effectiveness-route-graph.test.ts"
       },
       "freshness": {
@@ -362852,8 +362852,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "f11028336099f5df8858be0274575203c82d63e6",
-    "commitPayload": "dHJlZSAxN2YyMTdkNTgzZTYxZDBhOGMxNzY1MWY4M2QzZDU4Yzg0OGFlOTdmCnBhcmVudCBmYWI4YTk2ZmE0MGEyNDBlYzg1NDIxYmU0YzRlN2NmMmQ0NmFkZDc3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjcxNjY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjcxNzM2IC0wNTAwCgpDbG9zZSBvYmplY3QgZXhlY3V0b3IgaWRlbnRpdHkgZ2FwcyAoIzIxNzUpCg==",
+    "commit": "405d6a2196859b5ba97f6efeed8561f70a31b309",
+    "commitPayload": "dHJlZSBmOTM3NjBhMGIxNGQyYTU1ZGFjMjcwZGYxODk3MGYzMWYyMWUwZGE1CnBhcmVudCAxNWFiZjM3ODVhNTQwNmQ3M2UzMDFhZDlhMWM4OTQ2NDBkNDAyMjZiCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjcyODY5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjcyOTIzIC0wNTAwCgpVbndyYXAgdHJhbnNwYXJlbnQgZXhlY3V0b3IgZXhwcmVzc2lvbnMgKCMyMTc1KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -362862,13 +362862,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "11ff2f22c00630c0f995301f7715d9f7d8fda290",
+        "gitOid": "79b8791986ec4e8abb79add2543a23b908414d4c",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "87878daf3ac9c14e6201fcb5891b05861cea3a89dff51f88de622e0651ecd4c9",
-    "tree": "17f217d583e61d0a8c17651f83d3d58c848ae97f"
+    "populationSha256": "c289d70c96c08838b03ea7789501dfb58ee196d375c5832dea8c9fd4ef1119bd",
+    "tree": "f93760a0b14d2a55dac270df18970f31f21e0da5"
   },
   "venues": [
     {
@@ -381127,26 +381127,26 @@
       "sha256": "85278efe01cf4425eb7b46419a97346d43373214089bdb675a97607a91b47524"
     },
     {
-      "bytes": 20468,
+      "bytes": 27406,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f05e89af407e763fcf8bea7a6cbb6a9f09be52bb",
+      "gitOid": "84e40d00a86708e58c3da3881e38ff7845d89cc7",
       "id": "src/effectiveness-route-graph.test.ts",
       "kind": "source",
-      "literalCount": 447,
-      "literalSha256": "1557a6cc37e6a26fbc29c0eaafbbbd94a7ca0c41375025df5844bd0e0be239d5",
+      "literalCount": 555,
+      "literalSha256": "90271d3c88bf5fc220899bafa1d33e4f0bab273aa8d9d75cc007e6777bc4a70e",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/effectiveness-route-graph.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "e7f054dd04c680e8c3306634c299f01fd2200baaf3b70ebc910caacfdbb4559f"
+      "sha256": "8dac2b9cfdd4fc7f1573c5498e357effc07e09b644c6760e6436533221733af4"
     },
     {
-      "bytes": 36118,
+      "bytes": 36896,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "5e075ac830ce74fbfe6eeb2cc26ea716764012d9",
+      "gitOid": "f2d753c373866d750d3fbf2dfd2b61e486f8d789",
       "id": "src/effectiveness-route-graph.ts",
       "kind": "source",
       "literalCount": 139,
@@ -381154,7 +381154,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/effectiveness-route-graph.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f13df13d972e047e2ed2b350355bb592082753bf21099bd5dbbafd0fad6b42a4"
+      "sha256": "b25e7de69e9f6b772bf9c51e507ddd48375f98444abad3947b364c410d9fb648"
     },
     {
       "bytes": 7315,
