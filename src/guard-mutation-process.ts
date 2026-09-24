@@ -37,6 +37,8 @@ export async function runGuardCommand(options: {
   killGraceMs: number;
   signal?: AbortSignal;
   onFirstByte?: () => void;
+  /** Undefined ignores stdin, null keeps it open, and a string sends those exact bytes then EOF. */
+  stdin?: string | null;
 }): Promise<GuardCommandResult> {
   const { command, cwd, bundleDir, outputPrefix, timeoutMs, killGraceMs, signal } = options;
   if (!command[0] || !Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(killGraceMs) || killGraceMs <= 0) throw new Error("guard command requires a command and finite positive time bounds");
@@ -64,7 +66,7 @@ export async function runGuardCommand(options: {
   };
   const heartbeat = setInterval(sample, HEARTBEAT_MS);
   const child = spawn(command[0], command.slice(1), {
-    cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
+    cwd, detached: true, stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     // Dependencies are already installed and linked into private cache directories. Never let
     // pnpm's opportunistic verifier rewrite the shared installed package store.
     env: { ...process.env, pnpm_config_verify_deps_before_run: "false" },
@@ -87,14 +89,19 @@ export async function runGuardCommand(options: {
     acknowledgmentTimer = setTimeout(() => {
       acknowledged = false;
       error ??= "process group did not acknowledge termination before the cleanup deadline";
-      child.stdout.destroy(); child.stderr.destroy(); child.unref();
+      child.stdout!.destroy(); child.stderr!.destroy(); child.unref();
       resolveClose({ code: null, signal: null });
     }, killGraceMs + 1_000);
   };
   const deadline = setTimeout(() => terminate("timed-out"), timeoutMs);
   const abort = () => terminate("aborted");
   signal?.addEventListener("abort", abort, { once: true });
-  for (const [index, stream] of [child.stdout, child.stderr].entries()) {
+  child.stdin?.on("error", (cause: NodeJS.ErrnoException) => {
+    // A command may reject its arguments before consuming stdin; retain its native exit result.
+    if (cause.code !== "EPIPE") { error ??= `stdin: ${cause.message}`; terminate("aborted"); }
+  });
+  if (options.stdin !== null) child.stdin?.end(options.stdin);
+  for (const [index, stream] of [child.stdout!, child.stderr!].entries()) {
     const output = outputs[index]!;
     stream.on("data", (chunk: Buffer) => {
       if (firstByte === null) {
