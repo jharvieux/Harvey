@@ -48,6 +48,7 @@
 // FALSIFIER: test -f .github/workflows/genai-census.yml || exit 127; git grep -qF 'genai-admission-census.ts --density' -- '.github/workflows/genai-census.yml' && exit 0 || exit 1
 // TOUCHES: src/cli/genai-admission-census.ts .github/workflows/genai-census.yml
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
