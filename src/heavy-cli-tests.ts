@@ -31,18 +31,11 @@ if (registry.version !== 1 || !Array.isArray(registry.workloads) || registry.wor
 
 export const HEAVY_CLI_TESTS = registry.workloads.map((workload) => workload.testFile);
 
-// Seconds, MEASURED from CI unless an inline row says otherwise. A BALANCE HINT ONLY — correctness never depends on these being
-// current. They drift as tests are added, and a stale number costs a few seconds of imbalance,
-// never a dropped file. A file absent from this table is deliberately treated as the heaviest known
-// (see shardHeavyTests): an unweighted newcomer gets placed first and alone rather than silently
-// padding an already-full shard.
-//
-// run-audit carries its HIGH observation, not its average, and that is deliberate. Two runs:
-// 58.3s (run 30272315745) and ~87s (run 30276431912, the first sharded run — shard 1 spent 102s on
-// run-audit + lighthouse). It is both the longest file and by far the most variable, and it sets
-// the wall-clock floor no matter how many shards there are. Weighting it high makes LPT give it a
-// shard to itself, so its variance stops pushing a second file's cost onto the critical path —
-// which is exactly what made that first sharded run land at 141s against a 104s prediction.
+// Scheduling samples come from the exact hosted run recorded in the registry. They are n=1
+// observations rounded up to seconds, not upper bounds. heavy-test-plan validates a receipt for
+// every workload/gate and reports the evidence stale when the planned head or local tree differs.
+// Correctness still depends on conservation, never the weights: every registered file runs once.
+// shardHeavyTests uses the maximum observed weight for a missing registry key.
 const WEIGHT_HINT_SECONDS: Record<string, number> = Object.fromEntries(
   registry.workloads.map((workload) => [workload.testFile, workload.weightSeconds]),
 );

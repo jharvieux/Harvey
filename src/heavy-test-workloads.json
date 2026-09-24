@@ -12,7 +12,7 @@
     {
       "id": "run-audit",
       "testFile": "src/cli/run-audit.test.ts",
-      "weightSeconds": 326,
+      "weightSeconds": 446,
       "paths": [
         "src/audit-",
         "src/cli/run-audit.ts",
@@ -45,7 +45,7 @@
     {
       "id": "fix-calibration-acceptance",
       "testFile": "src/fix/calibration-acceptance.test.ts",
-      "weightSeconds": 58,
+      "weightSeconds": 60,
       "paths": [
         "src/fix/",
         "src/cli/fix-"
@@ -54,7 +54,7 @@
     {
       "id": "quick-scan",
       "testFile": "src/cli/quick-scan.test.ts",
-      "weightSeconds": 187,
+      "weightSeconds": 183,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -75,7 +75,7 @@
     {
       "id": "quick-scan-inventory",
       "testFile": "src/cli/quick-scan-inventory.test.ts",
-      "weightSeconds": 528,
+      "weightSeconds": 521,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -96,7 +96,7 @@
     {
       "id": "quick-scan-workspace",
       "testFile": "src/cli/quick-scan-workspace.test.ts",
-      "weightSeconds": 467,
+      "weightSeconds": 462,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -117,7 +117,7 @@
     {
       "id": "quick-scan-python",
       "testFile": "src/cli/quick-scan-python.test.ts",
-      "weightSeconds": 349,
+      "weightSeconds": 339,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -138,7 +138,7 @@
     {
       "id": "quick-scan-data-evidence",
       "testFile": "src/cli/quick-scan-data-evidence.test.ts",
-      "weightSeconds": 229,
+      "weightSeconds": 226,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -168,7 +168,7 @@
     {
       "id": "mutation-scan",
       "testFile": "src/cli/mutation-scan.test.ts",
-      "weightSeconds": 48,
+      "weightSeconds": 47,
       "paths": [
         "src/cli/mutation-scan.ts",
         "src/cli/mutation-scan.test.ts",
@@ -185,7 +185,7 @@
     {
       "id": "quality-scan",
       "testFile": "src/cli/quality-scan.test.ts",
-      "weightSeconds": 258,
+      "weightSeconds": 256,
       "paths": [
         "src/cli/quality-scan.ts",
         "src/cli/quality-scan.test.ts",
@@ -244,7 +244,7 @@
     {
       "id": "corpus-scanner-cross-process",
       "testFile": "src/corpus-scanner-cross-process.test.ts",
-      "weightSeconds": 177,
+      "weightSeconds": 176,
       "paths": [
         "src/corpus-",
         "src/scan/external-corpus.ts",
@@ -262,7 +262,7 @@
     {
       "id": "effectiveness-registry",
       "testFile": "src/effectiveness-registry.test.ts",
-      "weightSeconds": 114,
+      "weightSeconds": 113,
       "paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/free-recall.yml",
@@ -336,7 +336,7 @@
     {
       "id": "effectiveness-delivery",
       "testFile": "src/effectiveness-delivery.test.ts",
-      "weightSeconds": 70,
+      "weightSeconds": 69,
       "paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/free-recall.yml",
@@ -410,7 +410,7 @@
     {
       "id": "corpus-cache-preflight",
       "testFile": "src/corpus-cache-preflight.test.ts",
-      "weightSeconds": 218,
+      "weightSeconds": 214,
       "paths": [
         ".github/workflows/corpus-drift.yml",
         "src/__fixtures__/corpus-cache-preflight/",
@@ -443,28 +443,78 @@
   "gates": [
     {
       "id": "calibration",
-      "weightSeconds": 60
+      "weightSeconds": 86
     },
     {
       "id": "source-recall",
-      "weightSeconds": 60
+      "weightSeconds": 81
     },
     {
       "id": "m2-coverage",
-      "weightSeconds": 1
+      "weightSeconds": 2
     },
     {
       "id": "shared-source-match",
-      "weightSeconds": 6
+      "weightSeconds": 5
     }
   ],
   "weightProvenance": {
-    "tests": "https://github.com/jharvieux/Harvey/actions/runs/35968096724",
-    "head": "562e830bd4a13af1692971b51e7855a94aa3c50a",
-    "note": "Rounded-up observed test durations before sharing the duplicate calibration export. Calibration, M2 coverage, and shared-source gate durations come from this run; source-recall uses the same mechanical scan as calibration and is estimated at 60s.",
-    "quickScanSplit": {
-      "tests": "https://github.com/jharvieux/Harvey/actions/runs/35975271782",
-      "note": "One observed hosted run (n=1), rounded up by semantic group: calibration+prop-spread 186.438s, inventory 527.435s, M9 466.548s, M5 348.581s, M10 228.212s. The M9 mixed-clean pair hit 120.012s and is censored; these are scheduling estimates, not upper bounds. Splitting the eight JSON/text pairs preserves all 29 real invocations and yields 30 tests; calibration export remains shared in its file. Other workload and scored-gate weights retain the provenance above."
-    }
+    "version": 1,
+    "kind": "hosted-observation",
+    "head": "b28da071c884ea06e323c470af13a0e81dea6f8b",
+    "capturedAt": "2026-09-24T15:01:31Z",
+    "event": "push",
+    "selectedPopulation": "full 17/17 workloads and 4/4 scored gates",
+    "planDigest": "2110f26346e3c8bdf74d8e972538453b411d4397187be23bfbdcc3ea6ae7b1cb",
+    "run": "https://github.com/jharvieux/Harvey/actions/runs/36013910352",
+    "method": "Each weightSeconds is the ceiling of the named suite or gate's one hosted observation. These n=1 scheduling samples are not upper bounds. The planner reports them stale whenever its planned head differs from this exact evidence head.",
+    "jobs": [
+      {
+        "id": 107681478818,
+        "shard": 1,
+        "wallSeconds": 666,
+        "suiteSeconds": 445.42,
+        "note": "Wall time includes checkout, dependency/tool setup, four scored gates, liveness receipts and teardown; suiteSeconds is Vitest only."
+      },
+      {
+        "id": 107681479189,
+        "shard": 2,
+        "wallSeconds": 1521,
+        "suiteSeconds": 1486.68,
+        "note": "Wall time includes checkout, dependency/tool setup, liveness receipts and teardown; suiteSeconds is Vitest only."
+      },
+      {
+        "id": 107681478865,
+        "shard": 3,
+        "wallSeconds": 1506,
+        "suiteSeconds": 1470.96,
+        "note": "Wall time includes checkout, dependency/tool setup, liveness receipts and teardown; suiteSeconds is Vitest only."
+      }
+    ],
+    "workloads": [
+      { "id": "run-audit", "observedSeconds": 445.163, "jobId": 107681478818 },
+      { "id": "fix-calibration-acceptance", "observedSeconds": 59.406, "jobId": 107681479189 },
+      { "id": "quick-scan", "observedSeconds": 182.113, "jobId": 107681478865 },
+      { "id": "quick-scan-inventory", "observedSeconds": 520.652, "jobId": 107681479189 },
+      { "id": "quick-scan-workspace", "observedSeconds": 461.319, "jobId": 107681478865 },
+      { "id": "quick-scan-python", "observedSeconds": 338.557, "jobId": 107681478865 },
+      { "id": "quick-scan-data-evidence", "observedSeconds": 225.447, "jobId": 107681479189 },
+      { "id": "fix-detector-rerun", "observedSeconds": 49.349, "jobId": 107681478865 },
+      { "id": "mutation-scan", "observedSeconds": 46.761, "jobId": 107681479189 },
+      { "id": "quality-scan", "observedSeconds": 255.855, "jobId": 107681479189 },
+      { "id": "lighthouse-scan", "observedSeconds": 18.747, "jobId": 107681478865 },
+      { "id": "validate-calibration", "observedSeconds": 198.968, "jobId": 107681479189 },
+      { "id": "fix-execute", "observedSeconds": 20.108, "jobId": 107681478865 },
+      { "id": "corpus-scanner-cross-process", "observedSeconds": 175.704, "jobId": 107681479189 },
+      { "id": "effectiveness-registry", "observedSeconds": 112.649, "jobId": 107681478865 },
+      { "id": "effectiveness-delivery", "observedSeconds": 68.881, "jobId": 107681478865 },
+      { "id": "corpus-cache-preflight", "observedSeconds": 213.918, "jobId": 107681478865 }
+    ],
+    "gates": [
+      { "id": "calibration", "observedSeconds": 85.255, "jobId": 107681478818 },
+      { "id": "source-recall", "observedSeconds": 80.611, "jobId": 107681478818 },
+      { "id": "m2-coverage", "observedSeconds": 1.331, "jobId": 107681478818 },
+      { "id": "shared-source-match", "observedSeconds": 4.62, "jobId": 107681478818 }
+    ]
   }
 }
