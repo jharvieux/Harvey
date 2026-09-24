@@ -424,23 +424,54 @@ function transparentExpressionOperand(node: ts.Node): ts.Expression | undefined 
   return undefined;
 }
 
-function expressionSymbol(checker: ts.TypeChecker, expression: ts.Expression): ts.Symbol | undefined {
+const MAX_LOCAL_ALIAS_HOPS = 8;
+
+function isConstVariable(declaration: ts.VariableDeclaration): boolean {
+  return (declaration.parent.flags & ts.NodeFlags.Const) !== 0;
+}
+
+function expressionSymbol(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+  remainingAliasHops = MAX_LOCAL_ALIAS_HOPS,
+): ts.Symbol | undefined {
   const operand = transparentExpressionOperand(expression);
-  if (operand) return expressionSymbol(checker, operand);
+  if (operand) return expressionSymbol(checker, operand, seen, remainingAliasHops);
   if (ts.isPropertyAccessExpression(expression)) {
     const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
     // Follow named aliases (`{ exec: execFileSync }`) but retain the property identity for an
     // anonymous function initializer. The latter is where importedExecutionSymbols records an
     // executor wrapper; resolving the anonymous arrow/function itself yields no symbol.
-    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
+    return initializer ? expressionSymbol(checker, initializer, seen, remainingAliasHops) ?? property : property;
   }
   if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
     const property = canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
-    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
+    return initializer ? expressionSymbol(checker, initializer, seen, remainingAliasHops) ?? property : property;
   }
-  return canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  if (!ts.isIdentifier(expression) || !symbol || seen.has(symbol) || remainingAliasHops === 0) return symbol;
+  const declarations = (symbol.declarations ?? []).filter(ts.isVariableDeclaration);
+  if (declarations.length !== 1 || !isConstVariable(declarations[0]!) || !declarations[0]!.initializer) return symbol;
+  return expressionSymbol(
+    checker,
+    declarations[0]!.initializer,
+    new Set([...seen, symbol]),
+    remainingAliasHops - 1,
+  ) ?? symbol;
+}
+
+function mutableLocalAlias(checker: ts.TypeChecker, expression: ts.Expression): string | undefined {
+  const operand = transparentExpressionOperand(expression);
+  if (operand) return mutableLocalAlias(checker, operand);
+  if (!ts.isIdentifier(expression)) return undefined;
+  const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  const declarations = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration);
+  return declarations.length === 1 && declarations[0]!.initializer && !isConstVariable(declarations[0]!)
+    ? expression.text
+    : undefined;
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {
@@ -644,6 +675,7 @@ function routeGraphForReachability(
         && node.name.text === "id"
         && ts.isStringLiteralLike(node.initializer)) corpusIds.add(node.initializer.text);
       if (ts.isCallExpression(node)) {
+        const ambiguousAlias = mutableLocalAlias(checker, node.expression);
         const signature = checker.getResolvedSignature(node);
         const identity = symbolIdentity(root, checker, expressionSymbol(checker, node.expression))
           ?? (signature?.declaration ? symbolIdentity(root, checker, checker.getSymbolAtLocation((signature.declaration as ts.NamedDeclaration).name ?? signature.declaration)) : undefined);
@@ -660,7 +692,9 @@ function routeGraphForReachability(
             const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
             live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "call" }]);
           } else if (options.detectUnknown !== false && !identity.file.startsWith("node_modules/") && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile)) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
-            unresolvedCandidates.push({ message: `${consumerFile}#${identity.symbol}: finding-bearing call target ${target} is unregistered`, consumerFile, targetFile: identity.file });
+            unresolvedCandidates.push(ambiguousAlias
+              ? { message: `${consumerFile}#${ambiguousAlias}: finding-bearing call uses a mutable local alias, so one producer identity cannot be proven`, consumerFile }
+              : { message: `${consumerFile}#${identity.symbol}: finding-bearing call target ${target} is unregistered`, consumerFile, targetFile: identity.file });
           }
         } else if (options.detectUnknown !== false && rootIds.has(consumerFile) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
           unresolvedCandidates.push({ message: `${consumerFile}: finding-bearing dispatch has no resolvable declaration`, consumerFile });

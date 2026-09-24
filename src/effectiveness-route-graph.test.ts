@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
@@ -53,6 +54,56 @@ describe("schema-v3 route graph", () => {
     expect(live.routes).toHaveLength(1);
     writeFileSync(join(root, "src", "root.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     expect(discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]).routes).toEqual([]);
+  });
+
+  it("preserves producer identity through direct, import and bounded local aliases", async () => {
+    const root = fixture("export {};\n");
+    writeFileSync(join(root, "src", "producer.mjs"), "export function produce() { return [{ id: 'executed', taxonomy: 'test', severity: 'Low', location: 'fixture' }]; }\n");
+    const cases = {
+      direct: "import { produce } from './producer.mjs'; export const findings = produce();\n",
+      "import-alias": "import { produce as alias } from './producer.mjs'; export const findings = alias();\n",
+      "local-alias": "import { produce } from './producer.mjs'; const alias = produce; export const findings = alias();\n",
+      "multi-hop": "import { produce } from './producer.mjs'; const first = produce; const second = first; const third = second; export const findings = third();\n",
+    };
+    const aliasImplementation = { ...implementation, file: "src/producer.mjs" };
+
+    for (const [name, source] of Object.entries(cases)) {
+      const file = join(root, "src", `${name}.mjs`);
+      writeFileSync(file, source);
+      const graph = discoverEffectivenessRouteGraph(root, [aliasImplementation], [`src/${name}.mjs`]);
+      expect(graph.routes, name).toHaveLength(1);
+      expect(graph.routes[0]?.implementationId, name).toBe("src/producer.mjs#produce");
+      const executed = await import(`${pathToFileURL(file).href}?case=${name}`) as { findings: { id: string }[] };
+      expect(executed.findings.map((finding) => finding.id), name).toEqual(["executed"]);
+    }
+  });
+
+  it("does not invent routes for unused, unrelated, shadowed or mutable aliases", () => {
+    const cases = {
+      unused: "import { produce } from './producer.js'; const alias = produce; void alias;\n",
+      unrelated: "import { produce } from './producer.js'; function alias() { return []; } alias(); void produce;\n",
+      shadowed: "import { produce } from './producer.js'; function run(produce: () => unknown[]) { produce(); } run(() => []);\n",
+      reassigned: "import { produce, type Finding } from './producer.js'; const unrelated = (): Finding[] => []; let alias = produce; alias = unrelated; alias();\n",
+    };
+    for (const [name, source] of Object.entries(cases)) {
+      const root = fixture(source);
+      writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id: string; taxonomy: string; severity: string; location: string }\nexport function produce(): Finding[] { return []; }\n");
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(graph.routes, name).toEqual([]);
+      if (name === "reassigned") {
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable local alias");
+      }
+    }
+  });
+
+  it("reports the underlying producer when a local alias calls an unregistered implementation", () => {
+    const root = fixture('import { produce } from "./producer.js"; const alias = produce; alias();\n');
+    writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id: string; taxonomy: string; severity: string; location: string }\nexport function produce(): Finding[] { return []; }\n");
+    const graph = discoverEffectivenessRouteGraph(root, [], ["src/root.ts"]);
+    expect(graph.routes).toEqual([]);
+    expect(graph.unresolvedFindingDispatches).toContain(
+      "src/root.ts#produce: finding-bearing call target src/producer.ts#produce is unregistered",
+    );
   });
 
   it("batches separate root and venue reachability without retaining stale source", () => {
