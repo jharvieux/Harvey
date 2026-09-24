@@ -48,7 +48,7 @@
     "authoritativeRecords": 2240,
     "authoritativeUnresolved": 1523,
     "authoritativeVenues": 108,
-    "candidateVenues": 2539,
+    "candidateVenues": 2540,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 243,
-        "candidateRows": 808,
+        "candidateRows": 809,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1051,
-        "unresolved": 1045,
-        "whollyUnbound": 1046
+        "rows": 1052,
+        "unresolved": 1046,
+        "whollyUnbound": 1047
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2650,
+        "candidateRows": 2651,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3766,
-        "unresolved": 3766,
-        "whollyUnbound": 3766
+        "rows": 3767,
+        "unresolved": 3767,
+        "whollyUnbound": 3767
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7265,
+    "noAssertions": 7267,
     "opaqueVenues": 3,
-    "residualRows": 2650,
-    "rows": 8416,
+    "residualRows": 2651,
+    "rows": 8418,
     "schemaAssertions": 10,
-    "venues": 2650,
-    "vocabularyCandidates": 3526
+    "venues": 2651,
+    "vocabularyCandidates": 3527
   },
   "reconciliations": [
     {
@@ -152535,7 +152535,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 396,
+        "line": 491,
         "path": "src/effectiveness-registry.test.ts"
       },
       "freshness": {
@@ -152572,7 +152572,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 499,
+        "line": 354,
         "path": "src/effectiveness-registry.test.ts"
       },
       "freshness": {
@@ -152646,7 +152646,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 351,
+        "line": 446,
         "path": "src/effectiveness-registry.test.ts"
       },
       "freshness": {
@@ -152720,7 +152720,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 423,
+        "line": 439,
         "path": "src/effectiveness-registry.ts"
       },
       "freshness": {
@@ -152757,7 +152757,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 388,
+        "line": 404,
         "path": "src/effectiveness-registry.ts"
       },
       "freshness": {
@@ -153147,6 +153147,80 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/effectiveness-schema.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/effectiveness-validation-worker.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/effectiveness-validation-worker.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/effectiveness-validation-worker.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/effectiveness-validation-worker.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/effectiveness-validation-worker.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/effectiveness-validation-worker.test.ts"
     },
     {
       "assertionVenue": null,
@@ -360706,8 +360780,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "4ff2775e55ce7c9916f79f5b076956ea97397898",
-    "commitPayload": "dHJlZSA2MWM0N2ZmZGFmY2MyMmZkODY1ODcwZmY3ZTIxOWViODAxM2YxOWFlCnBhcmVudCAxMmJkOWJkMDYxZTAzMzlmYmQ3NGVhODAxNWEwODc3YWM4NmUwNjM4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI4MTUyIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI4MjU4IC0wNTAwCgpSdW4gY29sZCBlZmZlY3RpdmVuZXNzIHZhbGlkYXRpb24gaW4gY2hpbGQgd29ya2VycyAoIzIxNjUpCg==",
+    "commit": "54f37fa36021ed0229a892a74eafecb6c3b50da9",
+    "commitPayload": "dHJlZSA0ZTdhMjc1ODYxZTlmYjJlYjAwNGYzM2YyOTg3MzZmNWUwZWE1ZjI0CnBhcmVudCBkYTU0NDRlNDY3MDI3ODZmOGI2Y2E5MzMwMDU0MWU1ZjExNGZiMDIyCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjMwMjI4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjMwMjI4IC0wNTAwCgpTdXJmYWNlIGluZGVwZW5kZW50IHdvcmtlciBleGl0cyBkdXJpbmcgY2xlYW51cCAoIzIxNjUpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -360716,13 +360790,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "279850f349b1ce8d3c5a2417f04e76a8458140d6",
+        "gitOid": "cd5ec5c495316b8d8bf1b7d14bd84eec20f46d46",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "c02db757f2a810f9957099dbf28dce33c8e98ac8779b736717c32296c9f6a094",
-    "tree": "61c47ffdafcc22fd865870ff7e219eb8013f19ae"
+    "populationSha256": "9700ba46d45865c540d03726e964f87f860b0f0a83d2a11769efe2f3cbf1b725",
+    "tree": "4e7a275861e9fb2eb004f33f298736f5e0ea5f24"
   },
   "venues": [
     {
@@ -366231,19 +366305,19 @@
       "sha256": "8efbe08812ed9e804ed73d6d967c8847022f19802fee627c838835f78b2d5094"
     },
     {
-      "bytes": 3545,
+      "bytes": 4385,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "85d7e1aad8c8e84400c92f59f69b9bcb3def4802",
+      "gitOid": "259baecc578a919e3d1220b584f3fd5b40f271e5",
       "id": "src/__fixtures__/effectiveness-delivery/validation-worker.mjs",
       "kind": "source",
-      "literalCount": 31,
-      "literalSha256": "9f86184390c24b76f1c648b7b0876c688e7980da50305a65b54c64096079d53d",
+      "literalCount": 33,
+      "literalSha256": "a647a3eb4ed90ad700b0b3524808c3ff5c7643902254f559ad275692213e6b44",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/__fixtures__/effectiveness-delivery/validation-worker.mjs",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "73c9de6166abaf32430506a04508d0a763a1d76c6ed05bfa02dbc86d3dcf6d54"
+      "sha256": "d257174d54376dae730ed5c6b82eb94f260724de8035206884405e66876aad43"
     },
     {
       "bytes": 894,
@@ -378666,34 +378740,34 @@
       "sha256": "e019b259358568678319903e1adfa27956f1247ee8c27ae544093364c492f43f"
     },
     {
-      "bytes": 42412,
+      "bytes": 47240,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "4cdd71c0843281ea8f56230d1119312abd3ac48d",
+      "gitOid": "043572dc394c9525b0c215aa57b22743fd026b0b",
       "id": "src/effectiveness-registry.test.ts",
       "kind": "source",
-      "literalCount": 448,
-      "literalSha256": "c369a624041226ba4c75985810c098928558b2cf01a500e0927e3f3167476325",
+      "literalCount": 470,
+      "literalSha256": "28ed054d39d1a2a99886ff92cf52cee804097bc70469b2fa6721b2659f3833d3",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/effectiveness-registry.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "964eb94504cce7a8129bba5811069f62c02af0dd2560e636c32d81eb45963945"
+      "sha256": "59488f01a3fa746e4e454adf191a846d8a05208e98d65b29af6aa0f76ebef1ea"
     },
     {
-      "bytes": 67195,
+      "bytes": 68010,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9339854b8019dddf7b89e11cbbd0c89a4b2cd8e6",
+      "gitOid": "2c38fc03b1e930170e992be1502d80a6cbc0d1d7",
       "id": "src/effectiveness-registry.ts",
       "kind": "source",
-      "literalCount": 317,
-      "literalSha256": "1dfcb57f124096cc50154a596213a3b6e32fbd3ba86825ab24afee71a9512dc1",
+      "literalCount": 318,
+      "literalSha256": "aa8f9c413c2647a65043bc578c1dd7ba6d6f2573a0afd60350be2dd309f7e369",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/effectiveness-registry.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "7dfeee2c1aa3a06b59b6ab30f3f9d408162adb34e9ae62a326f78937b9c6257e"
+      "sha256": "85278efe01cf4425eb7b46419a97346d43373214089bdb675a97607a91b47524"
     },
     {
       "bytes": 17402,
@@ -378739,6 +378813,21 @@
       "path": "src/effectiveness-schema.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "552bc39129d3a41c8ad17af000af2c49628d9433404919875f02ca2d6b9a2168"
+    },
+    {
+      "bytes": 5504,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "e815bb3a87269e8dd2072d2fd397726f73405acf",
+      "id": "src/effectiveness-validation-worker.test.ts",
+      "kind": "source",
+      "literalCount": 74,
+      "literalSha256": "496f3fa1ac2d7112b4ec67d4667dc74e831a528eb135a3c20907e48dd79d0ff0",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/effectiveness-validation-worker.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "c402ca2b9c7bef863254500ea3f49a94fd59f3143cfdbb8c5fd1933282eb5b72"
     },
     {
       "bytes": 9947,
