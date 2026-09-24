@@ -242,18 +242,18 @@ function nodeEntrypoint(args: readonly string[]): string | undefined {
   return undefined;
 }
 
-function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>()): string | undefined {
+function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>(), candidates?: Set<string>): string | undefined {
   const manager = manifest.packageManager?.split("@")[0];
   const executable = slash(bin).split("/").at(-1);
   if (manager && executable === manager) {
-    if (args[0] === "exec") return args[1] ? invocationTarget(root, manifest, args[1], args.slice(2), seen) : undefined;
+    if (args[0] === "exec") return args[1] ? invocationTarget(root, manifest, args[1], args.slice(2), seen, candidates) : undefined;
     const script = args[0] === "run" ? args[1] : args[0];
     if (!script || seen.has(script)) return undefined;
     const command = manifest.scripts?.[script];
     if (!command) return undefined;
     const tokens = command.trim().split(/\s+/);
     if (tokens.some((token) => /^(?:&&|\|\||[|;])$/.test(token))) return undefined;
-    return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script])) : undefined;
+    return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script]), candidates) : undefined;
   }
   if (executable !== "tsx" && executable !== "node") return undefined;
   const entry = executable === "node"
@@ -261,7 +261,10 @@ function invocationTarget(root: string, manifest: PackageManifest, bin: string, 
     : args.find((argument) => !argument.startsWith("-"));
   if (!entry || !SOURCE_EXTENSIONS.includes(extname(entry) as typeof SOURCE_EXTENSIONS[number])) return undefined;
   const target = resolve(root, entry);
-  return repoRelative(root, target) && existsSync(target) ? target : undefined;
+  if (!repoRelative(root, target)) return undefined;
+  // An absent supported entrypoint may become reachable without changing its caller.
+  candidates?.add(target);
+  return existsSync(target) ? target : undefined;
 }
 
 function commandTargets(
@@ -270,6 +273,7 @@ function commandTargets(
   checker: ts.TypeChecker,
   executionSymbols: ReadonlySet<ts.Symbol>,
   manifest: PackageManifest,
+  candidates: Set<string>,
 ): string[] {
   const result = new Set<string>();
   const visit = (node: ts.Node): void => {
@@ -278,7 +282,7 @@ function commandTargets(
       if (called && executionSymbols.has(called) && node.arguments[0] && node.arguments[1]) {
         const bin = literalString(checker, node.arguments[0]);
         const args = literalArray(checker, node.arguments[1]);
-        const target = bin && args ? invocationTarget(root, manifest, bin, args) : undefined;
+        const target = bin && args ? invocationTarget(root, manifest, bin, args, new Set(), candidates) : undefined;
         if (target) result.add(target);
       }
     }
@@ -303,7 +307,7 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
 
 function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest): ReachableSources {
   const reached = new Set<string>();
-  const resolutionCandidates = new Set<string>();
+  const resolutionCandidates = new Set<string>(roots);
   const rootsByFile = new Map<string, Set<string>>();
   const commandReceiptsByFile = new Map<string, readonly EffectivenessCallReceipt[]>();
   const checker = program.getTypeChecker();
@@ -333,7 +337,7 @@ function reachableSourcesWithProgram(root: string, roots: readonly string[], pro
       const resolved = resolveLocalModule(root, repoRelative(root, file) ?? file, specifier);
       if (resolved) pending.push({ file: resolved, root: routeRoot, commands });
     }
-    for (const target of commandTargets(root, source, checker, executionSymbols, manifest)) {
+    for (const target of commandTargets(root, source, checker, executionSymbols, manifest, resolutionCandidates)) {
       const consumerFile = repoRelative(root, file);
       const targetFile = repoRelative(root, target);
       if (!consumerFile || !targetFile) continue;

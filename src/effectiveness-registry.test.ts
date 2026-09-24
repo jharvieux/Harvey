@@ -727,11 +727,18 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(serializeEffectivenessInventory(baseline)).toBe(intactBytes);
   });
 
-  it("invalidates source-derived venue evidence when an unresolved import target appears", () => {
+  it.each([
+    ["import", 'import "./unobserved-boundary/new-worker.js";\n'],
+    ["Node command", 'import { spawnSync } from "node:child_process";\nspawnSync("node", ["--import", "tsx", "src/cli/unobserved-boundary/new-worker.ts"]);\n'],
+    ["package script", 'import { spawnSync } from "node:child_process";\nspawnSync("pnpm", ["run", "boundary-worker"]);\n'],
+  ])("invalidates source-derived venue evidence when an unresolved %s target appears", (_kind, caller) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-source-boundary-"));
     try {
       cpSync(join(REPO_ROOT, "src"), join(root, "src"), { recursive: true });
       cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { packageManager: string; scripts: Record<string, string> };
+      manifest.scripts["boundary-worker"] = "node --import tsx src/cli/unobserved-boundary/new-worker.ts";
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
       mkdirSync(join(root, ".github", "workflows"), { recursive: true });
       symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"), "dir");
       const absentDirectory = join(root, "src", "cli", "unobserved-boundary");
@@ -742,7 +749,7 @@ describe("effectiveness producer inventory (#1910)", () => {
         measures: "source-cache invalidation",
         cadence: { kind: "verify" as const, description: "bounded source-cache invalidation proof" },
       };
-      writeFileSync(join(root, "src", "cli", `${gate.id}.ts`), 'import "./unobserved-boundary/new-worker.js";\n');
+      writeFileSync(join(root, "src", "cli", `${gate.id}.ts`), caller);
       const baseline = freshInventory();
       const inventory: EffectivenessInventory = {
         ...baseline,
