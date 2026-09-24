@@ -90,6 +90,14 @@ export const EXCLUDED_DIR = /^(node_modules|\.git)$/;
 // full set instead, because test files are its subject matter.
 export const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mocks__|__fixtures__|__snapshots__)\/|\.stories\./;
 
+// M6 corpus measurements count the same JS/TS source population as the detector loader. Keep
+// this beside SOURCE_FILE rather than copying a smaller extension list into each measurement
+// consumer: a newly supported suffix must either join every product-code denominator or be
+// excluded by an explicit, testable policy.
+export function isProductJavaScriptTypeScriptSource(path: string): boolean {
+  return SOURCE_FILE.test(path) && !NON_PRODUCT.test(path);
+}
+
 export function isTestSourcePath(path: string): boolean {
   return NON_PRODUCT.test(path)
     || /(^|\/)tests?\/.*\.py$|(^|\/)test_[^/]+\.py$|[^/]+_test\.py$/.test(path)

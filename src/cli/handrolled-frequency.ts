@@ -26,20 +26,27 @@
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
-import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { isProductJavaScriptTypeScriptSource, loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { cloneAtPin } from "../scan/corpus-clone.js";
 import { buildFrequencyTargets, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES, type FrequencyTier } from "../scan/handrolled-frequency.js";
 
 // A repo is either the organic tier of its provenance, or "curated" if it is an intentionally-
 // vulnerable teaching repo (its shape mix is authored, not organic — #413).
-type Tier = FrequencyTier;
+type Tier = FrequencyTier | "local";
 
 // #1524: buildFrequencyTargets() dedupes the EXTERNAL_CORPUS/AI_FREQUENCY_CORPUS overlap so a
 // shared slug (cravab, flori-web, effective) contributes to sumForTier's aggregate exactly once —
 // see its own doc comment in src/scan/handrolled-frequency.ts for why and which entry wins.
-const targets = buildFrequencyTargets();
+const localIndex = process.argv.indexOf("--local");
+const localRoot = localIndex === -1 ? undefined : process.argv[localIndex + 1];
+if (localIndex !== -1 && (!localRoot || process.argv.indexOf("--local", localIndex + 1) !== -1)) {
+  throw new Error("--local requires exactly one source-tree path");
+}
+const targets = localRoot
+  ? [{ slug: "local", tier: "local" as const, repo: "local", commit: "local" }]
+  : buildFrequencyTargets();
 
 // The 17 YES entries the 2026-07-16 run measured at ZERO across all six corpus repos (the reason
 // they were deferred). #413's core question: do any fire on AI-authored code?
@@ -67,14 +74,18 @@ const row = (entry: number, verdict: string, name: string, unit: string): TableR
 // Product LOC each repo contributes, so a per-KLOC aggregate can normalise the large repos
 // (effective is ~500k LOC — an unnormalised sum would be dominated by tree size, not shape density).
 const productLoc = new Map<string, number>();
+const localProductPaths: string[] = [];
 
 for (const target of targets) {
-  const dir = mkdtempSync(join(tmpdir(), `harvey-freq-${target.slug}-`));
-  console.error(`=== ${target.slug} [${target.tier}] (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
+  const dir = localRoot ? resolve(localRoot) : mkdtempSync(join(tmpdir(), `harvey-freq-${target.slug}-`));
+  console.error(localRoot
+    ? `=== local [local] (${dir}) ===`
+    : `=== ${target.slug} [${target.tier}] (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
   try {
-    cloneAtPin(target.repo, target.commit, dir);
+    if (!localRoot) cloneAtPin(target.repo, target.commit, dir);
     const files = loadSources(dir).filter((f) => !NON_PRODUCT.test(f.path));
-    const product = files.filter((f) => /\.(ts|tsx|jsx|mjs)$/.test(f.path));
+    const product = files.filter((f) => isProductJavaScriptTypeScriptSource(f.path));
+    if (localRoot) localProductPaths.push(...product.map((f) => f.path));
     productLoc.set(target.slug, product.reduce((acc, f) => acc + f.text.split("\n").length, 0));
 
     const findings = detectHandrolledFindings(files);
@@ -91,15 +102,21 @@ for (const target of targets) {
       r.total += n;
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (!localRoot) rmSync(dir, { recursive: true, force: true });
   }
 }
 
 const slugs = targets.map((t) => t.slug);
 const sortedRows = [...rows.values()].sort((a, b) => a.entry - b.entry);
 const out: string[] = [];
-out.push(`Corpus (${targets.length} repos):`);
-for (const t of targets) out.push(`  - ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} — ${productLoc.get(t.slug) ?? 0} product LOC`);
+out.push(localRoot ? "Corpus (1 local fixture):" : `Corpus (${targets.length} repos):`);
+for (const t of targets) {
+  out.push(localRoot
+    ? `  - ${t.slug} [${t.tier}] ${resolve(localRoot)} — ${productLoc.get(t.slug) ?? 0} product LOC`
+    : `  - ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} — ${productLoc.get(t.slug) ?? 0} product LOC`);
+}
+out.push("Product source population: shared SOURCE_FILE JS/TS suffixes, minus NON_PRODUCT.");
+if (localRoot) out.push(`Local product paths (${localProductPaths.length}): ${localProductPaths.sort().join(", ")}`);
 out.push("");
 out.push(`| # | Verdict | Shape | Unit | ${slugs.join(" | ")} | Total |`);
 out.push(`|---|---|---|---|${slugs.map(() => "---:").join("|")}|---:|`);

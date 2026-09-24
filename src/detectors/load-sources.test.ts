@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectHandrolledFindings } from "./handrolled.js";
-import { loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
+import { isProductJavaScriptTypeScriptSource, loadSourceInventory, loadSources, NON_PRODUCT } from "./load-sources.js";
 import { detectPerfCodeFindings } from "./perf-code.js";
 import { detectSlopFindings } from "./slop.js";
 import { productSourceInventoryForScope, productSourceInventoryForTarget } from "../source-inventory.js";
@@ -135,6 +135,16 @@ describe("loadSources extension coverage (#1065)", () => {
       .map((f) => f.path)
       .sort();
     expect(loaded).toEqual(["app/legacy.jsx", "app/page.tsx", "app/route.js", "lib/db.ts", "lib/esm.mjs", "lib/legacy.cjs", "lib/typed.cts", "lib/typed.mts"]);
+  });
+
+  it("defines the M6 product population across every supported suffix while preserving explicit exclusions (#2105)", () => {
+    const supported = ["ts", "tsx", "jsx", "mjs", "js", "cjs", "mts", "cts"];
+    expect(supported.map((suffix) => `src/shape.${suffix}`).filter(isProductJavaScriptTypeScriptSource)).toEqual(
+      supported.map((suffix) => `src/shape.${suffix}`),
+    );
+    expect(isProductJavaScriptTypeScriptSource("src/shape.test.js")).toBe(false);
+    expect(isProductJavaScriptTypeScriptSource("src/__fixtures__/shape.mts")).toBe(false);
+    expect(isProductJavaScriptTypeScriptSource("scripts/generate.py")).toBe(false);
   });
 
   it("skips minified/generated JavaScript — machine output is not auditable source", () => {

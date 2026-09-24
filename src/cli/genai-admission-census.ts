@@ -51,7 +51,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
@@ -77,6 +77,12 @@ import { buildFrequencyTargets } from "../scan/handrolled-frequency.js";
 // the measurement the withdrawn per-tier ratio could not be: same repo, same team, same era, and a
 // label the commit's own author wrote. It needs full history (blame), so it is opt-in.
 const WITH_DENSITY = process.argv.includes("--density");
+const localIndex = process.argv.indexOf("--local");
+const localRoot = localIndex === -1 ? undefined : process.argv[localIndex + 1];
+if (localIndex !== -1 && (!localRoot || process.argv.indexOf("--local", localIndex + 1) !== -1)) {
+  throw new Error("--local requires exactly one Git source-tree path");
+}
+if (localRoot && WITH_DENSITY) throw new Error("--local cannot be combined with --density");
 
 interface RepoCensus extends CommitCensus {
   slug: string;
@@ -84,7 +90,24 @@ interface RepoCensus extends CommitCensus {
   history: "live" | `captured:${number}`;
 }
 
-const targets = buildFrequencyTargets();
+interface CensusTarget {
+  slug: string;
+  repo: string;
+  commit: string;
+  tier: string;
+  capturedHistory?: {
+    snapshotRepo: string;
+    snapshotCommit: string;
+    originalRepo: string;
+    originalCommit: string;
+    sourceRun: number;
+    census: CommitCensus;
+  };
+}
+
+const targets: CensusTarget[] = localRoot
+  ? [{ slug: "local", repo: "local", commit: "", tier: "local" }]
+  : buildFrequencyTargets();
 const rows: RepoCensus[] = [];
 for (const t of targets) {
   if (t.capturedHistory) {
@@ -100,16 +123,20 @@ for (const t of targets) {
     rows.push({ slug: t.slug, tier: t.tier, history: `captured:${h.sourceRun}`, ...h.census });
     continue;
   }
-  const dir = mkdtempSync(join(tmpdir(), `harvey-admit-${t.slug}-`));
-  console.error(`=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} ===`);
+  const dir = localRoot ? resolve(localRoot) : mkdtempSync(join(tmpdir(), `harvey-admit-${t.slug}-`));
+  console.error(localRoot
+    ? `=== local [local] ${dir} ===`
+    : `=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} ===`);
   try {
-    execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
-    execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${t.repo}`], { stdio: "ignore" });
-    execFileSync("git", ["-C", dir, "fetch", "-q", "--filter=blob:none", "origin", t.commit], { stdio: ["ignore", "ignore", "pipe"] });
-    const log = execFileSync("git", ["-C", dir, "log", t.commit, "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`], { maxBuffer: 512 * 1024 * 1024 }).toString();
+    if (!localRoot) {
+      execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${t.repo}`], { stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "fetch", "-q", "--filter=blob:none", "origin", t.commit], { stdio: ["ignore", "ignore", "pipe"] });
+    }
+    const log = execFileSync("git", ["-C", dir, "log", ...(localRoot ? [] : [t.commit]), "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`], { maxBuffer: 512 * 1024 * 1024 }).toString();
     rows.push({ slug: t.slug, tier: t.tier, history: "live", ...censusOfLog(log) });
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (!localRoot) rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -173,8 +200,8 @@ function tallyFor(target: { slug: string; repo: string; commit: string }): ArmTa
 }
 
 const out: string[] = [];
-out.push(`Commit-level self-admitted-GenAI census over the pinned corpus (${rows.length} repos).`);
-out.push(`Product-source predicate: /\\.(ts|tsx|jsx|mjs)$/ minus NON_PRODUCT — identical to handrolled-frequency.ts.`);
+out.push(`Commit-level self-admitted-GenAI census over the ${localRoot ? "local fixture" : "pinned corpus"} (${rows.length} repos).`);
+out.push("Product-touching commits: shared SOURCE_FILE JS/TS suffixes, minus NON_PRODUCT; density files also pass through loadSources generated-content exclusion.");
 out.push(`Merge commits excluded. History read at each repo's PINNED commit, so this is reproducible.`);
 out.push("");
 out.push(`| Repo | Tier | History | Commits | Product-touching | Admitted (trailer) | Admitted (prose only) | Product+admitted | Product+unadmitted | Both arms >= ${MIN_ARM}? |`);

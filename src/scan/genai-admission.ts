@@ -11,7 +11,7 @@
 // Xiao et al., "Self-Admitted GenAI Usage in Open-Source Software" (arXiv:2507.10422, read in full
 // 2026-07-30) is the source of the concept and of the two-signal split below.
 
-import { NON_PRODUCT } from "../detectors/load-sources.js";
+import { isProductJavaScriptTypeScriptSource } from "../detectors/load-sources.js";
 
 // Assistants whose name in a trailer or a message is a declaration of GenAI involvement. ChatGPT and
 // Copilot are Xiao et al.'s own pair (the two most-used tools in the 2023 Stack Overflow survey);
@@ -20,9 +20,11 @@ import { NON_PRODUCT } from "../detectors/load-sources.js";
 // does not match.
 const ASSISTANTS = /claude|copilot|chat\s?-?_?gpt|openai|cursor|codex|gemini|devin|aider|windsurf|sourcegraph|tabnine/i;
 
-// Deliberately IDENTICAL to src/cli/handrolled-frequency.ts's product filter, so "commits in the
-// population" and "code in the density figure" name the same files rather than two nearby ideas.
-export const isProductSource = (path: string): boolean => /\.(ts|tsx|jsx|mjs)$/.test(path) && !NON_PRODUCT.test(path);
+// Commit history has paths but not source contents, so it shares the M6 suffix and non-product
+// path policy. The density pass then loads those files through loadSources, which additionally
+// removes generated content. An admitted .js/.cjs/.mts/.cts change cannot disappear from the
+// history population while remaining in the detector's loaded source population.
+export const isProductSource = isProductJavaScriptTypeScriptSource;
 
 // Sentinels rather than `-z`: a NUL-delimited stream is what makes text tooling classify output as
 // binary (CLAUDE.md's greppable-sources rule). TRAILERS and MESSAGE get their own sentinel rather
