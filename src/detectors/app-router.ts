@@ -2795,8 +2795,7 @@ function topLevelFunction(sf: ts.SourceFile, name: string, exported: boolean): B
 
 // Every same-named runtime binding in a file is relevant to a precision-only exemption. Rather
 // than partially reimplementing lexical resolution, require the resolved helper/import to be the
-// sole declaration with that local name. This deliberately rejects ambiguous safe programs, but
-// cannot mistake a block/catch/loop/function shadow for the proven helper.
+// sole declaration with that local name. Ambiguous safe programs retain the finding.
 function runtimeBindingDeclarations(sf: ts.SourceFile, name: string): ts.Node[] {
   const declarations: ts.Node[] = [];
   const visit = (node: ts.Node) => {
