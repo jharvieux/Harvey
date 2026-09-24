@@ -954,7 +954,14 @@ describe("SSR-only browser API misuse (#381)", () => {
     };
     expect(errorName("window?.innerWidth")).toBe("ReferenceError");
     expect(errorName("window.innerWidth")).toBe("ReferenceError");
+    expect(errorName('function isBrowser() { return typeof window !== "undefined"; } function Page() { function isBrowser() { return true; } return isBrowser() ? window?.innerWidth : ""; } Page();')).toBe("ReferenceError");
+    expect(errorName('function isBrowser() { return typeof window !== "undefined"; } isBrowser = () => true; isBrowser() ? window?.innerWidth : "";')).toBe("ReferenceError");
+    expect(errorName('let isBrowser = () => typeof window !== "undefined"; isBrowser = () => true; isBrowser() ? window?.innerWidth : "";')).toBe("ReferenceError");
+    expect(errorName('function isBrowser() { return typeof window !== "undefined"; } { const isBrowser = () => true; isBrowser() ? window?.innerWidth : ""; }')).toBe("ReferenceError");
+    expect(errorName('function isBrowser() { return typeof window !== "undefined"; } try { throw () => true; } catch (isBrowser) { isBrowser() ? window?.innerWidth : ""; }')).toBe("ReferenceError");
+    expect(errorName('const isBrowser = function window() { return typeof window !== "undefined"; }; isBrowser() ? window?.innerWidth : "";')).toBe("ReferenceError");
     expect(runInNewContext('typeof window === "undefined" ? undefined : window.innerWidth')).toBeUndefined();
+    expect(runInNewContext('function isBrowser() { return typeof window !== "undefined"; } isBrowser() ? window?.location.origin : ""')).toBe("");
     expect(runInNewContext("globalThis.window?.innerWidth")).toBeUndefined();
     expect(runInNewContext("const window = undefined; window?.innerWidth")).toBeUndefined();
   });
@@ -1045,6 +1052,141 @@ describe("SSR-only browser API misuse (#381)", () => {
       { path: "app/declared.tsx", text: `const window: { innerWidth: number } | undefined = undefined;\nexport default function DeclaredScreen() {\n  return <div>{window?.innerWidth ?? 0}</div>;\n}\n` },
     ]);
     expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  it("accepts a source-resolved browser-existence helper guarding the true branch (#2108)", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/sign-in.tsx",
+        text: `import { isBrowser } from "../lib/runtime";\nexport function SignIn() {\n  const redirect = isBrowser() ? window?.location.origin : "";\n  return <div>{redirect}</div>;\n}\n`,
+      },
+      { path: "lib/runtime.ts", text: `export function isBrowser() {\n  return typeof window !== "undefined";\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  it("does not widen helper recognition beyond the measured ternary shape (#2108)", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/guards.tsx",
+        text: `function browserExists() { return typeof window !== "undefined"; }\nexport function IfBranch() {\n  if (browserExists()) return <div>{window.innerWidth}</div>;\n  return null;\n}\nexport function EarlyExit() {\n  if (!browserExists()) return null;\n  return <div>{window.innerWidth}</div>;\n}\nexport function Logical() {\n  return <div>{browserExists() && window.innerWidth}</div>;\n}\n`,
+      },
+    ]);
+    expect(findings.filter((finding) => finding.taxonomy === SSR_API)).toHaveLength(3);
+  });
+
+  it("keeps unsafe helper lookalikes and inverted branches flagged (#2108)", () => {
+    const unsafeHelpers = [
+      `export function isBrowser() { return true; }`,
+      `export async function isBrowser() { return typeof window !== "undefined"; }`,
+      `export function* isBrowser() { return typeof window !== "undefined"; }`,
+      `export function isBrowser() { return Promise.resolve(typeof window !== "undefined"); }`,
+      `export function isBrowser(window?: Window) { return typeof window !== "undefined"; }`,
+      `export function isBrowser() { typeof window !== "undefined"; }`,
+      `export function isBrowser() { return typeof document !== "undefined"; }`,
+    ];
+    for (const helper of unsafeHelpers) {
+      const findings = detectAppRouterFindings([
+        {
+          path: "app/sign-in.tsx",
+          text: `import { isBrowser } from "../lib/runtime";\nexport function SignIn() {\n  return <div>{isBrowser() ? window?.location.origin : ""}</div>;\n}\n`,
+        },
+        { path: "lib/runtime.ts", text: helper },
+      ]);
+      expect(taxonomies(findings), helper).toContain(SSR_API);
+    }
+
+    const inverted = detectAppRouterFindings([
+      {
+        path: "app/inverted.tsx",
+        text: `function isBrowser() { return typeof window !== "undefined"; }\nexport function Inverted() {\n  return <div>{!isBrowser() ? window?.location.origin : ""}</div>;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(inverted)).toContain(SSR_API);
+  });
+
+  it("does not trust unresolved or caller-shadowed helper names (#2108)", () => {
+    const unresolved = detectAppRouterFindings([
+      {
+        path: "app/unresolved.tsx",
+        text: `import { isBrowser } from "unloaded-package";\nexport function Unresolved() {\n  return <div>{isBrowser() ? window?.location.origin : ""}</div>;\n}\n`,
+      },
+    ]);
+    const shadowed = detectAppRouterFindings([
+      { path: "lib/runtime.ts", text: `export function isBrowser() { return typeof window !== "undefined"; }` },
+      {
+        path: "app/shadowed.tsx",
+        text: `import { isBrowser } from "../lib/runtime";\nexport function Shadowed() {\n  const isBrowser = () => true;\n  return <div>{isBrowser() ? window?.location.origin : ""}</div>;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(unresolved)).toContain(SSR_API);
+    expect(taxonomies(shadowed)).toContain(SSR_API);
+  });
+
+  it("does not trust a proven helper binding after shadowing or reassignment (#2108)", () => {
+    const unsafe = [
+      `function isBrowser() { return typeof window !== "undefined"; }\nexport default function Page() {\n  function isBrowser() { return true; }\n  return <div>{isBrowser() ? window?.innerWidth : ""}</div>;\n}`,
+      `function isBrowser() { return typeof window !== "undefined"; }\nexport default function Page() {\n  { const isBrowser = () => true; return <div>{isBrowser() ? window?.innerWidth : ""}</div>; }\n}`,
+      `function isBrowser() { return typeof window !== "undefined"; }\nexport default function Page() {\n  try { throw (() => true); } catch (isBrowser) { return <div>{isBrowser() ? window?.innerWidth : ""}</div>; }\n}`,
+      `function isBrowser() { return typeof window !== "undefined"; }\nexport default function Page() {\n  { class isBrowser {} return <div>{isBrowser() ? window?.innerWidth : ""}</div>; }\n}`,
+      `function isBrowser() { return typeof window !== "undefined"; }\nisBrowser = () => true;\nexport default function Page() {\n  return <div>{isBrowser() ? window?.innerWidth : ""}</div>;\n}`,
+      `let isBrowser = () => typeof window !== "undefined";\nisBrowser = () => true;\nexport default function Page() {\n  return <div>{isBrowser() ? window?.innerWidth : ""}</div>;\n}`,
+      `let isBrowser = () => typeof window !== "undefined";\n[isBrowser] = [() => true];\nisBrowser() ? window?.innerWidth : "";`,
+      `let isBrowser = () => typeof window !== "undefined";\n({ guard: isBrowser } = { guard: () => true });\nisBrowser() ? window?.innerWidth : "";`,
+      `let isBrowser = () => typeof window !== "undefined";\nisBrowser &&= () => true;\nisBrowser() ? window?.innerWidth : "";`,
+      `let isBrowser = () => typeof window !== "undefined";\nfor (isBrowser of [() => true]) { isBrowser() ? window?.innerWidth : ""; }`,
+    ];
+    for (const text of unsafe) {
+      const findings = detectAppRouterFindings([{ path: "app/page.tsx", text }]);
+      expect(taxonomies(findings), text).toContain(SSR_API);
+    }
+
+    const importedReassignment = detectAppRouterFindings([
+      {
+        path: "app/page.tsx",
+        text: `import { isBrowser } from "../lib/runtime";\nexport default function Page() {\n  return <div>{isBrowser() ? window?.innerWidth : ""}</div>;\n}`,
+      },
+      {
+        path: "lib/runtime.ts",
+        text: `export let isBrowser = () => typeof window !== "undefined";\nisBrowser = () => true;`,
+      },
+    ]);
+    expect(taxonomies(importedReassignment)).toContain(SSR_API);
+  });
+
+  it("rejects top-level lexical shadows and helper-global runtime bindings (#2108)", () => {
+    const lexicalShadows = [
+      `function isBrowser() { return typeof window !== "undefined"; }\n{ const isBrowser = () => true; isBrowser() ? window?.location : ""; }`,
+      `function isBrowser() { return typeof window !== "undefined"; }\n{ function isBrowser() { return true; } isBrowser() ? window?.location : ""; }`,
+      `function isBrowser() { return typeof window !== "undefined"; }\nfor (const isBrowser of [() => true]) { isBrowser() ? window?.location : ""; }`,
+      `function isBrowser() { return typeof window !== "undefined"; }\ntry { throw () => true; } catch (isBrowser) { isBrowser() ? window?.location : ""; }`,
+      `const isBrowser = function window() { return typeof window !== "undefined"; };\nisBrowser() ? window?.location : "";`,
+    ];
+    for (const text of lexicalShadows) {
+      const findings = detectAppRouterFindings([{ path: "app/page.tsx", text }]);
+      expect(taxonomies(findings), text).toContain(SSR_API);
+    }
+
+    const helperGlobalBindings = [
+      `export enum window { Fake }\nexport function isBrowser() { return typeof window !== "undefined"; }`,
+      `export namespace window { export const fake = true; }\nexport function isBrowser() { return typeof window !== "undefined"; }`,
+      `namespace host { export const value = true; }\nimport window = host.value;\nexport function isBrowser() { return typeof window !== "undefined"; }`,
+    ];
+    for (const helper of helperGlobalBindings) {
+      const findings = detectAppRouterFindings([
+        { path: "lib/runtime.ts", text: helper },
+        { path: "app/page.tsx", text: `import { isBrowser } from "../lib/runtime";\nisBrowser() ? window?.location : "";` },
+      ]);
+      expect(taxonomies(findings), helper).toContain(SSR_API);
+    }
+
+    const unrelatedNestedBinding = detectAppRouterFindings([
+      {
+        path: "app/page.tsx",
+        text: `function unrelated() { enum window { Fake } }\nexport function Page() { return <div>{window?.innerWidth}</div>; }`,
+      },
+    ]);
+    expect(taxonomies(unrelatedNestedBinding)).toContain(SSR_API);
   });
 });
 

@@ -2769,7 +2769,211 @@ function precedingGuardExits(node: ts.Node, sf: ts.SourceFile, guards: (text: st
   return false;
 }
 
-function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+type BrowserGuardFunction = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
+
+function topLevelFunction(sf: ts.SourceFile, name: string, exported: boolean): BrowserGuardFunction | undefined {
+  const candidates: BrowserGuardFunction[] = [];
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) {
+      if (!exported || stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) candidates.push(stmt);
+    }
+    if (!ts.isVariableStatement(stmt)) continue;
+    if (exported && !stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (
+        ts.isIdentifier(decl.name) &&
+        decl.name.text === name &&
+        decl.initializer &&
+        (ts.isFunctionExpression(decl.initializer) || ts.isArrowFunction(decl.initializer))
+      ) {
+        candidates.push(decl.initializer);
+      }
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+// Every same-named runtime binding in a file is relevant to a precision-only exemption. Rather
+// than partially reimplementing lexical resolution, require the resolved helper/import to be the
+// sole declaration with that local name. This deliberately rejects ambiguous safe programs, but
+// cannot mistake a block/catch/loop/function shadow for the proven helper.
+function runtimeBindingDeclarations(sf: ts.SourceFile, name: string): ts.Node[] {
+  const declarations: ts.Node[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      const names = new Set<string>();
+      bindingNames(node.name, names);
+      if (names.has(name)) declarations.push(node);
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isClassExpression(node) ||
+        ts.isEnumDeclaration(node) ||
+        ts.isModuleDeclaration(node)) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) declarations.push(node);
+    else if (ts.isImportClause(node) && node.name?.text === name) declarations.push(node);
+    else if (ts.isImportSpecifier(node) && node.name.text === name) declarations.push(node);
+    else if (ts.isNamespaceImport(node) && node.name.text === name) declarations.push(node);
+    else if (ts.isImportEqualsDeclaration(node) && node.name.text === name) declarations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return declarations;
+}
+
+function helperBindingDeclaration(fn: BrowserGuardFunction): ts.Node | undefined {
+  if (ts.isFunctionDeclaration(fn)) return fn;
+  return ts.isVariableDeclaration(fn.parent) && fn.parent.initializer === fn ? fn.parent : undefined;
+}
+
+function hasUniqueHelperBinding(sf: ts.SourceFile, localName: string, helper: BrowserGuardFunction, imported: boolean): boolean {
+  const declarations = runtimeBindingDeclarations(sf, localName);
+  if (declarations.length !== 1) return false;
+  if (imported) {
+    return ts.isImportClause(declarations[0]!) || ts.isImportSpecifier(declarations[0]!) || ts.isNamespaceImport(declarations[0]!);
+  }
+  return declarations[0] === helperBindingDeclaration(helper);
+}
+
+function assignmentTargetContains(node: ts.Node, name: string): boolean {
+  if (ts.isIdentifier(node)) return node.text === name;
+  if (ts.isParenthesizedExpression(node)) return assignmentTargetContains(node.expression, name);
+  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => assignmentTargetContains(element, name));
+  if (ts.isObjectLiteralExpression(node)) {
+    return node.properties.some((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) return property.name.text === name;
+      if (ts.isPropertyAssignment(property)) return assignmentTargetContains(property.initializer, name);
+      return ts.isSpreadAssignment(property) && assignmentTargetContains(property.expression, name);
+    });
+  }
+  if (ts.isSpreadElement(node)) return assignmentTargetContains(node.expression, name);
+  return false;
+}
+
+// A declaration body proves only the binding's INITIAL value. Any later/conditional write means
+// the value at the call site is no longer source-proven, so this suppression must fail closed.
+// Conservative across nested scopes: an ambiguous same-named write rejects clearance rather than
+// requiring a type-checker-grade lexical resolver inside a precision-only suppression.
+function bindingIsReassigned(sf: ts.SourceFile, name: string): boolean {
+  let reassigned = false;
+  const visit = (node: ts.Node) => {
+    if (reassigned) return;
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      assignmentTargetContains(node.left, name)
+    ) {
+      reassigned = true;
+      return;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContains(node.operand, name)
+    ) {
+      reassigned = true;
+      return;
+    }
+    if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && assignmentTargetContains(node.initializer, name)) {
+      reassigned = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return reassigned;
+}
+
+function unwrapParentheses(expr: ts.Expression): ts.Expression {
+  let current = expr;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
+// A helper can suppress this finding only when its loaded source proves the exact synchronous
+// predicate it stands for. Names such as `isBrowser` carry no weight by themselves: unresolved,
+// async/generator, parameterised, shadowed, multi-statement, and wrong-global helpers all leave the
+// finding standing. This is deliberately narrower than the auth GateResolver: an existence check
+// has one small semantic shape, so guessing through a call graph would trade a corpus FP for FNs.
+function browserExistencePredicate(fn: BrowserGuardFunction, sf: ts.SourceFile): string | undefined {
+  if (
+    fn.parameters.length > 0 ||
+    fn.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ||
+    (ts.isFunctionDeclaration(fn) || ts.isFunctionExpression(fn)) && fn.asteriskToken
+  ) {
+    return undefined;
+  }
+  if (!fn.body) return undefined;
+  const onlyStatement = ts.isBlock(fn.body) ? fn.body.statements[0] : undefined;
+  const returned = ts.isBlock(fn.body)
+    ? fn.body.statements.length === 1 && onlyStatement && ts.isReturnStatement(onlyStatement)
+      ? onlyStatement.expression
+      : undefined
+    : fn.body;
+  if (!returned) return undefined;
+  const expr = unwrapParentheses(returned);
+  if (!ts.isBinaryExpression(expr)) return undefined;
+  if (expr.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsEqualsToken && expr.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsToken) {
+    return undefined;
+  }
+  const left = unwrapParentheses(expr.left);
+  const right = unwrapParentheses(expr.right);
+  const typeofGlobal = (candidate: ts.Expression, undefinedValue: ts.Expression): string | undefined =>
+    ts.isTypeOfExpression(candidate) &&
+    ts.isIdentifier(candidate.expression) &&
+    BROWSER_GLOBALS.has(candidate.expression.text) &&
+    ts.isStringLiteral(undefinedValue) &&
+    undefinedValue.text === "undefined"
+      ? candidate.expression.text
+      : undefined;
+  const global = typeofGlobal(left, right) ?? typeofGlobal(right, left);
+  return global !== undefined && runtimeBindingDeclarations(sf, global).length === 0 ? global : undefined;
+}
+
+function resolvedBrowserGuardCall(call: ts.CallExpression, sf: ts.SourceFile, ctx: SsrCrossFileContext, global: string): boolean {
+  if (call.arguments.length > 0 || !ts.isIdentifier(call.expression)) return false;
+  const name = call.expression.text;
+  if (bindingIsReassigned(sf, name)) return false;
+  const path = findSourcePath(sf, ctx);
+  if (!path) return false;
+  let helperSf = sf;
+  let helperName = name;
+  let importedHelper = false;
+  let helper = topLevelFunction(sf, name, false);
+  if (!helper) {
+    const imported = collectValueImports(sf, path, new Set(ctx.allPaths), ctx.aliases).get(name);
+    if (!imported || imported.name === NAMESPACE_IMPORT) return false;
+    helperSf = ctx.sources.get(imported.path) ?? sf;
+    if (helperSf === sf) return false;
+    helperName = imported.name;
+    helper = topLevelFunction(helperSf, imported.name, true);
+    importedHelper = true;
+  }
+  return (
+    helper !== undefined &&
+    hasUniqueHelperBinding(sf, name, helper, importedHelper) &&
+    (!importedHelper || hasUniqueHelperBinding(helperSf, helperName, helper, false)) &&
+    !bindingIsReassigned(helperSf, helperName) &&
+    browserExistencePredicate(helper, helperSf) === global
+  );
+}
+
+function browserGuardCondition(expr: ts.Expression, sf: ts.SourceFile, ctx: SsrCrossFileContext, global: string): boolean {
+  const condition = unwrapParentheses(expr);
+  return ts.isCallExpression(condition) && resolvedBrowserGuardCall(condition, sf, ctx, global);
+}
+
+function isDescendantOf(node: ts.Node, ancestor: ts.Node): boolean {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) if (current === ancestor) return true;
+  return false;
+}
+
+function isSsrGuarded(node: ts.Node, sf: ts.SourceFile, ctx: SsrCrossFileContext, global: string): boolean {
   const guards = (text: string) => TYPEOF_GUARD.test(text);
   if (precedingGuardExits(node, sf, guards)) return true;
   for (let cur = node.parent; cur; cur = cur.parent) {
@@ -2780,6 +2984,15 @@ function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
       (cur.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || cur.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
       guards(cur.left.getText(sf))
     ) {
+      return true;
+    }
+    if (
+      ts.isConditionalExpression(cur) &&
+      isDescendantOf(node, cur.whenTrue) &&
+      browserGuardCondition(cur.condition, sf, ctx, global)
+    ) {
+      // Bounded to the corpus-proven shape: `exists() ? window.x : fallback`. The existing
+      // early-return/helper population remains reported until that broader family is measured.
       return true;
     }
   }
@@ -2799,7 +3012,7 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         !declared.has(node.expression.text);
       if (onGlobal) {
         const global = (node.expression as ts.Identifier).text;
-        if (isOnSsrRenderPath(node, sf, ctx) && !isSsrGuarded(node, sf)) {
+        if (isOnSsrRenderPath(node, sf, ctx) && !isSsrGuarded(node, sf, ctx, global)) {
           const readSite = ssrReadSite(node);
           findings.push(
             makeFinding(nextId, {
