@@ -1,5 +1,5 @@
 export interface ConservationRule {
-  kind: "prefix" | "exact";
+  kind: "prefix" | "suffix" | "exact";
   value: string;
 }
 

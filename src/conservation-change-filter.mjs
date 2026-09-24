@@ -13,12 +13,20 @@ export const CONSERVATION_INPUT_RULES = Object.freeze([
   { kind: "prefix", value: "targets/calibration/" },
   { kind: "prefix", value: "briefs/" },
   { kind: "prefix", value: "tools/" },
-  { kind: "prefix", value: ".github/actions/mechanical-binaries/" },
+  { kind: "prefix", value: "report-template/" },
+  { kind: "prefix", value: ".github/actions/" },
+  { kind: "prefix", value: "patches/" },
   { kind: "exact", value: ".github/workflows/conservation.yml" },
   { kind: "exact", value: ".nvmrc" },
   { kind: "exact", value: ".semgrepignore" },
   { kind: "exact", value: "package.json" },
+  { kind: "suffix", value: "/package.json" },
   { kind: "exact", value: "pnpm-lock.yaml" },
+  { kind: "exact", value: "pnpm-workspace.yaml" },
+  { kind: "exact", value: ".npmrc" },
+  { kind: "exact", value: ".pnpmfile.cjs" },
+  { kind: "exact", value: ".jscpd.json" },
+  { kind: "exact", value: "knip.json" },
   { kind: "exact", value: "tsconfig.json" },
   { kind: "exact", value: "vitest.config.ts" },
 ]);
@@ -34,7 +42,9 @@ const DRIFT_INPUT_RULES = Object.freeze([
 ]);
 
 function matches(path, rule) {
-  return rule.kind === "prefix" ? path.startsWith(rule.value) : path === rule.value;
+  if (rule.kind === "prefix") return path.startsWith(rule.value);
+  if (rule.kind === "suffix") return path.endsWith(rule.value);
+  return path === rule.value;
 }
 
 function matchingPaths(paths, rules) {

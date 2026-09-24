@@ -32,14 +32,12 @@ describe("heavy CLI test sharding", () => {
   });
 
   it("gives run-audit a shard to ITSELF at the width CI uses", () => {
-    // run-audit is both the longest single file and the most variable (58.3s and ~87s across two
-    // CI runs), so it sets the wall-clock floor. Stacking anything behind it puts that variance on
-    // the critical path — measured: the first sharded run landed at 141s against a 104s prediction
-    // precisely because lighthouse sat behind it. Alone, its variance costs only itself.
+    // The registry reserves a runner for run-audit. The retained hosted receipts and
+    // current/stale status live with the planner; this test protects assignment, not duration.
     const shards = shardHeavyTests(3);
     const withRunAudit = shards.find((s) => s.includes("src/cli/run-audit.test.ts"));
     expect(withRunAudit, "run-audit.test.ts is not in any shard").toBeDefined();
-    expect(withRunAudit, "run-audit must not share a shard — it is the wall-clock floor").toEqual([
+    expect(withRunAudit, "run-audit must retain its reserved shard").toEqual([
       "src/cli/run-audit.test.ts",
     ]);
   });

@@ -601,7 +601,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/cli/quality-scan.test.ts": [
     "// per-workspace change, which on a monorepo structurally cannot see a block copy-pasted ACROSS",
     "// workspace the shared discoverTargets glob can't expand (a `packages/**` double-star, #548). This",
-    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
     "// no dependency at all (the issue's \"vite not in deps\" cause) leaves knip unable to activate its",
     "// #696: a config-less scan target gives knip no way to infer non-app entry points (test files above",
     "// Imports an uninstalled plugin → knip can't load this config without the target's node_modules.",
@@ -1319,6 +1318,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "//     on the VALUE side of a comparison can't spuriously clear the finding;",
     "// an ownership check in a wrapper/middleware it can't see is absent.",
   ],
+  "src/scan/duplication.test.ts": [
+    "// Retain a test-owned cleanup fallback so a deliberate cleanup mutation cannot leak scratch.",
+  ],
   "src/scan/env-schema.test.ts": [
     "// so it can't false-fire as an undeclared read.",
   ],
@@ -1362,6 +1364,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// malformed package.json can't assert a dependency either way, so treat it as absent.",
     "// #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry",
     "// Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since",
+  ],
+  "src/scan/genai-admission.ts": [
+    "// removes generated content. An admitted .js/.cjs/.mts/.cts change cannot disappear from the",
   ],
   "src/scan/gha-permissions.ts": [
     "// exact fact (`high`); shape 2 depends on a repository setting this scan cannot read, so it asks",

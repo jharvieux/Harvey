@@ -38,6 +38,17 @@ describe("conservation change selection", () => {
     ["effectiveness evidence", "src/effectiveness-registry.ts"],
     ["tool wrapper", "tools/pii-classify.mjs"],
     ["schema/registry source", "src/effectiveness-schema.ts"],
+    ["package manager settings", "pnpm-workspace.yaml"],
+    ["package manager configuration", ".npmrc"],
+    ["package manager hook", ".pnpmfile.cjs"],
+    ["dependency patch", "patches/tool.patch"],
+    ["workspace dependency manifest", "site/package.json"],
+    ["additional workspace manifest", "packages/new-workspace/package.json"],
+    ["duplication tool configuration", ".jscpd.json"],
+    ["dead-code tool configuration", "knip.json"],
+    ["report template", "report-template/render.mjs"],
+    ["liveness action", ".github/actions/gate-liveness/action.yml"],
+    ["failure alert action", ".github/actions/alert-issue/action.yml"],
   ])("selects real execution for a %s-only change", (_label, path) => {
     const result = runShippingFilter(path);
     expect(result.outputs).toContain("relevant=true\n");
@@ -73,5 +84,9 @@ describe("conservation change selection", () => {
     expect(workflow.match(/^\s+pull_request:\s*$/m)).not.toBeNull();
     expect(workflow.match(/^\s+merge_group:\s*$/m)).not.toBeNull();
     expect(workflow).not.toMatch(/^\s+paths(?:-ignore)?:/m);
+    const localActions = [...workflow.matchAll(/uses:\s*\.\/(\.github\/actions\/[^\s]+)/g)]
+      .map((match) => `${match[1]}/action.yml`);
+    expect(localActions.length).toBeGreaterThan(0);
+    for (const action of localActions) expect(planConservationRun("pull_request", [action]).relevant, action).toBe(true);
   });
 });
