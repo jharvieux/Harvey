@@ -26733,7 +26733,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26742,7 +26742,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "ubuntu-latest",
@@ -26751,7 +26751,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -26780,7 +26780,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26789,7 +26789,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "actions/checkout@v4",
@@ -26798,7 +26798,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -26827,7 +26827,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26836,7 +26836,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "pnpm/action-setup@v4",
@@ -26845,7 +26845,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -26874,7 +26874,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26883,7 +26883,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "actions/upload-artifact@v4",
@@ -26892,7 +26892,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -26921,7 +26921,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26930,7 +26930,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "actions/setup-node@v4",
@@ -26939,7 +26939,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -26968,7 +26968,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -26982,7 +26982,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27011,7 +27011,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27020,7 +27020,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "./.github/actions/mechanical-binaries",
@@ -27029,7 +27029,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27058,7 +27058,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27067,7 +27067,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "./.github/actions/corpus-mirror-auth",
@@ -27076,7 +27076,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27105,7 +27105,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27114,7 +27114,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "./.github/actions/corpus-clone-cache",
@@ -27123,7 +27123,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27152,7 +27152,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27161,7 +27161,7 @@
       "decision": null,
       "declarationSource": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "declaredIdentity": "actions/download-artifact@v4",
@@ -27170,7 +27170,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27199,7 +27199,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27213,7 +27213,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -27242,7 +27242,7 @@
       "consumer": {
         "location": {
           "anchor": "jobs/current-replay",
-          "line": 653,
+          "line": 652,
           "path": ".github/workflows/corpus-drift.yml"
         },
         "reason": "This job/action declaration is interpreted by the hosted runner. It declares configuration; it is not an observed run receipt.",
@@ -27256,7 +27256,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "jobs/current-replay",
-        "line": 653,
+        "line": 652,
         "path": ".github/workflows/corpus-drift.yml"
       },
       "freshness": {
@@ -106663,7 +106663,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 300,
+        "line": 310,
         "path": "src/cli/quick-scan.test.ts"
       },
       "freshness": {
@@ -115910,7 +115910,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 192,
+        "line": 246,
         "path": "src/corpus-cache-transport.test.ts"
       },
       "freshness": {
@@ -115984,7 +115984,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 165,
+        "line": 187,
         "path": "src/corpus-cache-transport.test.ts"
       },
       "freshness": {
@@ -116058,7 +116058,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 183,
+        "line": 190,
         "path": "src/corpus-cache-transport.ts"
       },
       "freshness": {
@@ -163008,7 +163008,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 280,
+        "line": 327,
         "path": "src/heavy-test-plan.test.ts"
       },
       "freshness": {
@@ -259016,7 +259016,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 25,
+        "line": 29,
         "path": "src/scan/corpus-shards.test.ts"
       },
       "freshness": {
@@ -259053,7 +259053,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 113,
+        "line": 116,
         "path": "src/scan/corpus-shards.test.ts"
       },
       "freshness": {
@@ -259164,7 +259164,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 20,
+        "line": 41,
         "path": "src/scan/corpus-shards.ts"
       },
       "freshness": {
@@ -360780,8 +360780,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "54f37fa36021ed0229a892a74eafecb6c3b50da9",
-    "commitPayload": "dHJlZSA0ZTdhMjc1ODYxZTlmYjJlYjAwNGYzM2YyOTg3MzZmNWUwZWE1ZjI0CnBhcmVudCBkYTU0NDRlNDY3MDI3ODZmOGI2Y2E5MzMwMDU0MWU1ZjExNGZiMDIyCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjMwMjI4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjMwMjI4IC0wNTAwCgpTdXJmYWNlIGluZGVwZW5kZW50IHdvcmtlciBleGl0cyBkdXJpbmcgY2xlYW51cCAoIzIxNjUpCg==",
+    "commit": "b378b3f0acb266db6e37b593fbb00ad14405ef2d",
+    "commitPayload": "dHJlZSA5ZjZkZmY2Y2Y3MzgwNWU1MTgwOTA3OWRjNTcxOWJkNTgxYmVkYWFhCnBhcmVudCA5NzRlZGUyZTIxNDdjMjc2ZjEwZDI0YjI2YzZkNTEyODExOWM5OGFiCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3MjYzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3MzQ5IC0wNTAwCgpCYWxhbmNlIGNvcnB1cyBvd25lcnMgYWdhaW5zdCBleGlzdGluZyBqb2IgYnVkZ2V0cyAoIzIxNzEpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -360790,13 +360790,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "cd5ec5c495316b8d8bf1b7d14bd84eec20f46d46",
+        "gitOid": "53e3794bed11d479459557ca6218baf8beb340c5",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "9700ba46d45865c540d03726e964f87f860b0f0a83d2a11769efe2f3cbf1b725",
-    "tree": "4e7a275861e9fb2eb004f33f298736f5e0ea5f24"
+    "populationSha256": "da02191f19f9539c43887a49736c967e1add400501e26cec1e8e37acce13014a",
+    "tree": "9f6dff6cf73805e51809079dc5719bd581bedaaa"
   },
   "venues": [
     {
@@ -361190,11 +361190,11 @@
       "sha256": "7b2c2c72bff29efcf85573311ad5f9ee61058fe02394db5cacf8e95cbc152f5f"
     },
     {
-      "bytes": 30658,
+      "bytes": 30680,
       "disposition": "authoritative-adapter",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "341ffc894f53997e9fc4768a218c607fc13b79e5",
+      "gitOid": "3f54e709c578d8fe9180a4c318e7a1bb6062cbed",
       "id": ".github/workflows/ci.yml",
       "kind": "workflow",
       "literalCount": 0,
@@ -361202,7 +361202,7 @@
       "owner": "workflow/action declaration; #1909 runtime receipts",
       "path": ".github/workflows/ci.yml",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "f1a79072a4476b6e3370ffa7af19289bcb3d04ff4713e7e0a03e406941f38255"
+      "sha256": "2522a30a17bdadb1b4b291ad848f1406d76e84309c90e1ea1d3794ea6e554d2b"
     },
     {
       "bytes": 27352,
@@ -361220,11 +361220,11 @@
       "sha256": "d45bd55e163f9593f4e0e2df5467c8e5addf0611e682d8c7970350f3a810334a"
     },
     {
-      "bytes": 58726,
+      "bytes": 58662,
       "disposition": "authoritative-adapter",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "7f84ef2580cf87bd28f2f6a16ee1d8b4e9ae6e24",
+      "gitOid": "2c9ac404c8362a94efc50701ad809f61fcfc1dfa",
       "id": ".github/workflows/corpus-drift.yml",
       "kind": "workflow",
       "literalCount": 0,
@@ -361232,7 +361232,7 @@
       "owner": "workflow/action declaration; #1909 runtime receipts",
       "path": ".github/workflows/corpus-drift.yml",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "0751e67f2eb89736d14a230344532f4fbc128f2e6e8a6ce94aa8a15d6b1da71e"
+      "sha256": "e5dcc122ca6b07122a97b9f7c7540ae234acafa9f496229ecb3c1cd061d1b0ef"
     },
     {
       "bytes": 10463,
@@ -368255,19 +368255,19 @@
       "sha256": "57110a910caad8adf6df9cfb131831a1fa4b33b2704ca7cdda7bc649224b8632"
     },
     {
-      "bytes": 35180,
+      "bytes": 35380,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9e50dd13da04d27a35c04447e1890bd036115b14",
+      "gitOid": "7ba881df5966cb8f702b72ee6ee4176892ea9bf2",
       "id": "src/cli/quick-scan.test.ts",
       "kind": "source",
-      "literalCount": 574,
-      "literalSha256": "0e317532a85ba151338fa1b3da4fe839e66ca31266649bf88e038b697e89a515",
+      "literalCount": 567,
+      "literalSha256": "6ce7856555e6d2de6d0d7394828fa9f0c8eaf7b016c831ac899727fc5222c695",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/quick-scan.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "dbcbac02030a5896fc45383bbfbd8ef66f5b0fbc98e0719c8b8775a975eed2cc"
+      "sha256": "733b86c449a3638825869671d9286233bca79dd8897d0f7e51803ab79d38533a"
     },
     {
       "bytes": 35565,
@@ -369215,34 +369215,34 @@
       "sha256": "ece4c288f8d44caa3a5826c9d8d7b71e800771408d6bb5b4200d7abb76683770"
     },
     {
-      "bytes": 13746,
+      "bytes": 17216,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "5fe7b0659a7a06518c1a85b302476947eb317843",
+      "gitOid": "116a8c3354fe216803d00d2c823fe41d6ea984fd",
       "id": "src/corpus-cache-transport.test.ts",
       "kind": "source",
-      "literalCount": 255,
-      "literalSha256": "e8968326cffdaca1afecb3104c892c81f965c66409cacf3cf8c4b0233102b3e3",
+      "literalCount": 297,
+      "literalSha256": "9a854fbd8e8782986ebf45d233dc67ae7637e6a6126e929f82f3d0e930dfb202",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-cache-transport.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "a8b699d763c9f4b42a1a52a54a31860fbfbfa05a0afd7b731b654746b042c28b"
+      "sha256": "d95dfedd37fb1723c1cbe206fc4308c992c3625474f48f03539932a460b14ef8"
     },
     {
-      "bytes": 15662,
+      "bytes": 16242,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "0333b05233b788f5eb32d47846d892c5f95c1907",
+      "gitOid": "fe07a0325bb2ed1df092c0f4294d8ac06eb76ebd",
       "id": "src/corpus-cache-transport.ts",
       "kind": "source",
-      "literalCount": 127,
-      "literalSha256": "24fa6f5072f0248c495d90c082fa7c8b1532ca90c2fdeac68141aa414c9c0115",
+      "literalCount": 128,
+      "literalSha256": "b07175b4520512048aedcae7651d057faeaf69719fa98647f7cb8a5688f3c0d0",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-cache-transport.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "73d223429987d29afedc3658dba3146bab263a16fd30235069aef10c4f286c6b"
+      "sha256": "d3f35bd3b0264eb3532081de6a7aee8356d1bf61602145b426c8ac3a1bd1039e"
     },
     {
       "bytes": 26972,
@@ -369395,11 +369395,11 @@
       "sha256": "6f02533cfaaf30232db8a1161f46f32cab8a6945979c860f3b64d0fef1aff104"
     },
     {
-      "bytes": 64366,
+      "bytes": 64401,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6374844f9d731a17a9009cd88a05dcc84a40b6ff",
+      "gitOid": "9b95a1fabad44a6df8f3c0f49780f0258f9d1aab",
       "id": "src/corpus-phase-cache-workflow.test.ts",
       "kind": "source",
       "literalCount": 964,
@@ -369407,7 +369407,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-phase-cache-workflow.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "b1131ce3e33a23b1124db019c01445581159a2704e68850f817026f3b78570da"
+      "sha256": "4e077aefe5f0499de6fc2f115152ce5d863186cba384f461c9ab0033a0213c3e"
     },
     {
       "bytes": 22342,
@@ -380075,11 +380075,11 @@
       "sha256": "4b7973e9c1f1824c4b11fa881b5acb8d09bd64f9c294d4a5040fb3c3de36c380"
     },
     {
-      "bytes": 1144,
+      "bytes": 1220,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f3586d135e0505866298404527073256afae1109",
+      "gitOid": "430b78e3e9a1761f77dc3f895e983c99bcdd8bdd",
       "id": "src/heavy-test-plan.d.mts",
       "kind": "source",
       "literalCount": 4,
@@ -380087,44 +380087,44 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-plan.d.mts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ae186eaa6d31f01bffc3b5777ae69ed054a7f8310810dfef968ae096974e21ab"
+      "sha256": "1af8bb4035e5c61c8f711c1edb6d4924e7c419bb45bf6fc05563246cd269b0ea"
     },
     {
-      "bytes": 8871,
+      "bytes": 9870,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "696fef114394b11d0fb85243df184ed8531b2822",
+      "gitOid": "4b3b74fb14d290374f4de3b496992447d6c751df",
       "id": "src/heavy-test-plan.mjs",
       "kind": "source",
-      "literalCount": 111,
-      "literalSha256": "cd20e8788df251dda468bbb7ed76b3e6afc0eb0ed58cf921018869858b3c76c2",
+      "literalCount": 106,
+      "literalSha256": "0dde138784b272a59f17c7e956abbb197e72f94a8a13200f69637f7c695f7b49",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-plan.mjs",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "8edfdf2a3cad18646a28508554366e2ae05f485e3558d4e9e4e89bd6626a49a0"
+      "sha256": "0ff474889ba5f8af6a020f8b6ce144ebe97109f8d284f424b408fb25654c290a"
     },
     {
-      "bytes": 18093,
+      "bytes": 21418,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "beab7ba2b045a92fed1055543270964ad74cf3fe",
+      "gitOid": "2b84bf6dfd86eaf7b84df4b174997f205eeb1d09",
       "id": "src/heavy-test-plan.test.ts",
       "kind": "source",
-      "literalCount": 302,
-      "literalSha256": "525d2c91c835f148787b016fa25ddcb2d530d797c53b67b2af7f6fece70ec8c4",
+      "literalCount": 346,
+      "literalSha256": "2c5482347b6e0ed601e11e936590630c6c9a70bf394143d0cb4133b17c38ab1a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-plan.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "682a04574b5d37ac3a93fdffcc28d0b1981c626dbcb7c9e6f7d89d017b69ecc5"
+      "sha256": "6ff95e43f390f1ded1294de2ddc95f7bef3ee9e0f1baf5c12c3b49efa30cb796"
     },
     {
-      "bytes": 11246,
+      "bytes": 11950,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "14ce5ed55840e56c7e0cf729433e8f5785068bd9",
+      "gitOid": "9e79a01c5bcb3d78a72d41c80f6b306327507229",
       "id": "src/heavy-test-workloads.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -380132,7 +380132,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-workloads.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "a7e8a0dc9e4d9c1950d471c43959b66d6bb2515f64feaa3b125cd6dc8a1133be"
+      "sha256": "f26df8197c48fb4262005eca2b514f9a994f49953dda8ad525413b2c4edc808a"
     },
     {
       "bytes": 33588,
@@ -384560,34 +384560,34 @@
       "sha256": "a37eccad3d5750e96bb17876fb760a5618d1f079625abb767bde7c18932c468a"
     },
     {
-      "bytes": 12995,
+      "bytes": 13487,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6d6e8d6d0f0eefdb8ec52b9acb420a0add1ade9d",
+      "gitOid": "ad2d2259bbe8b202346c9f513414c944e5a4d935",
       "id": "src/scan/corpus-shards.test.ts",
       "kind": "source",
-      "literalCount": 237,
-      "literalSha256": "1c71d5bf6b132b4a001b90b70405c04dbb911aefdf84b37747cf938cc4329161",
+      "literalCount": 252,
+      "literalSha256": "b43e3e240c93c1fddc651344ec72b98d885f666c8253bfd722459c0c2b477899",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/corpus-shards.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3142eb3797c87ed5c5916ff44094cab90f1abc2683382ba2b234f29f7de2bccb"
+      "sha256": "c8d3e0e021fbc40dcc99b68e0bfcfe31f6f021b9624221248899ec533165393c"
     },
     {
-      "bytes": 7814,
+      "bytes": 7627,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f370964c64d8b6a1e18900917c26bafb8da154fa",
+      "gitOid": "b02d09f8003fc683fc81d8b700b1bc6148873881",
       "id": "src/scan/corpus-shards.ts",
       "kind": "source",
-      "literalCount": 46,
-      "literalSha256": "9364439abe008628a90fd3635eaaed00cbc1c883b8c0982a1d8b654298bd4230",
+      "literalCount": 57,
+      "literalSha256": "8d43e62ff5b1dab5e67594d55913856ef3ded97d920bf1fd230aef340df420ef",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/corpus-shards.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "fd27ed51b8c3e181174a2ba12c4251b3c391fff713183d8bf9d371fb544ff613"
+      "sha256": "f2c014945e87a64f681d090018e243a63e787df130dda80814d7c14c5616948e"
     },
     {
       "bytes": 3116,
