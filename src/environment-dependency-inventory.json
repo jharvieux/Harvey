@@ -146694,7 +146694,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 3714,
+        "line": 3713,
         "path": "src/detectors/app-router.ts"
       },
       "freshness": {
@@ -360521,8 +360521,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "597177dd50196349d8a90f4613c0497933a40f14",
-    "commitPayload": "dHJlZSA2YTU3YTViMDA1NmE3ZmE1NzM0MzI3ZDJmYmVkMzgwMTk3MDViMTQ4CnBhcmVudCBlMDkyNDE1NTBiYWFkYjhhYjEwZjA2YjU2NTQwODY3ZTQzMzI1NGFjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI0NjY1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI1NzQ4IC0wNTAwCgpSZWNvZ25pemUgc291cmNlLXByb3ZlbiBicm93c2VyIGd1YXJkcyAoIzIxMDgpCg==",
+    "commit": "cad7ebe4f166aaa4c5c262ed9307a202262563e9",
+    "commitPayload": "dHJlZSA4Mzc5ZmI3MzM3OGU2ZDA1OTExMjg0MmY4OTAwOWE5ZjBlMmE0YTY3CnBhcmVudCA4ZDgwZWQ4MjVhOTNhZGVmMjNhN2RmNjM3NjgwYzQwMGRmOWZmZDcwCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI2MzY1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjI2MzY1IC0wNTAwCgpDbGFyaWZ5IGNvbnNlcnZhdGl2ZSBoZWxwZXIgYmluZGluZyByYXRpb25hbGUgKCMyMTA4KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -360531,13 +360531,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "592b80b287a112e4ca6a8ad55844677313bebb1f",
+        "gitOid": "13fb39671a65b7ed7d1d04eda613fd050e5504e3",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "3c51806ba45024ce3db074462eefcabdc45897f5407dc261c8f65cd7325edd32",
-    "tree": "6a57a5b0056a7fa5734327d2fbed38019705b148"
+    "populationSha256": "c54868eaaa92effac6e650ba48b06b9862a3a7b32b9a97479d6642c8b71f9a66",
+    "tree": "8379fb73378e6d059112842f89009a9f0e2a4a67"
   },
   "venues": [
     {
@@ -377776,11 +377776,11 @@
       "sha256": "2fa6b7ddfbc4db7e7b53d7ef360f471d76fbe6be3415d26dcc135993aaeaec0a"
     },
     {
-      "bytes": 235310,
+      "bytes": 235223,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "b4fb88dbacc953c229e7568e4f731680e9f32eac",
+      "gitOid": "23d761254bbdae9787c38e4cff26808897833509",
       "id": "src/detectors/app-router.ts",
       "kind": "source",
       "literalCount": 877,
@@ -377788,7 +377788,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/detectors/app-router.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3e02796f0da0ba1a4b7d7cdd8cd361a0fcd8017fe6c8fbacf977dc51190043ec"
+      "sha256": "eb43e1bac733c7ee9bdfd89a7d03a9fa4fe2fae3054830a978e1bbac457416bc"
     },
     {
       "bytes": 4196,
