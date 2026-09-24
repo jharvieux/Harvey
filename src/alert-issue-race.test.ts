@@ -71,6 +71,7 @@ function runRacer(
   barrierCount: number,
   racerId: number,
   body: string = DEFAULT_BODY,
+  incident: string = "default",
 ): Promise<void> {
   return new Promise((res, rej) => {
     const script = [
@@ -87,6 +88,7 @@ function runRacer(
         MOCK_GH_STORE: fixture.store,
         MOCK_GH_BARRIER: String(barrierCount),
         RACER_ID: String(racerId),
+        ALERT_INCIDENT: incident,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -171,5 +173,25 @@ describe("alert-issue duplicate-alarm race (#1511/#1512)", () => {
     const runB = issues.find((i) => i.body.includes("900002"))!;
     expect(runB.state).toBe("open");
     expect(runB.comments).toBe(0);
+  });
+
+  it("partitions a branch dispatch from a genuine main incident and deduplicates within the branch", async () => {
+    fixture = makeFixture();
+    await runRacer(fixture, FIND_OR_UPDATE_SH, 0, 0, DEFAULT_BODY, "main");
+    const branchBody = "branch failure (run: https://github.com/o/r/actions/runs/900003)";
+    await runRacer(fixture, FIND_OR_UPDATE_SH, 0, 1, branchBody, "branch-dispatch-a1b2c3");
+
+    let issues = readStore(fixture.store);
+    expect(issues.filter((issue) => issue.state === "open")).toHaveLength(2);
+    const main = issues.find((issue) => issue.body.includes("alert-incident: main"))!;
+    const branch = issues.find((issue) => issue.body.includes("alert-incident: branch-dispatch-a1b2c3"))!;
+    expect(main.comments).toBe(0);
+    expect(branch.comments).toBe(0);
+
+    await runRacer(fixture, FIND_OR_UPDATE_SH, 0, 2, branchBody, "branch-dispatch-a1b2c3");
+    issues = readStore(fixture.store);
+    expect(issues).toHaveLength(2);
+    expect(issues.find((issue) => issue.number === main.number)?.comments).toBe(0);
+    expect(issues.find((issue) => issue.number === branch.number)?.comments).toBe(1);
   });
 });

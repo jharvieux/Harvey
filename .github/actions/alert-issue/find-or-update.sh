@@ -34,8 +34,24 @@
 # closed issue and closing an already-closed one).
 
 # $1 = drill|real. Partitions open issues on the marker by title so a drill and a live alarm can
-# never be confused for one another.
+# never be confused for one another. Real alarms are additionally partitioned by ALERT_INCIDENT;
+# `default` admits unstamped historical issues so every existing caller retains its old behavior.
 find_open() {
+  local incident="${ALERT_INCIDENT:-default}"
+  gh issue list --state open --label "$MARKER" --json number,title,body \
+    | jq -r --arg s "$SUFFIX" --arg want "$1" --arg incident "$incident" \
+        '[.[] | select(
+          if $want == "drill" then (.title | endswith($s))
+          elif (.title | endswith($s)) then false
+          elif $incident == "default" then (((.body // "") | contains("<!-- alert-incident: ")) | not) or ((.body // "") | contains("<!-- alert-incident: default -->"))
+          else ((.body // "") | contains("<!-- alert-incident: " + $incident + " -->"))
+          end
+        )] | .[0].number // empty'
+}
+
+# Drill refusal remains marker-wide: a drill must not proceed merely because its caller selected a
+# different incident partition from a real open alarm.
+find_any_open() {
   gh issue list --state open --label "$MARKER" --json number,title \
     | jq -r --arg s "$SUFFIX" --arg want "$1" \
         '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | .[0].number // empty'
@@ -67,11 +83,17 @@ run_id_of() {
 # is empty, since there is then no evidence to resolve one from). Idempotent and safe to call after
 # every create/comment, including when there was never a duplicate.
 reconcile_duplicates() {
-  local namespace="$1" own_run="$2" rows row n body run
+  local namespace="$1" own_run="$2" rows row n body run incident="${ALERT_INCIDENT:-default}"
   local -A cluster_of=()
   rows=$(gh issue list --state open --label "$MARKER" --json number,title,body \
-    | jq -c --arg s "$SUFFIX" --arg want "$namespace" \
-        '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | sort_by(.number) | .[]') || return $?
+    | jq -c --arg s "$SUFFIX" --arg want "$namespace" --arg incident "$incident" \
+        '[.[] | select(
+          if $want == "drill" then (.title | endswith($s))
+          elif (.title | endswith($s)) then false
+          elif $incident == "default" then (((.body // "") | contains("<!-- alert-incident: ")) | not) or ((.body // "") | contains("<!-- alert-incident: default -->"))
+          else ((.body // "") | contains("<!-- alert-incident: " + $incident + " -->"))
+          end
+        )] | sort_by(.number) | .[]') || return $?
   while IFS= read -r row; do
     [ -z "$row" ] && continue
     n=$(jq -r '.number' <<<"$row")
@@ -112,6 +134,9 @@ reconcile_duplicates() {
 # function's return status meaningful again, which the call sites below rely on.
 find_or_update() {
   local namespace="$1" title="$2" body="$3" existing url status num canonical own_run
+  if [ "$namespace" = "real" ] && [[ "$body" != *"<!-- alert-incident:"* ]]; then
+    body="${body}"$'\n\n'"<!-- alert-incident: ${ALERT_INCIDENT:-default} -->"
+  fi
   existing=$(find_open "$namespace") || return $?
   if [ -n "$existing" ]; then
     # `gh issue comment` prints the new comment's URL to stdout on success — which, inside
