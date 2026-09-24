@@ -82,6 +82,7 @@ describe("schema-v3 route graph", () => {
     const cases = {
       unused: "import { produce } from './producer.js'; const alias = produce; void alias;\n",
       unrelated: "import { produce } from './producer.js'; function alias() { return []; } alias(); void produce;\n",
+      "same-name unrelated": "function produce() { return []; } produce();\n",
       shadowed: "import { produce } from './producer.js'; function run(produce: () => unknown[]) { produce(); } run(() => []);\n",
       reassigned: "import { produce, type Finding } from './producer.js'; const unrelated = (): Finding[] => []; let alias = produce; alias = unrelated; alias();\n",
     };
