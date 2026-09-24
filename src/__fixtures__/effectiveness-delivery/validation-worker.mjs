@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { clearTimeout, setTimeout } from "node:timers";
+import { clearTimeout, setImmediate, setTimeout } from "node:timers";
 import { fileURLToPath, URL } from "node:url";
 
 async function boundedWait(promises, ms) {
@@ -20,7 +20,7 @@ export class ValidationWorker {
   #isClosed = false;
   #error;
   #observedError;
-  #stopping = false;
+  #stopSignals = new Set();
   #stderr = "";
   #request;
   #nextId = 0;
@@ -36,7 +36,11 @@ export class ValidationWorker {
     this.#closed = new Promise((resolve) => {
       this.#child.once("close", (code, signal) => {
         this.#isClosed = true;
-        if (!this.#stopping) this.#error ??= new Error(`validation worker exited ${code ?? signal}: ${this.#stderr}`);
+        if (!signal || !this.#stopSignals.has(signal)) {
+          if (!this.#error || this.#error === this.#observedError) {
+            this.#error = new Error(`validation worker exited ${code ?? signal}: ${this.#stderr}`);
+          }
+        }
         resolve();
       });
     });
@@ -109,11 +113,14 @@ export class ValidationWorker {
   }
 
   async stop() {
+    // Process an exit queued behind the caller's synchronous work before sending
+    // a termination signal. Only a matching close signal is a requested exit.
+    await new Promise((resolve) => setImmediate(resolve));
     if (!this.#isClosed) {
-      this.#stopping = this.#child.kill("SIGTERM");
+      if (this.#child.kill("SIGTERM")) this.#stopSignals.add("SIGTERM");
       await boundedWait([this.#closed], 2_000);
       if (!this.#isClosed) {
-        this.#stopping = this.#child.kill("SIGKILL") || this.#stopping;
+        if (this.#child.kill("SIGKILL")) this.#stopSignals.add("SIGKILL");
         await boundedWait([this.#closed], 5_000);
       }
       if (!this.#isClosed) throw new Error(`failed to reap validation worker ${this.#child.pid}`);

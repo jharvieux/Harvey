@@ -70,6 +70,27 @@ describe("validation worker final-response teardown", () => {
     await expect(worker.stop()).rejects.toThrow("unexpected response");
   });
 
+  it.each([
+    ["zero exit", "process.exit(0);"],
+    ["nonzero exit", "process.exit(7);"],
+    ["signal exit", 'process.kill(process.pid, "SIGKILL");'],
+  ])("surfaces a queued %s before teardown processes the close event", async (_name, action) => {
+    const { worker, trigger } = await controlledWorker(action);
+    await expect(worker.validate({ kind: "inventory", inventory: {} as never })).resolves.toEqual([]);
+    writeFileSync(trigger, "exit while the parent callback is blocked");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    await expect(worker.stop()).rejects.toThrow("validation worker exited");
+    expect(alive(worker.pid!)).toBe(false);
+  });
+
+  it("reports a new unexpected exit after an earlier validator error was observed", async () => {
+    const { worker, trigger } = await controlledWorker("process.exit(7);", true);
+    await expect(worker.validate({ kind: "inventory", inventory: {} as never })).rejects.toThrow("planted validator failure");
+    writeFileSync(trigger, "exit after the earlier error assertion");
+    await observeExit(worker.pid!);
+    await expect(worker.stop()).rejects.toThrow("validation worker exited 7");
+  });
+
   it("allows requested teardown and repeated cleanup after a valid response", async () => {
     const { worker, trigger } = await controlledWorker("process.exit(0);");
     await expect(worker.validate({ kind: "inventory", inventory: {} as never })).resolves.toEqual([]);
