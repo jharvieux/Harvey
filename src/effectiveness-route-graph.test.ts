@@ -101,6 +101,35 @@ describe("schema-v3 route graph", () => {
   });
 
   it.each([
+    { name: "arrow property", member: "exec: (command, args) => execFileSync(command, args)" },
+    { name: "async arrow property", member: "exec: async (command, args) => execFileSync(command, args)" },
+    { name: "method property", member: "exec(command, args) { return execFileSync(command, args); }" },
+  ])("retains command provenance through an anonymous $name executor wrapper", ({ member }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    const wrapped = `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst ctx: Context = { ${member} };\nfunction run(context: Context) { context.exec("node", ["src/child.ts"]); }\nrun(ctx);\n`;
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped);
+
+    const live = discoverEffectivenessRouteGraph(root, [implementation]);
+    expect(live.calls.map((call) => call.id)).toContain("command:src/cli/run-audit.ts->src/child.ts");
+    expect(live.routes).toEqual([
+      expect.objectContaining({
+        producerId: "one",
+        rootId: "src/cli/run-audit.ts",
+        callReceiptIds: expect.arrayContaining([
+          "command:src/cli/run-audit.ts->src/child.ts",
+          "call:src/child.ts->src/producer.ts#produce",
+        ]),
+      }),
+    ]);
+
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped.replace("execFileSync(command, args)", "[]"));
+    expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+  });
+
+  it.each([
     { name: "separate import", args: ["--import", "tsx", "src/child.ts"] },
     { name: "equals import", args: ["--import=tsx", "src/child.ts"] },
     { name: "source preload", args: ["--import", "./src/preload.ts", "src/child.ts"] },

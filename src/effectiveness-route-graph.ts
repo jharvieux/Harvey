@@ -159,14 +159,36 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker):
             while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
             if (owner) {
               const declaration = owner as ts.FunctionLikeDeclaration;
-              const named = declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
-                ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
-                : ts.isVariableDeclaration(declaration.parent) && ts.isIdentifier(declaration.parent.name)
-                  ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.parent.name))
+              const symbols: (ts.Symbol | undefined)[] = [
+                declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
+                  ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
+                  : ts.isVariableDeclaration(declaration.parent) && ts.isIdentifier(declaration.parent.name)
+                    ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.parent.name))
+                    : undefined,
+              ];
+              // Object-property functions are the ordinary shape for an injected executor
+              // (`ctx.exec`). An arrow has no symbol of its own and a method's literal symbol can
+              // differ from its contextual interface member, so retain both identities. Otherwise
+              // wrapping `execFileSync` makes every command behind that interface disappear.
+              const property = ts.isPropertyAssignment(declaration.parent)
+                ? declaration.parent
+                : ts.isMethodDeclaration(declaration) && ts.isObjectLiteralExpression(declaration.parent)
+                  ? declaration
                   : undefined;
-              if (named && !result.has(named)) {
-                result.add(named);
-                changed = true;
+              if (property) {
+                const contextual = ts.isObjectLiteralExpression(property.parent)
+                  ? checker.getContextualType(property.parent)?.getProperty(property.name.getText(source))
+                  : undefined;
+                symbols.push(
+                  canonicalSymbol(checker, checker.getSymbolAtLocation(property.name)),
+                  canonicalSymbol(checker, contextual),
+                );
+              }
+              for (const named of symbols) {
+                if (named && !result.has(named)) {
+                  result.add(named);
+                  changed = true;
+                }
               }
             }
           }
