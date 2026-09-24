@@ -54,7 +54,7 @@
     {
       "id": "quick-scan",
       "testFile": "src/cli/quick-scan.test.ts",
-      "weightSeconds": 1729,
+      "weightSeconds": 187,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -67,7 +67,93 @@
         "src/quality-scan.ts",
         "src/quality-scan.test.ts",
         "src/diverged-clones.ts",
-        "src/diverged-clones.test.ts"
+        "src/diverged-clones.test.ts",
+        "src/cli/quick-scan-",
+        "src/guard-mutation-process.ts"
+      ]
+    },
+    {
+      "id": "quick-scan-inventory",
+      "testFile": "src/cli/quick-scan-inventory.test.ts",
+      "weightSeconds": 528,
+      "paths": [
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/cli/quick-scan-",
+        "src/guard-mutation-process.ts"
+      ]
+    },
+    {
+      "id": "quick-scan-workspace",
+      "testFile": "src/cli/quick-scan-workspace.test.ts",
+      "weightSeconds": 467,
+      "paths": [
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/cli/quick-scan-",
+        "src/guard-mutation-process.ts"
+      ]
+    },
+    {
+      "id": "quick-scan-python",
+      "testFile": "src/cli/quick-scan-python.test.ts",
+      "weightSeconds": 349,
+      "paths": [
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/cli/quick-scan-",
+        "src/guard-mutation-process.ts"
+      ]
+    },
+    {
+      "id": "quick-scan-data-evidence",
+      "testFile": "src/cli/quick-scan-data-evidence.test.ts",
+      "weightSeconds": 229,
+      "paths": [
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/cli/quick-scan-",
+        "src/guard-mutation-process.ts"
       ]
     },
     {
@@ -375,6 +461,10 @@
   "weightProvenance": {
     "tests": "https://github.com/jharvieux/Harvey/actions/runs/35968096724",
     "head": "562e830bd4a13af1692971b51e7855a94aa3c50a",
-    "note": "Rounded-up observed test durations before sharing the duplicate calibration export. Calibration, M2 coverage, and shared-source gate durations come from this run; source-recall uses the same mechanical scan as calibration and is estimated at 60s."
+    "note": "Rounded-up observed test durations before sharing the duplicate calibration export. Calibration, M2 coverage, and shared-source gate durations come from this run; source-recall uses the same mechanical scan as calibration and is estimated at 60s.",
+    "quickScanSplit": {
+      "tests": "https://github.com/jharvieux/Harvey/actions/runs/35975271782",
+      "note": "One observed hosted run (n=1), rounded up by semantic group: calibration+prop-spread 186.438s, inventory 527.435s, M9 466.548s, M5 348.581s, M10 228.212s. The M9 mixed-clean pair hit 120.012s and is censored; these are scheduling estimates, not upper bounds. Splitting the eight JSON/text pairs preserves all 29 real invocations and yields 30 tests; calibration export remains shared in its file. Other workload and scored-gate weights retain the provenance above."
+    }
   }
 }
