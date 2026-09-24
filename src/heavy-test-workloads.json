@@ -330,7 +330,8 @@
         "src/workspaces.ts",
         "tools/pii-classify.mjs",
         "src/source-inventory.ts",
-        "src/source-copy.ts"
+        "src/source-copy.ts",
+        "report-template/"
       ]
     },
     {
@@ -404,7 +405,8 @@
         "src/workspaces.ts",
         "tools/pii-classify.mjs",
         "src/source-inventory.ts",
-        "src/source-copy.ts"
+        "src/source-copy.ts",
+        "report-template/"
       ]
     },
     {

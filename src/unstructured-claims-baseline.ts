@@ -496,6 +496,12 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/audit-plan.ts": [
     "// The ordered plan for the passes the orchestrator cannot run itself. Steps in scope are gated by",
   ],
+  "src/audit-replay-delivery.ts": [
+    "// Stale files from a prior attempt cannot satisfy the delivery gate for this invocation.",
+  ],
+  "src/audit-replay.ts": [
+    "/** Historical material may be delivered, but cannot establish current execution or coverage. */",
+  ],
   "src/audit-report.test.ts": [
     "// come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect",
   ],
@@ -512,6 +518,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// only describe what it did, and cannot claim a status for a module it isn't registered under.",
     "// their honest partial/requires-live-run — no artifacts dir, no way to prove the pass ran.",
     "// original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays",
+    "/** Retention observes the exact producer return before assembly; it cannot change the result. */",
     "// runner that declares itself migrated is HELD to it at runtime, so a helper cannot quietly",
     "// cannot discover that it skipped M5. Checked before anything runs, so the failure arrives before",
     "// severity weight, and both entries classify the same name, so the merge cannot invent sensitivity.",
