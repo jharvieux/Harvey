@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
@@ -7,12 +7,13 @@ import { describe, expect, it } from "vitest";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
 import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads } from "./heavy-test-plan.mjs";
 import { MEASURED_OUTSIDE_DISCOVERY, SCORED_GATES } from "./scored-gates.js";
+import { readNamesSafe } from "./fs-walk.js";
 
 const registry = loadHeavyRegistry();
 const allIds = registry.workloads.map((workload) => workload.id);
 const censusOwners = ["effectiveness-registry", "effectiveness-delivery"];
 const quickScanOwners = ["quick-scan", "quick-scan-inventory", "quick-scan-workspace", "quick-scan-python", "quick-scan-data-evidence"];
-const quickScanFiles = readdirSync("src/cli").filter((name) => /^quick-scan.*\.test\.ts$/.test(name)
+const quickScanFiles = readNamesSafe("src/cli").filter((name) => /^quick-scan.*\.test\.ts$/.test(name)
   && readFileSync(`src/cli/${name}`, "utf8").includes("describe.skipIf(!MECHANICAL_BINARIES_PRESENT)")).map((name) => `src/cli/${name}`).sort();
 
 function assertQuickScanCoverage(candidate: typeof registry): void {

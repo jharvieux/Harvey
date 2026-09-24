@@ -615,9 +615,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// second full timeout; and with no plugin list we can't build the retry config. Either way, let",
     "// #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of",
   ],
-  "src/cli/quick-scan.test.ts": [
-    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
-  ],
   "src/cli/quick-scan.ts": [
     "// cannot be resolved the document says so in its own compositions/properties AND the CLI prints",
     "// no way to know which modules were attempted.",

@@ -1,8 +1,9 @@
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runGuardCommand } from "../guard-mutation-process.js";
+import { statSafe } from "../fs-walk.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const CLI = join(REPO_ROOT, "src", "cli", "quick-scan.ts");
@@ -14,7 +15,7 @@ export const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks"]
     try {
       const path = join(directory, name);
       accessSync(path, constants.X_OK);
-      return statSync(path).isFile();
+      return statSafe(path)?.isFile() ?? false;
     } catch { return false; }
   }),
 );
