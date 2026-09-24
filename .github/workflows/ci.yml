@@ -299,8 +299,8 @@ jobs:
       # #1301: `validate:calibration` scores the REAL mechanical scan against the corpus answer key
       # and ran in no workflow at all — the gate that would catch "a rule stopped firing on its
       # positive" was never run automatically. It belongs here because this is the only job that
-      # installs the mechanical binaries. Shard 1 only: it is one run of one scan, not a sharded
-      # test file, and three copies would just burn two runners.
+      # installs the mechanical binaries. Assigned once alongside the least-loaded runner,
+      # including the scored gates' own costs; extra copies would only repeat the same scan.
       - name: Calibration gate (real binaries, scored against the corpus answer key)
         if: contains(matrix.gates, 'calibration') && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-calibration.ts
@@ -308,9 +308,9 @@ jobs:
       # #1288: the same hole one gate over. `validate-source-recall` scores the app-layer
       # request→sink SOURCE detectors — the free-tier recall number #868 publishes — and ran in no
       # workflow either. It runs the same runMechanicalScan the calibration gate does, so it needs
-      # the binaries this job installs and belongs nowhere else. The planner spreads these scored
-      # gates over however many selected runners exist; a single-runner scoped plan carries all of
-      # them, while a full three-runner plan preserves the established distribution.
+      # the binaries this job installs and belongs nowhere else. The planner budgets these scored
+      # gates against the test workloads already assigned to each runner. A fixed shard number
+      # must not put recall after a nearly full quick-scan job while another runner sits idle.
       #
       # Deliberately WITHOUT --real: that mode git-clones six pinned external repos and always exits
       # 0 by design (it reports, it does not gate), so on a cadence it would spend network on a
@@ -341,7 +341,7 @@ jobs:
       # was green throughout. It now also EXECUTES the block against probes with real semgrep, which
       # means it skips in `verify` (that job installs no binaries) and this is the only job where it
       # can run. HARVEY_REQUIRE_SEMGREP=1 makes a missing binary red rather than a silent skip.
-      # Assigned alongside the M2 coverage gate; this is one ~3s Vitest file.
+      # Assigned by the same workload budget as the other scored gates.
       - name: Shared request-source block — patterns MATCH probes, not merely present
         id: shared-source-match
         if: contains(matrix.gates, 'shared-source-match') && !inputs.liveness_drill

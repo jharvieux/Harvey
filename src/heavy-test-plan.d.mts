@@ -9,6 +9,7 @@ export interface HeavyRegistry {
   version: 1;
   globalPaths: string[];
   workloads: HeavyWorkload[];
+  gates: { id: string; weightSeconds: number }[];
 }
 
 export interface HeavySelection {
@@ -20,7 +21,7 @@ export interface HeavySelection {
 }
 
 export interface HeavyMatrix {
-  include: { shard: number; total: number; files: string[]; workloadIds: string[]; gates: string[] }[];
+  include: { shard: number; total: number; files: string[]; workloadIds: string[]; gates: string[]; estimatedSeconds: number }[];
 }
 
 export interface HeavyPlan extends HeavySelection {

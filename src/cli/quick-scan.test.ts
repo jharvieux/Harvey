@@ -61,6 +61,20 @@ function run(args: string[]): Promise<{ stdout: string }> {
   });
 }
 
+// Both export-path and prop-spread assertions consume this exact CLI invocation. Retain an
+// immutable serialized snapshot after the first run; the separate console-mode test still
+// exercises its own output branch. This avoids repeating the entire real calibration scan.
+let calibrationExport: Promise<string> | undefined;
+function calibrationFindings(): Promise<string> {
+  return calibrationExport ??= (async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "harvey-quick-calibration-export-"));
+    dirs.push(outDir);
+    const findingsOutPath = join(outDir, "findings.json");
+    await run([CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")]);
+    return readFileSync(findingsOutPath, "utf8");
+  })();
+}
+
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
   // Drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child process,
   // so vitest's 5s default is far too short. 30s was too short too: #1125 is this file blowing that
@@ -78,11 +92,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
   }, 120000);
 
   it("does not leak the scratch prefix into --findings-out (the raw mechanical Finding[])", async () => {
-    const outDir = mkdtempSync(join(tmpdir(), "harvey-quick-scan-test-"));
-    dirs.push(outDir);
-    const findingsOutPath = join(outDir, "findings.json");
-    await run([CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")]);
-    const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { location: string }[];
+    const findings = JSON.parse(await calibrationFindings()) as { location: string }[];
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.some((f) => SCRATCH_PREFIX.test(f.location))).toBe(false);
   }, 120000);
@@ -330,11 +340,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("harvey-jsx-prop-spread-injection:
   const FIXTURES = join(CALIBRATION, "src", "owasp-react");
 
   async function propSpreadHits(): Promise<string[]> {
-    const outDir = mkdtempSync(join(tmpdir(), "harvey-propspread-test-"));
-    dirs.push(outDir);
-    const findingsOutPath = join(outDir, "findings.json");
-    await run([CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")]);
-    const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { taxonomy: string; location: string }[];
+    const findings = JSON.parse(await calibrationFindings()) as { taxonomy: string; location: string }[];
     return findings
       .filter((f) => f.taxonomy.includes("prop-spread-injection"))
       .map((f) => f.location.split("/").pop() ?? f.location);

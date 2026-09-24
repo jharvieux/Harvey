@@ -12,7 +12,7 @@
     {
       "id": "run-audit",
       "testFile": "src/cli/run-audit.test.ts",
-      "weightSeconds": 100,
+      "weightSeconds": 326,
       "paths": [
         "src/audit-",
         "src/cli/run-audit.ts",
@@ -45,7 +45,7 @@
     {
       "id": "fix-calibration-acceptance",
       "testFile": "src/fix/calibration-acceptance.test.ts",
-      "weightSeconds": 37.7,
+      "weightSeconds": 58,
       "paths": [
         "src/fix/",
         "src/cli/fix-"
@@ -54,7 +54,7 @@
     {
       "id": "quick-scan",
       "testFile": "src/cli/quick-scan.test.ts",
-      "weightSeconds": 1332,
+      "weightSeconds": 1729,
       "paths": [
         "src/cli/quick-scan.ts",
         "src/cli/quick-scan.test.ts",
@@ -73,7 +73,7 @@
     {
       "id": "fix-detector-rerun",
       "testFile": "src/fix/detector-rerun.test.ts",
-      "weightSeconds": 25.9,
+      "weightSeconds": 50,
       "paths": [
         "src/fix/",
         "src/cli/fix-"
@@ -82,7 +82,7 @@
     {
       "id": "mutation-scan",
       "testFile": "src/cli/mutation-scan.test.ts",
-      "weightSeconds": 21.1,
+      "weightSeconds": 48,
       "paths": [
         "src/cli/mutation-scan.ts",
         "src/cli/mutation-scan.test.ts",
@@ -99,7 +99,7 @@
     {
       "id": "quality-scan",
       "testFile": "src/cli/quality-scan.test.ts",
-      "weightSeconds": 18.9,
+      "weightSeconds": 258,
       "paths": [
         "src/cli/quality-scan.ts",
         "src/cli/quality-scan.test.ts",
@@ -114,7 +114,7 @@
     {
       "id": "lighthouse-scan",
       "testFile": "src/cli/lighthouse-scan.test.ts",
-      "weightSeconds": 15,
+      "weightSeconds": 19,
       "paths": [
         "src/cli/lighthouse-scan.ts",
         "src/cli/lighthouse-scan.test.ts",
@@ -127,7 +127,7 @@
     {
       "id": "validate-calibration",
       "testFile": "src/cli/validate-calibration.test.ts",
-      "weightSeconds": 40,
+      "weightSeconds": 199,
       "paths": [
         "src/cli/validate-calibration.ts",
         "src/cli/validate-calibration.test.ts",
@@ -149,7 +149,7 @@
     {
       "id": "fix-execute",
       "testFile": "src/cli/fix-execute.test.ts",
-      "weightSeconds": 23.3,
+      "weightSeconds": 21,
       "paths": [
         "src/fix/",
         "src/cli/fix-"
@@ -158,7 +158,7 @@
     {
       "id": "corpus-scanner-cross-process",
       "testFile": "src/corpus-scanner-cross-process.test.ts",
-      "weightSeconds": 17,
+      "weightSeconds": 177,
       "paths": [
         "src/corpus-",
         "src/scan/external-corpus.ts",
@@ -176,7 +176,7 @@
     {
       "id": "effectiveness-registry",
       "testFile": "src/effectiveness-registry.test.ts",
-      "weightSeconds": 40,
+      "weightSeconds": 114,
       "paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/free-recall.yml",
@@ -250,7 +250,7 @@
     {
       "id": "effectiveness-delivery",
       "testFile": "src/effectiveness-delivery.test.ts",
-      "weightSeconds": 36,
+      "weightSeconds": 70,
       "paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/free-recall.yml",
@@ -324,7 +324,7 @@
     {
       "id": "corpus-cache-preflight",
       "testFile": "src/corpus-cache-preflight.test.ts",
-      "weightSeconds": 101.5,
+      "weightSeconds": 218,
       "paths": [
         ".github/workflows/corpus-drift.yml",
         "src/__fixtures__/corpus-cache-preflight/",
@@ -353,5 +353,28 @@
         "src/mutation-scan.test.ts"
       ]
     }
-  ]
+  ],
+  "gates": [
+    {
+      "id": "calibration",
+      "weightSeconds": 60
+    },
+    {
+      "id": "source-recall",
+      "weightSeconds": 60
+    },
+    {
+      "id": "m2-coverage",
+      "weightSeconds": 1
+    },
+    {
+      "id": "shared-source-match",
+      "weightSeconds": 6
+    }
+  ],
+  "weightProvenance": {
+    "tests": "https://github.com/jharvieux/Harvey/actions/runs/35968096724",
+    "head": "562e830bd4a13af1692971b51e7855a94aa3c50a",
+    "note": "Rounded-up observed test durations before sharing the duplicate calibration export. Calibration, M2 coverage, and shared-source gate durations come from this run; source-recall uses the same mechanical scan as calibration and is estimated at 60s."
+  }
 }
