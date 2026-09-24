@@ -2,7 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { assertCorpusCachePreflight } from "./corpus-cache-preflight.js";
@@ -17,6 +17,13 @@ const fixtures = join(root, "src", "__fixtures__", "corpus-cache-preflight");
 const directories: string[] = [];
 const activeInvocations = new Set<TrackedInvocation>();
 
+interface ExternalInvocation {
+  binary: string;
+  args: string[];
+  cwd: string;
+  targetIsCwd?: boolean;
+  targetEntries?: string[];
+}
 interface InvocationResult { status: number | null; stdout: string; stderr: string }
 interface TrackedInvocation {
   child: ChildProcess;
@@ -28,6 +35,25 @@ interface TrackedInvocation {
 }
 
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+const registryValidationConfigNames = REGISTRY_PACKS.map((pack, ordinal) => `${ordinal}-${pack.replaceAll("/", "-")}.yml`);
+
+function isRegistryValidation(invocation: ExternalInvocation): boolean {
+  const { args } = invocation;
+  if (invocation.binary !== "semgrep" || args.length !== 19 || args[0] !== "scan") return false;
+  for (let ordinal = 0; ordinal < registryValidationConfigNames.length; ordinal += 1) {
+    if (args[1 + (ordinal * 2)] !== "--config" || basename(args[2 + (ordinal * 2)]!) !== registryValidationConfigNames[ordinal]) return false;
+  }
+  return JSON.stringify(args.slice(13, 18)) === JSON.stringify(["--json", "--strict", "--metrics", "off", "--disable-version-check"])
+    && invocation.targetIsCwd === true
+    && invocation.targetEntries?.length === 0;
+}
+
+function targetScans(invocations: ExternalInvocation[]): ExternalInvocation[] {
+  // Receipt validation is an offline parse of six exact local configs against its own empty cwd.
+  // Every command that does not carry that complete evidence remains a target/provider execution.
+  return invocations.filter((invocation) => !isRegistryValidation(invocation));
+}
 
 function signalOwnedInvocation(invocation: TrackedInvocation, signal: NodeJS.Signals): boolean {
   const pid = invocation.child.pid;
@@ -195,7 +221,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     return {
       ...completed,
       output: `${completed.stdout}\n${completed.stderr}`,
-      children: existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { binary: string; args: string[] }) : [],
+      children: existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as ExternalInvocation) : [],
     };
   }
 
@@ -272,7 +298,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const seeded = await invoke(seedCache);
     seedOutput = seeded.output;
     expect(seeded.status, seeded.output).toBe(0);
-    expect(seeded.children.some((child) => child.binary === "semgrep")).toBe(true);
+    expect(targetScans(seeded.children).some((child) => child.binary === "semgrep")).toBe(true);
     expect(seeded.output).toContain("CACHE MISS semgrep family");
     expect(seeded.output).toContain("CACHE MISS quality-scan");
   });
@@ -326,7 +352,8 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.output).toContain("semgrep-family:");
     expect(result.output).toContain("missing:");
     expect(result.output).toContain("without --force-cold-cache");
-    expect(result.children).toEqual([]);
+    expect(result.children.some(isRegistryValidation), JSON.stringify(result.children, null, 2)).toBe(true);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   describe("snapshot phase consumers", () => {
@@ -354,7 +381,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
       const missing = await invoke(cache, [...flags, "--force-cold-cache"], snapshot);
       expect(missing.status, missing.output).not.toBe(0);
       expect(missing.output).toContain("mechanical-phase:dependency-advisory: missing:");
-      expect(missing.children).toEqual([]);
+      expect(targetScans(missing.children)).toEqual([]);
     });
   });
 
@@ -364,7 +391,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(cache, ["--force-cold-cache"]);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("fixture-later: forced-cold cache preflight rejected");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it("rejects physically changed Harvey source through the production implementation builder", async () => {
@@ -376,7 +403,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(copyCache(), ["--force-cold-cache"], { HARVEY_PREFLIGHT_CLI_ROOT: changedRoot });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("identity.implementation");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it("rejects a changed observed tool version before execution", async () => {
@@ -396,7 +423,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(copyCache(), ["--force-cold-cache"], { PATH: `${changedBin}:${environment.PATH}` });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("identity.externalInputs.semgrep");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it("rejects changed materialized configuration and planned ownership identities", async () => {
@@ -406,7 +433,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.output).toContain("identity.externalInputs.registryPacks");
     expect(result.output).toContain("identity.rules");
     expect(result.output).toContain("identity.plannedExecution");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it("rejects a changed later target pin/tree before scanning the earlier pin", async () => {
@@ -423,14 +450,14 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.output).toContain("fixture-later: forced-cold cache preflight rejected");
     expect(result.output).toContain("identity.targetRevision");
     expect(result.output).toContain("identity.targetTree");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it.each(["snapshot", "live-verify"])("rejects a changed %s mode with the exact mismatching option component", async (mode) => {
     const result = await invoke(copyCache(), ["--force-cold-cache"], { HARVEY_CORPUS_EXTERNAL_STATE_MODE: mode });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("identity.externalInputs.options");
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
   });
 
   it("rejects a malformed exact-address family artifact before expensive execution", async () => {
@@ -440,7 +467,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(cache, ["--force-cold-cache"]);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(`semgrep-family:${String(family.value.family)}: invalid:`);
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
     expect(readFileSync(family.path, "utf8")).toBe("{corrupt");
   });
 
@@ -450,7 +477,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(cache, ["--force-cold-cache"]);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain('corpus-scanner:quality-scan {"root":".","install":true}: missing:');
-    expect(result.children).toEqual([]);
+    expect(targetScans(result.children)).toEqual([]);
     expect(result.output).not.toContain("SCANNER quality-scan —");
   });
 
@@ -492,7 +519,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
       expect(missing.status, missing.output).not.toBe(0);
       expect(missing.output).toContain("fixture-later: forced-cold cache preflight rejected");
       expect(missing.output).toContain("corpus-scanner:mutation-detect-only");
-      expect(missing.children).toEqual([]);
+      expect(targetScans(missing.children)).toEqual([]);
     });
   });
 
@@ -500,7 +527,7 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(copyCache(), ["--force-cold-cache"], { HARVEY_PREFLIGHT_CHANGED_OUTPUT: "1" });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("forced-cold output differs from cached artifact");
-    expect(result.children.some((child) => child.binary === "semgrep")).toBe(true);
+    expect(targetScans(result.children).some((child) => child.binary === "semgrep")).toBe(true);
   });
 
   it("reaps a cancelled CLI group before its disposable tool fixture can write again", async () => {
@@ -535,11 +562,34 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const result = await invoke(cache, ["--force-cold-cache"]);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(`${kind === "phase" ? "configuration" : "detect-static"}: forced-cold result differs`);
-    expect(result.children.some((child) => child.binary === "semgrep")).toBe(true);
+    expect(targetScans(result.children).some((child) => child.binary === "semgrep")).toBe(true);
   });
 });
 
 it("does not turn an empty preflight or a missing comparison into success", () => {
   expect(() => assertCorpusCachePreflight("empty", [])).toThrow("no eligible cache comparisons were planned");
   expect(() => assertCorpusCachePreflight("missing", [{ component: "semgrep-family:auth", status: "missing", reason: "no seed" }])).toThrow("semgrep-family:auth: missing: no seed");
+});
+
+it("does not let a target scan borrow the registry-validator exemption", () => {
+  const validation: ExternalInvocation = {
+    binary: "semgrep",
+    args: [
+      "scan",
+      ...registryValidationConfigNames.flatMap((name) => ["--config", `/receipt/${name}`]),
+      "--json", "--strict", "--metrics", "off", "--disable-version-check", "/empty-validator-target",
+    ],
+    cwd: "/empty-validator-target",
+    targetIsCwd: true,
+    targetEntries: [],
+  };
+  expect(targetScans([validation])).toEqual([]);
+  for (const illicit of [
+    { ...validation, targetIsCwd: false },
+    { ...validation, targetEntries: ["target-source.ts"] },
+    { ...validation, args: validation.args.with(2, "/receipt/target-rule.yml") },
+    { ...validation, args: validation.args.filter((arg) => arg !== "--strict") },
+  ]) {
+    expect(targetScans([illicit]), JSON.stringify(illicit)).toEqual([illicit]);
+  }
 });

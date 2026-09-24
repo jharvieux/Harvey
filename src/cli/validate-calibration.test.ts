@@ -103,7 +103,9 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-calibration exits 1 on a
   // #1664: the wiring of the SCAN-DID-NOT-RUN halt, proven through the process like the two runs
   // above — the unit tests on scanDidNotRun cover the predicate, and #1407's lesson is that a
   // library-level proof leaves the CLI's own call unguarded. The shim replays the live crash shape
-  // (valid empty envelope on stdout, non-zero exit, `semgrep-core exited with -10!` in errors[]):
+  // (valid empty envelope on stdout, non-zero exit, `semgrep-core exited with -10!` in errors[]).
+  // The shim also implements Semgrep's version probe and the exact six-config strict scan against
+  // an empty cwd that validates the offline registry snapshot before the real target scan begins:
   // before the halt, that run rendered a full recall table reading "113 rules have never been shown
   // to work" over a scan that never ran.
   it("exits 2 and renders NO recall table when semgrep crashes instead of completing (#1664)", async () => {
@@ -111,7 +113,18 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-calibration exits 1 on a
     try {
       writeFileSync(
         join(shimDir, "semgrep"),
-        '#!/bin/bash\necho \'{"version":"1.164.0","results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"semgrep-core exited with -10!"}],"paths":{"scanned":[],"skipped":[]}}\'\nexit 2\n',
+        [
+          "#!/bin/bash",
+          'if [[ "$1" == "--version" ]]; then echo "1.164.0"; exit 0; fi',
+          'expected=("0-p-typescript.yml" "1-p-react.yml" "2-p-nextjs.yml" "3-p-owasp-top-ten.yml" "4-p-secrets.yml" "5-p-security-audit.yml")',
+          'validation=1; [[ "$#" -eq 19 && "$1" == "scan" ]] || validation=0',
+          'for ordinal in "${!expected[@]}"; do flag=$((2 + ordinal * 2)); config=$((3 + ordinal * 2)); [[ "${!flag}" == "--config" && "$(basename "${!config}")" == "${expected[$ordinal]}" ]] || validation=0; done',
+          '[[ "${14}" == "--json" && "${15}" == "--strict" && "${16}" == "--metrics" && "${17}" == "off" && "${18}" == "--disable-version-check" && "${19}" -ef "$PWD" && -z "$(find "${19}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || validation=0',
+          'if [[ "$validation" -eq 1 ]]; then echo \'{"version":"1.164.0","results":[],"errors":[],"paths":{"scanned":[],"skipped":[]}}\'; exit 0; fi',
+          'echo \'{"version":"1.164.0","results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"semgrep-core exited with -10!"}],"paths":{"scanned":[],"skipped":[]}}\'',
+          "exit 2",
+          "",
+        ].join("\n"),
         { mode: 0o755 },
       );
       const { code, out } = await run([], { ...process.env, PATH: `${shimDir}:${process.env.PATH ?? ""}` });
