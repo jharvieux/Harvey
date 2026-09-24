@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -725,6 +725,53 @@ describe("effectiveness producer inventory (#1910)", () => {
 
     expect(validateEffectivenessInventory(baseline)).toEqual([]);
     expect(serializeEffectivenessInventory(baseline)).toBe(intactBytes);
+  });
+
+  it("invalidates source-derived venue evidence when an unresolved import target appears", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-source-boundary-"));
+    try {
+      cpSync(join(REPO_ROOT, "src"), join(root, "src"), { recursive: true });
+      cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"), "dir");
+      const absentDirectory = join(root, "src", "cli", "unobserved-boundary");
+      mkdirSync(absentDirectory);
+      const gate = {
+        id: "validate-boundary-census",
+        script: "validate:boundary-census",
+        measures: "source-cache invalidation",
+        cadence: { kind: "verify" as const, description: "bounded source-cache invalidation proof" },
+      };
+      writeFileSync(join(root, "src", "cli", `${gate.id}.ts`), 'import "./unobserved-boundary/new-worker.js";\n');
+      const baseline = freshInventory();
+      const inventory: EffectivenessInventory = {
+        ...baseline,
+        venues: [{
+          ...baseline.venues[0]!,
+          id: gate.id,
+          gateId: gate.id,
+          rootId: `src/cli/${gate.id}.ts`,
+          command: `pnpm ${gate.script}`,
+          cadence: gate.cadence,
+          callReceiptIds: [],
+        }],
+      };
+      const sourceProblems = (): string[] => validateEffectivenessInventory(inventory, {
+        root,
+        scoredGates: [gate],
+      }).filter((problem) => problem.includes("static source reachability call receipts do not close"));
+
+      expect(sourceProblems()).toEqual([]);
+      writeFileSync(
+        join(absentDirectory, "new-worker.ts"),
+        'import { detectHookDepFindings } from "../../detectors/hook-deps.js";\ndetectHookDepFindings([]);\n',
+      );
+      expect(sourceProblems()).toEqual([
+        expect.stringContaining("validate-boundary-census: static source reachability call receipts do not close"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails an incomplete structured exemption and passes when restored", () => {

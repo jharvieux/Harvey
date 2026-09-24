@@ -62,7 +62,8 @@ describe("schema-v3 route graph", () => {
     writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
     writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     const venueRoots = ["src/venue-a.ts", "src/venue-b.ts"];
-    const first = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);
+    const independentImplementation = { ...implementation, producerId: "independent" };
+    const first = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots, [independentImplementation]);
     expect(first.production).toEqual(discoverEffectivenessRouteGraph(root, [implementation]));
     for (const [index, venueRoot] of venueRoots.entries()) {
       expect(first.venues[index]).toEqual(discoverEffectivenessRouteGraph(root, [implementation], [venueRoot], { detectUnknown: false }));
@@ -70,6 +71,8 @@ describe("schema-v3 route graph", () => {
     expect(first.venues[0]!.routes).toHaveLength(1);
     expect(first.venues[1]!.routes).toEqual([]);
     expect(first.venues[0]!.routes[0]!.rootId).toBe("src/venue-a.ts");
+    expect(first.independentVenues?.[0]?.routes.map((route) => route.producerId)).toEqual(["independent"]);
+    expect(first.independentVenues?.[1]?.routes).toEqual([]);
     writeFileSync(join(root, "src", "venue-a.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     writeFileSync(join(root, "src", "venue-b.ts"), 'import { produce } from "./producer.js"; export const findings = produce();\n');
     const changed = discoverEffectivenessRouteGraphs(root, [implementation], venueRoots);

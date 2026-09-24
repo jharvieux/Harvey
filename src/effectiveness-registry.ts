@@ -4,7 +4,6 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { parse } from "yaml";
-import { statSafe } from "./fs-walk.js";
 import { AUDIT_MODULES, type AuditModule } from "./audit-coverage.js";
 import { CALIBRATION_PLANTS } from "./audit-conservation.js";
 import type { ModuleRunner } from "./audit-runner.js";
@@ -534,6 +533,16 @@ interface SourceVenueEvidenceCache {
 
 let sourceVenueEvidenceCache: SourceVenueEvidenceCache | undefined;
 
+function sourceVenueEvidenceKey(root: string, scoredGates: readonly ScoredGate[]): string {
+  return JSON.stringify({
+    root: resolve(root),
+    gates: scoredGates
+      .filter((gate) => gate.cadence.kind !== "none")
+      .map((gate) => gate.id)
+      .sort(byText),
+  });
+}
+
 function sourceFingerprint(root: string, files: readonly string[]): string {
   const hash = createHash("sha256");
   const sorted = unique(files).sort(byText);
@@ -546,22 +555,40 @@ function sourceFingerprint(root: string, files: readonly string[]): string {
     }
     hash.update("\0");
   }
-  // A previously unresolved local import can become reachable when a file is
-  // added without changing its importer. Directory mtimes invalidate that seam.
-  for (const directory of unique(sorted.map((file) => dirname(file))).sort(byText)) {
-    try {
-      const stats = statSafe(join(root, directory));
-      hash.update(directory).update(":").update(stats ? String(stats.mtimeMs) : "missing").update("\0");
-    } catch {
-      hash.update(`${directory}:missing\0`);
-    }
-  }
   return hash.digest("hex");
+}
+
+function rememberSourceVenueEvidence(
+  root: string,
+  scoredGates: readonly ScoredGate[],
+  evidence: readonly SourceVenueEvidence[],
+): void {
+  const files = evidence.flatMap((entry) => entry.examinedFiles);
+  sourceVenueEvidenceCache = {
+    key: sourceVenueEvidenceKey(root, scoredGates),
+    fingerprint: sourceFingerprint(root, files),
+    evidence,
+  };
+}
+
+function venueEvidenceFromGraphs(
+  gates: readonly ScoredGate[],
+  graphs: readonly ReturnType<typeof discoverEffectivenessVenueRouteGraphs>[number][],
+): readonly SourceVenueEvidence[] {
+  return gates.map((gate, index): SourceVenueEvidence => {
+    const graph = graphs[index]!;
+    return {
+      id: gate.id,
+      rootId: `src/cli/${gate.id}.ts`,
+      callReceiptIds: graph.calls.map((call) => call.id).sort(byText),
+      examinedFiles: [...graph.examinedFiles, "package.json"].sort(byText),
+    };
+  });
 }
 
 function discoverSourceVenueEvidence(root: string, scoredGates: readonly ScoredGate[]): readonly SourceVenueEvidence[] {
   const gates = scoredGates.filter((gate) => gate.cadence.kind !== "none");
-  const key = JSON.stringify({ root, gates: gates.map((gate) => gate.id) });
+  const key = sourceVenueEvidenceKey(root, gates);
   if (sourceVenueEvidenceCache?.key === key) {
     const files = sourceVenueEvidenceCache.evidence.flatMap((entry) => entry.examinedFiles);
     if (sourceFingerprint(root, files) === sourceVenueEvidenceCache.fingerprint) return sourceVenueEvidenceCache.evidence;
@@ -584,17 +611,8 @@ function discoverSourceVenueEvidence(root: string, scoredGates: readonly ScoredG
     implementations,
     gates.map((gate) => `src/cli/${gate.id}.ts`),
   );
-  const evidence = gates.map((gate, index): SourceVenueEvidence => {
-    const graph = graphs[index]!;
-    return {
-      id: gate.id,
-      rootId: `src/cli/${gate.id}.ts`,
-      callReceiptIds: graph.calls.map((call) => call.id).sort(byText),
-      examinedFiles: [...graph.examinedFiles, "package.json"].sort(byText),
-    };
-  });
-  const files = evidence.flatMap((entry) => entry.examinedFiles);
-  sourceVenueEvidenceCache = { key, fingerprint: sourceFingerprint(root, files), evidence };
+  const evidence = venueEvidenceFromGraphs(gates, graphs);
+  rememberSourceVenueEvidence(root, gates, evidence);
   return evidence;
 }
 
@@ -615,8 +633,26 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
     .map((receipt) => [receipt.producerId.slice("semgrep:registry:".length), receipt.findingFamilyIds]));
   const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds });
   const routeImplementations = routeGraphImplementations(population.bindings);
+  // Keep validation independent from caller-supplied inventory inputs, while
+  // sharing only the immutable TypeScript source snapshot and checker.
+  const sourcePopulation = producerPopulation(
+    root,
+    AUDIT_RUNNERS,
+    MECHANICAL_REGISTRY,
+    MECHANICAL_DETECTORS,
+    CALIBRATION_PLANTS,
+    REGISTRY_PACKS,
+    {},
+  );
+  const sourceRouteImplementations = routeGraphImplementations(sourcePopulation.bindings);
   const scoredVenues = scoredGates.filter((gate) => gate.cadence.kind !== "none");
-  const graphs = discoverEffectivenessRouteGraphs(root, routeImplementations, scoredVenues.map((gate) => `src/cli/${gate.id}.ts`));
+  const graphs = discoverEffectivenessRouteGraphs(
+    root,
+    routeImplementations,
+    scoredVenues.map((gate) => `src/cli/${gate.id}.ts`),
+    sourceRouteImplementations,
+  );
+  rememberSourceVenueEvidence(root, scoredVenues, venueEvidenceFromGraphs(scoredVenues, graphs.independentVenues!));
   const routeGraph = graphs.production;
   const semanticVenues: SemanticVenueInput[] = scoredVenues.map((gate, index): SemanticVenueInput => {
     const rootId = `src/cli/${gate.id}.ts`;

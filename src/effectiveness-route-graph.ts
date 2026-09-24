@@ -94,6 +94,7 @@ function productionRoots(root: string, implementations: readonly ProducerImpleme
 
 interface ReachableSources {
   readonly files: Set<string>;
+  readonly resolutionCandidates: Set<string>;
   readonly rootsByFile: ReadonlyMap<string, readonly string[]>;
   readonly commandReceiptsByFile: ReadonlyMap<string, readonly EffectivenessCallReceipt[]>;
 }
@@ -302,6 +303,7 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
 
 function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest): ReachableSources {
   const reached = new Set<string>();
+  const resolutionCandidates = new Set<string>();
   const rootsByFile = new Map<string, Set<string>>();
   const commandReceiptsByFile = new Map<string, readonly EffectivenessCallReceipt[]>();
   const checker = program.getTypeChecker();
@@ -324,6 +326,10 @@ function reachableSourcesWithProgram(root: string, roots: readonly string[], pro
         ? statement.moduleSpecifier.text
         : undefined;
       if (!specifier) continue;
+      if (specifier.startsWith(".")) {
+        const base = resolve(root, dirname(repoRelative(root, file) ?? file), specifier);
+        for (const candidate of sourceCandidates(base)) resolutionCandidates.add(candidate);
+      }
       const resolved = resolveLocalModule(root, repoRelative(root, file) ?? file, specifier);
       if (resolved) pending.push({ file: resolved, root: routeRoot, commands });
     }
@@ -343,6 +349,7 @@ function reachableSourcesWithProgram(root: string, roots: readonly string[], pro
   }
   return {
     files: reached,
+    resolutionCandidates,
     rootsByFile: new Map([...rootsByFile].map(([file, fileRoots]) => [file, [...fileRoots].sort(byText)])),
     commandReceiptsByFile,
   };
@@ -465,14 +472,26 @@ export function discoverEffectivenessRouteGraphs(
   root: string,
   implementations: readonly RouteGraphImplementation[],
   venueRoots: readonly string[],
-): { readonly production: EffectivenessRouteGraph; readonly venues: readonly EffectivenessRouteGraph[] } {
+  independentVenueImplementations?: readonly RouteGraphImplementation[],
+): {
+  readonly production: EffectivenessRouteGraph;
+  readonly venues: readonly EffectivenessRouteGraph[];
+  readonly independentVenues?: readonly EffectivenessRouteGraph[];
+} {
   const production = productionRoots(root, implementations).map((file) => resolve(root, file));
   const venues = venueRoots.map((file) => [resolve(root, file)]);
-  const [productionGraph, ...venueGraphs] = discoverEffectivenessGraphs(root, implementations, [
+  const [productionResult, ...venueResults] = discoverEffectivenessGraphs(root, implementations, [
     { roots: production, detectUnknown: true },
-    ...venues.map((roots) => ({ roots, detectUnknown: false })),
+    ...venues.map((roots) => ({ roots, detectUnknown: false, alternateImplementations: independentVenueImplementations })),
   ]);
-  return { production: productionGraph!, venues: venueGraphs };
+  const independentVenues = independentVenueImplementations
+    ? venueResults.map((result) => result.alternate!).filter((graph): graph is EffectivenessRouteGraph => graph !== undefined)
+    : undefined;
+  return {
+    production: productionResult!.primary,
+    venues: venueResults.map((result) => result.primary),
+    ...(independentVenues ? { independentVenues } : {}),
+  };
 }
 
 /** Derive only scored-venue graphs for independent inventory validation. */
@@ -484,20 +503,28 @@ export function discoverEffectivenessVenueRouteGraphs(
   return discoverEffectivenessGraphs(root, implementations, venueRoots.map((file) => ({
     roots: [resolve(root, file)],
     detectUnknown: false,
-  })));
+  }))).map((result) => result.primary);
 }
 
 function discoverEffectivenessGraphs(
   root: string,
   implementations: readonly RouteGraphImplementation[],
-  inputs: readonly { readonly roots: readonly string[]; readonly detectUnknown: boolean }[],
-): EffectivenessRouteGraph[] {
+  inputs: readonly {
+    readonly roots: readonly string[];
+    readonly detectUnknown: boolean;
+    readonly alternateImplementations?: readonly RouteGraphImplementation[];
+  }[],
+): { readonly primary: EffectivenessRouteGraph; readonly alternate?: EffectivenessRouteGraph }[] {
   const packagePath = join(root, "package.json");
   const manifest = existsSync(packagePath)
     ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
     : {};
   let previousProgram: ts.Program | undefined;
-  const graph = (roots: readonly string[], detectUnknown: boolean): EffectivenessRouteGraph => {
+  const graph = (
+    roots: readonly string[],
+    detectUnknown: boolean,
+    alternateImplementations?: readonly RouteGraphImplementation[],
+  ): { readonly primary: EffectivenessRouteGraph; readonly alternate?: EffectivenessRouteGraph } => {
     let program = programForSources(roots, previousProgram);
     while (true) {
       const reachability = reachableSourcesWithProgram(root, roots, program, manifest);
@@ -505,12 +532,17 @@ function discoverEffectivenessGraphs(
         // Each graph owns its checker while TypeScript reuses unchanged parsed source files.
         // The completed program already contains every file examined by this root.
         previousProgram = program;
-        return routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown });
+        return {
+          primary: routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown }),
+          ...(alternateImplementations
+            ? { alternate: routeGraphForReachability(root, alternateImplementations, roots, reachability, program, { detectUnknown }) }
+            : {}),
+        };
       }
       program = programForSources([...reachability.files], program);
     }
   };
-  return inputs.map((input) => graph(input.roots, input.detectUnknown));
+  return inputs.map((input) => graph(input.roots, input.detectUnknown, input.alternateImplementations));
 }
 
 function routeGraphForReachability(
@@ -650,7 +682,7 @@ function routeGraphForReachability(
     }
   }
   return {
-    examinedFiles: [...reachability.files]
+    examinedFiles: [...new Set([...reachability.files, ...reachability.resolutionCandidates])]
       .map((file) => repoRelative(root, file))
       .filter((file): file is string => !!file)
       .sort(byText),
