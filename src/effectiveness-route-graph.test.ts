@@ -101,15 +101,26 @@ describe("schema-v3 route graph", () => {
   });
 
   it.each([
-    { name: "arrow property", member: "exec: (command, args) => execFileSync(command, args)" },
-    { name: "async arrow property", member: "exec: async (command, args) => execFileSync(command, args)" },
-    { name: "method property", member: "exec(command, args) { return execFileSync(command, args); }" },
-  ])("retains command provenance through an anonymous $name executor wrapper", ({ member }) => {
+    { name: "typed arrow property", typed: true, member: "exec: (command, args) => execFileSync(command, args)" },
+    { name: "typed async arrow property", typed: true, member: "exec: async (command, args) => execFileSync(command, args)" },
+    { name: "typed method property", typed: true, member: "exec(command, args) { return execFileSync(command, args); }" },
+    { name: "inferred arrow property", typed: false, member: "exec: (command: string, args: string[]) => execFileSync(command, args)" },
+    { name: "inferred async arrow property", typed: false, member: "exec: async (command: string, args: string[]) => execFileSync(command, args)" },
+    { name: "inferred method property", typed: false, member: "exec(command: string, args: string[]) { return execFileSync(command, args); }" },
+    { name: "typed quoted arrow property", typed: true, member: '"exec": (command, args) => execFileSync(command, args)' },
+    { name: "typed quoted method property", typed: true, member: '"exec"(command, args) { return execFileSync(command, args); }' },
+    { name: "typed computed arrow property", typed: true, member: '["exec"]: (command, args) => execFileSync(command, args)' },
+    { name: "inferred function-expression property", typed: false, member: "exec: function (command: string, args: string[]) { return execFileSync(command, args); }" },
+    { name: "typed function-expression property", typed: true, member: "exec: function (command, args) { return execFileSync(command, args); }" },
+  ])("retains command provenance through an anonymous $name executor wrapper", ({ member, typed }) => {
     const root = fixture("export {};\n");
     symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
     mkdirSync(join(root, "src", "cli"));
     writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
-    const wrapped = `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst ctx: Context = { ${member} };\nfunction run(context: Context) { context.exec("node", ["src/child.ts"]); }\nrun(ctx);\n`;
+    const invocation = typed
+      ? 'function run(context: Context) { context.exec("node", ["src/child.ts"]); }\nrun(ctx);'
+      : 'ctx.exec("node", ["src/child.ts"]);';
+    const wrapped = `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst ctx${typed ? ": Context" : ""} = { ${member} };\n${invocation}\n`;
     writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped);
 
     const live = discoverEffectivenessRouteGraph(root, [implementation]);
