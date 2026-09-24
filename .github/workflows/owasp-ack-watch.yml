@@ -60,12 +60,18 @@ jobs:
       issues: write
     timeout-minutes: 10
     steps:
-      # This job wants no source (see the GH_REPO note below), but the shared alert action is a
-      # local `uses:` and local actions are resolved from the checkout. Sparse: `.github/actions`
-      # only, so the "don't clone the repo to satisfy an inference step" reasoning still holds.
+      # This job checks out only the shared alert action, the shipping decision helper, and the
+      # pinned Node version. The upstream API remains its sole watched data source.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            src/owasp-ack-watch.ts
+            .nvmrc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
 
       - name: Alert-path liveness drill — fail deliberately (#1287)
         if: inputs.alert_drill
@@ -74,27 +80,21 @@ jobs:
           exit 1
 
       - name: Read both proposals and report any change from the filing baseline
+        id: proposal-watch
         env:
           GH_TOKEN: ${{ github.token }}
-          # This job deliberately has no actions/checkout — it reads a third-party API and writes
-          # an issue, and needs none of this repo's source. But `gh issue`/`gh label` infer their
-          # target repo from the git remote, so without a checkout they die on "not a git
-          # repository". GH_REPO supplies it directly, which is cheaper than cloning the repo to
-          # satisfy an inference step. `gh api` is unaffected: its paths are already absolute, so
-          # the upstream reads below still go to OWASP/CheatSheetSeries.
+          # GH_REPO keeps every local issue/label operation explicit. `gh api` paths are absolute,
+          # so the upstream reads below still go to OWASP/CheatSheetSeries.
           GH_REPO: ${{ github.repository }}
           UPSTREAM: OWASP/CheatSheetSeries
           MARKER: owasp-ack-alert
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-
-          # BASELINE, recorded at filing on 2026-07-26: both issues open, zero labels, zero
-          # comments. Any deviation on either is a change worth the operator's attention.
-          changed=false
-          ack=false
-          state=""
-          report=""
+          current="$RUNNER_TEMP/owasp-proposals.jsonl"
+          snapshots="$RUNNER_TEMP/owasp-proposals.json"
+          message="$RUNNER_TEMP/owasp-alert.md"
+          : > "$current"
 
           for n in 2308 2309; do
             # No `|| true` here on purpose. A failed read must surface AS a failed read — reporting
@@ -107,43 +107,27 @@ jobs:
               exit 1
             fi
 
-            labels=$(printf '%s' "$json" | jq -r '[.labels[].name] | sort | join(",")')
+            labels=$(printf '%s' "$json" | jq -c '[.labels[].name] | sort')
             comments=$(printf '%s' "$json" | jq -r '.comments')
             issue_state=$(printf '%s' "$json" | jq -r '.state')
             url=$(printf '%s' "$json" | jq -r '.html_url')
-
-            state="${state}${n}:[${labels}]:${comments}:${issue_state}|"
-
-            line="- **#${n}** — labels: \`[${labels}]\` · comments: **${comments}** · state: \`${issue_state}\` · ${url}"
-            if [ -n "$labels" ] || [ "$comments" != "0" ] || [ "$issue_state" != "open" ]; then
-              changed=true
-              # Quote the latest comment so the operator can judge without opening GitHub.
-              if [ "$comments" != "0" ]; then
-                latest=$(gh api "repos/$UPSTREAM/issues/$n/comments" \
-                  --jq '.[-1] | "  - latest comment — **@\(.user.login)** at \(.created_at):\n\n    > \(.body | gsub("\n"; "\n    > "))"')
-                line="${line}"$'\n'"${latest}"
-              fi
-            else
-              line="${line} — unchanged from baseline"
+            latest=null
+            if [ "$comments" != "0" ]; then
+              latest=$(gh api "repos/$UPSTREAM/issues/$n/comments" --jq '.[-1] | {author: .user.login, createdAt: .created_at, body: .body}')
             fi
-            case "$labels" in *ACK_OBTAINED*) ack=true ;; esac
-            report="${report}${line}"$'\n'
+            jq -cn --argjson number "$n" --arg state "$issue_state" --argjson labels "$labels" \
+              --argjson comments "$comments" --arg url "$url" --argjson latestComment "$latest" \
+              '{number:$number,state:$state,labels:$labels,comments:$comments,url:$url,latestComment:$latestComment}' >> "$current"
           done
+          jq -s . "$current" > "$snapshots"
 
-          echo "Current state: $state"
-
-          if [ "$changed" = "false" ]; then
-            echo "No change: #2308 and #2309 both still unlabeled with 0 comments."
-            exit 0
-          fi
-
-          # Idempotence without external state: the last-reported state is stamped into the
-          # tracking issue itself, so a standing change (jmanico's comment will sit there for
-          # weeks) is reported ONCE rather than re-announced every morning. An alert that cries
-          # wolf daily gets filtered out, and then the ACK_OBTAINED it was built for goes unread.
+          # Keep the open issue for updates, but read the newest issue in ALL states for the last
+          # receipt. A completed-state receipt therefore survives the operator closing its tracker
+          # and prevents the same closed+ACK state from recreating a drafting alert tomorrow.
           existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          latest_issue=$(gh issue list --state all --label "$MARKER" --limit 100 --json number --jq 'sort_by(.number) | last | .number // empty')
           last=""
-          if [ -n "$existing" ]; then
+          if [ -n "$latest_issue" ]; then
             # #1402: each read is captured on its OWN line, as a plain top-level assignment, because
             # that is the only form `set -e` actually watches. The previous shape put both reads in a
             # brace group at the head of a pipeline:
@@ -165,39 +149,26 @@ jobs:
             # precisely what produces the duplicate comment. An empty `last` now means "read both,
             # found no stamp"; a failed read turns the job red, where this workflow's own
             # ci-owasp-watch-alert path picks it up.
-            body=$(gh issue view "$existing" --json body --jq '.body')
-            comments=$(gh issue view "$existing" --json comments --jq '.comments[].body')
-            last=$(printf '%s\n%s\n' "$body" "$comments" | sed -n 's/.*owasp-ack-state: \([^ ]*\) -->.*/\1/p' | tail -1)
+            body=$(gh issue view "$latest_issue" --json body --jq '.body')
+            comments=$(gh issue view "$latest_issue" --json comments --jq '.comments[].body')
+            last=$(printf '%s\n%s\n' "$body" "$comments" | sed -n 's/.*owasp-ack-receipt: \([A-Za-z0-9_-]*\) -->.*/\1/p' | tail -1)
           fi
+          node --experimental-strip-types src/owasp-ack-watch.ts \
+            --input "$snapshots" --body "$message" --run-url "$RUN_URL" --previous "$last"
 
-          if [ "$state" = "$last" ]; then
-            echo "Change already reported on issue #${existing} (state unchanged since last report). Not commenting again."
+          if ! grep -qx 'notify=true' "$GITHUB_OUTPUT"; then
             exit 0
           fi
-
-          headline="An OWASP proposal changed state."
-          if [ "$ack" = "true" ]; then
-            headline="**ACK_OBTAINED is present.** Drafting work on that cheat sheet can begin."
-          fi
-
-          body="${headline}
-
-          ${report}
-          Baseline at filing (2026-07-26): both issues open, zero labels, zero comments.
-
-          Remember the ack in this project IS a label, not a comment — \`ACK_OBTAINED\` is the one that unblocks drafting. A friendly comment is encouragement, not approval (#543 is the cautionary tale).
-
-          <sub>Watch: ${RUN_URL} · <!-- owasp-ack-state: ${state} --></sub>"
 
           gh label create "$MARKER" --color B60205 \
             --description "Auto-opened when an OWASP cheat-sheet proposal (#2308/#2309) changes state" 2>/dev/null || true
 
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
+            gh issue comment "$existing" --body-file "$message"
             echo "Commented on existing tracking issue #${existing}."
           else
             gh issue create --title "OWASP proposal status changed: #2308 / #2309" \
-              --label "$MARKER" --body "$body"
+              --label "$MARKER" --body-file "$message"
           fi
 
       # A watch that breaks silently is worse than no watch, because it manufactures the false
