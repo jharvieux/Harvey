@@ -19,6 +19,8 @@ export class ValidationWorker {
   #closed;
   #isClosed = false;
   #error;
+  #observedError;
+  #stopping = false;
   #stderr = "";
   #request;
   #nextId = 0;
@@ -34,7 +36,7 @@ export class ValidationWorker {
     this.#closed = new Promise((resolve) => {
       this.#child.once("close", (code, signal) => {
         this.#isClosed = true;
-        this.#error ??= new Error(`validation worker exited ${code ?? signal}: ${this.#stderr}`);
+        if (!this.#stopping) this.#error ??= new Error(`validation worker exited ${code ?? signal}: ${this.#stderr}`);
         resolve();
       });
     });
@@ -57,8 +59,15 @@ export class ValidationWorker {
 
   get pid() { return this.#child.pid; }
 
+  #assertHealthy() {
+    if (this.#error) {
+      this.#observedError = this.#error;
+      throw this.#error;
+    }
+  }
+
   start(input) {
-    if (this.#error) throw this.#error;
+    this.#assertHealthy();
     if (this.#request && !this.#request.result) throw new Error("validation worker already has an unfinished request");
     let resolve;
     const request = {
@@ -79,11 +88,11 @@ export class ValidationWorker {
 
   async waitSlice(request, ms = 10_000) {
     await boundedWait([request.completed, this.#closed], ms);
-    if (this.#error) throw this.#error;
+    this.#assertHealthy();
   }
 
   async finish(request) {
-    if (this.#error) throw this.#error;
+    this.#assertHealthy();
     if (!request.result) {
       await this.stop();
       throw new Error("source validation exceeded its bounded wait budget");
@@ -100,12 +109,17 @@ export class ValidationWorker {
   }
 
   async stop() {
-    if (this.#isClosed) return;
-    this.#child.kill("SIGTERM");
-    await boundedWait([this.#closed], 2_000);
-    if (this.#isClosed) return;
-    this.#child.kill("SIGKILL");
-    await boundedWait([this.#closed], 5_000);
-    if (!this.#isClosed) throw new Error(`failed to reap validation worker ${this.#child.pid}`);
+    if (!this.#isClosed) {
+      this.#stopping = this.#child.kill("SIGTERM");
+      await boundedWait([this.#closed], 2_000);
+      if (!this.#isClosed) {
+        this.#stopping = this.#child.kill("SIGKILL") || this.#stopping;
+        await boundedWait([this.#closed], 5_000);
+      }
+      if (!this.#isClosed) throw new Error(`failed to reap validation worker ${this.#child.pid}`);
+    }
+    // A response can finish before a later protocol/exit failure arrives. Surface
+    // that failure at teardown, while allowing cleanup after an asserted error.
+    if (this.#error !== this.#observedError) this.#assertHealthy();
   }
 }
