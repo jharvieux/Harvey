@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -29,6 +29,69 @@ import { planConservationRun } from "./conservation-change-filter.mjs";
 const ACTION_DIR = join(process.cwd(), ".github", "actions", "mechanical-binaries");
 const SCRIPT = join(ACTION_DIR, "assert-complete.sh");
 const TOOLS = ["semgrep", "trufflehog", "osv-scanner", "gitleaks"];
+
+interface ActionStep { id?: unknown; name?: unknown; run?: unknown }
+
+function shippingExecutableProof(): { script: string; trufflehogVersion: string } {
+  const steps = (parse(readFileSync(join(ACTION_DIR, "action.yml"), "utf8")) as { runs?: { steps?: ActionStep[] } }).runs?.steps;
+  if (!steps) throw new Error("mechanical-binaries action has no runnable steps");
+  const versions = steps.find((step) => step.id === "versions")?.run;
+  const proof = steps.find((step) => step.name === "Put them on PATH and PROVE they run")?.run;
+  if (typeof versions !== "string" || typeof proof !== "string") {
+    throw new Error("mechanical-binaries action is missing its versions or executable-proof step");
+  }
+  const match = /^\s*TRUFFLEHOG=([^\s#]+)/m.exec(versions);
+  if (!match) throw new Error("mechanical-binaries versions step does not declare TRUFFLEHOG");
+  return {
+    trufflehogVersion: match[1]!,
+    // A workflow expression is rendered by Actions before bash receives the shipping step. This is
+    // the fixture rendering of that declared output, not a second implementation of the check.
+    script: proof.replaceAll("$" + "{{ steps.versions.outputs.trufflehog }}", match[1]!),
+  };
+}
+
+function runExecutableProof(trufflehogOutput: string, options: { unrunnable?: string } = {}): { status: number; out: string; invoked: string[] } {
+  const root = mkdtempSync(join(tmpdir(), "harvey-mech-proof-"));
+  const home = join(root, "home");
+  const bin = join(home, ".local", "bin");
+  const marker = join(root, "invoked");
+  const githubPath = join(root, "github-path");
+  mkdirSync(bin, { recursive: true });
+  const body = [
+    "#!/bin/sh",
+    'printf "%s %s\\n" "$0" "$*" >> "$MECHANICAL_BINARY_MARKER"',
+    'if [ "$(basename "$0")" = trufflehog ]; then printf "%s\\n" "$TRUFFLEHOG_OUTPUT"; else printf "fixture\\n"; fi',
+  ].join("\n");
+  for (const tool of TOOLS) {
+    const path = join(bin, tool);
+    writeFileSync(path, body);
+    if (tool !== options.unrunnable) chmodSync(path, 0o755);
+  }
+  try {
+    const { script } = shippingExecutableProof();
+    const out = execFileSync("bash", ["-c", script], {
+      encoding: "utf8",
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        HOME: home,
+        GITHUB_PATH: githubPath,
+        MECHANICAL_BINARY_MARKER: marker,
+        TRUFFLEHOG_OUTPUT: trufflehogOutput,
+      },
+    });
+    return { status: 0, out, invoked: readFileSync(marker, "utf8").trim().split("\n").filter(Boolean) };
+  } catch (error) {
+    const err = error as { status?: number; stdout?: string; stderr?: string };
+    return {
+      status: err.status ?? 1,
+      out: String(err.stdout ?? "") + String(err.stderr ?? ""),
+      invoked: readFileSync(marker, "utf8").trim().split("\n").filter(Boolean),
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function tree(present: string[], executable: string[] = present): string {
   const dir = mkdtempSync(join(tmpdir(), "harvey-mech-bins-"));
@@ -209,6 +272,25 @@ describe("#1978 the TruffleHog fixture gate installs the version it can vouch fo
   it("rejects a cached or downloaded binary that reports a different identity", () => {
     expect(executableProof).toContain('trufflehog_version=$("$HOME/.local/bin/trufflehog" --version 2>&1)');
     expect(executableProof).toContain('"trufflehog ${{ steps.versions.outputs.trufflehog }}"');
+  });
+
+  it("executes the shipping proof shell against local binaries and rejects poisoned identities", () => {
+    const { trufflehogVersion } = shippingExecutableProof();
+    const expected = runExecutableProof("trufflehog " + trufflehogVersion);
+    expect(expected.status, expected.out).toBe(0);
+    for (const tool of TOOLS) {
+      expect(expected.invoked.some((line) => line.includes("/.local/bin/" + tool + " --version")), tool + " was not invoked by the shipping step").toBe(true);
+    }
+
+    for (const output of ["trufflehog 0.0.0", "trufflehog", "not a trufflehog version"]) {
+      const poisoned = runExecutableProof(output);
+      expect(poisoned.status, output + ": " + poisoned.out).toBe(1);
+      expect(poisoned.invoked.some((line) => line.includes("/.local/bin/trufflehog --version"))).toBe(true);
+    }
+
+    const unrunnable = runExecutableProof("trufflehog " + trufflehogVersion, { unrunnable: "trufflehog" });
+    expect(unrunnable.status, unrunnable.out).toBe(1);
+    expect(unrunnable.invoked.some((line) => line.includes("/.local/bin/semgrep --version"))).toBe(true);
   });
 
   it("routes an installer-contract change through conservation's live drift tier", () => {

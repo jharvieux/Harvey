@@ -222,12 +222,34 @@ describe("buildVerificationEvidence", () => {
 
   it("records a needs-ci command as skipped and does not count it against green", async () => {
     const baseline = new Map();
+    const invoked: Array<{ command: string; cwd: string }> = [];
     const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline, needsCi: () => true },
       "/fixed",
-      failRun, // would fail if actually run — proves it is NOT run
+      async (command, cwd) => {
+        invoked.push({ command, cwd });
+        return failRun(command, cwd);
+      },
     );
     expect(ev.clientChecks[0]!.skipped).toBe("needs-ci");
+    expect(ev.green).toBe(true);
+    // The disclosure alone is not proof: a future implementation could run the command and then
+    // discard its result. The callback is the production execution seam.
+    expect(invoked).toEqual([]);
+  });
+
+  it("observes a runnable command through the same callback seam", async () => {
+    const baseline = new Map();
+    const invoked: Array<{ command: string; cwd: string }> = [];
+    const ev = await buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
+      "/fixed",
+      async (command, cwd) => {
+        invoked.push({ command, cwd });
+        return okRun(command, cwd);
+      },
+    );
+    expect(invoked).toEqual([{ command: "pnpm run verify", cwd: "/fixed" }]);
     expect(ev.green).toBe(true);
   });
 
