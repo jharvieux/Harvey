@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CORPUS_CACHE_MAX_PAYLOAD_BYTES,
   corpusCacheOwnershipScope,
@@ -17,7 +17,7 @@ import {
   type CorpusCacheTransportManifest,
 } from "./corpus-cache-transport.js";
 import { EXTERNAL_CORPUS } from "./scan/external-corpus.js";
-import { compareUtf8Bytes, TARGET_SCAN_SECONDS } from "./scan/corpus-shards.js";
+import { compareUtf8Bytes, CORPUS_SHARD_JOB_BUDGET_SECONDS, CORPUS_SHARD_OVERHEAD_SECONDS, TARGET_SCAN_SECONDS } from "./scan/corpus-shards.js";
 
 const targets = EXTERNAL_CORPUS.map((target) => ({
   slug: target.slug,
@@ -110,17 +110,39 @@ describe("ownership-bound corpus cache transport", () => {
   });
 
   it("rotates every owner scope when the complete weight table changes without moving membership", () => {
-    const changedWeights = { ...TARGET_SCAN_SECONDS, carbon: 1410 };
+    const changedWeights = { ...TARGET_SCAN_SECONDS, carbon: TARGET_SCAN_SECONDS.carbon! + 1 };
     const before = [1, 2, 3, 4].map((namespace) => scope(namespace));
     const after = [1, 2, 3, 4].map((namespace) => scope(namespace, targets, changedWeights));
     expect(after.map((ownership) => ownership.partitions)).toEqual(before.map((ownership) => ownership.partitions));
     after.forEach((ownership, index) => {
       expect(corpusCacheScopeSha256(ownership)).not.toBe(corpusCacheScopeSha256(before[index]!));
-      expect(ownership.weights.find((row) => row.slug === "carbon")?.seconds).toBe(1410);
+      expect(ownership.weights.find((row) => row.slug === "carbon")?.seconds).toBe(TARGET_SCAN_SECONDS.carbon! + 1);
     });
 
     const stale = source({}, 4);
     expect(decideCorpusCacheRestore(stale, current(stale, { scope: after[3]! })).reason).toContain("is not current scope");
+  });
+
+  it("binds every owner's capacity and publication reserve and rejects the prior partition policy", () => {
+    for (const namespace of [1, 2, 3, 4]) {
+      const canonical = source({}, namespace);
+      expect(canonical.scope.executionBudgets).toEqual(CORPUS_SHARD_JOB_BUDGET_SECONDS.map((jobSeconds, index) => ({
+        namespace: index + 1, jobSeconds, reservedSeconds: CORPUS_SHARD_OVERHEAD_SECONDS,
+      })));
+      for (const field of ["jobSeconds", "reservedSeconds"] as const) {
+        const altered = structuredClone(canonical.scope);
+        altered.executionBudgets[0]![field] += 1;
+        expect(altered.partitions).toEqual(canonical.scope.partitions);
+        expect(corpusCacheScopeSha256(altered)).not.toBe(canonical.scopeSha256);
+        const stale = source({ scope: altered, scopeSha256: corpusCacheScopeSha256(altered) }, namespace);
+        expect(decideCorpusCacheRestore(stale, current(stale, { scope: canonical.scope })).reason).toContain("is not current scope");
+      }
+      const legacy = structuredClone(canonical.scope);
+      Object.assign(legacy, { policy: "corpus-lpt-four-owner-v1" });
+      Reflect.deleteProperty(legacy, "executionBudgets");
+      const stale = source({ scope: legacy, scopeSha256: corpusCacheScopeSha256(legacy) }, namespace);
+      expect(decideCorpusCacheRestore(stale, current(stale, { scope: canonical.scope })).reason).toContain("policy");
+    }
   });
 
   it("uses one POSIX UTF-8 order for scope construction and scope hashing", () => {
@@ -170,6 +192,38 @@ describe("ownership-bound corpus cache transport", () => {
     expect(written.payload).toMatchObject({ bytes: 16, files: 2, symlinks: 0 });
     expect(written.payload.classes.map((row) => row.name)).toEqual(["dependency-preparation", "semgrep-family-timeout-telemetry"]);
     expect(validateCorpusCacheTransport(dir, current(written))).toMatchObject({ accepted: true });
+  });
+
+  it("bounds hashing scratch space across large inventories without changing canonical byte identity", () => {
+    const dir = temporary("cache-transport-bounded-hashing");
+    const chunkBytes = 1024 * 1024;
+    const contents = new Map<string, Buffer>([
+      ["A-large", Buffer.alloc(chunkBytes * 2 + 17, 0x61)],
+      ["a-short", Buffer.from("different bytes after a partial final chunk")],
+      ["\u{10000}", Buffer.alloc(chunkBytes, 0x62)],
+      ["\uE000", Buffer.alloc(chunkBytes - 1, 0x63)],
+      ["empty", Buffer.alloc(0)],
+      ...Array.from({ length: 128 }, (_, n): [string, Buffer] => [`store-${n}`, Buffer.from(`package ${n}`)]),
+    ]);
+    for (const [path, bytes] of contents) writeFileSync(join(dir, path), bytes);
+    const inventory = [...contents].sort(([a], [b]) => compareUtf8Bytes(a, b)).map(([path, bytes]) => ({
+      path, type: "file", bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"),
+    }));
+    const expectedDigest = createHash("sha256").update(stableUtf8(inventory)).digest("hex");
+    const allocation = vi.spyOn(Buffer, "allocUnsafe");
+    try {
+      const written = writeCorpusCacheTransport(dir, source());
+      expect(written.payload.inventorySha256).toBe(expectedDigest);
+      expect(written.payload.files).toBe(contents.size);
+      expect(written.payload.bytes).toBe([...contents.values()].reduce((total, bytes) => total + bytes.length, 0));
+      // Bound the resource directly instead of using a runner-dependent elapsed-time assertion.
+      expect(allocation.mock.calls.reduce((total, [size]) => total + size, 0)).toBeLessThanOrEqual(chunkBytes);
+      allocation.mockClear();
+      expect(validateCorpusCacheTransport(dir, current(written))).toMatchObject({ accepted: true });
+      expect(allocation.mock.calls.reduce((total, [size]) => total + size, 0)).toBeLessThanOrEqual(chunkBytes);
+    } finally {
+      allocation.mockRestore();
+    }
   });
 
   it("detects undercount, omission, rename, and same-size content mutation", () => {

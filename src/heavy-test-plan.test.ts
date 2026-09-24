@@ -7,10 +7,26 @@ import { describe, expect, it } from "vitest";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
 import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads } from "./heavy-test-plan.mjs";
 import { MEASURED_OUTSIDE_DISCOVERY, SCORED_GATES } from "./scored-gates.js";
+import { readNamesSafe } from "./fs-walk.js";
 
 const registry = loadHeavyRegistry();
 const allIds = registry.workloads.map((workload) => workload.id);
 const censusOwners = ["effectiveness-registry", "effectiveness-delivery"];
+const quickScanOwners = ["quick-scan", "quick-scan-inventory", "quick-scan-workspace", "quick-scan-python", "quick-scan-data-evidence"];
+const quickScanFiles = readNamesSafe("src/cli").filter((name) => /^quick-scan.*\.test\.ts$/.test(name)
+  && readFileSync(`src/cli/${name}`, "utf8").includes("describe.skipIf(!MECHANICAL_BINARIES_PRESENT)")).map((name) => `src/cli/${name}`).sort();
+
+function assertQuickScanCoverage(candidate: typeof registry): void {
+  const selected = selectHeavyWorkloads(candidate, ["src/cli/quick-scan-test-support.ts"]).selected;
+  expect(candidate.workloads.filter((workload) => selected.includes(workload.id) && workload.id.startsWith("quick-scan")).map((workload) => workload.testFile).sort()).toEqual(quickScanFiles);
+}
+
+function assertRunnerBudget(matrix: ReturnType<typeof shardSelectedWorkloads>): void {
+  // Reserve three minutes for setup, Vitest/file startup, publication, and runner teardown.
+  // n=1 workload samples are estimates, so hosted completion remains the acceptance proof.
+  for (const group of matrix.include) expect(group.estimatedSeconds + 180).toBeLessThan(30 * 60);
+}
+
 
 function inventorySourceInputs(): string[] {
   const root = process.cwd();
@@ -116,14 +132,14 @@ describe("heavy PR impact planner", () => {
     expect(selectHeavyWorkloads(registry, ["src/lighthouse.ts"]).selected).toEqual(["lighthouse-scan", ...censusOwners]);
     expect(selectHeavyWorkloads(registry, ["src/quality-scan.ts"]).selected).toEqual([
       "run-audit",
-      "quick-scan",
+      ...quickScanOwners,
       "quality-scan",
       "corpus-scanner-cross-process",
       ...censusOwners,
       "corpus-cache-preflight",
     ]);
     expect(selectHeavyWorkloads(registry, ["src/audit-report.ts"]).selected).toEqual(["run-audit", ...censusOwners]);
-    expect(selectHeavyWorkloads(registry, ["src/health-scorecard.ts"]).selected).toEqual(["run-audit", "quick-scan", ...censusOwners]);
+    expect(selectHeavyWorkloads(registry, ["src/health-scorecard.ts"]).selected).toEqual(["run-audit", ...quickScanOwners, ...censusOwners]);
     expect(selectHeavyWorkloads(registry, ["src/fix/schedule.ts"]).selected).toEqual([
       "fix-calibration-acceptance",
       "fix-detector-rerun",
@@ -201,11 +217,8 @@ describe("heavy PR impact planner", () => {
       expect(group.files).toHaveLength(group.workloadIds.length);
       expect(group.total).toBe(3);
     }
-    expect(matrix.include.map((group) => group.gates)).toEqual([
-      ["calibration"],
-      ["source-recall"],
-      ["m2-coverage", "shared-source-match"],
-    ]);
+    expect(matrix.include.flatMap((group) => group.gates).sort()).toEqual(registry.gates.map((gate) => gate.id).sort());
+    expect(matrix.include.find((group) => group.workloadIds.includes("quality-scan"))?.gates).toEqual([]);
   });
 
   it("uses one runner for one selected workload and refuses an empty matrix", () => {
@@ -215,7 +228,9 @@ describe("heavy PR impact planner", () => {
         total: 1,
         files: ["src/cli/lighthouse-scan.test.ts"],
         workloadIds: ["lighthouse-scan"],
-        gates: ["calibration", "source-recall", "m2-coverage", "shared-source-match"],
+        gates: ["calibration", "source-recall", "shared-source-match", "m2-coverage"],
+        estimatedSeconds: registry.workloads.find((workload) => workload.id === "lighthouse-scan")!.weightSeconds
+          + registry.gates.reduce((sum, gate) => sum + gate.weightSeconds, 0),
       },
     ]);
     expect(() => shardSelectedWorkloads(registry, [], 3)).toThrow(/empty heavy-test matrix/);
@@ -239,14 +254,93 @@ describe("heavy PR impact planner", () => {
     expect(plan.matrix.include.find((group) => group.workloadIds.includes("run-audit"))?.workloadIds).toEqual(["run-audit"]);
   });
 
-  it("isolates the measured 22-minute quick-scan suite in the full plan (#2168)", () => {
-    // Runs 35757706257 and 35764439204 measured 1299s and 1331s, respectively.
-    // The old 28.4s estimate crowded other suites into its 30-minute job and
-    // prevented the full main population from reaching its liveness checks.
+  it("discovers every quick-scan heavy file and routes all shared inputs to every owner", () => {
+    expect(quickScanFiles).toHaveLength(5);
+    assertQuickScanCoverage(registry);
+    expect(HEAVY_CLI_TESTS).toEqual(expect.arrayContaining(quickScanFiles));
+    expect(HEAVY_CLI_TESTS).not.toContain("src/cli/quick-scan-test-support.test.ts");
+    for (const path of [
+      "src/cli/quick-scan.ts", "src/quick-scan.ts", "src/health-scorecard.ts", "src/quality-scan.ts",
+      "src/cli/quick-scan-test-support.ts", "src/guard-mutation-process.ts", ...quickScanFiles,
+    ]) {
+      expect(selectHeavyWorkloads(registry, [path]).selected, path).toEqual(expect.arrayContaining(quickScanOwners));
+    }
+    const missing = { ...registry, workloads: registry.workloads.filter((workload) => workload.id !== "quick-scan-inventory") };
+    expect(() => assertQuickScanCoverage(missing)).toThrow();
+    const orphaned = { ...registry, workloads: registry.workloads.map((workload) => workload.id === "quick-scan-workspace"
+      ? { ...workload, paths: workload.paths.filter((path) => path !== "src/cli/quick-scan-") } : workload) };
+    expect(() => assertQuickScanCoverage(orphaned)).toThrow();
+  });
+
+  it("schedules independent quick-scan files below the existing runner budget (#2171)", () => {
     const plan = buildHeavyPlan(registry, [], { forceFull: true, maxShards: 3 });
     expect(plan.mode).toBe("full");
-    expect(plan.matrix.include.find((group) => group.workloadIds.includes("quick-scan"))?.workloadIds).toEqual(["quick-scan"]);
-    expect(shardHeavyTests(3).find((files) => files.includes("src/cli/quick-scan.test.ts"))).toEqual(["src/cli/quick-scan.test.ts"]);
+    expect(plan.matrix.include).toHaveLength(3);
+    assertRunnerBudget(plan.matrix);
+    expect(plan.matrix.include.filter((group) => group.workloadIds.some((id) => quickScanOwners.includes(id)))).toHaveLength(2);
+    expect(plan.matrix.include.flatMap((group) => group.files).filter((file) => quickScanFiles.includes(file)).sort()).toEqual(quickScanFiles);
+    expect(plan.matrix.include.flatMap((group) => group.gates).sort()).toEqual(registry.gates.map((gate) => gate.id).sort());
+    expect(shardHeavyTests(3).flat().filter((file) => quickScanFiles.includes(file)).sort()).toEqual(quickScanFiles);
+    const monolith = { ...registry, workloads: registry.workloads.filter((workload) => !quickScanOwners.slice(1).includes(workload.id))
+      .map((workload) => workload.id === "quick-scan" ? { ...workload, weightSeconds: 1758 } : workload) };
+    expect(() => assertRunnerBudget(buildHeavyPlan(monolith, [], { forceFull: true, maxShards: 3 }).matrix)).toThrow();
+  });
+
+  it("conserves files and every scored gate for every nonempty quick-scan subset", () => {
+    for (let mask = 1; mask < 2 ** quickScanOwners.length; mask += 1) {
+      const selected = quickScanOwners.filter((_, index) => mask & (1 << index));
+      const matrix = shardSelectedWorkloads(registry, selected, selected.length <= 4 ? 2 : 3);
+      expect(matrix.include.flatMap((group) => group.workloadIds).sort()).toEqual([...selected].sort());
+      expect(matrix.include.flatMap((group) => group.files).sort()).toEqual(registry.workloads.filter((workload) => selected.includes(workload.id)).map((workload) => workload.testFile).sort());
+      expect(matrix.include.flatMap((group) => group.gates).sort()).toEqual(registry.gates.map((gate) => gate.id).sort());
+      assertRunnerBudget(matrix);
+    }
+  });
+
+  it("budgets scored gates by workload rather than shard ordinal in scoped plans", () => {
+    const plan = buildHeavyPlan(registry, ["src/health-scorecard.ts"], { maxShards: 3 });
+    expect(plan.mode).toBe("scoped");
+    expect(plan.matrix.include).toHaveLength(3);
+    assertRunnerBudget(plan.matrix);
+    expect(plan.matrix.include.flatMap((group) => group.gates).sort()).toEqual(registry.gates.map((gate) => gate.id).sort());
+    for (const group of plan.matrix.include) {
+      const testSeconds = registry.workloads.filter((workload) => group.workloadIds.includes(workload.id)).reduce((sum, workload) => sum + workload.weightSeconds, 0);
+      const gateSeconds = registry.gates.filter((gate) => group.gates.includes(gate.id)).reduce((sum, gate) => sum + gate.weightSeconds, 0);
+      expect(group.estimatedSeconds).toBe(testSeconds + gateSeconds);
+    }
+  });
+
+  it.each(["missing", "duplicate", "unbudgeted"])("refuses a %s scored gate in the registry", (shape) => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-heavy-gate-registry-"));
+    const path = join(dir, "registry.json");
+    try {
+      const gates = registry.gates.map((gate) => ({ ...gate }));
+      if (shape === "missing") gates.pop();
+      if (shape === "duplicate") gates[1] = { ...gates[0]! };
+      if (shape === "unbudgeted") gates[0]!.weightSeconds = 0;
+      writeFileSync(path, JSON.stringify({ ...registry, gates }));
+      expect(() => loadHeavyRegistry(path)).toThrow(/every required scored gate exactly once/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["push", "merge_group", "schedule", "workflow_dispatch"])("the shipped CLI budgets the complete %s population", (event) => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-heavy-event-plan-"));
+    const output = join(dir, "github-output");
+    try {
+      const result = spawnSync(process.execPath, ["src/heavy-test-plan.mjs", "--event", event, "--github-output", output], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      const matrixLine = readFileSync(output, "utf8").split("\n").find((line) => line.startsWith("matrix="))!;
+      const matrix = JSON.parse(matrixLine.slice("matrix=".length)) as ReturnType<typeof shardSelectedWorkloads>;
+      expect(matrix.include).toHaveLength(3);
+      expect(matrix.include.flatMap((group) => group.workloadIds).sort()).toEqual([...allIds].sort());
+      expect(matrix.include.flatMap((group) => group.gates).sort()).toEqual(registry.gates.map((gate) => gate.id).sort());
+      expect(matrix.include.flatMap((group) => group.files).sort()).toEqual([...HEAVY_CLI_TESTS].sort());
+      assertRunnerBudget(matrix);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("produces a stable digest for the same exact plan", () => {
@@ -256,6 +350,8 @@ describe("heavy PR impact planner", () => {
   });
 
   it.each([
+    { name: "quick-scan shared helper", paths: ["src/cli/quick-scan-test-support.ts"], selected: [...quickScanOwners, ...censusOwners] },
+    { name: "quick-scan output file", paths: ["src/cli/quick-scan-workspace.test.ts"], selected: [...quickScanOwners, ...censusOwners] },
     { name: "independent test", paths: ["src/lighthouse.test.ts"], selected: ["lighthouse-scan"] },
     { name: "SBOM producer input", paths: ["src/sbom.ts"], selected: censusOwners },
     { name: "new corpus batch", paths: ["src/scan/calibration/new-batch.entries.ts"], selected: ["validate-calibration", ...censusOwners] },

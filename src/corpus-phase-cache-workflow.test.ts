@@ -681,7 +681,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const from = parts["corpus-drift-shard1.json"]!;
     const into = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(from.findings)[0]!;
-    into.rows.push(...from.rows);
+    into.rows.push(...from.rows.filter((row) => row.slug === slug));
     for (const field of ["findings", "detectors", "mechanicalContexts", "dependencyPreparations"] as const) into[field][slug] = from[field][slug]!;
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace("([.[].findings | keys[]] | sort)", "([.[].findings | keys[]] | unique)");

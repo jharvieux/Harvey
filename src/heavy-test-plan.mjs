@@ -6,6 +6,7 @@ import { fileURLToPath, URL } from "node:url";
 const DEFAULT_REGISTRY = fileURLToPath(new URL("./heavy-test-workloads.json", import.meta.url));
 const SAFE_TEST_FILE = /^src\/(?:[a-z0-9_.-]+\/)*[a-z0-9_.-]+\.test\.ts$/;
 const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const REQUIRED_GATES = ["calibration", "source-recall", "m2-coverage", "shared-source-match"];
 
 function matches(path, rule) {
   return rule.endsWith("/") || rule.endsWith("-") ? path.startsWith(rule) : path === rule;
@@ -33,6 +34,12 @@ export function loadHeavyRegistry(path = DEFAULT_REGISTRY) {
     }
     ids.add(workload.id);
     files.add(workload.testFile);
+  }
+  if (!Array.isArray(parsed.gates)
+    || parsed.gates.length !== REQUIRED_GATES.length
+    || REQUIRED_GATES.some((id) => parsed.gates.filter((gate) => gate.id === id).length !== 1)
+    || parsed.gates.some((gate) => !Number.isFinite(gate.weightSeconds) || gate.weightSeconds <= 0)) {
+    throw new Error("heavy workload registry must budget every required scored gate exactly once");
   }
   return parsed;
 }
@@ -107,20 +114,28 @@ export function shardSelectedWorkloads(registry, selectedIds, maxShards = 3) {
     bins[lightest].weight += workload.weightSeconds;
   }
 
-  const gatesByShard =
-    bins.length === 1
-      ? [["calibration", "source-recall", "m2-coverage", "shared-source-match"]]
-      : bins.length === 2
-        ? [["calibration", "m2-coverage", "shared-source-match"], ["source-recall"]]
-        : [["calibration"], ["source-recall"], ["m2-coverage", "shared-source-match"], ...bins.slice(3).map(() => [])];
+  // Reserving run-audit excludes other test files, not independent scored gates. Reset its
+  // sentinel to the real estimate before assigning gates: a fixed shard ordinal used to append
+  // source-recall to quick-scan's 1729s suite while another runner finished in seven minutes.
+  const scheduled = bins.map((bin) => ({
+    ...bin,
+    weight: bin.workloads.reduce((sum, workload) => sum + workload.weightSeconds, 0),
+    gates: [],
+  }));
+  for (const gate of [...registry.gates].sort((a, b) => b.weightSeconds - a.weightSeconds || a.id.localeCompare(b.id))) {
+    const lightest = scheduled.reduce((candidate, bin) => bin.weight < candidate.weight ? bin : candidate);
+    lightest.gates.push(gate.id);
+    lightest.weight += gate.weightSeconds;
+  }
 
   return {
-    include: bins.map((bin, index) => ({
+    include: scheduled.map((bin) => ({
       shard: bin.shard,
       total: bins.length,
       files: bin.workloads.map((workload) => workload.testFile),
       workloadIds: bin.workloads.map((workload) => workload.id),
-      gates: gatesByShard[index] ?? [],
+      gates: bin.gates,
+      estimatedSeconds: bin.weight,
     })),
   };
 }
@@ -169,7 +184,9 @@ function main() {
   const summary = `heavy plan: ${plan.mode}; ${plan.selected.length}/${registry.workloads.length} workload(s); ${plan.matrix.include.length} runner(s); digest ${plan.digest.slice(0, 12)}`;
   console.log(summary);
   for (const reason of plan.reasons) console.log(`  ${reason}`);
-  for (const group of plan.matrix.include) console.log(`  shard ${group.shard}/${group.total}: ${group.workloadIds.join(", ")}`);
+  for (const group of plan.matrix.include) {
+    console.log(`  shard ${group.shard}/${group.total}: ${group.workloadIds.join(", ")}; gates: ${group.gates.join(", ") || "none"}; estimated work: ${group.estimatedSeconds}s`);
+  }
 
   const githubOutput = value(args, "--github-output", "");
   if (githubOutput) {
