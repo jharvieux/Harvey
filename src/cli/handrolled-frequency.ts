@@ -39,11 +39,15 @@ type Tier = FrequencyTier | "local";
 // #1524: buildFrequencyTargets() dedupes the EXTERNAL_CORPUS/AI_FREQUENCY_CORPUS overlap so a
 // shared slug (cravab, flori-web, effective) contributes to sumForTier's aggregate exactly once —
 // see its own doc comment in src/scan/handrolled-frequency.ts for why and which entry wins.
-const localIndex = process.argv.indexOf("--local");
-const localRoot = localIndex === -1 ? undefined : process.argv[localIndex + 1];
-if (localIndex !== -1 && (!localRoot || process.argv.indexOf("--local", localIndex + 1) !== -1)) {
+const args = process.argv.slice(2);
+const localIndex = args.indexOf("--local");
+const unknownArgs = args.filter((arg, index) => arg !== "--local" && index !== localIndex + 1);
+if (localIndex === -1 && args.length > 0) throw new Error(`unknown argument(s): ${args.join(" ")}; expected --local <source-tree-path>`);
+if (localIndex !== -1 && (args.length !== 2 || localIndex !== 0 || !args[1] || args[1].startsWith("--"))) {
   throw new Error("--local requires exactly one source-tree path");
 }
+if (unknownArgs.length > 0) throw new Error(`unknown argument(s): ${unknownArgs.join(" ")}; expected --local <source-tree-path>`);
+const localRoot = localIndex === -1 ? undefined : args[1];
 const targets = localRoot
   ? [{ slug: "local", tier: "local" as const, repo: "local", commit: "local" }]
   : buildFrequencyTargets();
@@ -109,7 +113,7 @@ for (const target of targets) {
 const slugs = targets.map((t) => t.slug);
 const sortedRows = [...rows.values()].sort((a, b) => a.entry - b.entry);
 const out: string[] = [];
-out.push(localRoot ? "Corpus (1 local fixture):" : `Corpus (${targets.length} repos):`);
+out.push(localRoot ? "Corpus (1 local source tree):" : `Corpus (${targets.length} repos):`);
 for (const t of targets) {
   out.push(localRoot
     ? `  - ${t.slug} [${t.tier}] ${resolve(localRoot)} — ${productLoc.get(t.slug) ?? 0} product LOC`

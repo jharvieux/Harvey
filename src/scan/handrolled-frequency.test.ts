@@ -37,12 +37,9 @@ describe("measured shapes count their canonical example", () => {
         expect(shape.count({ path, text: `${shape.example}\n${shape.example}` }), `repeated ${shape.entry}`).toBe(exactExpected * 2);
       } else {
         expect(
-          [
-            { path, text: shape.example },
-            { path: path === "middleware.ts" ? "apps/web/middleware.js" : `other/${path}`, text: shape.example },
-          ].reduce((total, file) => total + shape.count(file), 0),
-          `repeated files ${shape.entry}`,
-        ).toBe(2);
+          shape.count({ path, text: `${shape.example}\n${shape.example}` }),
+          `repeated positives in one file ${shape.entry}`,
+        ).toBe(1);
       }
     }
   });
