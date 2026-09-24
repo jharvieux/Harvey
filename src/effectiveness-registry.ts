@@ -165,8 +165,23 @@ function literalTaxonomies(root: string, file: string): string[] {
   return unique(values.filter(nonEmpty)).sort(byText);
 }
 
-function normalizeBinding(binding: ProductionProducerBinding, root: string): ProductionProducerBinding {
-  const literal = unique(binding.implementations.flatMap((item) => literalTaxonomies(root, item.file)));
+function literalTaxonomyReader(root: string): (file: string) => readonly string[] {
+  const facts = new Map<string, readonly string[]>();
+  return (file) => {
+    const path = join(root, file);
+    let values = facts.get(path);
+    if (values === undefined) {
+      values = literalTaxonomies(root, file);
+      facts.set(path, values);
+    }
+    return values;
+  };
+}
+
+function normalizeBinding(binding: ProductionProducerBinding, readTaxonomies: (file: string) => readonly string[]): ProductionProducerBinding {
+  const literal = binding.findingFamilies.some((entry) => entry.taxonomyPattern === "@literal-taxonomies")
+    ? unique(binding.implementations.flatMap((item) => readTaxonomies(item.file)))
+    : [];
   const families = binding.findingFamilies.flatMap((entry) => {
     if (entry.taxonomyPattern !== "@literal-taxonomies") return [entry];
     const scoped = binding.modules.length === 1
@@ -298,9 +313,10 @@ function producerPopulation(
   plants: typeof CALIBRATION_PLANTS,
   packs: readonly string[],
   resolvedPackRules: Readonly<Record<string, readonly string[]>>,
+  readTaxonomies = literalTaxonomyReader(root),
 ): { bindings: ProductionProducerBinding[]; local: ReturnType<typeof readLocalSemgrepRules>; auditIds: string[]; mechanicalIds: string[] } {
   const local = readLocalSemgrepRules(root);
-  const auditBindings = auditRunners.flatMap((runner) => runner.producers).map((binding) => normalizeBinding(binding, root));
+  const auditBindings = auditRunners.flatMap((runner) => runner.producers).map((binding) => normalizeBinding(binding, readTaxonomies));
   const detectorById = new Map(mechanicalDetectors.map((detector) => [detector.id, detector]));
   const mechanicalBindings = mechanicalRegistry.flatMap((entry) => entry.phase === "semgrep"
     ? expandSemgrepAggregate(entry, local, packs, resolvedPackRules)
@@ -315,7 +331,7 @@ function producerPopulation(
     deliveryKind: "conservation",
   }));
   return {
-    bindings: [...auditBindings, ...mechanicalBindings, ...plantBindings].map((binding) => normalizeBinding(binding, root)),
+    bindings: [...auditBindings, ...mechanicalBindings, ...plantBindings].map((binding) => normalizeBinding(binding, readTaxonomies)),
     local,
     auditIds: auditBindings.map((binding) => binding.id).sort(byText),
     mechanicalIds: mechanicalRegistry.map((entry) => `${entry.phase}:${entry.id}`).sort(byText),
@@ -631,7 +647,10 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const runtimePackRuleIds = Object.fromEntries(producerExecutions
     .filter((receipt) => receipt.producerId.startsWith("semgrep:registry:"))
     .map((receipt) => [receipt.producerId.slice("semgrep:registry:".length), receipt.findingFamilyIds]));
-  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds });
+  // Share syntax facts across the two independent populations in this build.
+  // A later build gets a fresh reader so source edits are observed again.
+  const readTaxonomies = literalTaxonomyReader(root);
+  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds }, readTaxonomies);
   const routeImplementations = routeGraphImplementations(population.bindings);
   // Keep validation independent from caller-supplied inventory inputs, while
   // sharing only the immutable TypeScript source snapshot and checker.
@@ -643,6 +662,7 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
     CALIBRATION_PLANTS,
     REGISTRY_PACKS,
     {},
+    readTaxonomies,
   );
   const sourceRouteImplementations = routeGraphImplementations(sourcePopulation.bindings);
   const scoredVenues = scoredGates.filter((gate) => gate.cadence.kind !== "none");

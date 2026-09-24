@@ -330,6 +330,101 @@ describe("awaited reversed detector-census integration", () => {
   });
 });
 
+describe("literal taxonomy source facts", () => {
+  it("bounds requested source reads per build and observes edits, deletion, and restoration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-literal-facts-"));
+    // Observe file I/O through the public builder in its own process. The full
+    // default/reversed census tests above and in delivery retain shipping parity.
+    const script = `
+      import fs, { cpSync, rmSync, writeFileSync } from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { join } from "node:path";
+      import { buildEffectivenessInventory } from "./src/effectiveness-registry.ts";
+      import { AUDIT_RUNNERS } from "./src/audit-runners.ts";
+      import { SCORED_GATES } from "./src/scored-gates.ts";
+      const root = ${JSON.stringify(root)};
+      const repo = process.cwd();
+      cpSync(join(repo, "src"), join(root, "src"), { recursive: true });
+      cpSync(join(repo, "tools"), join(root, "tools"), { recursive: true });
+      cpSync(join(repo, ".github", "workflows"), join(root, ".github", "workflows"), { recursive: true });
+      for (const id of ["run-audit", ...SCORED_GATES.map(gate => gate.id)]) {
+        rmSync(join(root, "src", "cli", id + ".ts"), { force: true });
+      }
+      const manifest = JSON.parse(fs.readFileSync(join(repo, "package.json"), "utf8"));
+      delete manifest.packageManager;
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+      const literalFile = "src/detectors/hook-deps.ts";
+      const explicitFile = "src/opaque.ts";
+      const explicitId = "disclosure:source-extension";
+      const writeLiteral = taxonomy => writeFileSync(join(root, literalFile),
+        "export const findings = [{ taxonomy: " + JSON.stringify(taxonomy) + " }];\\n");
+      writeLiteral("M7 — before");
+      writeFileSync(join(root, explicitFile), "export const opaque = true;\\n");
+      const inputs = {
+        root, scoredGates: [],
+        auditRunners: AUDIT_RUNNERS.map(runner => ({ ...runner, producers: runner.producers.map(binding =>
+          binding.id === explicitId
+            ? { ...binding, implementations: [{ ...binding.implementations[0], file: explicitFile, symbol: "opaque" }] }
+            : binding),
+        })),
+      };
+      const originalRead = fs.readFileSync;
+      let reads = 0;
+      fs.readFileSync = (path, ...args) => {
+        if (path === join(root, explicitFile)) throw new Error("explicit taxonomy triggered an unnecessary implementation read");
+        if (path === join(root, literalFile)) reads += 1;
+        return originalRead(path, ...args);
+      };
+      syncBuiltinESMExports();
+      try {
+        const build = () => {
+          const inventory = buildEffectivenessInventory(inputs);
+          return {
+            families: inventory.producers.filter(row => ["detector:hook-deps", explicitId].includes(row.id))
+              .map(row => [row.id, row.findingFamilies.map(family => family.taxonomyPattern)]),
+            reads,
+          };
+        };
+        const before = build();
+        writeLiteral("M7 — after");
+        const after = build();
+        rmSync(join(root, literalFile));
+        let deleted;
+        try { build(); } catch (error) { deleted = error.message; }
+        writeLiteral("M7 — restored");
+        const restored = build();
+        console.log(JSON.stringify({ before, after, deleted, restored }));
+      } finally {
+        fs.readFileSync = originalRead;
+        syncBuiltinESMExports();
+      }
+    `;
+    const run = startManagedChild(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script]);
+    try {
+      if (!(await waitForClose(run, 20_000))) throw new Error("literal source fixture exceeded its bounded wait");
+      expect(run.error).toBeUndefined();
+      expect(run.code, run.stderr).toBe(0);
+      const result = JSON.parse(run.stdout) as {
+        before: { families: [string, string[]][]; reads: number };
+        after: { families: [string, string[]][]; reads: number };
+        restored: { families: [string, string[]][]; reads: number };
+        deleted?: string;
+      };
+      const families = (taxonomy: string): [string, string[]][] => [
+        ["detector:hook-deps", [taxonomy]],
+        ["disclosure:source-extension", ["Coverage — source files not read*"]],
+      ];
+      expect(result.before).toEqual({ families: families("M7 — before"), reads: 1 });
+      expect(result.after).toEqual({ families: families("M7 — after"), reads: 2 });
+      expect(result.deleted).toBe("detector:hook-deps: @literal-taxonomies resolved no M7 taxonomy");
+      expect(result.restored).toEqual({ families: families("M7 — restored"), reads: 3 });
+    } finally {
+      await terminateAndReap(run);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("effectiveness producer inventory (#1910)", () => {
   beforeAll(() => {
     if (censusInventory === undefined) throw new Error("unit inventory unavailable after reversed census failure");
