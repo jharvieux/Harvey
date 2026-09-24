@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { readNamesSafe } from "../fs-walk.js";
@@ -16,6 +16,7 @@ import {
   partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
   POSTMESSAGE_WILDCARD_TAXONOMY,
+  REGISTRY_PACK_FETCH_POLICY,
   runRegistryPacksOnFile,
   runSemgrep,
   runSemgrepPartitioned,
@@ -27,6 +28,7 @@ import {
   semgrepTaintNotAssessedFindings,
   semgrepUnavailableFinding,
   stripCommentsAndStrings,
+  validateRegistryPackConfigs,
   type SemgrepOutput,
   type SemgrepResult,
 } from "./semgrep.js";
@@ -78,7 +80,7 @@ describe("Semgrep registry snapshot reuse (#1864)", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-reuse-"));
     try {
       const seeded = seedRegistrySnapshot(dir);
-      expect(materializeRegistryPacks(dir, "reuse")).toEqual(seeded);
+      expect(withRegistryConfigValidator(() => materializeRegistryPacks(dir, "reuse"))).toEqual(seeded);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -89,10 +91,25 @@ describe("Semgrep registry snapshot reuse (#1864)", () => {
     try {
       const seeded = seedRegistrySnapshot(dir);
       writeFileSync(seeded.files[0]!, "rules: [changed]\n");
-      const result = materializeRegistryPacks(dir, "reuse");
+      const result = withRegistryConfigValidator(() => materializeRegistryPacks(dir, "reuse"));
       expect(result.identity).toBeUndefined();
       expect(result.failure).toContain("restored Semgrep registry snapshot required on CI retry but is invalid");
       expect(result.failure).toContain("snapshot bytes hash to");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not return a memoized identity after the canonical selector is deleted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-memo-"));
+    try {
+      const seeded = seedRegistrySnapshot(dir);
+      expect(withRegistryConfigValidator(() => materializeRegistryPacks(dir, "reuse")).identity).toBe(seeded.identity);
+      rmSync(join(dir, "registry-packs", "current.json"));
+      const result = withRegistryConfigValidator(() => materializeRegistryPacks(dir, "reuse"));
+      expect(result.identity).toBeUndefined();
+      expect(result.files).toBeUndefined();
+      expect(result.failure).toContain("current.json is missing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -152,6 +169,86 @@ vi.mock("node:child_process", async (importOriginal) => {
       return actual.execFileSync(bin, args, opts as never);
     }),
   };
+});
+
+function withRegistryConfigValidator<T>(run: () => T): T {
+  const previous = semgrepMock.handler;
+  semgrepMock.handler = (args, opts) => {
+    if (args.includes("--version")) {
+      expect(args).toEqual(["--version", "--disable-version-check"]);
+      expect(opts).toMatchObject({ timeout: REGISTRY_PACK_FETCH_POLICY.validatorIdentityBudgetMs });
+      return "1.173.0\n";
+    }
+    if (args[0] === "scan" && args.includes("--strict")) {
+      const files = args.flatMap((arg, index) => arg === "--config" ? [args[index + 1]!] : []);
+      expect(files).toHaveLength(6);
+      expect(files.every(isAbsolute)).toBe(true);
+      const target = args.at(-1)!;
+      expect(args).toEqual(["scan", ...files.flatMap((path) => ["--config", path]), "--json", "--strict", "--metrics", "off", "--disable-version-check", target]);
+      expect(opts).toMatchObject({ cwd: target, timeout: REGISTRY_PACK_FETCH_POLICY.validationBudgetMs });
+      expect(readNamesSafe(target)).toEqual([]);
+      return JSON.stringify({ errors: [], paths: { scanned: [] }, skipped_rules: [] });
+    }
+    return previous?.(args, opts);
+  };
+  try {
+    return run();
+  } finally {
+    semgrepMock.handler = previous;
+  }
+}
+
+describe("local Semgrep registry validation (#2171)", () => {
+  it("validates all six exact configs in an empty temporary target and cleans it up", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-validation-command-"));
+    try {
+      const seeded = seedRegistrySnapshot(root);
+      writeFileSync(seeded.files[5]!, `${readFileSync(seeded.files[5]!, "utf8")}# command control\n`);
+      const before = vi.mocked(execFileSync).mock.calls.length;
+      withRegistryConfigValidator(() => validateRegistryPackConfigs(seeded.files.map((path) => relative(process.cwd(), path))));
+      const calls = vi.mocked(execFileSync).mock.calls.slice(before);
+      const validation = calls.find(([, args]) => args?.[0] === "scan")!;
+      expect(validation).toBeDefined();
+      const args = validation[1] as string[];
+      expect(args.filter((_, index) => args[index - 1] === "--config")).toEqual(seeded.files);
+      expect(existsSync(args.at(-1)!)).toBe(false);
+      const after = vi.mocked(execFileSync).mock.calls.length;
+      withRegistryConfigValidator(() => validateRegistryPackConfigs(seeded.files));
+      expect(vi.mocked(execFileSync).mock.calls.length).toBe(after);
+      writeFileSync(seeded.files[5]!, `${readFileSync(seeded.files[5]!, "utf8")}# changed exact bytes\n`);
+      withRegistryConfigValidator(() => validateRegistryPackConfigs(seeded.files));
+      expect(vi.mocked(execFileSync).mock.calls.length).toBe(after + 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans the empty target and does not memoize failed validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-validation-failure-"));
+    const previous = semgrepMock.handler;
+    const targets: string[] = [];
+    try {
+      const seeded = seedRegistrySnapshot(root);
+      writeFileSync(seeded.files[5]!, `${readFileSync(seeded.files[5]!, "utf8")}# failure control\n`);
+      semgrepMock.handler = (args, opts) => {
+        if (args.includes("--version")) return "1.173.0\n";
+        const target = args.at(-1)!;
+        targets.push(target);
+        expect(realpathSync(target)).toBe(realpathSync((opts as { cwd: string }).cwd));
+        expect(readNamesSafe(target)).toEqual([]);
+        throw Object.assign(new Error("malformed pattern"), { status: 2 });
+      };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(() => validateRegistryPackConfigs(seeded.files)).toThrow("semgrep validator exited with code 2");
+      }
+      expect(targets).toHaveLength(2);
+      expect(new Set(targets).size).toBe(2);
+      expect(targets.some(existsSync)).toBe(false);
+    } finally {
+      semgrepMock.handler = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));

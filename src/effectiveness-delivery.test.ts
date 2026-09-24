@@ -2,10 +2,8 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  serializeEffectivenessInventory,
-  validateEffectivenessDelivery,
-} from "./effectiveness-registry.js";
+import { ValidationWorker, type PendingValidation } from "./__fixtures__/effectiveness-delivery/validation-worker.mjs";
+import { serializeEffectivenessInventory } from "./effectiveness-registry.js";
 import { REQUIRED_RUNTIME_EDGE, type EffectivenessInventory } from "./effectiveness-schema.js";
 import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "./producer-execution-receipt.js";
@@ -106,12 +104,15 @@ function deepFreeze<T>(value: T): T {
 
 let censusRun: CensusRun | undefined;
 let censusInventory: EffectivenessInventory | undefined;
+let validationWorker: ValidationWorker | undefined;
+let coldDelivery: PendingValidation | undefined;
 
 beforeAll(() => { censusRun = startDetectorCensus(); });
 afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 afterAll(async () => {
   if (censusRun !== undefined) await terminateAndReap(censusRun);
 });
+afterAll(async () => { await validationWorker?.stop(); });
 
 function deliveredFixture(): { inventory: EffectivenessInventory; observation: { findingId: string; producerId: string; familyId: string; venueId: string } } {
   if (censusInventory === undefined) throw new Error("default detector-census did not produce the shared delivery fixture");
@@ -161,19 +162,29 @@ describe("awaited detector-census integration", () => {
     expect(output).toBe(`${canonical}\n`);
     expect(createHash("sha256").update(output).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
     censusInventory = deepFreeze(JSON.parse(output) as EffectivenessInventory);
+    validationWorker = new ValidationWorker(REPO_ROOT);
+    const { inventory, observation } = deliveredFixture();
+    coldDelivery = validationWorker.start({ kind: "delivery", inventory, delivered: [observation] });
   });
 });
 
 describe("producer-specific client delivery", () => {
   beforeAll(() => {
-    if (censusInventory === undefined) throw new Error("delivery inventory unavailable after default census failure");
+    if (coldDelivery === undefined) throw new Error("delivery validation unavailable after default census failure");
   });
-  it("traces one actual execution through its exact family and venue", () => {
-    const { inventory, observation } = deliveredFixture();
-    expect(validateEffectivenessDelivery(inventory, [observation])).toEqual([]);
+  it.each(Array.from({ length: CENSUS_SLICE_COUNT }, (_, index) => index + 1))(
+    "yields while awaiting cold source validation in a separate child (slice %i)",
+    async () => { await validationWorker!.waitSlice(coldDelivery!, CENSUS_SLICE_MS); },
+  );
+
+  it("traces one actual execution through its exact family and venue with cold source evidence", async () => {
+    const result = await validationWorker!.finish(coldDelivery!);
+    expect(result.pid).not.toBe(process.pid);
+    expect(result.problems).toEqual([]);
+    console.info(`cold delivery source validation: ${Math.round(result.elapsedMs)}ms in child ${result.pid}`);
   });
 
-  it("fails when delivery is deleted while accounting remains", () => {
+  it("fails when delivery is deleted while accounting remains", async () => {
     const { inventory, observation } = deliveredFixture();
     const receipt = inventory.receipt.producerExecutions[0]!;
     const withoutDelivery = createProducerExecutionReceipt({
@@ -187,13 +198,13 @@ describe("producer-specific client delivery", () => {
       edges: receipt.edges.filter((edge) => edge.kind !== "client-delivery").map(({ kind, from, to }) => ({ kind, from, to })),
     });
     const planted = { ...inventory, receipt: { ...inventory.receipt, producerExecutions: [withoutDelivery] } };
-    expect(validateEffectivenessDelivery(planted, [observation])).toContain("DELIVERED-1: expected one exact producer-to-client delivery receipt, found 0");
+    expect(await validationWorker!.validate({ kind: "delivery", inventory: planted, delivered: [observation] })).toContain("DELIVERED-1: expected one exact producer-to-client delivery receipt, found 0");
   });
 
-  it("rejects venue-wide unrelated calls and duplicate observations", () => {
+  it("rejects venue-wide unrelated calls and duplicate observations", async () => {
     const { inventory, observation } = deliveredFixture();
     const wrong = { ...observation, venueId: "unrelated-venue" };
-    expect(validateEffectivenessDelivery(inventory, [wrong]).some((problem) => problem.includes("not bound") || problem.includes("found 0"))).toBe(true);
-    expect(validateEffectivenessDelivery(inventory, [observation, observation])).toContain("client delivery observations contain duplicates");
+    expect((await validationWorker!.validate({ kind: "delivery", inventory, delivered: [wrong] })).some((problem) => problem.includes("not bound") || problem.includes("found 0"))).toBe(true);
+    expect(await validationWorker!.validate({ kind: "delivery", inventory, delivered: [observation, observation] })).toContain("client delivery observations contain duplicates");
   });
 });

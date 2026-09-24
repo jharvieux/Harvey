@@ -184,6 +184,9 @@ jobs:
         with:
           mode: save
 
+      - name: Install the pinned Semgrep validator
+        if: steps.route.outputs.relevant == 'true'
+        uses: ./.github/actions/mechanical-binaries
       - name: Materialize the one current Semgrep registry input
         if: steps.route.outputs.relevant == 'true'
         run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --out .harvey-current-semgrep/receipt.json
@@ -824,6 +827,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill
         working-directory: source
+      - name: Install the pinned aggregate Semgrep validator
+        if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill
+        uses: ./source/.github/actions/mechanical-binaries
       - name: Current registry producer ↔ independent replay equivalence/readiness
         if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         run: |

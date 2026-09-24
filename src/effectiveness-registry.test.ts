@@ -1,14 +1,13 @@
 import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  serializeEffectivenessInventory,
-  validateEffectivenessInventory,
-} from "./effectiveness-registry.js";
+import { serializeEffectivenessInventory } from "./effectiveness-registry.js";
+import { ValidationWorker, type PendingValidation } from "./__fixtures__/effectiveness-delivery/validation-worker.mjs";
+import type { ScoredGate } from "./scored-gates.js";
 import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
 import type { EffectivenessInventory, EffectivenessProducer } from "./effectiveness-schema.js";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
@@ -86,7 +85,7 @@ async function terminateAndReap(run: ManagedChild): Promise<void> {
   run.child.kill("SIGTERM");
   if (await waitForClose(run, 2_000)) return;
   run.child.kill("SIGKILL");
-  if (!(await waitForClose(run, 5_000))) {
+  if (!await waitForClose(run, 5_000)) {
     throw new Error(`failed to reap child process ${run.child.pid ?? "without-pid"}`);
   }
 }
@@ -112,6 +111,7 @@ function deepFreeze<T>(value: T): T {
 
 let censusRun: ManagedChild | undefined;
 let censusInventory: EffectivenessInventory | undefined;
+let validationWorker: ValidationWorker | undefined;
 
 beforeAll(() => {
   censusRun = startManagedChild("node", [
@@ -126,6 +126,36 @@ afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 afterAll(async () => {
   if (censusRun !== undefined) await terminateAndReap(censusRun);
 });
+afterAll(async () => { await validationWorker?.stop(); });
+
+async function validateEffectivenessInventory(
+  inventory: EffectivenessInventory,
+  options: { root?: string; scoredGates?: readonly ScoredGate[] } = {},
+): Promise<string[]> {
+  if (!validationWorker) throw new Error("source validation child unavailable");
+  return validationWorker.validate({ kind: "inventory", inventory, options });
+}
+
+function coldSourceValidation(label: string): void {
+  describe(label, () => {
+    let request: PendingValidation;
+    beforeAll(() => {
+      if (!validationWorker) throw new Error("source validation child unavailable");
+      request = validationWorker.start({ kind: "inventory", inventory: freshInventory() });
+    });
+    it.each(Array.from({ length: CENSUS_SLICE_COUNT }, (_, index) => index + 1))(
+      "yields while independently deriving cold source evidence (slice %i)",
+      async () => { await validationWorker!.waitSlice(request, CENSUS_SLICE_MS); },
+    );
+    it("validates the hash-bound inventory against the complete source graph", async () => {
+      const result = await validationWorker!.finish(request);
+      expect(result.pid).not.toBe(process.pid);
+      expect(result.pid).toBe(validationWorker!.pid);
+      expect(result.problems).toEqual([]);
+      console.info(`${label}: ${Math.round(result.elapsedMs)}ms in child ${result.pid}`);
+    });
+  });
+}
 
 const immutableInventory = (): EffectivenessInventory => {
   if (censusInventory === undefined) throw new Error("reversed detector-census did not produce the shared inventory fixture");
@@ -174,8 +204,8 @@ function withProducer(
   };
 }
 
-const expectRestoredBaseline = (): void => {
-  expect(validateEffectivenessInventory(freshInventory())).toEqual([]);
+const expectRestoredBaseline = async (): Promise<void> => {
+  expect(await validateEffectivenessInventory(freshInventory())).toEqual([]);
 };
 
 describe("awaited reversed detector-census integration", () => {
@@ -196,6 +226,7 @@ describe("awaited reversed detector-census integration", () => {
     expect(output).toBe(`${canonical}\n`);
     expect(createHash("sha256").update(output).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
     censusInventory = deepFreeze(JSON.parse(output) as EffectivenessInventory);
+    validationWorker = new ValidationWorker(REPO_ROOT);
   });
 
   it("routes both census owners once and requires their afterAll terminate-and-reap teardown", () => {
@@ -223,6 +254,10 @@ describe("awaited reversed detector-census integration", () => {
       expect(source, `${file} must escalate cleanup when graceful termination stalls`).toContain("SIGKILL");
       expect(source, `${file} must yield between child and unit assertions`).toContain("setImmediate");
       expect(source, `${file} must not start a second parent inventory build`).not.toContain(PARENT_INVENTORY_GETTER);
+      expect(source, `${file} must run independent source validation outside the Vitest worker`).not.toMatch(
+        /import\s*\{[^}]*\bvalidateEffectiveness(?:Inventory|Delivery)\b[^}]*\}\s*from\s*["']\.\/effectiveness-registry\.js["']/,
+      );
+      expect(source, `${file} must reap its retained source-validation child`).toContain("afterAll(async () => { await validationWorker?.stop(); });");
       expect(source, `${file} must not directly await the unbounded child lifetime`).not.toMatch(
         /await\s+(?:runDetectorCensus\s*\(|censusRun!?\.close)/,
       );
@@ -266,13 +301,136 @@ describe("awaited reversed detector-census integration", () => {
       }
     }
   });
+
+  it("rejects an unfinished source validation at the final checkpoint and reaps its child", async () => {
+    const worker = new ValidationWorker(REPO_ROOT);
+    const pid = worker.pid;
+    expect(pid).toBeDefined();
+    try {
+      const request = worker.start({ kind: "inventory", inventory: freshInventory() });
+      await expect(worker.finish(request)).rejects.toThrow("source validation exceeded its bounded wait budget");
+      expect(() => process.kill(pid!, 0)).toThrow();
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("propagates validation exceptions instead of accepting missing evidence", async () => {
+    const worker = new ValidationWorker(REPO_ROOT);
+    const pid = worker.pid;
+    expect(pid).toBeDefined();
+    try {
+      const request = worker.start({ kind: "inventory", inventory: {} as EffectivenessInventory });
+      await expect(worker.waitSlice(request)).rejects.toThrow();
+      await expect(worker.finish(request)).rejects.toThrow();
+    } finally {
+      await worker.stop();
+    }
+    expect(() => process.kill(pid!, 0)).toThrow();
+  });
+});
+
+describe("literal taxonomy source facts", () => {
+  it("bounds requested source reads per build and observes edits, deletion, and restoration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-literal-facts-"));
+    // Observe file I/O through the public builder in its own process. The full
+    // default/reversed census tests above and in delivery retain shipping parity.
+    const script = `
+      import fs, { cpSync, rmSync, writeFileSync } from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { join } from "node:path";
+      import { buildEffectivenessInventory } from "./src/effectiveness-registry.ts";
+      import { AUDIT_RUNNERS } from "./src/audit-runners.ts";
+      import { SCORED_GATES } from "./src/scored-gates.ts";
+      const root = ${JSON.stringify(root)};
+      const repo = process.cwd();
+      cpSync(join(repo, "src"), join(root, "src"), { recursive: true });
+      cpSync(join(repo, "tools"), join(root, "tools"), { recursive: true });
+      cpSync(join(repo, ".github", "workflows"), join(root, ".github", "workflows"), { recursive: true });
+      for (const id of ["run-audit", ...SCORED_GATES.map(gate => gate.id)]) {
+        rmSync(join(root, "src", "cli", id + ".ts"), { force: true });
+      }
+      const manifest = JSON.parse(fs.readFileSync(join(repo, "package.json"), "utf8"));
+      delete manifest.packageManager;
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+      const literalFile = "src/detectors/hook-deps.ts";
+      const explicitFile = "src/opaque.ts";
+      const explicitId = "disclosure:source-extension";
+      const writeLiteral = taxonomy => writeFileSync(join(root, literalFile),
+        "export const findings = [{ taxonomy: " + JSON.stringify(taxonomy) + " }];\\n");
+      writeLiteral("M7 — before");
+      writeFileSync(join(root, explicitFile), "export const opaque = true;\\n");
+      const inputs = {
+        root, scoredGates: [],
+        auditRunners: AUDIT_RUNNERS.map(runner => ({ ...runner, producers: runner.producers.map(binding =>
+          binding.id === explicitId
+            ? { ...binding, implementations: [{ ...binding.implementations[0], file: explicitFile, symbol: "opaque" }] }
+            : binding),
+        })),
+      };
+      const originalRead = fs.readFileSync;
+      let reads = 0;
+      fs.readFileSync = (path, ...args) => {
+        if (path === join(root, explicitFile)) throw new Error("explicit taxonomy triggered an unnecessary implementation read");
+        if (path === join(root, literalFile)) reads += 1;
+        return originalRead(path, ...args);
+      };
+      syncBuiltinESMExports();
+      try {
+        const build = () => {
+          const inventory = buildEffectivenessInventory(inputs);
+          return {
+            families: inventory.producers.filter(row => ["detector:hook-deps", explicitId].includes(row.id))
+              .map(row => [row.id, row.findingFamilies.map(family => family.taxonomyPattern)]),
+            reads,
+          };
+        };
+        const before = build();
+        writeLiteral("M7 — after");
+        const after = build();
+        rmSync(join(root, literalFile));
+        let deleted;
+        try { build(); } catch (error) { deleted = error.message; }
+        writeLiteral("M7 — restored");
+        const restored = build();
+        console.log(JSON.stringify({ before, after, deleted, restored }));
+      } finally {
+        fs.readFileSync = originalRead;
+        syncBuiltinESMExports();
+      }
+    `;
+    const run = startManagedChild(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script]);
+    try {
+      if (!(await waitForClose(run, 20_000))) throw new Error("literal source fixture exceeded its bounded wait");
+      expect(run.error).toBeUndefined();
+      expect(run.code, run.stderr).toBe(0);
+      const result = JSON.parse(run.stdout) as {
+        before: { families: [string, string[]][]; reads: number };
+        after: { families: [string, string[]][]; reads: number };
+        restored: { families: [string, string[]][]; reads: number };
+        deleted?: string;
+      };
+      const families = (taxonomy: string): [string, string[]][] => [
+        ["detector:hook-deps", [taxonomy]],
+        ["disclosure:source-extension", ["Coverage — source files not read*"]],
+      ];
+      expect(result.before).toEqual({ families: families("M7 — before"), reads: 1 });
+      expect(result.after).toEqual({ families: families("M7 — after"), reads: 2 });
+      expect(result.deleted).toBe("detector:hook-deps: @literal-taxonomies resolved no M7 taxonomy");
+      expect(result.restored).toEqual({ families: families("M7 — restored"), reads: 3 });
+    } finally {
+      await terminateAndReap(run);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("effectiveness producer inventory (#1910)", () => {
   beforeAll(() => {
     if (censusInventory === undefined) throw new Error("unit inventory unavailable after reversed census failure");
   });
-  it("binds actual runtime receipts to their exact producer and rejects unknown or forged ownership", () => {
+  coldSourceValidation("cold source validation before runtime receipt assertions");
+  it("binds actual runtime receipts to their exact producer and rejects unknown or forged ownership", async () => {
     const receipt = createProducerExecutionReceipt({
       executionId: "conservation:M7",
       producerId: "plant:M7",
@@ -297,7 +455,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     const inventory = withExecutionReceipts(freshInventory(), [receipt, directResponseReceipt]);
     expect(producer(inventory, "plant:M7").executionReceiptIds).toEqual(["conservation:M7"]);
     expect(producer(inventory, `semgrep:registry:${rule}`).executionReceiptIds).toEqual(["semgrep:direct-response"]);
-    expect(validateEffectivenessInventory(inventory)).toEqual([]);
+    expect(await validateEffectivenessInventory(inventory)).toEqual([]);
     const unknown = createProducerExecutionReceipt({
       executionId: receipt.executionId,
       producerId: "unknown",
@@ -308,11 +466,11 @@ describe("effectiveness producer inventory (#1910)", () => {
       findingIds: receipt.findingIds,
       edges: receipt.edges.map(({ kind, from, to }) => ({ kind, from, to })),
     });
-    expect(validateEffectivenessInventory(withExecutionReceipts(freshInventory(), [unknown])).join("\n")).toMatch(/unknown producer/);
+    expect((await validateEffectivenessInventory(withExecutionReceipts(freshInventory(), [unknown]))).join("\n")).toMatch(/unknown producer/);
   });
-  it("closes the production registries and preserves the current exact populations", () => {
+  it("closes the production registries and preserves the current exact populations", async () => {
     const inventory = freshInventory();
-    expect(validateEffectivenessInventory(inventory)).toEqual([]);
+    expect(await validateEffectivenessInventory(inventory)).toEqual([]);
     expect(inventory.receipt).toMatchObject({
       mechanicalDefinitions: 73,
       localSemgrepFamilies: 10,
@@ -428,7 +586,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     ]));
   });
 
-  it("fails when the sole registry invoke is deleted even if its evidence names a real test caller", () => {
+  it("fails when the sole registry invoke is deleted even if its evidence names a real test caller", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-registry-route-"));
     try {
       mkdirSync(join(root, "src", "cli"), { recursive: true });
@@ -462,7 +620,7 @@ describe("effectiveness producer inventory (#1910)", () => {
       expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
       writeFileSync(join(root, "src", "scan", "mechanical-detector-registry.ts"), registry("() => detectBolaOwnerFindings()"));
       expect(discoverEffectivenessRouteGraph(root, [implementation])).toEqual(live);
-      expectRestoredBaseline();
+      await expectRestoredBaseline();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -556,7 +714,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     });
   });
 
-  it("discovers a neutral-name producer through aliases and fails when its real call is deleted", () => {
+  it("discovers a neutral-name producer through aliases and fails when its real call is deleted", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-discovery-"));
     try {
       mkdirSync(join(root, "src", "cli"), { recursive: true });
@@ -585,24 +743,24 @@ describe("effectiveness producer inventory (#1910)", () => {
       expect(deleted.routes).toEqual([]);
       writeFileSync(join(root, "src", "cli", "run-audit.ts"), liveEntry);
       expect(discoverEffectivenessRouteGraph(root, [implementation])).toEqual(live);
-      expectRestoredBaseline();
+      await expectRestoredBaseline();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("fails a deleted scored venue and passes when it is restored", () => {
+  it("fails a deleted scored venue and passes when it is restored", async () => {
     const baseline = freshInventory();
     const planted: EffectivenessInventory = {
       ...baseline,
       venues: baseline.venues.filter((row) => row.id !== "validate-calibration"),
     };
-    expect(validateEffectivenessInventory(planted).some((problem) =>
+    expect((await validateEffectivenessInventory(planted)).some((problem) =>
       problem.includes("scored venue validate-calibration no longer exists"))).toBe(true);
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails a module-mismatched venue and passes when it is restored", () => {
+  it("fails a module-mismatched venue and passes when it is restored", async () => {
     const baseline = freshInventory();
     const planted: EffectivenessInventory = {
       ...baseline,
@@ -610,24 +768,24 @@ describe("effectiveness producer inventory (#1910)", () => {
         ? { ...row, modules: ["M2"] as const }
         : row),
     };
-    expect(validateEffectivenessInventory(planted)).toContain(
+    expect(await validateEffectivenessInventory(planted)).toContain(
       "validate-precision: module claims do not match the live venue population",
     );
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails a duplicate producer id and passes when the duplicate is removed", () => {
+  it("fails a duplicate producer id and passes when the duplicate is removed", async () => {
     const baseline = freshInventory();
     const duplicate = producer(baseline, "detector:app-router");
     const planted: EffectivenessInventory = {
       ...baseline,
       producers: [...baseline.producers, duplicate],
     };
-    expect(validateEffectivenessInventory(planted)).toContain("detector:app-router: duplicate producer id");
-    expectRestoredBaseline();
+    expect(await validateEffectivenessInventory(planted)).toContain("detector:app-router: duplicate producer id");
+    await expectRestoredBaseline();
   });
 
-  it("does not treat a renamed implementation declaration as runtime evidence", () => {
+  it("does not treat a renamed implementation declaration as runtime evidence", async () => {
     const baseline = freshInventory();
     const id = "detector:app-router";
     const planted = withProducer(baseline, id, (row) => ({
@@ -636,25 +794,25 @@ describe("effectiveness producer inventory (#1910)", () => {
         ? { ...item, symbol: "removedAppRouterProducer" }
         : item),
     }));
-    expect(validateEffectivenessInventory(planted).some((problem) => problem.includes("removedAppRouterProducer") && problem.includes("live route"))).toBe(false);
+    expect((await validateEffectivenessInventory(planted)).some((problem) => problem.includes("removedAppRouterProducer") && problem.includes("live route"))).toBe(false);
     expect(producer(planted, id).executionReceiptIds).toEqual([]);
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails a deleted semantic route receipt and passes when it is restored", () => {
+  it("fails a deleted semantic route receipt and passes when it is restored", async () => {
     const baseline = freshInventory();
     const id = "detector:app-router";
     const planted = withProducer(baseline, id, (row) => ({
       ...row,
       routeIds: row.routeIds.slice(1),
     }));
-    expect(validateEffectivenessInventory(planted)).toContain(
+    expect(await validateEffectivenessInventory(planted)).toContain(
       `${id}: producer route ids do not close on the semantic route graph`,
     );
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails a stale exemption after a real venue is assigned and passes when restored", () => {
+  it("fails a stale exemption after a real venue is assigned and passes when restored", async () => {
     const baseline = freshInventory();
     const id = "detector:hook-deps";
     expect(producer(baseline, id)).toMatchObject({ venueIds: [], exemptionId: expect.any(String) });
@@ -666,13 +824,13 @@ describe("effectiveness producer inventory (#1910)", () => {
         : family),
     }));
     const family = producer(baseline, id).findingFamilies[0]!;
-    expect(validateEffectivenessInventory(planted)).toContain(
+    expect(await validateEffectivenessInventory(planted)).toContain(
       `${family.id}: stale exemption ${family.exemptionId} remains after a scored venue was assigned`,
     );
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails scored-family and exemption pair loss in either receipt direction", () => {
+  it("fails scored-family and exemption pair loss in either receipt direction", async () => {
     const baseline = freshInventory();
     const venue = baseline.venues.find((row) => row.coveredFamilyIds.length > 0)!;
     const scoredFamily = venue.coveredFamilyIds[0]!;
@@ -682,7 +840,7 @@ describe("effectiveness producer inventory (#1910)", () => {
         ? { ...row, coveredFamilyIds: row.coveredFamilyIds.slice(1) }
         : row),
     };
-    expect(validateEffectivenessInventory(missingVenuePair)).toContain("scored family/venue pair sets do not conserve exactly");
+    expect(await validateEffectivenessInventory(missingVenuePair)).toContain("scored family/venue pair sets do not conserve exactly");
 
     const exemption = baseline.exemptions.find((row) => row.applicableFamilyIds.length > 0)!;
     const exemptFamily = exemption.applicableFamilyIds[0]!;
@@ -692,32 +850,120 @@ describe("effectiveness producer inventory (#1910)", () => {
         ? { ...row, applicableFamilyIds: row.applicableFamilyIds.filter((id) => id !== exemptFamily) }
         : row),
     };
-    expect(validateEffectivenessInventory(missingExemptionPair)).toContain("exempt family pair sets do not conserve exactly");
+    expect(await validateEffectivenessInventory(missingExemptionPair)).toContain("exempt family pair sets do not conserve exactly");
     expect(scoredFamily).not.toBe(exemptFamily);
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 
-  it("fails an incomplete structured exemption and passes when restored", () => {
+  it("rejects correlated deletion of venue calls and their family-binding copies", async () => {
+    const baseline = freshInventory();
+    const intactBytes = serializeEffectivenessInventory(baseline);
+    const removedVenueReferences = baseline.venues.reduce((sum, venue) => sum + venue.callReceiptIds.length, 0);
+    const removedBindingReferences = baseline.receipt.familyCoverage
+      .flatMap((receipt) => receipt.scoredBindings)
+      .reduce((sum, binding) => sum + binding.callReceiptIds.length, 0);
+    expect(removedVenueReferences).toBeGreaterThan(0);
+    expect(removedBindingReferences).toBeGreaterThan(0);
+
+    const planted: EffectivenessInventory = {
+      ...baseline,
+      venues: baseline.venues.map((venue) => ({ ...venue, callReceiptIds: [] })),
+      receipt: {
+        ...baseline.receipt,
+        familyCoverage: baseline.receipt.familyCoverage.map((receipt) => ({
+          ...receipt,
+          scoredBindings: receipt.scoredBindings.map((binding) => ({ ...binding, callReceiptIds: [] })),
+        })),
+      },
+    };
+    const problems = await validateEffectivenessInventory(planted);
+    expect(problems.filter((problem) => problem.includes("static source reachability call receipts do not close"))).toHaveLength(baseline.venues.length);
+    expect(problems.some((problem) => problem.includes("scorer call path does not close"))).toBe(false);
+    expect(problems.every((problem) => problem.includes("runtime client delivery requires producer execution receipts"))).toBe(true);
+
+    expect(await validateEffectivenessInventory(baseline)).toEqual([]);
+    expect(serializeEffectivenessInventory(baseline)).toBe(intactBytes);
+  });
+
+  it.each([
+    ["import", 'import "./unobserved-boundary/new-worker.js";\n'],
+    ["Node command", 'import { spawnSync } from "node:child_process";\nspawnSync("node", ["--import", "tsx", "src/cli/unobserved-boundary/new-worker.ts"]);\n'],
+    ["package script", 'import { spawnSync } from "node:child_process";\nspawnSync("pnpm", ["run", "boundary-worker"]);\n'],
+  ])("invalidates source-derived venue evidence when an unresolved %s target appears", async (_kind, caller) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-source-boundary-"));
+    try {
+      cpSync(join(REPO_ROOT, "src"), join(root, "src"), { recursive: true });
+      cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { packageManager: string; scripts: Record<string, string> };
+      manifest.scripts["boundary-worker"] = "node --import tsx src/cli/unobserved-boundary/new-worker.ts";
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"), "dir");
+      const absentDirectory = join(root, "src", "cli", "unobserved-boundary");
+      mkdirSync(absentDirectory);
+      const gate = {
+        id: "validate-boundary-census",
+        script: "validate:boundary-census",
+        measures: "source-cache invalidation",
+        cadence: { kind: "verify" as const, description: "bounded source-cache invalidation proof" },
+      };
+      writeFileSync(join(root, "src", "cli", `${gate.id}.ts`), caller);
+      const baseline = freshInventory();
+      const inventory: EffectivenessInventory = {
+        ...baseline,
+        venues: [{
+          ...baseline.venues[0]!,
+          id: gate.id,
+          gateId: gate.id,
+          rootId: `src/cli/${gate.id}.ts`,
+          command: `pnpm ${gate.script}`,
+          cadence: gate.cadence,
+          callReceiptIds: [],
+        }],
+      };
+      const sourceProblems = async (): Promise<string[]> => (await validateEffectivenessInventory(inventory, {
+        root,
+        scoredGates: [gate],
+      })).filter((problem) => problem.includes("static source reachability call receipts do not close"));
+
+      expect(await sourceProblems()).toEqual([]);
+      writeFileSync(
+        join(absentDirectory, "new-worker.ts"),
+        'import { detectHookDepFindings } from "../../detectors/hook-deps.js";\ndetectHookDepFindings([]);\n',
+      );
+      expect(await sourceProblems()).toEqual([
+        expect.stringContaining("validate-boundary-census: static source reachability call receipts do not close"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The temporary-root requests above replace the production cache. Exercise the
+  // real default-root rebuild in the same process instead of concealing it.
+  coldSourceValidation("cold source validation after temporary-root cache replacement");
+
+  it("fails an incomplete structured exemption and passes when restored", async () => {
     const baseline = freshInventory();
     const id = "exemption:m2-live-score";
     const planted: EffectivenessInventory = {
       ...baseline,
       exemptions: baseline.exemptions.map((row) => row.id === id ? { ...row, owner: "" } : row),
     };
-    expect(validateEffectivenessInventory(planted)).toContain(`${id}: exemption metadata is incomplete`);
-    expectRestoredBaseline();
+    expect(await validateEffectivenessInventory(planted)).toContain(`${id}: exemption metadata is incomplete`);
+    await expectRestoredBaseline();
   });
 
-  it("fails a wrongly classified synthesizer and passes when it is restored", () => {
+  it("fails a wrongly classified synthesizer and passes when it is restored", async () => {
     const baseline = freshInventory();
     const id = "synthesizer:m2-apply-verify-results";
     const planted = withProducer(baseline, id, (row) => ({
       ...row,
       populationClass: "true-finding-producer",
     }));
-    expect(validateEffectivenessInventory(planted)).toContain(
+    expect(await validateEffectivenessInventory(planted)).toContain(
       `${id}: synthesizer implementation is wrongly classified as true-finding-producer`,
     );
-    expectRestoredBaseline();
+    await expectRestoredBaseline();
   });
 });

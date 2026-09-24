@@ -2,16 +2,20 @@
 // planted missing-dep and stay silent on the corrected version — same fixture discipline as
 // the other M7C classes.
 
-import { readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Linter } from "eslint";
 import { describe, expect, it, vi } from "vitest";
 import { detectHookDepFindings } from "./hook-deps.js";
 import type { SourceInput } from "./common.js";
 
 const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/perf/", import.meta.url));
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
@@ -56,6 +60,17 @@ describe("missing hook dependencies (react-hooks/exhaustive-deps adapter)", () =
 // parse errors and even parser stack overflows internally, converting them to `fatal` messages
 // rather than throwing — TRIED 2026-07-25, see PR body).
 describe("hook-deps lint parse failure disclosure (#1083)", () => {
+  it("discloses a real ESLint fatal parser diagnostic rather than silently filtering it (#2104)", () => {
+    const files: SourceInput[] = [{
+      path: "components/broken.tsx",
+      text: `"use client";\nimport { useEffect } from "react";\nexport function Broken({ userId }: { userId: string }) {\n  useEffect(() => { fetch(userId); }, []);\n  return <div;\n}\n`,
+    }];
+    const hits = detectHookDepFindings(files);
+    const coverage = hits.find((finding) => finding.id === "M7H-00");
+    expect(coverage).toMatchObject({ category: "Coverage", location: "components/broken.tsx" });
+    expect(coverage?.evidence).toContain("Parsing error");
+  });
+
   it("counts and discloses a file the linter throws on, instead of silently dropping it", () => {
     const spy = vi.spyOn(Linter.prototype, "verify").mockImplementation(() => {
       throw new Error("simulated linter crash");
@@ -70,6 +85,29 @@ describe("hook-deps lint parse failure disclosure (#1083)", () => {
       expect(coverage?.evidence).toContain("components/broken.tsx");
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("delivers a real fatal parser diagnostic through the static-detect CLI (#2104)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-hook-deps-static-"));
+    try {
+      const target = join(root, "target");
+      const source = join(target, "app", "broken.tsx");
+      const out = join(root, "findings.json");
+      mkdirSync(dirname(source), { recursive: true });
+      writeFileSync(source, `"use client";\nimport { useEffect } from "react";\nexport function Broken({ userId }: { userId: string }) {\n  useEffect(() => { fetch(userId); }, []);\n  return <div;\n}\n`);
+      await promisify(execFile)(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src", "cli", "static-detect.ts"), target, "--out", out], {
+        cwd: REPO_ROOT,
+        timeout: 20_000,
+        maxBuffer: 1024 * 1024,
+      });
+      const findings = JSON.parse(readFileSync(out, "utf8")) as { id: string; location: string; evidence: string }[];
+      expect(findings.find((finding) => finding.id === "M7H-00")).toMatchObject({
+        location: "app/broken.tsx",
+        evidence: expect.stringContaining("Parsing error"),
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

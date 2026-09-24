@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { rejectCorpusCacheTransport } from "./corpus-cache-transport.js";
 import { semgrepPackReceipt, validateRestoredSemgrepPackArtifact } from "./corpus-mechanical-readiness.js";
@@ -20,6 +20,34 @@ const mechanical = readFileSync(join(root, "src", "scan", "mechanical.ts"), "utf
 const corpusCli = readFileSync(join(root, "src", "cli", "corpus-drift.ts"), "utf8");
 const replayCli = readFileSync(join(root, "src", "cli", "replay-current-mechanical.ts"), "utf8");
 const temporaryDirectories: string[] = [];
+const originalPath = process.env.PATH;
+const validatorRoot = mkdtempSync(join(tmpdir(), "harvey-corpus-semgrep-validator-"));
+const validator = join(validatorRoot, "semgrep");
+writeFileSync(validator, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version --disable-version-check") { process.stdout.write("1.173.0\\n"); process.exit(0); }
+if (args[0] !== "scan" || !args.includes("--strict") || !args.includes("--json") || !args.includes("--disable-version-check") || args[args.indexOf("--metrics") + 1] !== "off") process.exit(91);
+const target = args.at(-1);
+if (fs.realpathSync(target) !== fs.realpathSync(process.cwd()) || fs.readdirSync(target).length !== 0) process.exit(93);
+const files = args.flatMap((arg, index) => arg === "--config" ? [args[index + 1]] : []);
+if (files.length !== 6) process.exit(92);
+for (const file of files) {
+  const body = fs.readFileSync(file, "utf8");
+  if (/rules:\\s*\\[\\s*\\]/m.test(body)) continue;
+  for (const field of ["id", "message", "severity", "languages"]) {
+    if (!new RegExp("^\\\\s*[- ]*" + field + ":", "m").test(body)) process.exit(2);
+  }
+  if (!/^\\s*(pattern|mode):/m.test(body)) process.exit(2);
+}
+`);
+chmodSync(validator, 0o755);
+
+beforeAll(() => { process.env.PATH = `${validatorRoot}:${originalPath ?? ""}`; });
+afterAll(() => {
+  process.env.PATH = originalPath;
+  rmSync(validatorRoot, { recursive: true, force: true });
+});
 
 function transportWorkflowErrors(text: string, cli = corpusCli): string[] {
   const errors: string[] = [];
@@ -58,8 +86,13 @@ function temporary(prefix: string): string {
   return dir;
 }
 
-function seedSemgrepArtifact(dir: string, marker: string): string {
-  const bodies = REGISTRY_PACKS.map((pack, ordinal) => ({ pack, body: `rules:\n  - id: ${marker}-${ordinal}\n    message: ${pack}\n` }));
+function seedSemgrepArtifact(dir: string, marker: string, idOnly = false): string {
+  const bodies = REGISTRY_PACKS.map((pack, ordinal) => ({
+    pack,
+    body: idOnly
+      ? `rules:\n  - id: ${marker}-${ordinal}\n`
+      : `rules:\n  - id: ${marker}-${ordinal}\n    message: ${pack}\n    severity: WARNING\n    languages: [typescript]\n    pattern: $X\n`,
+  }));
   const identity = registryPackIdentity(bodies);
   const packDir = join(dir, "registry-packs", identity);
   mkdirSync(packDir, { recursive: true });
@@ -788,6 +821,9 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   });
 
   it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {
+    const validatorInstall = named(document, "prepare-current-inputs", "Install the pinned Semgrep validator");
+    expect(validatorInstall.uses).toBe("./.github/actions/mechanical-binaries");
+    expect(validatorInstall.if).toBe("steps.route.outputs.relevant == 'true'");
     expect(workflow).toContain("name: Materialize the one current Semgrep registry input");
     expect(workflow).toContain("name: current-mechanical-semgrep-pack");
     expect(workflow.match(/name: Restore the run's exact shared Semgrep bytes/g)).toHaveLength(2);
@@ -801,6 +837,26 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(corpusCli).toContain("validateRestoredSemgrepPackArtifact(registrySnapshotDir!)");
     expect(corpusCli).toContain("resolve(registrySnapshotDir) === resolve(phaseCacheDir)");
     expect(replayCli).toContain("validateRestoredSemgrepPackArtifact(registryDir)");
+  });
+
+  it("provisions the pinned validator before aggregate receipt consumers", () => {
+    const steps = document.jobs.drift!.steps;
+    const install = named(document, "drift", "Install the pinned aggregate Semgrep validator");
+    expect(install.uses).toBe("./source/.github/actions/mechanical-binaries");
+    const consumers = steps.filter((step) => /validate:current-mechanical-readiness|corpus-advisory-observation\.ts/.test(step.run ?? ""));
+    expect(consumers).toHaveLength(2);
+    for (const consumer of consumers) expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(consumer));
+    for (const event of events) {
+      const ctx = context(event);
+      expect(active(install, ctx)).toBe(true);
+      expect(consumers.some((step) => active(step, ctx))).toBe(true);
+      expect(active(install, context(event, false))).toBe(false);
+      for (const drill of ["alert_drill", "liveness_drill"] as const) {
+        const drillContext = context(event);
+        drillContext.inputs[drill] = true;
+        expect(active(install, drillContext)).toBe(false);
+      }
+    }
   });
 
   it("opts every hidden artifact search root into the uploader's file selection", () => {
@@ -879,6 +935,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     seedSemgrepArtifact(other, "different-run");
     copyFileSync(join(other, "receipt.json"), join(mixed, "receipt.json"));
     expect(() => validateRestoredSemgrepPackArtifact(mixed)).toThrow(/disagree with receipt\.json/);
+  });
+
+  it("rejects a self-consistent restored artifact whose rules Semgrep cannot load", () => {
+    const dir = join(temporary("semgrep-invalid-config-"), ".harvey-current-semgrep");
+    seedSemgrepArtifact(dir, "missing-required-fields", true);
+    expect(() => validateRestoredSemgrepPackArtifact(dir)).toThrow(/semgrep validator exited with code 2/);
   });
 
   it("keeps immutable registry bytes intact when a rejected mutable phase transport is cleared", () => {

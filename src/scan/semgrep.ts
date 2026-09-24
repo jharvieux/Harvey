@@ -22,9 +22,9 @@ import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { readEntriesLstatSafe, readEntriesSafe, readNamesSafe } from "../fs-walk.js";
+import { readEntriesLstatSafe, readEntriesSafe, readNamesSafe, statSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-trust.js";
@@ -70,7 +70,34 @@ const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 // The maintained registry packs every real engagement scan fetches (runSemgrep below) — shared with
 // runRegistryPacksOnFile's single-file replay (#1368) so the two can never drift apart.
 export const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"] as const;
-const materializedRegistryMemo = new Map<string, { identity?: string; files?: string[]; failure?: string }>();
+export const REGISTRY_PACK_FETCH_POLICY = {
+  name: "bounded-public-registry-v1",
+  maxAttempts: 3,
+  http403Attempts: 2,
+  perPackBudgetMs: 60_000,
+  attemptBudgetMs: 20_000,
+  maxResponseBytes: 32 * 1024 * 1024,
+  validatorIdentityBudgetMs: 10_000,
+  validationBudgetMs: 20_000,
+  backoffMs: [250, 750] as const,
+} as const;
+
+export interface RegistryPackTransportProvenance {
+  policy: typeof REGISTRY_PACK_FETCH_POLICY.name;
+  totalAttempts: number;
+  packs: Array<{ pack: typeof REGISTRY_PACKS[number]; attempts: number; retries: string[] }>;
+}
+
+interface MaterializedRegistrySnapshot {
+  identity?: string;
+  files?: string[];
+  failure?: string;
+  transport?: RegistryPackTransportProvenance;
+}
+
+const materializedRegistryMemo = new Map<string, MaterializedRegistrySnapshot>();
+const validatedRegistryConfigs = new Set<string>();
+let semgrepValidatorIdentity: string | undefined;
 
 interface RegistryPackSnapshotManifest {
   schema: 1;
@@ -92,7 +119,7 @@ function registryPackFiles(cacheDir: string, identity: string): string[] {
   return REGISTRY_PACKS.map((pack, index) => join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`));
 }
 
-function readRestoredRegistrySnapshot(cacheDir: string): { identity?: string; files?: string[]; failure?: string } {
+function readRestoredRegistrySnapshot(cacheDir: string): MaterializedRegistrySnapshot {
   const manifestPath = join(cacheDir, "registry-packs", "current.json");
   try {
     if (!existsSync(manifestPath)) throw new Error("current.json is missing");
@@ -113,47 +140,231 @@ function readRestoredRegistrySnapshot(cacheDir: string): { identity?: string; fi
   }
 }
 
-export function materializeRegistryPacks(cacheDir: string, mode: "refresh" | "reuse" = "refresh"): { identity?: string; files?: string[]; failure?: string } {
-  const memoKey = `${mode}:${cacheDir}`;
+type RegistryFetchFailure = { reason: string; retryable: boolean; maxAttempts: number };
+
+function classifyRegistryHttpFailure(status: number): RegistryFetchFailure {
+  // This endpoint is public and this request deliberately carries no credentials. A lone 403 is
+  // therefore treated as an edge/provider refusal and retried once; a second 403 is still a hard
+  // denial. Credential-bearing authorization failures (401/407) and other stable 4xx responses are
+  // never retried.
+  if (status === 403) return { reason: "http-403", retryable: true, maxAttempts: REGISTRY_PACK_FETCH_POLICY.http403Attempts };
+  if (status === 408 || status === 425 || status === 429 || status >= 500) {
+    return { reason: `http-${status}`, retryable: true, maxAttempts: REGISTRY_PACK_FETCH_POLICY.maxAttempts };
+  }
+  return { reason: `http-${status}`, retryable: false, maxAttempts: 1 };
+}
+
+function classifyRegistryTransportFailure(error: unknown): RegistryFetchFailure {
+  const failure = error as { code?: string; status?: number };
+  if (failure.code === "ENOENT") return { reason: "curl-not-found", retryable: false, maxAttempts: 1 };
+  if (failure.code === "ETIMEDOUT") return { reason: "transport-timeout", retryable: true, maxAttempts: REGISTRY_PACK_FETCH_POLICY.maxAttempts };
+  const status = failure.status;
+  if (status === 63) return { reason: "response-too-large", retryable: false, maxAttempts: 1 };
+  const transientCurlExit = status !== undefined && [5, 6, 7, 18, 28, 35, 52, 55, 56, 92, 95].includes(status);
+  return {
+    reason: status === undefined ? "transport-failure" : `curl-exit-${status}`,
+    retryable: transientCurlExit,
+    maxAttempts: transientCurlExit ? REGISTRY_PACK_FETCH_POLICY.maxAttempts : 1,
+  };
+}
+
+function waitForRegistryRetry(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function semgrepValidationFailure(error: unknown): string {
+  const failure = error as { code?: string | number; status?: number | null; signal?: string | null };
+  if (failure.code === "ENOENT") return "semgrep validator not found on PATH";
+  const status = failure.status ?? (typeof failure.code === "number" ? failure.code : undefined);
+  return failure.signal ? `semgrep validator was killed by signal ${failure.signal}` : `semgrep validator exited with code ${status ?? "unknown"}`;
+}
+
+/** Validate the exact local files with Semgrep's own versioned rule parser. */
+export function validateRegistryPackConfigs(files: readonly string[], source = "Semgrep registry pack"): void {
+  if (files.length !== REGISTRY_PACKS.length) throw new Error(`${source} contains ${files.length} configs, expected ${REGISTRY_PACKS.length}`);
+  if (!semgrepValidatorIdentity) {
+    try {
+      semgrepValidatorIdentity = execFileSync("semgrep", ["--version", "--disable-version-check"], {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+        timeout: REGISTRY_PACK_FETCH_POLICY.validatorIdentityBudgetMs,
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch (error) {
+      throw new Error(`${source} cannot be validated: ${semgrepValidationFailure(error)}`);
+    }
+  }
+  const exactBytes = registryPackIdentity(files.map((path, index) => {
+    const stats = statSafe(path);
+    if (!stats?.isFile()) throw new Error(`${source} config ${index} is not a readable file`);
+    if (stats.size > REGISTRY_PACK_FETCH_POLICY.maxResponseBytes) {
+      throw new Error(`${source} config ${index} exceeds ${REGISTRY_PACK_FETCH_POLICY.maxResponseBytes} bytes`);
+    }
+    return { pack: REGISTRY_PACKS[index]!, body: readFileSync(path, "utf8") };
+  }));
+  const validationKey = createHash("sha256").update(semgrepValidatorIdentity).update("\0").update(exactBytes).digest("hex");
+  if (validatedRegistryConfigs.has(validationKey)) return;
+  // --validate fetches p/semgrep-rule-lints even for local configs. A strict scan parses every
+  // rule and pattern without that mutable input; the empty cwd/target excludes project content.
+  const validationTarget = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-validation-"));
+  try {
+    execFileSync("semgrep", [
+      "scan",
+      ...files.flatMap((path) => ["--config", resolve(path)]),
+      "--json", "--strict",
+      "--metrics", "off",
+      "--disable-version-check",
+      validationTarget,
+    ], {
+      cwd: validationTarget,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: REGISTRY_PACK_FETCH_POLICY.validationBudgetMs,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new Error(`${source} is not loadable by Semgrep ${semgrepValidatorIdentity}: ${semgrepValidationFailure(error)}`);
+  } finally {
+    rmSync(validationTarget, { recursive: true, force: true });
+  }
+  validatedRegistryConfigs.add(validationKey);
+}
+
+function fetchRegistryPack(pack: typeof REGISTRY_PACKS[number]): { body?: string; attempts: number; retries: string[]; failure?: string } {
+  const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-fetch-"));
+  const output = join(root, "pack.yml");
+  const retries: string[] = [];
+  const deadline = Date.now() + REGISTRY_PACK_FETCH_POLICY.perPackBudgetMs;
+  let attempts = 0;
+  try {
+    while (attempts < REGISTRY_PACK_FETCH_POLICY.maxAttempts) {
+      attempts += 1;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return { attempts, retries, failure: "transport-time-budget" };
+      rmSync(output, { force: true });
+      let failure: RegistryFetchFailure | undefined;
+      try {
+        const attemptMs = Math.min(REGISTRY_PACK_FETCH_POLICY.attemptBudgetMs, remainingMs);
+        const statusText = execFileSync("curl", [
+          "-sS", "-L", "--proto", "=https",
+          "--output", output,
+          "--max-filesize", String(REGISTRY_PACK_FETCH_POLICY.maxResponseBytes),
+          "--write-out", "%{http_code}",
+          "--connect-timeout", "10",
+          "--max-time", String(Math.max(1, Math.floor(attemptMs / 1_000))),
+          `https://semgrep.dev/c/${pack}`,
+        ], {
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024,
+          timeout: remainingMs,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const status = Number(statusText.trim());
+        if (Number.isInteger(status) && status >= 200 && status < 300 && existsSync(output)) {
+          const stats = statSafe(output);
+          if (!stats?.isFile()) return { attempts, retries, failure: "response-file-missing" };
+          if (stats.size > REGISTRY_PACK_FETCH_POLICY.maxResponseBytes) {
+            return { attempts, retries, failure: "response-too-large" };
+          }
+          return { body: readFileSync(output, "utf8"), attempts, retries };
+        }
+        failure = classifyRegistryHttpFailure(status);
+      } catch (error) {
+        failure = classifyRegistryTransportFailure(error);
+      }
+      if (!failure.retryable || attempts >= failure.maxAttempts) {
+        return { attempts, retries, failure: failure.reason };
+      }
+      retries.push(failure.reason);
+      const delay = REGISTRY_PACK_FETCH_POLICY.backoffMs[Math.min(attempts - 1, REGISTRY_PACK_FETCH_POLICY.backoffMs.length - 1)]!;
+      if (Date.now() + delay >= deadline) return { attempts, retries, failure: "transport-time-budget" };
+      waitForRegistryRetry(delay);
+    }
+    return { attempts, retries, failure: "retry-budget-exhausted" };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+export function materializeRegistryPacks(cacheDir: string, mode: "refresh" | "reuse" = "refresh"): MaterializedRegistrySnapshot {
+  const canonicalCacheDir = resolve(cacheDir);
+  const memoKey = `${mode}:${canonicalCacheDir}`;
   const memo = materializedRegistryMemo.get(memoKey);
-  if (memo) return memo;
+  if (memo?.failure && mode === "refresh") return memo;
+  if (memo?.failure) materializedRegistryMemo.delete(memoKey);
+  if (memo?.identity) {
+    const current = readRestoredRegistrySnapshot(cacheDir);
+    if (current.identity === memo.identity && current.files) {
+      try {
+        validateRegistryPackConfigs(current.files, "memoized Semgrep registry snapshot");
+        return { ...memo, files: current.files };
+      } catch {
+        // Fall through and invalidate the memo. Reuse returns the detailed fresh read failure;
+        // refresh performs a new bounded fetch rather than trusting stale in-memory identity.
+      }
+    }
+    materializedRegistryMemo.delete(memoKey);
+  }
   if (mode === "reuse") {
     const result = readRestoredRegistrySnapshot(cacheDir);
+    if (result.files) {
+      try {
+        validateRegistryPackConfigs(result.files, "restored Semgrep registry snapshot");
+      } catch (error) {
+        result.identity = undefined;
+        result.files = undefined;
+        result.failure = error instanceof Error ? error.message : String(error);
+      }
+    }
     materializedRegistryMemo.set(memoKey, result);
     return result;
   }
-  const bodies: { pack: string; body: string }[] = [];
+  materializedRegistryMemo.delete(`reuse:${canonicalCacheDir}`);
+  const registryRoot = join(cacheDir, "registry-packs");
+  const manifestPath = join(registryRoot, "current.json");
+  const bodies: { pack: typeof REGISTRY_PACKS[number]; body: string }[] = [];
+  const transport: RegistryPackTransportProvenance = { policy: REGISTRY_PACK_FETCH_POLICY.name, totalAttempts: 0, packs: [] };
+  // A refresh failure must invalidate an older canonical selector before any network work starts.
+  // Identity directories may remain for diagnosis, but no consumer can select them without this
+  // manifest and the shipping CLI also removes its receipt before entering this function.
+  rmSync(manifestPath, { force: true });
   try {
     for (const pack of REGISTRY_PACKS) {
-      const config = execFileSync("curl", ["-fsSL", `https://semgrep.dev/c/${pack}`], {
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024 * 32,
-        timeout: 60_000,
-      });
-      bodies.push({ pack, body: config });
+      const fetched = fetchRegistryPack(pack);
+      transport.totalAttempts += fetched.attempts;
+      transport.packs.push({ pack, attempts: fetched.attempts, retries: fetched.retries });
+      if (fetched.failure || fetched.body === undefined) {
+        throw new Error(`${pack} failed after ${fetched.attempts} attempt(s): ${fetched.failure ?? "empty response"}`);
+      }
+      bodies.push({ pack, body: fetched.body });
     }
     const identity = registryPackIdentity(bodies);
-    const dir = join(cacheDir, "registry-packs", identity);
-    mkdirSync(dir, { recursive: true });
-    const files = bodies.map(({ pack, body }, index) => {
-      const path = join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`);
-      if (!existsSync(path) || readFileSync(path, "utf8") !== body) {
-        const temp = `${path}.${process.pid}.tmp`;
-        writeFileSync(temp, body);
-        renameSync(temp, path);
-      }
-      return path;
-    });
-    const manifestPath = join(cacheDir, "registry-packs", "current.json");
-    const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
-    writeFileSync(manifestTemp, `${JSON.stringify({ schema: 1, identity } satisfies RegistryPackSnapshotManifest, null, 2)}\n`);
-    renameSync(manifestTemp, manifestPath);
-    const result = { identity, files };
+    mkdirSync(cacheDir, { recursive: true });
+    const stagedRoot = mkdtempSync(join(cacheDir, ".registry-packs-"));
+    try {
+      const stagedDir = join(stagedRoot, identity);
+      mkdirSync(stagedDir, { recursive: true });
+      const stagedFiles = bodies.map(({ pack, body }, index) => {
+        const path = join(stagedDir, `${index}-${pack.replaceAll("/", "-")}.yml`);
+        writeFileSync(path, body);
+        return path;
+      });
+      validateRegistryPackConfigs(stagedFiles, "fresh Semgrep registry snapshot");
+      writeFileSync(join(stagedRoot, "current.json"), `${JSON.stringify({ schema: 1, identity } satisfies RegistryPackSnapshotManifest, null, 2)}\n`);
+      rmSync(registryRoot, { recursive: true, force: true });
+      renameSync(stagedRoot, registryRoot);
+    } finally {
+      rmSync(stagedRoot, { recursive: true, force: true });
+    }
+    const files = registryPackFiles(cacheDir, identity);
+    const result = { identity, files, transport };
     materializedRegistryMemo.set(memoKey, result);
     return result;
   } catch (error) {
-    const e = error as { code?: string; message?: string };
-    const result = { failure: e.code === "ENOENT" ? "curl not found while materializing Semgrep registry packs" : `Semgrep registry packs could not be reproducibly materialized: ${e.message ?? "registry fetch failed"}` };
+    rmSync(manifestPath, { force: true });
+    const message = error instanceof Error ? error.message : "registry fetch failed";
+    const result = { failure: `Semgrep registry packs could not be reproducibly materialized: ${message}`, transport };
     materializedRegistryMemo.set(memoKey, result);
     return result;
   }

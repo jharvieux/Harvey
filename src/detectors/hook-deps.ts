@@ -23,7 +23,12 @@ const HOOK_CALL = /\buse(Effect|LayoutEffect|InsertionEffect|Memo|Callback|Imper
 
 const linter = new Linter();
 
-function lintFile(file: SourceInput): { line: number; message: string }[] {
+interface LintResult {
+  hits: { line: number; message: string }[];
+  fatalDiagnostic?: string;
+}
+
+function lintFile(file: SourceInput): LintResult {
   const messages = linter.verify(
     file.text,
     {
@@ -37,31 +42,42 @@ function lintFile(file: SourceInput): { line: number; message: string }[] {
     },
     file.path,
   );
-  return messages
-    .filter((m) => m.ruleId === "react-hooks/exhaustive-deps")
-    .map((m) => ({ line: m.line, message: m.message }));
+  // ESLint reports parse failures as fatal diagnostics instead of throwing. Keep those separate
+  // from rule hits: a null ruleId means the hook-dependency pass never assessed this file.
+  const fatal = messages.find((m) => m.fatal);
+  return {
+    hits: messages
+      .filter((m) => m.ruleId === "react-hooks/exhaustive-deps")
+      .map((m) => ({ line: m.line, message: m.message })),
+    fatalDiagnostic: fatal?.message,
+  };
 }
 
 export function detectHookDepFindings(files: SourceInput[]): Finding[] {
   const findings: Finding[] = [];
-  const unparseable: string[] = [];
+  const unparseable: { path: string; reason: string }[] = [];
   let n = 0;
   for (const file of files) {
     if (!SOURCE_FILE.test(file.path)) continue; // #1065: the loader's own filter, imported so the two can never drift apart
     if (!HOOK_CALL.test(file.text)) continue; // cheap pre-filter: no dep-taking hooks, no lint run
-    let hits: { line: number; message: string }[];
+    let result: LintResult;
     try {
-      hits = lintFile(file);
-    } catch {
+      result = lintFile(file);
+    } catch (error) {
       // #1083: this pass's own ESLint+typescript-eslint parser configuration failed on the file's
       // syntax. NOT a read failure — the shared loader (load-sources.ts) has no try/catch of its
       // own, so an unreadable file throws there and fails the whole pass loud before any file ever
       // reaches this detector. (The comment this replaces asserted "the other detectors already
       // skip it too" — unverified, and contradicted by `grep 'limitations.push|notes.push' src` :
       // no detector anywhere records a skip.) Counted below instead of silently dropped.
-      unparseable.push(file.path);
+      unparseable.push({ path: file.path, reason: error instanceof Error ? error.message : "ESLint threw a non-Error value" });
       continue;
     }
+    if (result.fatalDiagnostic) {
+      unparseable.push({ path: file.path, reason: result.fatalDiagnostic });
+      continue;
+    }
+    const { hits } = result;
     const first = hits[0];
     if (!first) continue;
     findings.push({
@@ -90,8 +106,8 @@ export function detectHookDepFindings(files: SourceInput[]): Finding[] {
       severity: "Info",
       confidence: "N/A",
       taxonomy: "Coverage — hook-dependency lint parse failure",
-      location: unparseable.slice(0, 5).join(", ") + (unparseable.length > 5 ? `, +${unparseable.length - 5} more` : ""),
-      evidence: `react-hooks/exhaustive-deps could not be run against: ${unparseable.join(", ")} — this pass's ESLint+typescript-eslint configuration failed to parse the file.`,
+      location: unparseable.slice(0, 5).map(({ path }) => path).join(", ") + (unparseable.length > 5 ? `, +${unparseable.length - 5} more` : ""),
+      evidence: `react-hooks/exhaustive-deps could not be run against: ${unparseable.map(({ path, reason }) => `${path} (${reason})`).join(", ")} — this pass's ESLint+typescript-eslint configuration could not parse the file.`,
       impact: "Any missing/stale hook-dependency issue in these specific files is NOT assessed by this pass.",
       fix: "Review these files by hand for missing-dependency / stale-closure bugs in useEffect/useMemo/useCallback/useLayoutEffect/useInsertionEffect/useImperativeHandle.",
       value: 1,

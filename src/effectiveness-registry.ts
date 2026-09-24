@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,11 @@ import { AUDIT_MODULES, type AuditModule } from "./audit-coverage.js";
 import { CALIBRATION_PLANTS } from "./audit-conservation.js";
 import type { ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
-import { discoverEffectivenessRouteGraphs, type RouteGraphImplementation } from "./effectiveness-route-graph.js";
+import {
+  discoverEffectivenessRouteGraphs,
+  discoverEffectivenessVenueRouteGraphs,
+  type RouteGraphImplementation,
+} from "./effectiveness-route-graph.js";
 import { HEURISTIC_CORPUS } from "./scan/heuristic-precision.js";
 import { CORPUS, mechanicalCorpus } from "./scan/calibration.js";
 import { m6HandrolledEntries } from "./scan/calibration/m6-handrolled.entries.js";
@@ -160,8 +165,23 @@ function literalTaxonomies(root: string, file: string): string[] {
   return unique(values.filter(nonEmpty)).sort(byText);
 }
 
-function normalizeBinding(binding: ProductionProducerBinding, root: string): ProductionProducerBinding {
-  const literal = unique(binding.implementations.flatMap((item) => literalTaxonomies(root, item.file)));
+function literalTaxonomyReader(root: string): (file: string) => readonly string[] {
+  const facts = new Map<string, readonly string[]>();
+  return (file) => {
+    const path = join(root, file);
+    let values = facts.get(path);
+    if (values === undefined) {
+      values = literalTaxonomies(root, file);
+      facts.set(path, values);
+    }
+    return values;
+  };
+}
+
+function normalizeBinding(binding: ProductionProducerBinding, readTaxonomies: (file: string) => readonly string[]): ProductionProducerBinding {
+  const literal = binding.findingFamilies.some((entry) => entry.taxonomyPattern === "@literal-taxonomies")
+    ? unique(binding.implementations.flatMap((item) => readTaxonomies(item.file)))
+    : [];
   const families = binding.findingFamilies.flatMap((entry) => {
     if (entry.taxonomyPattern !== "@literal-taxonomies") return [entry];
     const scoped = binding.modules.length === 1
@@ -293,9 +313,10 @@ function producerPopulation(
   plants: typeof CALIBRATION_PLANTS,
   packs: readonly string[],
   resolvedPackRules: Readonly<Record<string, readonly string[]>>,
+  readTaxonomies = literalTaxonomyReader(root),
 ): { bindings: ProductionProducerBinding[]; local: ReturnType<typeof readLocalSemgrepRules>; auditIds: string[]; mechanicalIds: string[] } {
   const local = readLocalSemgrepRules(root);
-  const auditBindings = auditRunners.flatMap((runner) => runner.producers).map((binding) => normalizeBinding(binding, root));
+  const auditBindings = auditRunners.flatMap((runner) => runner.producers).map((binding) => normalizeBinding(binding, readTaxonomies));
   const detectorById = new Map(mechanicalDetectors.map((detector) => [detector.id, detector]));
   const mechanicalBindings = mechanicalRegistry.flatMap((entry) => entry.phase === "semgrep"
     ? expandSemgrepAggregate(entry, local, packs, resolvedPackRules)
@@ -310,7 +331,7 @@ function producerPopulation(
     deliveryKind: "conservation",
   }));
   return {
-    bindings: [...auditBindings, ...mechanicalBindings, ...plantBindings].map((binding) => normalizeBinding(binding, root)),
+    bindings: [...auditBindings, ...mechanicalBindings, ...plantBindings].map((binding) => normalizeBinding(binding, readTaxonomies)),
     local,
     auditIds: auditBindings.map((binding) => binding.id).sort(byText),
     mechanicalIds: mechanicalRegistry.map((entry) => `${entry.phase}:${entry.id}`).sort(byText),
@@ -504,6 +525,113 @@ function normalizeProducer(
   };
 }
 
+function routeGraphImplementations(bindings: readonly ProductionProducerBinding[]): RouteGraphImplementation[] {
+  return bindings.flatMap((binding) => binding.implementations.map((item) => ({
+    ...item,
+    producerId: binding.id,
+    deliveryKind: binding.deliveryKind,
+    endpoint: binding.deliveryKind === "conservation" ? "conservation" : binding.populationClass === "true-finding-producer" ? "client-finding-delivery" : "coverage-disclosure",
+  })));
+}
+
+interface SourceVenueEvidence {
+  readonly id: string;
+  readonly rootId: string;
+  readonly callReceiptIds: readonly string[];
+  readonly examinedFiles: readonly string[];
+}
+
+interface SourceVenueEvidenceCache {
+  readonly key: string;
+  readonly fingerprint: string;
+  readonly evidence: readonly SourceVenueEvidence[];
+}
+
+let sourceVenueEvidenceCache: SourceVenueEvidenceCache | undefined;
+
+function sourceVenueEvidenceKey(root: string, scoredGates: readonly ScoredGate[]): string {
+  return JSON.stringify({
+    root: resolve(root),
+    gates: scoredGates
+      .filter((gate) => gate.cadence.kind !== "none")
+      .map((gate) => gate.id)
+      .sort(byText),
+  });
+}
+
+function sourceFingerprint(root: string, files: readonly string[]): string {
+  const hash = createHash("sha256");
+  const sorted = unique(files).sort(byText);
+  for (const file of sorted) {
+    hash.update(file).update("\0");
+    try {
+      hash.update(readFileSync(join(root, file)));
+    } catch {
+      hash.update("<missing>");
+    }
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function rememberSourceVenueEvidence(
+  root: string,
+  scoredGates: readonly ScoredGate[],
+  evidence: readonly SourceVenueEvidence[],
+): void {
+  const files = evidence.flatMap((entry) => entry.examinedFiles);
+  sourceVenueEvidenceCache = {
+    key: sourceVenueEvidenceKey(root, scoredGates),
+    fingerprint: sourceFingerprint(root, files),
+    evidence,
+  };
+}
+
+function venueEvidenceFromGraphs(
+  gates: readonly ScoredGate[],
+  graphs: readonly ReturnType<typeof discoverEffectivenessVenueRouteGraphs>[number][],
+): readonly SourceVenueEvidence[] {
+  return gates.map((gate, index): SourceVenueEvidence => {
+    const graph = graphs[index]!;
+    return {
+      id: gate.id,
+      rootId: `src/cli/${gate.id}.ts`,
+      callReceiptIds: graph.calls.map((call) => call.id).sort(byText),
+      examinedFiles: [...graph.examinedFiles, "package.json"].sort(byText),
+    };
+  });
+}
+
+function discoverSourceVenueEvidence(root: string, scoredGates: readonly ScoredGate[]): readonly SourceVenueEvidence[] {
+  const gates = scoredGates.filter((gate) => gate.cadence.kind !== "none");
+  const key = sourceVenueEvidenceKey(root, gates);
+  if (sourceVenueEvidenceCache?.key === key) {
+    const files = sourceVenueEvidenceCache.evidence.flatMap((entry) => entry.examinedFiles);
+    if (sourceFingerprint(root, files) === sourceVenueEvidenceCache.fingerprint) return sourceVenueEvidenceCache.evidence;
+  }
+  // Derive implementations from the live source registries rather than from the
+  // inventory being validated. Otherwise correlated deletion from the inventory
+  // and its family backlinks would still agree with itself.
+  const population = producerPopulation(
+    root,
+    AUDIT_RUNNERS,
+    MECHANICAL_REGISTRY,
+    MECHANICAL_DETECTORS,
+    CALIBRATION_PLANTS,
+    REGISTRY_PACKS,
+    {},
+  );
+  const implementations = routeGraphImplementations(population.bindings);
+  const graphs = discoverEffectivenessVenueRouteGraphs(
+    root,
+    implementations,
+    gates.map((gate) => `src/cli/${gate.id}.ts`),
+  );
+  const evidence = venueEvidenceFromGraphs(gates, graphs);
+  rememberSourceVenueEvidence(root, gates, evidence);
+  return evidence;
+}
+
 export function buildEffectivenessInventory(inputs: RegistryInputs = {}): EffectivenessInventory {
   const root = inputs.root ?? REPO_ROOT;
   const auditRunners = inputs.auditRunners ?? AUDIT_RUNNERS;
@@ -519,15 +647,32 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const runtimePackRuleIds = Object.fromEntries(producerExecutions
     .filter((receipt) => receipt.producerId.startsWith("semgrep:registry:"))
     .map((receipt) => [receipt.producerId.slice("semgrep:registry:".length), receipt.findingFamilyIds]));
-  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds });
-  const routeImplementations: RouteGraphImplementation[] = population.bindings.flatMap((binding) => binding.implementations.map((item) => ({
-    ...item,
-    producerId: binding.id,
-    deliveryKind: binding.deliveryKind,
-    endpoint: binding.deliveryKind === "conservation" ? "conservation" : binding.populationClass === "true-finding-producer" ? "client-finding-delivery" : "coverage-disclosure",
-  })));
+  // Share syntax facts across the two independent populations in this build.
+  // A later build gets a fresh reader so source edits are observed again.
+  const readTaxonomies = literalTaxonomyReader(root);
+  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds }, readTaxonomies);
+  const routeImplementations = routeGraphImplementations(population.bindings);
+  // Keep validation independent from caller-supplied inventory inputs, while
+  // sharing only the immutable TypeScript source snapshot and checker.
+  const sourcePopulation = producerPopulation(
+    root,
+    AUDIT_RUNNERS,
+    MECHANICAL_REGISTRY,
+    MECHANICAL_DETECTORS,
+    CALIBRATION_PLANTS,
+    REGISTRY_PACKS,
+    {},
+    readTaxonomies,
+  );
+  const sourceRouteImplementations = routeGraphImplementations(sourcePopulation.bindings);
   const scoredVenues = scoredGates.filter((gate) => gate.cadence.kind !== "none");
-  const graphs = discoverEffectivenessRouteGraphs(root, routeImplementations, scoredVenues.map((gate) => `src/cli/${gate.id}.ts`));
+  const graphs = discoverEffectivenessRouteGraphs(
+    root,
+    routeImplementations,
+    scoredVenues.map((gate) => `src/cli/${gate.id}.ts`),
+    sourceRouteImplementations,
+  );
+  rememberSourceVenueEvidence(root, scoredVenues, venueEvidenceFromGraphs(scoredVenues, graphs.independentVenues!));
   const routeGraph = graphs.production;
   const semanticVenues: SemanticVenueInput[] = scoredVenues.map((gate, index): SemanticVenueInput => {
     const rootId = `src/cli/${gate.id}.ts`;
@@ -643,6 +788,11 @@ export function validateEffectivenessInventory(
   const venueById = new Map(inventory.venues.map((venue) => [venue.id, venue]));
   const exemptionById = new Map(inventory.exemptions.map((exemption) => [exemption.id, exemption]));
   const gateById = new Map(scoredGates.map((gate) => [gate.id, gate]));
+  const sourceVenueEvidence = discoverSourceVenueEvidence(root, scoredGates);
+  const sourceVenueById = new Map(sourceVenueEvidence.map((entry) => [entry.id, entry]));
+  for (const entry of sourceVenueEvidence) {
+    if (!venueById.has(entry.id)) problems.push(`${entry.id}: source-derived scored venue evidence is missing from the inventory`);
+  }
 
   for (const producer of inventory.producers) {
     if (!nonEmpty(producer.id)) problems.push("producer has an empty id");
@@ -733,6 +883,16 @@ export function validateEffectivenessInventory(
 
   for (const venue of inventory.venues) {
     const gate = gateById.get(venue.gateId);
+    const sourceEvidence = sourceVenueById.get(venue.id);
+    if (sourceEvidence) {
+      if (venue.rootId !== sourceEvidence.rootId) problems.push(`${venue.id}: venue root does not match source-derived reachability root ${sourceEvidence.rootId}`);
+      const actualCalls = [...venue.callReceiptIds].sort(byText);
+      const missingCalls = sourceEvidence.callReceiptIds.filter((id) => !actualCalls.includes(id));
+      const unexpectedCalls = actualCalls.filter((id) => !sourceEvidence.callReceiptIds.includes(id));
+      if (missingCalls.length > 0 || unexpectedCalls.length > 0 || unique(actualCalls).length !== actualCalls.length) {
+        problems.push(`${venue.id}: static source reachability call receipts do not close on the live venue graph (missing ${missingCalls.length}, unexpected ${unexpectedCalls.length}, duplicates ${actualCalls.length - unique(actualCalls).length}); runtime client delivery requires producer execution receipts`);
+      }
+    }
     if (!gate) problems.push(`${venue.id}: mapped scored gate ${venue.gateId} no longer exists`);
     else {
       if (gate.cadence.kind === "none") problems.push(`${venue.id}: mapped scored gate has no cadence`);

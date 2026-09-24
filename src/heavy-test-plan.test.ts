@@ -74,6 +74,9 @@ describe("heavy PR impact planner", () => {
       "src/scan/new-producer.ts", "src/scan/calibration/new-batch.entries.ts",
       "src/scan/rules/semgrep/new-family.yml", "src/detectors/new-detector.ts",
       "src/pentest/new-probe.ts", "src/cli/validate-new-venue.ts", ...cadenceFiles,
+      "src/__fixtures__/effectiveness-delivery/worker.mjs",
+      "src/__fixtures__/effectiveness-delivery/validation-worker.mjs",
+      "src/__fixtures__/effectiveness-delivery/validation-worker.d.mts",
     ]) {
       const selection = selectHeavyWorkloads(registry, [path]);
       expect(selection.mode, path).toBe("scoped");

@@ -12,6 +12,32 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] as cons
 const byText = (a: string, b: string): number => a.localeCompare(b);
 const slash = (value: string): string => value.split(sep).join("/");
 
+// Command discovery is deliberately narrower than Node's complete, versioned CLI.
+// Every accepted form below has an execution-backed route test. Unknown options
+// are rejected before interpreting a later source argument as an entrypoint.
+const NODE_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-r",
+  "--conditions",
+  "--import",
+  "--require",
+]);
+
+const NODE_ENTRY_FLAGS = new Set(["--no-warnings", "--trace-warnings"]);
+
+// These modes consume, validate, or print without executing a later file as the
+// program entrypoint. Their operands and trailing arguments are never routes.
+const NODE_NON_ENTRY_MODES = [
+  "-c", "--check",
+  "-e", "--eval",
+  "-h", "--help",
+  "-p", "--print",
+  "-v", "--version",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+] as const;
+
 function repoRelative(root: string, file: string): string | undefined {
   const rel = slash(relative(root, file));
   return rel === "" || rel === ".." || rel.startsWith("../") ? undefined : rel;
@@ -68,6 +94,7 @@ function productionRoots(root: string, implementations: readonly ProducerImpleme
 
 interface ReachableSources {
   readonly files: Set<string>;
+  readonly resolutionCandidates: Set<string>;
   readonly rootsByFile: ReadonlyMap<string, readonly string[]>;
   readonly commandReceiptsByFile: ReadonlyMap<string, readonly EffectivenessCallReceipt[]>;
 }
@@ -184,24 +211,60 @@ function literalArray(checker: ts.TypeChecker, expression: ts.Expression): strin
   return result;
 }
 
-function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>()): string | undefined {
+function nodeEntrypoint(args: readonly string[]): string | undefined {
+  let parseOptions = true;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (parseOptions && argument === "--") {
+      parseOptions = false;
+      continue;
+    }
+    if (parseOptions) {
+      if (NODE_NON_ENTRY_MODES.some((option) => argument === option
+        || argument.startsWith(`${option}=`)
+        || (option.length === 2 && argument.startsWith(option) && argument.length > 2))) return undefined;
+      const exactValueOption = NODE_OPTIONS_WITH_VALUE.has(argument);
+      if (exactValueOption) {
+        const value = args[index + 1];
+        if (!value || value.startsWith("-")) return undefined;
+        index += 1;
+        continue;
+      }
+      if ([...NODE_OPTIONS_WITH_VALUE].some((option) => option.startsWith("--") && argument.startsWith(`${option}=`))) {
+        if (argument.endsWith("=")) return undefined;
+        continue;
+      }
+      if (NODE_ENTRY_FLAGS.has(argument)) continue;
+      if (argument.startsWith("-")) return undefined;
+    }
+    return SOURCE_EXTENSIONS.includes(extname(argument) as typeof SOURCE_EXTENSIONS[number]) ? argument : undefined;
+  }
+  return undefined;
+}
+
+function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>(), candidates?: Set<string>): string | undefined {
   const manager = manifest.packageManager?.split("@")[0];
   const executable = slash(bin).split("/").at(-1);
   if (manager && executable === manager) {
-    if (args[0] === "exec") return args[1] ? invocationTarget(root, manifest, args[1], args.slice(2), seen) : undefined;
+    if (args[0] === "exec") return args[1] ? invocationTarget(root, manifest, args[1], args.slice(2), seen, candidates) : undefined;
     const script = args[0] === "run" ? args[1] : args[0];
     if (!script || seen.has(script)) return undefined;
     const command = manifest.scripts?.[script];
     if (!command) return undefined;
     const tokens = command.trim().split(/\s+/);
     if (tokens.some((token) => /^(?:&&|\|\||[|;])$/.test(token))) return undefined;
-    return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script])) : undefined;
+    return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script]), candidates) : undefined;
   }
   if (executable !== "tsx" && executable !== "node") return undefined;
-  const entry = args.find((argument) => !argument.startsWith("-"));
+  const entry = executable === "node"
+    ? nodeEntrypoint(args)
+    : args.find((argument) => !argument.startsWith("-"));
   if (!entry || !SOURCE_EXTENSIONS.includes(extname(entry) as typeof SOURCE_EXTENSIONS[number])) return undefined;
   const target = resolve(root, entry);
-  return repoRelative(root, target) && existsSync(target) ? target : undefined;
+  if (!repoRelative(root, target)) return undefined;
+  // An absent supported entrypoint may become reachable without changing its caller.
+  candidates?.add(target);
+  return existsSync(target) ? target : undefined;
 }
 
 function commandTargets(
@@ -210,6 +273,7 @@ function commandTargets(
   checker: ts.TypeChecker,
   executionSymbols: ReadonlySet<ts.Symbol>,
   manifest: PackageManifest,
+  candidates: Set<string>,
 ): string[] {
   const result = new Set<string>();
   const visit = (node: ts.Node): void => {
@@ -218,7 +282,7 @@ function commandTargets(
       if (called && executionSymbols.has(called) && node.arguments[0] && node.arguments[1]) {
         const bin = literalString(checker, node.arguments[0]);
         const args = literalArray(checker, node.arguments[1]);
-        const target = bin && args ? invocationTarget(root, manifest, bin, args) : undefined;
+        const target = bin && args ? invocationTarget(root, manifest, bin, args, new Set(), candidates) : undefined;
         if (target) result.add(target);
       }
     }
@@ -243,6 +307,7 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
 
 function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest): ReachableSources {
   const reached = new Set<string>();
+  const resolutionCandidates = new Set<string>(roots);
   const rootsByFile = new Map<string, Set<string>>();
   const commandReceiptsByFile = new Map<string, readonly EffectivenessCallReceipt[]>();
   const checker = program.getTypeChecker();
@@ -265,10 +330,14 @@ function reachableSourcesWithProgram(root: string, roots: readonly string[], pro
         ? statement.moduleSpecifier.text
         : undefined;
       if (!specifier) continue;
+      if (specifier.startsWith(".")) {
+        const base = resolve(root, dirname(repoRelative(root, file) ?? file), specifier);
+        for (const candidate of sourceCandidates(base)) resolutionCandidates.add(candidate);
+      }
       const resolved = resolveLocalModule(root, repoRelative(root, file) ?? file, specifier);
       if (resolved) pending.push({ file: resolved, root: routeRoot, commands });
     }
-    for (const target of commandTargets(root, source, checker, executionSymbols, manifest)) {
+    for (const target of commandTargets(root, source, checker, executionSymbols, manifest, resolutionCandidates)) {
       const consumerFile = repoRelative(root, file);
       const targetFile = repoRelative(root, target);
       if (!consumerFile || !targetFile) continue;
@@ -284,6 +353,7 @@ function reachableSourcesWithProgram(root: string, roots: readonly string[], pro
   }
   return {
     files: reached,
+    resolutionCandidates,
     rootsByFile: new Map([...rootsByFile].map(([file, fileRoots]) => [file, [...fileRoots].sort(byText)])),
     commandReceiptsByFile,
   };
@@ -373,6 +443,8 @@ export interface RouteGraphImplementation extends ProducerImplementation {
 }
 
 interface EffectivenessRouteGraph {
+  /** Every source file parsed for this static reachability graph. */
+  readonly examinedFiles: readonly string[];
   readonly roots: readonly string[];
   readonly calls: readonly EffectivenessCallReceipt[];
   readonly consumers: readonly EffectivenessConsumerReceipt[];
@@ -404,15 +476,59 @@ export function discoverEffectivenessRouteGraphs(
   root: string,
   implementations: readonly RouteGraphImplementation[],
   venueRoots: readonly string[],
-): { readonly production: EffectivenessRouteGraph; readonly venues: readonly EffectivenessRouteGraph[] } {
+  independentVenueImplementations?: readonly RouteGraphImplementation[],
+): {
+  readonly production: EffectivenessRouteGraph;
+  readonly venues: readonly EffectivenessRouteGraph[];
+  readonly independentVenues?: readonly EffectivenessRouteGraph[];
+} {
   const production = productionRoots(root, implementations).map((file) => resolve(root, file));
   const venues = venueRoots.map((file) => [resolve(root, file)]);
+  const [productionResult, ...venueResults] = discoverEffectivenessGraphs(root, implementations, [
+    { roots: production, detectUnknown: true },
+    ...venues.map((roots) => ({ roots, detectUnknown: false, alternateImplementations: independentVenueImplementations })),
+  ]);
+  const independentVenues = independentVenueImplementations
+    ? venueResults.map((result) => result.alternate!).filter((graph): graph is EffectivenessRouteGraph => graph !== undefined)
+    : undefined;
+  return {
+    production: productionResult!.primary,
+    venues: venueResults.map((result) => result.primary),
+    ...(independentVenues ? { independentVenues } : {}),
+  };
+}
+
+/** Derive only scored-venue graphs for independent inventory validation. */
+export function discoverEffectivenessVenueRouteGraphs(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  venueRoots: readonly string[],
+): readonly EffectivenessRouteGraph[] {
+  return discoverEffectivenessGraphs(root, implementations, venueRoots.map((file) => ({
+    roots: [resolve(root, file)],
+    detectUnknown: false,
+  }))).map((result) => result.primary);
+}
+
+function discoverEffectivenessGraphs(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  inputs: readonly {
+    readonly roots: readonly string[];
+    readonly detectUnknown: boolean;
+    readonly alternateImplementations?: readonly RouteGraphImplementation[];
+  }[],
+): { readonly primary: EffectivenessRouteGraph; readonly alternate?: EffectivenessRouteGraph }[] {
   const packagePath = join(root, "package.json");
   const manifest = existsSync(packagePath)
     ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
     : {};
   let previousProgram: ts.Program | undefined;
-  const graph = (roots: readonly string[], detectUnknown: boolean): EffectivenessRouteGraph => {
+  const graph = (
+    roots: readonly string[],
+    detectUnknown: boolean,
+    alternateImplementations?: readonly RouteGraphImplementation[],
+  ): { readonly primary: EffectivenessRouteGraph; readonly alternate?: EffectivenessRouteGraph } => {
     let program = programForSources(roots, previousProgram);
     while (true) {
       const reachability = reachableSourcesWithProgram(root, roots, program, manifest);
@@ -420,12 +536,17 @@ export function discoverEffectivenessRouteGraphs(
         // Each graph owns its checker while TypeScript reuses unchanged parsed source files.
         // The completed program already contains every file examined by this root.
         previousProgram = program;
-        return routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown });
+        return {
+          primary: routeGraphForReachability(root, implementations, roots, reachability, program, { detectUnknown }),
+          ...(alternateImplementations
+            ? { alternate: routeGraphForReachability(root, alternateImplementations, roots, reachability, program, { detectUnknown }) }
+            : {}),
+        };
       }
       program = programForSources([...reachability.files], program);
     }
   };
-  return { production: graph(production, true), venues: venues.map((roots) => graph(roots, false)) };
+  return inputs.map((input) => graph(input.roots, input.detectUnknown, input.alternateImplementations));
 }
 
 function routeGraphForReachability(
@@ -565,6 +686,10 @@ function routeGraphForReachability(
     }
   }
   return {
+    examinedFiles: [...new Set([...reachability.files, ...reachability.resolutionCandidates])]
+      .map((file) => repoRelative(root, file))
+      .filter((file): file is string => !!file)
+      .sort(byText),
     roots: roots.map((entry) => repoRelative(root, entry)).filter((entry): entry is string => !!entry).sort(byText),
     calls: [...calls.values()].sort((a, b) => a.id.localeCompare(b.id)),
     consumers: consumers.sort((a, b) => a.id.localeCompare(b.id)),
