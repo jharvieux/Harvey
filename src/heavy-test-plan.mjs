@@ -6,6 +6,7 @@ import { fileURLToPath, URL } from "node:url";
 const DEFAULT_REGISTRY = fileURLToPath(new URL("./heavy-test-workloads.json", import.meta.url));
 const SAFE_TEST_FILE = /^src\/(?:[a-z0-9_.-]+\/)*[a-z0-9_.-]+\.test\.ts$/;
 const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SAFE_SHA = /^[0-9a-f]{40}$/;
 const REQUIRED_GATES = ["calibration", "source-recall", "m2-coverage", "shared-source-match"];
 
 function matches(path, rule) {
@@ -41,7 +42,46 @@ export function loadHeavyRegistry(path = DEFAULT_REGISTRY) {
     || parsed.gates.some((gate) => !Number.isFinite(gate.weightSeconds) || gate.weightSeconds <= 0)) {
     throw new Error("heavy workload registry must budget every required scored gate exactly once");
   }
+  const provenance = parsed.weightProvenance;
+  if (provenance?.version !== 1 || provenance.kind !== "hosted-observation" || !SAFE_SHA.test(provenance.head ?? "")
+    || !Array.isArray(provenance.jobs) || provenance.jobs.length === 0
+    || !Array.isArray(provenance.workloads) || !Array.isArray(provenance.gates)) {
+    throw new Error("heavy workload registry must carry versioned exact-head hosted weight evidence");
+  }
+  const jobIds = new Set(provenance.jobs.map((job) => job.id));
+  const validateReceipts = (population, receipts, label) => {
+    const expected = population.map((entry) => entry.id).sort();
+    const actual = receipts.map((entry) => entry.id).sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual) || new Set(actual).size !== actual.length) {
+      throw new Error(`heavy weight evidence must cover every ${label} exactly once`);
+    }
+    for (const item of population) {
+      const receipt = receipts.find((entry) => entry.id === item.id);
+      if (!Number.isFinite(receipt?.observedSeconds) || receipt.observedSeconds <= 0 || !jobIds.has(receipt.jobId)) {
+        throw new Error(`heavy weight evidence for ${label} ${item.id} is incomplete`);
+      }
+      if (item.weightSeconds < Math.ceil(receipt.observedSeconds)) {
+        throw new Error(`heavy scheduling weight for ${label} ${item.id} underweights its hosted observation`);
+      }
+    }
+  };
+  validateReceipts(parsed.workloads, provenance.workloads, "workload");
+  validateReceipts(parsed.gates, provenance.gates, "gate");
   return parsed;
+}
+
+export function weightEvidenceStatus(registry, head, { dirty = false } = {}) {
+  const evidenceHead = registry.weightProvenance.head;
+  const current = !dirty && head === evidenceHead;
+  return {
+    status: current ? "current" : "stale",
+    evidenceHead,
+    reason: current
+      ? `hosted observations are bound to planned head ${head}`
+      : dirty
+        ? `working tree differs from hosted evidence head ${evidenceHead}`
+        : `planned head ${head} differs from hosted evidence head ${evidenceHead}`,
+  };
 }
 
 export function selectHeavyWorkloads(registry, changedPaths, { forceFull = false, reason = "non-pull-request event" } = {}) {
@@ -181,8 +221,12 @@ function main() {
       .filter(Boolean);
   }
   const plan = buildHeavyPlan(registry, paths, { forceFull, maxShards, reason: `${event} events run the full heavy suite` });
+  const exactHead = execFileSync("git", ["rev-parse", head], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+  const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" }).trim().length > 0;
+  const evidence = weightEvidenceStatus(registry, exactHead, { dirty });
   const summary = `heavy plan: ${plan.mode}; ${plan.selected.length}/${registry.workloads.length} workload(s); ${plan.matrix.include.length} runner(s); digest ${plan.digest.slice(0, 12)}`;
   console.log(summary);
+  console.log(`heavy weight evidence: ${evidence.status}; ${evidence.reason}`);
   for (const reason of plan.reasons) console.log(`  ${reason}`);
   for (const group of plan.matrix.include) {
     console.log(`  shard ${group.shard}/${group.total}: ${group.workloadIds.join(", ")}; gates: ${group.gates.join(", ") || "none"}; estimated work: ${group.estimatedSeconds}s`);
@@ -199,6 +243,8 @@ function main() {
         `digest=${plan.digest}`,
         `selected=${plan.selected.join(",")}`,
         `summary=${summary}`,
+        `weight_evidence=${evidence.status}`,
+        `weight_evidence_head=${evidence.evidenceHead}`,
       ].join("\n") + "\n",
     );
   }

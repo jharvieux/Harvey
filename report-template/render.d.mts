@@ -5,6 +5,7 @@
 import type { CoverageRow, FindingsDocument, ReportMeta } from "../src/findings.js";
 
 export declare function buildHtml(data: FindingsDocument): string;
+export declare function renderReport(data: FindingsDocument, options: { htmlPath?: string; pdfPath?: string; screenshotPath?: string }): Promise<void>;
 export declare function healthGauge(v: number): string;
 export declare function severityDonut(counts: Record<string, number>): string;
 export declare function completenessBanner(rows: CoverageRow[] | undefined): string;

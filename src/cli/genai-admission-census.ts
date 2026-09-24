@@ -51,7 +51,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
@@ -76,15 +76,48 @@ import { buildFrequencyTargets } from "../scan/handrolled-frequency.js";
 // hand-rolled density of the declared-AI arm against the not-declared arm WITHIN that repo. This is
 // the measurement the withdrawn per-tier ratio could not be: same repo, same team, same era, and a
 // label the commit's own author wrote. It needs full history (blame), so it is opt-in.
-const WITH_DENSITY = process.argv.includes("--density");
+const args = process.argv.slice(2);
+const localIndex = args.indexOf("--local");
+const densityIndex = args.indexOf("--density");
+const localCount = args.filter((arg) => arg === "--local").length;
+const densityCount = args.filter((arg) => arg === "--density").length;
+if (localCount > 1) throw new Error("--local may be provided only once");
+if (densityCount > 1) throw new Error("--density may be provided only once");
+if (localIndex !== -1 && (!args[localIndex + 1] || args[localIndex + 1]?.startsWith("--"))) {
+  throw new Error("--local requires exactly one Git source-tree path");
+}
+if (localIndex !== -1 && densityIndex !== -1) throw new Error("--local cannot be combined with --density");
+const expectedArgCount = localIndex === -1 ? (densityIndex === -1 ? 0 : 1) : 2;
+if (args.length !== expectedArgCount || (localIndex !== -1 && localIndex !== 0) || (densityIndex !== -1 && densityIndex !== 0)) {
+  throw new Error(`unknown argument(s): ${args.join(" ")}; expected --local <git-source-tree-path> or --density`);
+}
+const WITH_DENSITY = densityIndex !== -1;
+const localRoot = localIndex === -1 ? undefined : args[1];
 
 interface RepoCensus extends CommitCensus {
   slug: string;
   tier: string;
-  history: "live" | `captured:${number}`;
+  history: "local HEAD" | "live" | `captured:${number}`;
 }
 
-const targets = buildFrequencyTargets();
+interface CensusTarget {
+  slug: string;
+  repo: string;
+  commit: string;
+  tier: string;
+  capturedHistory?: {
+    snapshotRepo: string;
+    snapshotCommit: string;
+    originalRepo: string;
+    originalCommit: string;
+    sourceRun: number;
+    census: CommitCensus;
+  };
+}
+
+const targets: CensusTarget[] = localRoot
+  ? [{ slug: "local", repo: "local", commit: "", tier: "local" }]
+  : buildFrequencyTargets();
 const rows: RepoCensus[] = [];
 for (const t of targets) {
   if (t.capturedHistory) {
@@ -100,16 +133,20 @@ for (const t of targets) {
     rows.push({ slug: t.slug, tier: t.tier, history: `captured:${h.sourceRun}`, ...h.census });
     continue;
   }
-  const dir = mkdtempSync(join(tmpdir(), `harvey-admit-${t.slug}-`));
-  console.error(`=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} ===`);
+  const dir = localRoot ? resolve(localRoot) : mkdtempSync(join(tmpdir(), `harvey-admit-${t.slug}-`));
+  console.error(localRoot
+    ? `=== local [local] ${dir} ===`
+    : `=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} ===`);
   try {
-    execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
-    execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${t.repo}`], { stdio: "ignore" });
-    execFileSync("git", ["-C", dir, "fetch", "-q", "--filter=blob:none", "origin", t.commit], { stdio: ["ignore", "ignore", "pipe"] });
-    const log = execFileSync("git", ["-C", dir, "log", t.commit, "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`], { maxBuffer: 512 * 1024 * 1024 }).toString();
-    rows.push({ slug: t.slug, tier: t.tier, history: "live", ...censusOfLog(log) });
+    if (!localRoot) {
+      execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${t.repo}`], { stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "fetch", "-q", "--filter=blob:none", "origin", t.commit], { stdio: ["ignore", "ignore", "pipe"] });
+    }
+    const log = execFileSync("git", ["-C", dir, "log", ...(localRoot ? [] : [t.commit]), "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`], { maxBuffer: 512 * 1024 * 1024 }).toString();
+    rows.push({ slug: t.slug, tier: t.tier, history: localRoot ? "local HEAD" : "live", ...censusOfLog(log) });
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (!localRoot) rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -173,9 +210,11 @@ function tallyFor(target: { slug: string; repo: string; commit: string }): ArmTa
 }
 
 const out: string[] = [];
-out.push(`Commit-level self-admitted-GenAI census over the pinned corpus (${rows.length} repos).`);
-out.push(`Product-source predicate: /\\.(ts|tsx|jsx|mjs)$/ minus NON_PRODUCT — identical to handrolled-frequency.ts.`);
-out.push(`Merge commits excluded. History read at each repo's PINNED commit, so this is reproducible.`);
+out.push(`Commit-level self-admitted-GenAI census over the ${localRoot ? "local source tree" : "pinned corpus"} (${rows.length} repos).`);
+out.push("Product-touching commits: shared SOURCE_FILE JS/TS suffixes, minus NON_PRODUCT; density files also pass through loadSources generated-content exclusion.");
+out.push(localRoot
+  ? "Merge commits excluded. History read at the local tree's current HEAD; results move when that history moves."
+  : "Merge commits excluded. History read at each repo's PINNED commit, so this is reproducible.");
 out.push("");
 out.push(`| Repo | Tier | History | Commits | Product-touching | Admitted (trailer) | Admitted (prose only) | Product+admitted | Product+unadmitted | Both arms >= ${MIN_ARM}? |`);
 out.push(`|---|---|---|---:|---:|---:|---:|---:|---:|---|`);

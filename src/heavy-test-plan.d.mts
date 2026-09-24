@@ -10,6 +10,20 @@ export interface HeavyRegistry {
   globalPaths: string[];
   workloads: HeavyWorkload[];
   gates: { id: string; weightSeconds: number }[];
+  weightProvenance: {
+    version: 1;
+    kind: "hosted-observation";
+    head: string;
+    capturedAt: string;
+    event: string;
+    selectedPopulation: string;
+    planDigest: string;
+    run: string;
+    method: string;
+    jobs: { id: number; shard: number; wallSeconds: number; suiteSeconds: number; note: string }[];
+    workloads: { id: string; observedSeconds: number; jobId: number }[];
+    gates: { id: string; observedSeconds: number; jobId: number }[];
+  };
 }
 
 export interface HeavySelection {
@@ -41,3 +55,8 @@ export function buildHeavyPlan(
   changedPaths: string[],
   options?: { forceFull?: boolean; reason?: string; maxShards?: number },
 ): HeavyPlan;
+export function weightEvidenceStatus(
+  registry: HeavyRegistry,
+  head: string,
+  options?: { dirty?: boolean },
+): { status: "current" | "stale"; evidenceHead: string; reason: string };

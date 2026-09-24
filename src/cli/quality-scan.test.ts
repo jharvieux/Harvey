@@ -6,8 +6,8 @@
 // a `packages/**` package: under per-workspace jscpd M4 sees nothing; under whole-repo it must find
 // the cross-workspace pair. A regression back to per-workspace jscpd fails this test.
 
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,14 +15,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import { digestObservedPaths, readCorpusScannerScope } from "../corpus-scanner-scope.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { createQualityScanTestHarness } from "./quality-scan-test-support.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "quality-scan.ts");
 
-const dirs: string[] = [];
-afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-});
+const harness = createQualityScanTestHarness();
+const { dirs, run: spawnCli } = harness;
+afterEach(() => harness.cleanup());
 
 // A block long/token-dense enough to clear jscpd's default min-lines/min-tokens gate, so an
 // identical copy in two workspaces is reported as one cross-file clone.
@@ -60,35 +60,63 @@ function monorepoFixture(): string {
   return repo;
 }
 
-// #1134: awaited spawn, not execFileSync. execFileSync blocks the vitest worker's event loop for the
-// call's duration, and a blocked worker cannot service the birpc ack for a task update it already
-// sent — vitest hardcodes a 60s window for that ack (see vitest.config.ts's HEAVY_CLI_TESTS comment,
-// and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
-// here are ~0.7-1.7s each on this hardware, well under the ceiling either way, but the standing
-// constraint is "no single blocking window may approach 60s" for every heavy CLI test.
-function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<string> {
-  return new Promise((res, rej) => {
-    const child = spawn(binPath, args, {
-      cwd, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
-      ...(input === undefined ? {} : { timeout: 20_000, killSignal: "SIGKILL" as const }),
-    });
-    if (input !== null) child.stdin?.end(input);
-    child.stdin?.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") rej(error); });
-    let stderr = "";
-    // setEncoding, never `stderr += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
-    // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
-    child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (d: string) => (stderr += d));
-    child.on("error", rej);
-    child.on("close", (code) => (code === 0 ? res(stderr) : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
-  });
-}
 
 async function runCli(repo: string, args: string[] = [], input?: string | null): Promise<Finding[]> {
   const outPath = join(repo, "quality-out.json");
   await spawnCli("node_modules/.bin/tsx", [CLI, repo, ...args, "--out", outPath], REPO_ROOT, input);
   return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
 }
+
+describe("quality-scan CLI — native duplication failures remain visible (#2102)", () => {
+  it.each(["valid", "tiny", "missing", "malformed", "nonzero", "timeout"] as const)("delivers the %s adapter outcome and cleans the actual output directory", async (mode) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-quality-jscpd-failure-"));
+    dirs.push(fixture);
+    const repo = join(fixture, "target");
+    mkdirSync(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "duplication-failure-control", private: true }));
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    if (mode !== "tiny") writeFileSync(join(repo, "b.ts"), "export const b = 2;\n");
+    const capture = join(fixture, "output-path.txt");
+    const executable = join(fixture, "jscpd.cjs");
+    writeFileSync(executable, `#!/usr/bin/env node
+const fs=require('node:fs');const path=require('node:path');const args=process.argv.slice(2);
+const out=args[args.indexOf('--output')+1];fs.writeFileSync(${JSON.stringify(capture)},out);
+const mode=${JSON.stringify(mode)};
+if(mode==='valid')fs.writeFileSync(path.join(out,'jscpd-report.json'),JSON.stringify({statistics:{total:{percentage:0,duplicatedLines:0,lines:2}},duplicates:[]}));
+if(mode==='malformed')fs.writeFileSync(path.join(out,'jscpd-report.json'),'{broken JSON');
+if(mode==='nonzero'){process.stderr.write('jscpd native failure canary');process.exitCode=7;}
+if(mode==='timeout')setInterval(()=>{},1000);
+`);
+    chmodSync(executable, 0o755);
+    const preload = join(fixture, "native-jscpd.cjs");
+    // Substitute only the external executable; the shipping adapter, catch, receipt and findings
+    // assembly all execute unchanged. The fake child still receives the adapter's real argv/cwd.
+    writeFileSync(preload, `const cp=require('node:child_process');const {syncBuiltinESMExports}=require('node:module');
+const original=cp.execFileSync;cp.execFileSync=function(file,args,options){return original.call(this,String(file).endsWith('/jscpd')?${JSON.stringify(executable)}:file,args,options);};syncBuiltinESMExports();`);
+    const output = join(fixture, "findings.json");
+    const receipt = join(fixture, "scope.json");
+    const stderr = await spawnCli(process.execPath, ["--require", preload, "--import", "tsx", CLI, repo,
+      "--timeout", mode === "timeout" ? "0.5" : "5", "--out", output, "--scope-out", receipt], REPO_ROOT);
+    const actualOutput = readFileSync(capture, "utf8");
+    dirs.push(actualOutput);
+    expect(existsSync(actualOutput)).toBe(false);
+    const findings = JSON.parse(readFileSync(output, "utf8")) as Finding[];
+    const scope = readCorpusScannerScope(receipt, "quality-scan");
+    const gap = findings.find((finding) => finding.id === "M4-99");
+    if (mode === "valid" || mode === "tiny") {
+      expect(gap).toBeUndefined();
+      expect(scope.observation).toMatchObject({ jscpd: { status: "completed" } });
+    } else {
+      const diagnostic = mode === "nonzero" ? "jscpd native failure canary"
+        : mode === "timeout" ? "did not complete within 0.5s (timed out)"
+          : mode === "missing" ? "no report" : "JSON";
+      expect(gap).toMatchObject({ taxonomy: "M4 — Duplication", evidence: expect.stringContaining(diagnostic) });
+      expect(stderr).toContain(diagnostic);
+      expect(scope.observation).toMatchObject({ jscpd: { status: "incomplete" } });
+      expect(gap?.impact).toContain("not a finding of zero duplication");
+    }
+  }, 30_000);
+});
 
 describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones are detected (#544)", () => {
   // 30s: drives the real CLI end-to-end (jscpd whole-repo + per-workspace knip on the now-enumerated
@@ -319,7 +347,7 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
   it("reports compiler-live overlay dead-code findings through the quick-scan CLI", async () => {
     const repo = compilerLiveOverlayFixture();
     const quickPath = join(repo, "quick-out.json");
-    await spawnCli(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/quick-scan.ts"), "--dir", repo, "--json", "--out", quickPath], REPO_ROOT);
+    await spawnCli(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/quick-scan.ts"), "--dir", repo, "--json", "--out", quickPath], REPO_ROOT, undefined, { timeoutMs: 110_000 });
     const quick = JSON.parse(readFileSync(quickPath, "utf8")) as { scorecard: { dimensions: Array<{ module: string; count?: number }> } };
     expect(quick.scorecard.dimensions.find((dimension) => dimension.module === "M5")).toMatchObject({ count: 2 });
   }, 120000);

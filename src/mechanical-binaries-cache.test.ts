@@ -24,6 +24,7 @@ import { parse } from "yaml";
 import { readFileSync } from "node:fs";
 import { readNamesSafe } from "./fs-walk.js";
 import { TRUFFLEHOG_PINNED_VERSION } from "./scan/fixture-drift-contracts.js";
+import { planConservationRun } from "./conservation-change-filter.mjs";
 
 const ACTION_DIR = join(process.cwd(), ".github", "actions", "mechanical-binaries");
 const SCRIPT = join(ACTION_DIR, "assert-complete.sh");
@@ -211,7 +212,7 @@ describe("#1978 the TruffleHog fixture gate installs the version it can vouch fo
   });
 
   it("routes an installer-contract change through conservation's live drift tier", () => {
-    const conservation = readFileSync(join(process.cwd(), ".github", "workflows", "conservation.yml"), "utf8");
-    expect(conservation).toMatch(/\.github\/actions\/mechanical-binaries\/\*\) relevant=true; drift=true/);
+    expect(planConservationRun("pull_request", [".github/actions/mechanical-binaries/action.yml"]))
+      .toMatchObject({ relevant: true, drift: true });
   });
 });

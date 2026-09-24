@@ -101,6 +101,165 @@ describe("schema-v3 route graph", () => {
   });
 
   it.each([
+    { name: "typed arrow property", typed: true, member: "exec: (command, args) => execFileSync(command, args)" },
+    { name: "typed async arrow property", typed: true, member: "exec: async (command, args) => execFileSync(command, args)" },
+    { name: "typed method property", typed: true, member: "exec(command, args) { return execFileSync(command, args); }" },
+    { name: "inferred arrow property", typed: false, member: "exec: (command: string, args: string[]) => execFileSync(command, args)" },
+    { name: "inferred async arrow property", typed: false, member: "exec: async (command: string, args: string[]) => execFileSync(command, args)" },
+    { name: "inferred method property", typed: false, member: "exec(command: string, args: string[]) { return execFileSync(command, args); }" },
+    { name: "typed quoted arrow property", typed: true, member: '"exec": (command, args) => execFileSync(command, args)' },
+    { name: "typed quoted method property", typed: true, member: '"exec"(command, args) { return execFileSync(command, args); }' },
+    { name: "typed computed arrow property", typed: true, member: '["exec"]: (command, args) => execFileSync(command, args)' },
+    { name: "inferred function-expression property", typed: false, member: "exec: function (command: string, args: string[]) { return execFileSync(command, args); }" },
+    { name: "typed function-expression property", typed: true, member: "exec: function (command, args) { return execFileSync(command, args); }" },
+  ])("retains command provenance through an anonymous $name executor wrapper", ({ member, typed }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    const invocation = typed
+      ? 'function run(context: Context) { context.exec("node", ["src/child.ts"]); }\nrun(ctx);'
+      : 'ctx.exec("node", ["src/child.ts"]);';
+    const wrapped = `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst ctx${typed ? ": Context" : ""} = { ${member} };\n${invocation}\n`;
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped);
+
+    const live = discoverEffectivenessRouteGraph(root, [implementation]);
+    expect(live.calls.map((call) => call.id)).toContain("command:src/cli/run-audit.ts->src/child.ts");
+    expect(live.routes).toEqual([
+      expect.objectContaining({
+        producerId: "one",
+        rootId: "src/cli/run-audit.ts",
+        callReceiptIds: expect.arrayContaining([
+          "command:src/cli/run-audit.ts->src/child.ts",
+          "call:src/child.ts->src/producer.ts#produce",
+        ]),
+      }),
+    ]);
+
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped.replace("execFileSync(command, args)", "[]"));
+    expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+  });
+
+  const transparentWrappers = [
+    { name: "parenthesized", wrap: (body: string) => `(${body})` },
+    { name: "as expression", wrap: (body: string) => `(${body}) as Context["exec"]` },
+    { name: "type assertion", wrap: (body: string) => `<Context["exec"]>(${body})` },
+    { name: "satisfies expression", wrap: (body: string) => `(${body}) satisfies Context["exec"]` },
+    { name: "non-null expression", wrap: (body: string) => `(${body})!` },
+    { name: "nested transparent expressions", wrap: (body: string) => `(((${body})!) as Context["exec"]) satisfies Context["exec"]` },
+  ];
+  const transparentWrapperCases = transparentWrappers.flatMap(({ name, wrap }) => [
+    { name: `typed ${name} arrow`, typed: true, member: wrap("(command, args) => execFileSync(command, args)") },
+    { name: `inferred ${name} arrow`, typed: false, member: wrap("(command: string, args: string[]) => execFileSync(command, args)") },
+    { name: `typed ${name} function expression`, typed: true, member: wrap("function (command, args) { return execFileSync(command, args); }") },
+    { name: `inferred ${name} function expression`, typed: false, member: wrap("function (command: string, args: string[]) { return execFileSync(command, args); }") },
+  ]);
+
+  it.each(transparentWrapperCases)("retains command provenance through a $name", ({ member, typed }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    const invocation = typed
+      ? 'function run(context: Context) { context.exec("node", ["src/child.ts"]); }\nrun(ctx);'
+      : 'ctx.exec("node", ["src/child.ts"]);';
+    const wrapped = `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst ctx${typed ? ": Context" : ""} = { exec: ${member} };\n${invocation}\n`;
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped);
+
+    const live = discoverEffectivenessRouteGraph(root, [implementation]);
+    expect(live.calls.map((call) => call.id)).toContain("command:src/cli/run-audit.ts->src/child.ts");
+    expect(live.routes).toEqual([
+      expect.objectContaining({
+        producerId: "one",
+        rootId: "src/cli/run-audit.ts",
+        callReceiptIds: expect.arrayContaining([
+          "command:src/cli/run-audit.ts->src/child.ts",
+          "call:src/child.ts->src/producer.ts#produce",
+        ]),
+      }),
+    ]);
+
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), wrapped.replace("execFileSync(command, args)", "[]"));
+    expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+  });
+
+  const transparentOwnerCases = transparentWrappers.flatMap(({ name, wrap }) => [
+    { name: `${name} named arrow owner`, wrap, functionKind: "arrow" as const },
+    { name: `${name} named function-expression owner`, wrap, functionKind: "function" as const },
+  ]);
+
+  it.each(transparentOwnerCases)("retains command provenance through a $name", ({ wrap, functionKind }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    const source = (native: boolean): string => {
+      const result = native ? "execFileSync(command, args)" : "[]";
+      const executor = functionKind === "arrow"
+        ? `(command: string, args: string[]) => ${result}`
+        : `function (command: string, args: string[]) { return ${result}; }`;
+      return `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\nconst execute = ${wrap(executor)};\nexecute("node", ["src/child.ts"]);\n`;
+    };
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), source(true));
+
+    const live = discoverEffectivenessRouteGraph(root, [implementation]);
+    expect(live.calls.map((call) => call.id)).toContain("command:src/cli/run-audit.ts->src/child.ts");
+    expect(live.routes).toHaveLength(1);
+
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), source(false));
+    expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+  });
+
+  const transparentSymbolCases = transparentWrappers.flatMap(({ name, wrap }) => [
+    ...(["native executor", "named wrapper", "typed member", "own member"] as const).map((symbolKind) => ({
+      name: `${name} alias of ${symbolKind}`,
+      wrap,
+      symbolKind,
+      direct: false,
+    })),
+    ...(["native executor", "named wrapper", "typed member", "own member"] as const).map((symbolKind) => ({
+      name: `${name} direct ${symbolKind} callee`,
+      wrap,
+      symbolKind,
+      direct: true,
+    })),
+  ]);
+
+  it.each(transparentSymbolCases)("retains command provenance through a $name", ({ wrap, symbolKind, direct }) => {
+    const root = fixture("export {};\n");
+    symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+    mkdirSync(join(root, "src", "cli"));
+    writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.js"; produce();\n');
+    const source = (native: boolean): string => {
+      const result = native ? "execFileSync(command, args)" : "[]";
+      const setup = symbolKind === "native executor"
+        ? ""
+        : symbolKind === "named wrapper"
+          ? `function executeNamed(command: string, args: string[]) { return ${result}; }\n`
+          : symbolKind === "typed member"
+            ? `const ctx: Context = { exec: (command, args) => ${result} };\n`
+            : `const ctx = { exec: (command: string, args: string[]) => ${result} };\n`;
+      const symbol = symbolKind === "native executor"
+        ? native ? "execFileSync" : "((command: string, args: string[]) => [])"
+        : symbolKind === "named wrapper"
+          ? "executeNamed"
+          : "ctx.exec";
+      const invocation = direct
+        ? `(${wrap(symbol)})("node", ["src/child.ts"]);`
+        : `const execute = ${wrap(symbol)};\nexecute("node", ["src/child.ts"]);`;
+      return `import { execFileSync } from "node:child_process";\ninterface Context { exec: (command: string, args: string[]) => unknown }\n${setup}${invocation}\n`;
+    };
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), source(true));
+
+    const live = discoverEffectivenessRouteGraph(root, [implementation]);
+    expect(live.calls.map((call) => call.id)).toContain("command:src/cli/run-audit.ts->src/child.ts");
+    expect(live.routes).toHaveLength(1);
+
+    writeFileSync(join(root, "src", "cli", "run-audit.ts"), source(false));
+    expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+  });
+
+  it.each([
     { name: "separate import", args: ["--import", "tsx", "src/child.ts"] },
     { name: "equals import", args: ["--import=tsx", "src/child.ts"] },
     { name: "source preload", args: ["--import", "./src/preload.ts", "src/child.ts"] },

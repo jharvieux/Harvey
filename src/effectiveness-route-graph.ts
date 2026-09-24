@@ -104,8 +104,18 @@ interface PackageManifest {
   readonly scripts?: Readonly<Record<string, string>>;
 }
 
-function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker): Set<ts.Symbol> {
-  const result = new Set<ts.Symbol>();
+function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker): Set<string> {
+  const result = new Set<string>();
+  const add = (symbol: ts.Symbol | undefined): boolean => {
+    const key = symbolKey(checker, symbol);
+    if (!key || result.has(key)) return false;
+    result.add(key);
+    return true;
+  };
+  const has = (symbol: ts.Symbol | undefined): boolean => {
+    const key = symbolKey(checker, symbol);
+    return key !== undefined && result.has(key);
+  };
   for (const source of program.getSourceFiles()) {
     if (source.isDeclarationFile) continue;
     const visit = (node: ts.Node): void => {
@@ -115,8 +125,7 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker):
         const bindings = node.importClause?.namedBindings;
         if (bindings && ts.isNamedImports(bindings)) {
           for (const binding of bindings.elements) {
-            const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(binding.name));
-            if (symbol) result.add(symbol);
+            add(checker.getSymbolAtLocation(binding.name));
           }
         }
       }
@@ -132,41 +141,47 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker):
       if (source.isDeclarationFile) continue;
       const visit = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
-          const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
-          const declared = canonicalSymbol(checker, checker.getSymbolAtLocation(node.name));
-          if (initializer && result.has(initializer) && declared && !result.has(declared)) {
-            result.add(declared);
-            changed = true;
-          }
+          const initializer = expressionSymbol(checker, node.initializer);
+          if (has(initializer)) changed = add(checker.getSymbolAtLocation(node.name)) || changed;
         }
         if (ts.isPropertyAssignment(node)) {
-          const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
-          if (initializer && result.has(initializer)) {
-            const own = canonicalSymbol(checker, checker.getSymbolAtLocation(node.name));
-            const contextual = checker.getContextualType(node.parent)?.getProperty(node.name.getText(source));
-            for (const symbol of [own, canonicalSymbol(checker, contextual)]) {
-              if (symbol && !result.has(symbol)) {
-                result.add(symbol);
-                changed = true;
-              }
+          const initializer = expressionSymbol(checker, node.initializer);
+          if (has(initializer)) {
+            for (const symbol of objectMemberSymbols(checker, node)) {
+              changed = add(symbol) || changed;
             }
           }
         }
         if (ts.isCallExpression(node)) {
-          const called = canonicalSymbol(checker, expressionSymbol(checker, node.expression));
-          if (called && result.has(called)) {
-            let owner: ts.Node | undefined = node.parent;
-            while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
-            if (owner) {
-              const declaration = owner as ts.FunctionLikeDeclaration;
-              const named = declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
-                ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
-                : ts.isVariableDeclaration(declaration.parent) && ts.isIdentifier(declaration.parent.name)
-                  ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.parent.name))
+          const called = expressionSymbol(checker, node.expression);
+          if (has(called)) {
+            let functionOwner: ts.Node | undefined = node.parent;
+            while (functionOwner && !ts.isFunctionLike(functionOwner)) functionOwner = functionOwner.parent;
+            if (functionOwner) {
+              const declaration = functionOwner as ts.FunctionLikeDeclaration;
+              let memberExpression: ts.Node = declaration;
+              while (memberExpression.parent && transparentExpressionOperand(memberExpression.parent) === memberExpression) {
+                memberExpression = memberExpression.parent;
+              }
+              const symbols: (ts.Symbol | undefined)[] = [
+                declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
+                  ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
+                  : ts.isVariableDeclaration(memberExpression.parent) && ts.isIdentifier(memberExpression.parent.name)
+                    ? canonicalSymbol(checker, checker.getSymbolAtLocation(memberExpression.parent.name))
+                    : undefined,
+              ];
+              // Object-property functions are the ordinary shape for an injected executor
+              // (`ctx.exec`). An arrow has no symbol of its own and a method's literal symbol can
+              // differ from its contextual interface member, so retain both identities. Otherwise
+              // wrapping `execFileSync` makes every command behind that interface disappear.
+              const property = ts.isPropertyAssignment(memberExpression.parent)
+                ? memberExpression.parent
+                : ts.isMethodDeclaration(declaration) && ts.isObjectLiteralExpression(declaration.parent)
+                  ? declaration
                   : undefined;
-              if (named && !result.has(named)) {
-                result.add(named);
-                changed = true;
+              if (property) symbols.push(...objectMemberSymbols(checker, property));
+              for (const named of symbols) {
+                changed = add(named) || changed;
               }
             }
           }
@@ -271,14 +286,14 @@ function commandTargets(
   root: string,
   source: ts.SourceFile,
   checker: ts.TypeChecker,
-  executionSymbols: ReadonlySet<ts.Symbol>,
+  executionSymbols: ReadonlySet<string>,
   manifest: PackageManifest,
   candidates: Set<string>,
 ): string[] {
   const result = new Set<string>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      const called = canonicalSymbol(checker, expressionSymbol(checker, node.expression));
+      const called = symbolKey(checker, expressionSymbol(checker, node.expression));
       if (called && executionSymbols.has(called) && node.arguments[0] && node.arguments[1]) {
         const bin = literalString(checker, node.arguments[0]);
         const args = literalArray(checker, node.arguments[1]);
@@ -371,6 +386,17 @@ function canonicalSymbol(checker: ts.TypeChecker, symbol: ts.Symbol | undefined)
   return symbol;
 }
 
+function symbolKey(checker: ts.TypeChecker, symbol: ts.Symbol | undefined): string | undefined {
+  const resolved = canonicalSymbol(checker, symbol);
+  if (!resolved) return undefined;
+  const sites = (resolved.declarations ?? [])
+    .map((declaration) => `${declaration.getSourceFile().fileName}:${declaration.pos}:${declaration.end}`)
+    .sort(byText);
+  return sites.length > 0
+    ? `${resolved.getName()}@${sites.join("|")}`
+    : checker.getFullyQualifiedName(resolved);
+}
+
 function declarationSymbol(node: ts.Declaration): string | undefined {
   const name = (node as ts.NamedDeclaration).name;
   if (name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name))) return name.text;
@@ -389,16 +415,53 @@ function symbolIdentity(root: string, checker: ts.TypeChecker, symbol: ts.Symbol
   return undefined;
 }
 
+function transparentExpressionOperand(node: ts.Node): ts.Expression | undefined {
+  if (ts.isParenthesizedExpression(node)
+    || ts.isAsExpression(node)
+    || ts.isTypeAssertionExpression(node)
+    || ts.isSatisfiesExpression(node)
+    || ts.isNonNullExpression(node)) return node.expression;
+  return undefined;
+}
+
 function expressionSymbol(checker: ts.TypeChecker, expression: ts.Expression): ts.Symbol | undefined {
+  const operand = transparentExpressionOperand(expression);
+  if (operand) return expressionSymbol(checker, operand);
   if (ts.isPropertyAccessExpression(expression)) {
     const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
-    return initializer ? expressionSymbol(checker, initializer) : property;
+    // Follow named aliases (`{ exec: execFileSync }`) but retain the property identity for an
+    // anonymous function initializer. The latter is where importedExecutionSymbols records an
+    // executor wrapper; resolving the anonymous arrow/function itself yields no symbol.
+    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
   }
   if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
-    return canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
+    const property = canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
+    const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
+    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
   }
   return canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+}
+
+function propertyName(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+  return ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)
+    ? name.expression.text
+    : undefined;
+}
+
+function objectMemberSymbols(
+  checker: ts.TypeChecker,
+  member: ts.PropertyAssignment | ts.MethodDeclaration,
+): (ts.Symbol | undefined)[] {
+  const name = propertyName(member.name);
+  const literal = canonicalSymbol(checker, checker.getSymbolAtLocation(member.name));
+  if (!ts.isObjectLiteralExpression(member.parent) || !name) return [literal];
+  return [
+    literal,
+    canonicalSymbol(checker, checker.getTypeAtLocation(member.parent).getProperty(name)),
+    canonicalSymbol(checker, checker.getContextualType(member.parent)?.getProperty(name)),
+  ];
 }
 
 function typeContainsFinding(checker: ts.TypeChecker, type: ts.Type, seen = new Set<ts.Type>()): boolean {

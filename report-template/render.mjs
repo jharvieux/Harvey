@@ -598,7 +598,10 @@ export function buildHtml(data) {
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
-    ${testQualityBlock(data)}
+    ${data.auditEvidence?.testQualityByScope?.length > 1
+      ? data.auditEvidence.testQualityByScope.map((row) => `<h3>${esc(row.scope.workspace)} — ${esc(row.scope.tier)} / ${esc(row.scope.surface)}</h3>${testQualityBlock({ testQuality: row.testQuality })}`).join("")
+      : testQualityBlock(data)}
+    ${data.auditEvidence ? evidenceSection(data.auditEvidence) : ""}
     <h2>Findings</h2>
     ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — representatives and linked members in full, the remaining members disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
     ${findingItems.map((item) => (item.kind === "group" ? groupCard(item) : findingCard(item.finding))).join("")}
@@ -635,33 +638,46 @@ function sevRank(f) {
 // #1099: guarded so `import { healthGauge, ... } from "./render.mjs"` (the test file) doesn't also
 // run the CLI (argv parsing, a real Chromium launch) as a side effect of importing the exports.
 const isMain = import.meta.url === `file://${process.argv[1]}`;
+/** Rendering permits only its own Chromium process; remote assets and scripts cannot run. */
+export async function renderReport(data, { htmlPath, pdfPath, screenshotPath } = {}) {
+  const html = buildHtml(data);
+  if (htmlPath) fs.writeFileSync(htmlPath, html);
+  if (!pdfPath && !screenshotPath) return;
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext({ javaScriptEnabled: false, serviceWorkers: "block", offline: true });
+    await context.route("**/*", (route) => route.abort());
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: "load" });
+    // PDF has no disclosure controls. Include every rolled-up location, not only linked cards.
+    await page.locator("details").evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
+    if (pdfPath) await page.pdf({
+      path: pdfPath, format: "A4", printBackground: true,
+      margin: { top: "0", bottom: "26px", left: "0", right: "0" },
+      displayHeaderFooter: true, headerTemplate: "<div></div>",
+      footerTemplate: `<div style="width:100%;font-size:8px;color:#94a3b8;padding:0 54px;display:flex;justify-content:space-between"><span>${esc(data.meta.client)} — Confidential</span><span class="pageNumber"></span></div>`,
+    });
+    if (screenshotPath) {
+      await page.setViewportSize({ width: 880, height: 1100 });
+      await page.screenshot({ path: screenshotPath, clip: { x: 0, y: 0, width: 880, height: 1080 } });
+    }
+  } finally { await browser.close(); }
+}
+
+function evidenceSection(evidence) {
+  const rows = evidence.current.map((receipt) => {
+    const scope = receipt.scope;
+    return `<tr><td>${esc(scope.module)} / ${esc(scope.workspace)}</td><td>${esc(scope.tier)} / ${esc(scope.surface)}</td><td>${esc(receipt.generatedAt)}<br>${esc(receipt.producer.name)}@${esc(receipt.producer.version)}<br><code>${esc(receipt.id)}</code></td></tr>`;
+  }).join("");
+  return `<h2>Current evidence and receipt history</h2><div class="kv">Current coverage above is derived from the newest accepted evidence for each module, workspace, tier and surface. ${evidence.history.length} older receipt(s) are superseded and retained in the JSON history; their old limitations are not current claims. Original raw owning-run outputs are retained unchanged.</div><table class="cov"><tr><th>Module / workspace</th><th>Assessed surface</th><th>Owning-run receipt</th></tr>${rows}</table>`;
+}
+
 if (isMain) {
   const [, , findingsPath, outDirArg] = process.argv;
   const data = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
   const outDir = outDirArg ?? path.join(path.dirname(findingsPath), "out");
   fs.mkdirSync(outDir, { recursive: true });
   fs.rmSync(path.join(outDir, "report.pdf"), { force: true });
-  const html = buildHtml(data);
-  fs.writeFileSync(path.join(outDir, "report.html"), html);
-
-  const browser = await chromium.launch();
-  try {
-  const page = await browser.newPage();
-  await page.setContent(html, { waitUntil: "networkidle" });
-  await page.locator("details.linked-findings").evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
-  await page.pdf({
-    path: path.join(outDir, "report.pdf"),
-    format: "A4",
-    printBackground: true,
-    margin: { top: "0", bottom: "26px", left: "0", right: "0" },
-    displayHeaderFooter: true,
-    headerTemplate: "<div></div>",
-    footerTemplate: `<div style="width:100%;font-size:8px;color:#94a3b8;padding:0 54px;display:flex;justify-content:space-between"><span>${esc(data.meta.client)} — Confidential</span><span class="pageNumber"></span></div>`,
-  });
-  await page.setViewportSize({ width: 880, height: 1100 });
-  await page.screenshot({ path: path.join(outDir, "page1.png"), clip: { x: 0, y: 0, width: 880, height: 1080 } });
+  await renderReport(data, { htmlPath: path.join(outDir, "report.html"), pdfPath: path.join(outDir, "report.pdf"), screenshotPath: path.join(outDir, "page1.png") });
   console.log("wrote", path.join(outDir, "report.pdf"));
-  } finally {
-    await browser.close();
-  }
 }

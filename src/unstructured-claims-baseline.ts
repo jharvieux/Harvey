@@ -420,6 +420,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "`run-audit` cannot run these itself (they're operator/skill passes, not CLI subprocesses), but it",
     "if any is missing.** Two real identities are genuinely needed: a BOLA cannot be proven with one.",
     "cannot yet pass `--install` through, #523 — run `mutation-scan` directly for the full pass, as",
+    "strict retention, so it cannot be combined with `--retain-artifacts`. An explicit historical",
   ],
   "docs/runbooks/m2-pentest-ops.md": [
     "cannot reproduce (dashboard-edited policies, platform env vars, uncommitted edge functions, WAF",
@@ -483,6 +484,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// we can't know which is true, so refuse to pick rather than let a \"ran\" mask a gap.",
     "// An unfilled --template row. The gate can't judge whether a reason is TRUE, but it can",
   ],
+  "src/audit-evidence-import.ts": [
+    "/** A recipe selects existing bound receipts. It cannot create execution provenance for raw files. */",
+  ],
   "src/audit-execution-log.test.ts": [
     "// false \"never run\" alarm. Derivation makes forgetting impossible — the record IS the removal.",
   ],
@@ -495,6 +499,12 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/audit-plan.ts": [
     "// The ordered plan for the passes the orchestrator cannot run itself. Steps in scope are gated by",
+  ],
+  "src/audit-replay-delivery.ts": [
+    "// Stale files from a prior attempt cannot satisfy the delivery gate for this invocation.",
+  ],
+  "src/audit-replay.ts": [
+    "/** Historical material may be delivered, but cannot establish current execution or coverage. */",
   ],
   "src/audit-report.test.ts": [
     "// come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect",
@@ -512,6 +522,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// only describe what it did, and cannot claim a status for a module it isn't registered under.",
     "// their honest partial/requires-live-run — no artifacts dir, no way to prove the pass ran.",
     "// original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays",
+    "/** Retention observes the exact producer return before assembly; it cannot change the result. */",
     "// runner that declares itself migrated is HELD to it at runtime, so a helper cannot quietly",
     "// cannot discover that it skipped M5. Checked before anything runs, so the failure arrives before",
     "// severity weight, and both entries classify the same name, so the merge cannot invent sensitivity.",
@@ -601,7 +612,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/cli/quality-scan.test.ts": [
     "// per-workspace change, which on a monorepo structurally cannot see a block copy-pasted ACROSS",
     "// workspace the shared discoverTargets glob can't expand (a `packages/**` double-star, #548). This",
-    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
     "// no dependency at all (the issue's \"vite not in deps\" cause) leaves knip unable to activate its",
     "// #696: a config-less scan target gives knip no way to infer non-app entry points (test files above",
     "// Imports an uninstalled plugin → knip can't load this config without the target's node_modules.",
@@ -1319,6 +1329,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "//     on the VALUE side of a comparison can't spuriously clear the finding;",
     "// an ownership check in a wrapper/middleware it can't see is absent.",
   ],
+  "src/scan/duplication.test.ts": [
+    "// Retain a test-owned cleanup fallback so a deliberate cleanup mutation cannot leak scratch.",
+  ],
   "src/scan/env-schema.test.ts": [
     "// so it can't false-fire as an undeclared read.",
   ],
@@ -1362,6 +1375,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// malformed package.json can't assert a dependency either way, so treat it as absent.",
     "// #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry",
     "// Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since",
+  ],
+  "src/scan/genai-admission.ts": [
+    "// removes generated content. An admitted .js/.cjs/.mts/.cts change cannot disappear from the",
   ],
   "src/scan/gha-permissions.ts": [
     "// exact fact (`high`); shape 2 depends on a repository setting this scan cannot read, so it asks",

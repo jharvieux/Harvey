@@ -412,6 +412,14 @@ const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
     // #1522: the slot accumulates, so fold EVERY fresh pass it holds — a superseded tier's findings
     // are evidence in the same way the newest tier's are, and used to be deleted at the write side.
     let first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    if (pass.fresh && "kind" in first && first.kind === "examined") {
+      const measured = passSlotCensus(pass.artifact, ctx.now ?? Date.now()).fresh
+        .filter((recorded) => recorded.testQuality)
+        .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt))[0];
+      // The native invocation just completed after this slot was read. Its measured table is
+      // authoritative; an older recorded table is useful only when this invocation has none.
+      if (!first.testQuality && measured?.testQuality) first = { ...first, testQuality: measured.testQuality };
+    }
     if (pass.fresh && pass.artifact.producerExecutionReceipts?.length && "kind" in first && first.kind === "examined") {
       first = { ...first, producerExecutionReceipts: ingestPassArtifactReceipts(pass.artifact, `audit-runner:${runner.module}`) };
     }
@@ -781,7 +789,7 @@ const m2: ModuleRunner = {
     const pass = findFreshPass(ctx, "M2");
     if (pass.fresh) {
       const ran = ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)", ctx.now ?? Date.now());
-      return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M2 dynamic pass artifact" };
+      return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M2 dynamic pass artifact", reason: "This legacy pass does not enumerate assessed workspaces and surfaces. PostgREST or database results do not establish application-route isolation or complete tenant-boundary coverage [MEASURED from the pass schema; falsifier: retain separately bound PostgREST, application-route and tenant-isolation scope receipts]." };
     }
     const base = ctx.env.dynamic
       ? "no local supabase stack confirmed — --dynamic asserts a stack exists but the orchestrator cannot reach or verify one; run `pnpm exec tsx src/cli/pentest.ts` directly against a stood-up two-tenant stack (docs/runbooks/m2-pentest-ops.md). A flag is not a reachable stack (#356; artifact path #416). No M2 findings are collected into this deliverable — they come from that live pen-test run, so absence here is not-collected, not clean (#420)"
@@ -806,8 +814,8 @@ const m2: ModuleRunner = {
 // installing it gives the FULL M3 signal. #807: when vitals is entirely unavailable the CLI no longer
 // fails — it drops to a reduced Harvey-side churn×complexity ranking (git + a complexity proxy) and
 // prints an "M3 REDUCED TIER" banner, which this probe records as `partial` with that reason (still
-// carrying the top-K hotspots for cross-module enrichment), never a silent skip. A fresh full-vitals
-// capture pass (#416) still beats the reduced tier. `requires-live-run` now fires only when the CLI
+// carrying the top-K hotspots for cross-module enrichment), never a silent skip. A recorded pass
+// contributes its findings without erasing the reduced-tier scope. `requires-live-run` fires when the CLI
 // exits non-zero: vitals present but its report crashed, or the reduced tier's own floor (no git
 // history) failed. `run-audit` does not thread per-module args, so a pre-captured report is replayed
 // by running hotspot-scan.ts `--report` directly (or via the durable-artifact path, #416).
@@ -849,17 +857,16 @@ const m3: ModuleRunner = {
     };
     if (ok && ranked && /M3 hotspot table/.test(output)) {
       const artifact = readArtifact(ctx, outPath);
-      const findings = artifactFindings(artifact);
+      const pass = findFreshPass(ctx, "M3");
+      const findings = [...artifactFindings(artifact), ...(pass.fresh ? ranFromPass(pass.artifact, "recorded M3 specialist evidence", ctx.now ?? Date.now()).findings ?? [] : [])];
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
       const rankedTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over });
       // #807: the CLI dropped to its reduced Harvey-side tier (vitals not installed) — a churn×
       // complexity ranking only, no coupling/knowledge-risk/AI-provenance. Keyed off the stdout
       // banner so it holds even without an artifacts dir. That is a `partial`, never a clean `ran`;
-      // but a fresh full-vitals capture still beats it.
+      // a recorded specialist adds evidence without erasing this run's scope limitation.
       if (/M3 REDUCED TIER/.test(output)) {
-        const pass = findFreshPass(ctx, "M3");
-        if (pass.fresh) return fromPass(pass.artifact);
         return rankedTier({
           reason: "vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only (no coupling/knowledge-risk/AI-provenance). Install vitals for the full signal.",
           ...(hotspots?.length ? { hotspots } : {}),
@@ -1227,15 +1234,18 @@ const m7: ModuleRunner = {
     // #1522: every fresh pass the slot holds, not just the newest — a second recorded M7 tier no
     // longer overwrites the first, so both must reach the row.
     const lhFresh = lh.fresh ? passSlotCensus(lh.artifact, ctx.now ?? Date.now()).fresh : [];
-    const cwv = lhFresh.length
-      ? { note: `Core Web Vitals WERE measured — recorded ${lhFresh.map(passLabel).join(", ")} supplied ${lhFresh.flatMap((p) => p.findings ?? []).length} finding(s), merged into this deliverable (#1042)`, findings: lhFresh.flatMap((p) => p.findings ?? []) }
+    const lighthouse = lhFresh.filter((pass) => pass.pass === "lighthouse");
+    const otherPasses = lhFresh.filter((pass) => pass.pass !== "lighthouse");
+    const cwv = lighthouse.length
+      ? `Core Web Vitals WERE measured — recorded ${lighthouse.map(passLabel).join(", ")} supplied ${lighthouse.flatMap((p) => p.findings ?? []).length} finding(s), merged into this deliverable (#1042)`
       : undefined;
+    const recordedNote = [cwv, ...(otherPasses.length ? [`Recorded ${otherPasses.map(passLabel).join(", ")} contributed findings for their named scope; those passes do not establish Lighthouse/CWV measurements`] : [])].filter(Boolean).join(". ");
     const rejectedCwv = lh.fresh ? undefined : lh.reason;
     // Only a fresh pass changes a row (merging its findings, upgrading a not-run to partial because
     // something demonstrably ran). Without one, behaviour is exactly as before — except that a
     // present-but-rejected artifact is now named on the row instead of ignored.
     const withCwv = (outcome: ProbeResult): ProbeResult =>
-      cwv ? foldPassInto(outcome, cwv.note, cwv.findings) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
+      recordedNote ? foldPassInto(outcome, recordedNote, lhFresh.flatMap((pass) => pass.findings ?? [])) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
     // #1062: the code tier is captured like every other emitter. It ran with no --out since capture
     // was wired, so its findings were empty BY CONSTRUCTION and the M7 row asserted the tier ran
     // while carrying zero evidence. On a single-app target M9's unfiltered per-app sweep incidentally
@@ -1258,7 +1268,7 @@ const m7: ModuleRunner = {
     // Every row below is the code tier's — same command, same file count — so the examined evidence
     // is written once here and the branches vary only the reason and the advisor findings.
     const codeTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: "pnpm detect-static (code tier)", unitsExamined: scanned, scope: "product source files", findings: [], ...over });
-    if (!ctx.env.connected) return withCode(withCwv(codeTier({ reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" })));
+    if (!ctx.env.connected) return withCode(withCwv(codeTier({ reason: `DB advisors were not invoked in this run (--connected was not requested); credential availability was not assessed [MEASURED from execution intent; falsifier: run --connected --supabase <ref>].${cwv ? "" : ` ${M7_LIGHTHOUSE_NOT_RUN}`}` })));
     // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
     // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
     // project; without a ref threaded through run-audit there is nothing to call, so this stays
@@ -1278,7 +1288,7 @@ const m7: ModuleRunner = {
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
       const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
       const fold = (outcome: ProbeResult): ProbeResult => (i === 0 ? withCode(withCwv(outcome)) : outcome);
-      if (!advisors.ok) return fold(codeTier({ reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance }));
+      if (!advisors.ok) return fold(codeTier({ reason: `advisors failed for ${ref}: ${advisors.output.trim()} [TRIED; falsifier: rerun pnpm perf-scan ${ref} with the required project permissions]`, ...instance }));
       // #527: code + advisors both ran; without a recorded Lighthouse pass the CWV tier did not, so
       // this is `partial` with that reason, never a bare `ran`. With one (#1042), the reason names
       // what ran instead of asserting a tier did not. The advisor findings flow in either way.

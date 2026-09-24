@@ -330,7 +330,13 @@ pnpm record-pass --module M8 --target <app-1-path> --pass mutation --out <artifa
   --summary "mutation score 78%, 12 surviving on hotspots"
 ```
 
-## 7. Assemble the deliverable
+## 7. Execute or assemble the deliverable
+
+### 7a. Execute the orchestrator with banked passes
+
+This command performs fresh orchestration, including scanner and mutation work. The tier
+flags express execution intent; permission to read existing evidence does not authorize
+those tiers. Use the bound assembly mode below when the task is to rebuild exports.
 
 ```bash
 pnpm exec tsx src/cli/run-audit.ts <target-dir> \
@@ -342,9 +348,10 @@ pnpm exec tsx src/cli/run-audit.ts <target-dir> \
   --out coverage.json
 ```
 
-- `--artifacts-dir` makes the M1 semantic/live, M2 dynamic, M3 vitals, and M6 verdict probes
-  derive `ran` from the `<module>.pass.json` files banked in steps 3–6, instead of staying
-  honestly not-run.
+- `--artifacts-dir` supplies the `<module>.pass.json` evidence banked in steps 3–6 to
+  supported probes. Coverage must still describe the assessed surface: a PostgREST-only
+  pass does not establish application-route coverage, and an advisor pass does not establish
+  browser measurements.
 - `--findings-out` assembles ONE engagement findings document: every captured module's findings
   plus the derived coverage ledger, in the shape `report-template/` and `pnpm validate:findings`
   consume. Omit `--meta` and the file still writes, but with a placeholder meta and a loud warning
@@ -359,6 +366,42 @@ Validate before it ships:
 ```bash
 pnpm validate:findings engagement-findings.json
 ```
+
+### 7b. Retain a fresh run and assemble its exports offline (#2126, #2128)
+
+For a newly authorized run, add `--retain-artifacts <new-bundle-dir>` to retain its module
+results and owning-run outputs. Keep the bundle outside the target tree. Choose execution
+tiers using the engagement's existing capability permissions; the retention option grants
+no additional execution authority.
+
+The legacy `--artifacts-dir` pass bank lacks the original execution binding needed for
+strict retention, so it cannot be combined with `--retain-artifacts`. An explicit historical
+import preserves those older receipts with partial provenance instead of declaring a new run.
+
+```bash
+pnpm exec tsx src/cli/run-audit.ts <target-dir> \
+  --retain-artifacts <new-bundle-dir> \
+  --meta engagement-meta.json \
+  --findings-out fresh-findings.json --out fresh-coverage.json
+
+pnpm exec tsx src/cli/run-audit.ts <target-dir> \
+  --assemble <new-bundle-dir> \
+  --findings-out engagement-findings.json --out coverage.json \
+  --sarif-out engagement.sarif --sbom-out sbom.json \
+  --html-out report.html --pdf-out report.pdf \
+  --conservation-out conservation.json
+```
+
+Assembly reads retained local evidence. It checks target, engine, configuration, timestamps
+and artifact digests before delivery, and rejects execution flags such as `--llm`,
+`--dynamic`, `--connected` and `--allow-target-install`. PDF rendering uses the report
+renderer’s offline browser process. Export paths must be distinct, with existing parent
+directories, outside the source and bundle trees.
+
+Review current scope and limitations in the rendered report, alongside conservation and
+owning-run receipts. Historical imports carry their original target and engine identity plus
+explicit limitations for missing execution-time bindings; importing them does not establish
+a fresh audit of the current target.
 
 ## 8. Coverage-ledger completeness check — the last gate before delivery
 

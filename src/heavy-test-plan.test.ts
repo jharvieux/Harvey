@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
-import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads } from "./heavy-test-plan.mjs";
+import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads, weightEvidenceStatus } from "./heavy-test-plan.mjs";
 import { MEASURED_OUTSIDE_DISCOVERY, SCORED_GATES } from "./scored-gates.js";
 import { readNamesSafe } from "./fs-walk.js";
 
@@ -323,6 +323,46 @@ describe("heavy PR impact planner", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("binds every workload and scored gate weight to exact-head hosted evidence", () => {
+    expect(registry.weightProvenance).toMatchObject({
+      version: 1,
+      kind: "hosted-observation",
+      head: "b28da071c884ea06e323c470af13a0e81dea6f8b",
+      event: "push",
+      selectedPopulation: "full 17/17 workloads and 4/4 scored gates",
+    });
+    expect(registry.weightProvenance.workloads.map((entry) => entry.id).sort()).toEqual(allIds.sort());
+    expect(registry.weightProvenance.gates.map((entry) => entry.id).sort()).toEqual(registry.gates.map((entry) => entry.id).sort());
+    for (const workload of registry.workloads) {
+      const observation = registry.weightProvenance.workloads.find((entry) => entry.id === workload.id)!;
+      expect(workload.weightSeconds).toBe(Math.ceil(observation.observedSeconds));
+    }
+    for (const gate of registry.gates) {
+      const observation = registry.weightProvenance.gates.find((entry) => entry.id === gate.id)!;
+      expect(gate.weightSeconds).toBe(Math.ceil(observation.observedSeconds));
+    }
+  });
+
+  it("rejects a materially underweighted expensive suite", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-heavy-underweight-"));
+    const path = join(dir, "registry.json");
+    try {
+      const candidate = structuredClone(registry);
+      candidate.workloads.find((workload) => workload.id === "run-audit")!.weightSeconds = 60;
+      writeFileSync(path, JSON.stringify(candidate));
+      expect(() => loadHeavyRegistry(path)).toThrow(/run-audit underweights its hosted observation/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("makes exact-head and dirty-tree scheduling evidence staleness machine-visible", () => {
+    const head = registry.weightProvenance.head;
+    expect(weightEvidenceStatus(registry, head)).toMatchObject({ status: "current", evidenceHead: head });
+    expect(weightEvidenceStatus(registry, "0".repeat(40))).toMatchObject({ status: "stale", evidenceHead: head });
+    expect(weightEvidenceStatus(registry, head, { dirty: true })).toMatchObject({ status: "stale", evidenceHead: head });
   });
 
   it.each(["push", "merge_group", "schedule", "workflow_dispatch"])("the shipped CLI budgets the complete %s population", (event) => {

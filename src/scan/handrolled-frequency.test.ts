@@ -8,16 +8,51 @@ import { EXTERNAL_CORPUS } from "./external-corpus.js";
 import { AI_FREQUENCY_CORPUS, buildFrequencyTargets, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "./handrolled-frequency.js";
 
 describe("measured shapes count their canonical example", () => {
+  // Expected counts are derived from the planted snippets below, not from each shape's regex. Two
+  // examples intentionally contain two independent literal occurrences (18 and 65), which makes a
+  // constant counter and an accidental duplicate observable rather than merely checking presence.
+  const plantedCounts: Record<number, number> = {
+    3: 1, 4: 1, 5: 1, 6: 1, 11: 1, 12: 1, 13: 1, 15: 1, 16: 1, 18: 2, 22: 1, 23: 1,
+    24: 1, 27: 1, 28: 1, 29: 1, 30: 1, 31: 1, 34: 1, 35: 1, 37: 1, 39: 1, 40: 1,
+    41: 1, 42: 1, 43: 1, 44: 1, 47: 1, 52: 1, 53: 1, 58: 1, 59: 1, 61: 1, 65: 2,
+    66: 1, 67: 1, 68: 1, 69: 1, 72: 1, 76: 1, 81: 1, 83: 1, 88: 1, 89: 1, 90: 1,
+    95: 1, 98: 1, 99: 1, 100: 1, 101: 1,
+  };
+
   for (const shape of MEASURED_SHAPES) {
     it(`entry ${shape.entry} (${shape.name})`, () => {
       expect(shape.count({ path: shape.examplePath ?? "src/example.ts", text: shape.example })).toBeGreaterThanOrEqual(1);
     });
   }
 
+  it("pins zero, single, and repeated production counts for every measured shape (#2103)", () => {
+    for (const shape of MEASURED_SHAPES) {
+      const path = shape.examplePath ?? "src/example.ts";
+      const expected = plantedCounts[shape.entry];
+      expect(expected, `missing planted count for ${shape.entry}`).toBeDefined();
+      const exactExpected = expected!;
+      expect(shape.count({ path, text: "export const unrelated = true;" }), `negative ${shape.entry}`).toBe(0);
+      expect(shape.count({ path, text: shape.example }), `single ${shape.entry}`).toBe(exactExpected);
+      if (shape.unit === "matches") {
+        expect(shape.count({ path, text: `${shape.example}\n${shape.example}` }), `repeated ${shape.entry}`).toBe(exactExpected * 2);
+      } else {
+        expect(
+          shape.count({ path, text: `${shape.example}\n${shape.example}` }),
+          `repeated positives in one file ${shape.entry}`,
+        ).toBe(1);
+      }
+    }
+  });
+
   it("path-scoped shapes stay silent off their path", () => {
     for (const shape of MEASURED_SHAPES.filter((s) => s.examplePath !== undefined)) {
       expect(shape.count({ path: "src/elsewhere.ts", text: shape.example })).toBe(0);
     }
+  });
+
+  it("keeps nearby filter syntax out of the unique-via-indexOf counter", () => {
+    const unique = MEASURED_SHAPES.find((shape) => shape.entry === 3)!;
+    expect(unique.count({ path: "src/nearby.ts", text: "const kept = arr.filter((value) => Boolean(value));" })).toBe(0);
   });
 });
 

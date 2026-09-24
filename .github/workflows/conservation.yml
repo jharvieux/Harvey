@@ -130,67 +130,13 @@ jobs:
           echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a conservation failure."
           exit 1
 
-      # The `paths:` filter that used to live on the `pull_request` trigger, moved in-job by #1205
-      # so this context reports on EVERY PR (see the header note on the #1107 deadlock). `case`
-      # patterns, not pathspecs: in `case` a `*` matches `/` too, so `src/scan/*` covers the whole
-      # subtree. Schedule and workflow_dispatch always run the full job.
+      # The `paths:` filter that used to live on the `pull_request` trigger remains in-job so this
+      # required context reports on EVERY PR (see the header note on the #1107 deadlock). The router
+      # owns one conservative source/input population instead of a leaf allowlist; its tests exercise
+      # scanner-only, detector-only, effectiveness-only, drift and declared-no-op changes (#2175).
       - id: filter
         name: Does this change set touch the conservation pipeline or its fixtures?
-        run: |
-          # #1498: a merge-queue entry is NOT a schedule. It runs the GATE (relevant) but must NOT
-          # run the nine captured-fixture drift checks. Those re-run PINNED EXTERNAL TOOLS and
-          # detect an upstream release moving a tool's output schema — so gating the queue on them
-          # would make merges fail for reasons that have nothing to do with the batch being merged,
-          # and would put an unrelated third party on the critical path to every merge. They stay
-          # on the daily schedule, which is the cadence that actually matches what they detect.
-          if [ "${{ github.event_name }}" = "merge_group" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "drift=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            # BOTH flags. The scheduled run is the ONLY thing that executes the drift checks on a
-            # regular cadence now, so forgetting `drift` here would silently retire all nine —
-            # a guard that still exists, still passes, and can no longer fire.
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "drift=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
-          echo "Changed files:"
-          echo "$files"
-          relevant=false
-          drift=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              src/audit-conservation.ts) relevant=true ;;
-              src/conservation-ledger.ts) relevant=true ;;
-              src/audit-runner.ts) relevant=true ;;
-              src/audit-runners.ts) relevant=true ;;
-              src/audit-report.ts) relevant=true ;;
-              src/cli/validate-conservation.ts) relevant=true ;;
-              src/cli/run-audit.ts) relevant=true ;;
-              targets/calibration/*) relevant=true ;;
-            esac
-            # The captured-fixture contracts. These make the drift checks meaningful AND can change
-            # what the probes parse, so they set both flags.
-            case "$f" in
-              src/cli/fixture-drift.ts|src/cli/osv-fixture-drift.ts) relevant=true; drift=true ;;
-              src/scan/fixture-drift-contracts.ts) relevant=true; drift=true ;;
-              src/scan/__fixtures__/*|src/__fixtures__/*) relevant=true; drift=true ;;
-              .github/actions/mechanical-binaries/*) relevant=true; drift=true ;;
-              .github/workflows/conservation.yml) relevant=true; drift=true ;;
-            esac
-          done <<< "$files"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "drift=$drift" >> "$GITHUB_OUTPUT"
-          if [ "$relevant" = "false" ]; then
-            echo "No change to the conservation pipeline, its probes, its fixtures or this workflow — a planted finding's route to the deliverable cannot have changed from this PR. Nothing to assert. The daily scheduled run covers the tree regardless."
-          fi
-          if [ "$relevant" = "true" ] && [ "$drift" = "false" ]; then
-            echo "Running the gate but SKIPPING the 9 captured-fixture drift checks: they re-run pinned external tools and assert the FRESH output still satisfies the committed contract, so they detect an UPSTREAM release changing a tool's output schema. That is a function of time, not of this diff — no change to a fixture, a contract or the drift CLI can make them say anything about this PR. The daily scheduled run executes all of them."
-          fi
+        run: node src/conservation-change-filter.mjs --event '${{ github.event_name }}' --base '${{ github.event.pull_request.base.sha }}' --head HEAD --github-output "$GITHUB_OUTPUT"
 
       # #1509: a short-circuited job and a dead job are both "no scoring happened", and until now they
       # looked identical from outside. The no-op is DECLARED, with its reason, so the assert step at

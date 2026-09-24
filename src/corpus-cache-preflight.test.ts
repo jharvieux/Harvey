@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { assertCorpusCachePreflight } from "./corpus-cache-preflight.js";
-import { semgrepPackReceipt } from "./corpus-mechanical-readiness.js";
+import { assertPreparedTargetUnchanged, prepareCurrentMechanicalTarget, semgrepPackReceipt } from "./corpus-mechanical-readiness.js";
 import { readRecursiveSafe } from "./fs-walk.js";
 import { mechanicalPhasePayloadDigest } from "./scan/mechanical-phase-cache.js";
 import { runOsvScanner } from "./scan/dependencies.js";
@@ -246,12 +246,31 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     writeFileSync(join(target, "nested", "index.ts"), 'console.log("independent nested quality root");\n');
     for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Cache fixture", "-c", "user.email=cache@example.invalid", "commit", "-qm", "Pin offline cache fixture"]]) execFileSync("git", ["-C", target, ...args]);
     const commit = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(target, "unrelated.lock"), "untracked working state\n");
+    writeFileSync(join(target, ".git", "census.lock"), "untracked Git state\n");
     const targets = join(fixtureRoot, "targets.json");
     const advisories = join(fixtureRoot, "advisories");
     mkdirSync(advisories);
-    // Preserve the real provider wrapper's input-gap assessment for this empty dependency
-    // population in the snapshot fixture.
-    const { result, assessment } = runOsvScanner(target);
+    // Capture the same pinned, prepared population as the shipping snapshot CLI. Raw working
+    // trees also contain untracked inputs and transient Git locks that replay never receives.
+    const snapshotRoot = temporary("harvey-preflight-snapshot-inputs-");
+    const snapshotCache = join(snapshotRoot, "cache");
+    mkdirSync(snapshotCache);
+    execFileSync("git", ["clone", "--quiet", "--no-hardlinks", target, join(snapshotCache, "fixture__cache-target")]);
+    const prepared = prepareCurrentMechanicalTarget({
+      target: { slug: "fixture-first", repo: "fixture/cache-target", commit },
+      checkoutDir: join(snapshotRoot, "checkout"),
+      preparedDir: join(snapshotRoot, "prepared"),
+      cloneCacheDir: snapshotCache,
+      verifyRemote: false,
+    });
+    const { result, assessment } = runOsvScanner(prepared.preparedDir);
+    assertPreparedTargetUnchanged(prepared);
+    expect(assessment.inventory.inputs.map(({ path, sha256 }) => ({ path, sha256 }))).toEqual(
+      ["nested/package-lock.json", "nested/package.json", "package-lock.json", "package.json"].map((path) => ({
+        path, sha256: createHash("sha256").update(readFileSync(join(target, path))).digest("hex"),
+      })),
+    );
     const bytes = gzipSync(JSON.stringify({ schema: 1, result, assessment }));
     writeFileSync(join(advisories, "fixture.osv.json.gz"), bytes);
     writeFileSync(join(advisories, "manifest.json"), JSON.stringify({ schema: 2, targets: Object.fromEntries(["fixture-first", "fixture-later"].map((slug) => [slug, {

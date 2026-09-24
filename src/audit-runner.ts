@@ -246,6 +246,8 @@ export interface RunContext {
   // all. Absent ⇒ the probe calls the real `detectOrm` on ctx.targetDir; injected so a probe test
   // can pin an architecture without standing up a target tree.
   detectOrm?: (dir: string) => TargetOrm;
+  /** Retention observes the exact producer return before assembly; it cannot change the result. */
+  retainModuleResult?: (module: AuditModule, reports: readonly ProbeReport[]) => void;
 }
 
 export interface ModuleRunner {
@@ -457,6 +459,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
         }
       }
       outcomes = reports.map((r) => (isTyped(r) ? toOutcome(r) : r));
+      ctx.retainModuleResult?.(module, structuredClone(reports));
     } catch (err) {
       // Recorded requires-live-run because that is the honest description of the OUTPUT (there is
       // none). The reason names the crash rather than a tier, and `failures` — not this row — is
