@@ -360780,8 +360780,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "b378b3f0acb266db6e37b593fbb00ad14405ef2d",
-    "commitPayload": "dHJlZSA5ZjZkZmY2Y2Y3MzgwNWU1MTgwOTA3OWRjNTcxOWJkNTgxYmVkYWFhCnBhcmVudCA5NzRlZGUyZTIxNDdjMjc2ZjEwZDI0YjI2YzZkNTEyODExOWM5OGFiCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3MjYzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3MzQ5IC0wNTAwCgpCYWxhbmNlIGNvcnB1cyBvd25lcnMgYWdhaW5zdCBleGlzdGluZyBqb2IgYnVkZ2V0cyAoIzIxNzEpCg==",
+    "commit": "4d9c137bf8f052d15a6b258073644691185aa7b1",
+    "commitPayload": "dHJlZSAyMDgwZjY2ZmUwOWExNTllODA3YzU3YjQ5NmNiNDI4ZDk5ZjAyODgwCnBhcmVudCA4MGRjMGYzNmFmYTE2NmEwZjNjMGNjNmY2MDFkNmEyY2ZkYjQwOGEzCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3OTk1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjM3OTk1IC0wNTAwCgpSZWJpbmQgcmV2aWV3ZWQgcGxhbm5lciBzb3VyY2UgYW5kIGNsYXJpZnkgYnVkZ2V0IGV2aWRlbmNlICgjMjE3MSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -360790,13 +360790,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "53e3794bed11d479459557ca6218baf8beb340c5",
+        "gitOid": "b3e3b9f5fb9939ad3af3b4f6c79644ffa0fcbeeb",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "da02191f19f9539c43887a49736c967e1add400501e26cec1e8e37acce13014a",
-    "tree": "9f6dff6cf73805e51809079dc5719bd581bedaaa"
+    "populationSha256": "c0dd2b75b6af7b4a7aa377bc10912aa6b9d9fc2f67a3d384f13018d59df8b1b2",
+    "tree": "2080f66fe09a159e807c57b496cb428d99f02880"
   },
   "venues": [
     {
@@ -384575,11 +384575,11 @@
       "sha256": "c8d3e0e021fbc40dcc99b68e0bfcfe31f6f021b9624221248899ec533165393c"
     },
     {
-      "bytes": 7627,
+      "bytes": 7616,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "b02d09f8003fc683fc81d8b700b1bc6148873881",
+      "gitOid": "9e354864f81be4569f1595431320e80a01e15ea8",
       "id": "src/scan/corpus-shards.ts",
       "kind": "source",
       "literalCount": 57,
@@ -384587,7 +384587,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/corpus-shards.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f2c014945e87a64f681d090018e243a63e787df130dda80814d7c14c5616948e"
+      "sha256": "8486c75eee055f8f4ecea2200b1ccaa3ef50bbc8b7b0977487a2ea2e13ccacf5"
     },
     {
       "bytes": 3116,
@@ -387515,11 +387515,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 310113,
+      "bytes": 310403,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "36bd31dc71cb4e29422c45823c5b9c57b78f33ef",
+      "gitOid": "939d4148007e2ec8ea132799c13143d0a262aa11",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -387527,7 +387527,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "acb71acf87fb9acff0e444861c1845b68a49899f983395ba0a03fdb19a12a8e2"
+      "sha256": "ff57ca1552dda195ccea655a6ce124e33e6f8e23e74c5874c675180bbf225548"
     },
     {
       "bytes": 10289,
