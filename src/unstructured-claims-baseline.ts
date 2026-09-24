@@ -420,6 +420,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "`run-audit` cannot run these itself (they're operator/skill passes, not CLI subprocesses), but it",
     "if any is missing.** Two real identities are genuinely needed: a BOLA cannot be proven with one.",
     "cannot yet pass `--install` through, #523 — run `mutation-scan` directly for the full pass, as",
+    "strict retention, so it cannot be combined with `--retain-artifacts`. An explicit historical",
   ],
   "docs/runbooks/m2-pentest-ops.md": [
     "cannot reproduce (dashboard-edited policies, platform env vars, uncommitted edge functions, WAF",
@@ -482,6 +483,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// recording a reason. This cannot be fixed by a reason; only by running the module.",
     "// we can't know which is true, so refuse to pick rather than let a \"ran\" mask a gap.",
     "// An unfilled --template row. The gate can't judge whether a reason is TRUE, but it can",
+  ],
+  "src/audit-evidence-import.ts": [
+    "/** A recipe selects existing bound receipts. It cannot create execution provenance for raw files. */",
   ],
   "src/audit-execution-log.test.ts": [
     "// false \"never run\" alarm. Derivation makes forgetting impossible — the record IS the removal.",
