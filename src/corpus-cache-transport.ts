@@ -159,10 +159,9 @@ export function corpusCacheTransportKey(input: {
   return `corpus-phase-${input.family}-v6-${input.platform}-shard${input.namespace}-scope${input.scopeSha256}-${input.runId}-${input.runAttempt}-${input.headSha}`;
 }
 
-function fileSha256(path: string): string {
+function fileSha256(path: string, buffer: Buffer): string {
   const hash = createHash("sha256");
   const fd = openSync(path, "r");
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
   try {
     for (;;) {
       const length = readSync(fd, buffer, 0, buffer.length, null);
@@ -210,7 +209,10 @@ function payloadReceipt(dir: string): CorpusCachePayloadReceipt {
   if (bytes > CORPUS_CACHE_MAX_PAYLOAD_BYTES) throw new Error(`transport payload ${bytes} bytes exceeds ${CORPUS_CACHE_MAX_PAYLOAD_BYTES}-byte ceiling`);
   // Bound first, then read bytes. An oversized sparse or corrupt transport must fail in the cheap
   // metadata pass instead of spending the remaining job timeout hashing data we will reject.
-  const files = discovered.map(({ diskPath, ...file }) => ({ ...file, sha256: fileSha256(diskPath) }));
+  // Hashing is synchronous: one scratch buffer can cover the entire inventory. Allocating it per
+  // file turned the 188,927-file shard into 184.5 GiB of allocation on each restore and publication.
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const files = discovered.map(({ diskPath, ...file }) => ({ ...file, sha256: fileSha256(diskPath, buffer) }));
   const classes = new Map<string, { files: number; bytes: number }>();
   for (const file of files) {
     const name = file.path.split("/")[0]!;
