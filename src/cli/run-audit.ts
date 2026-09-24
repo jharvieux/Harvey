@@ -86,7 +86,7 @@
 
 import "./sync-stdio.js";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
@@ -109,7 +109,7 @@ import { enrichFindingsCwe } from "../cwe-map.js";
 import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
-import { statSafe } from "../fs-walk.js";
+import { readEntriesLstatSafe, statSafe } from "../fs-walk.js";
 import { discoverWorkspaceInventory } from "../workspaces.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -204,6 +204,10 @@ if (assembleDir) {
   process.exit(0);
 }
 if (htmlOut || pdfOut) { console.error("--html-out/--pdf-out require --assemble; retain fresh evidence with --retain-artifacts first"); process.exit(2); }
+if (retainDir && artifactsDir) {
+  console.error("--retain-artifacts cannot ingest --artifacts-dir: legacy pass files lack original target tree/configuration/engine bindings. Retain a fresh run without legacy passes, or use pass-artifact-bundle --legacy-document with original snapshot and acceptance receipts for an explicitly partial historical delivery.");
+  process.exit(2);
+}
 
 // #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
 // tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
@@ -271,7 +275,7 @@ const ctx: RunContext = {
     const raw = join(captureDir!, `${module}-owning-run.json`);
     writeFileSync(raw, `${JSON.stringify({ module, reports, commands: commandReceipts }, null, 2)}\n`);
     commandReceipts = [];
-    const artifacts = [raw, ...readdirSync(captureDir!).filter((name) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map((name) => join(captureDir!, name))];
+    const artifacts = [raw, ...readEntriesLstatSafe(captureDir!).filter(({ name }) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map(({ path }) => path)];
     for (const result of reports) retainedPasses.push({ scope: { module, workspace: result.instance ?? ".", tier: "orchestrated", surface: "module", wholeModule: true }, generatedAt: new Date().toISOString(), producer: { name: `audit-runner:${module}`, version: replayBinding!.engine.sha256 }, result, rawArtifacts: artifacts });
   }) satisfies NonNullable<RunContext["retainModuleResult"]> } : {}),
 };

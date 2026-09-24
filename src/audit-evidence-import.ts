@@ -2,34 +2,49 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AUDIT_MODULES, moduleOfFinding, type AuditModule } from "./audit-coverage.js";
-import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput, type AuditEvidenceScope } from "./audit-replay.js";
-import { type Examined, type ProbeReport } from "./audit-runner.js";
+import { createAuditReplayBinding, replayAuditBundle, writeAuditReplayBundle, type AuditEvidenceInput, type AuditEvidenceScope } from "./audit-replay.js";
+import { type Examined } from "./audit-runner.js";
 import type { FindingsDocument } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
 
 const json = (path: string): unknown => JSON.parse(readFileSync(path, "utf8"));
 const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex");
 
-/** A recipe names retained producer outputs and scope, never executable code or a report overlay. */
+/** A recipe selects existing bound receipts. It cannot create execution provenance for raw files. */
 export function bundleAuditEvidenceRecipe(recipePath: string, out: string): string {
   const recipe = json(recipePath) as {
     target: string; effectiveConfig: Record<string, unknown>; scopes: AuditEvidenceScope[];
-    passes: (Omit<AuditEvidenceInput, "result"> & { resultFile: string; resultPointer?: string })[];
-    metaFile?: string; sbomFile?: string; expectedRevision: string;
+    passes: { bundle: string; receiptId: string }[];
+    metaFile?: string; sbomBundle?: string; expectedRevision: string;
   };
   const from = (path: string): string => resolve(dirname(recipePath), path);
   const binding = createAuditReplayBinding(from(recipe.target), recipe.effectiveConfig);
   if (recipe.expectedRevision !== binding.target.revision) throw new Error("Evidence recipe target revision mismatch");
-  const passes: AuditEvidenceInput[] = recipe.passes.map(({ resultFile, resultPointer, ...pass }) => {
-    const raw = from(resultFile);
-    let result = json(raw);
-    for (const part of (resultPointer ?? "").split("/").filter(Boolean)) {
-      if (!result || typeof result !== "object" || !(part in result)) throw new Error(`Missing result pointer ${resultPointer} in ${resultFile}`);
-      result = (result as Record<string, unknown>)[part];
-    }
-    return { ...pass, result: result as ProbeReport, rawArtifacts: [...new Set([raw, ...pass.rawArtifacts.map(from)])] };
+  const passes: AuditEvidenceInput[] = recipe.passes.map((selection) => {
+    if (!selection.bundle || !selection.receiptId) throw new Error("Evidence recipes require an original bound bundle and receiptId for every pass; raw result files cannot establish original execution provenance. Use explicit legacy import for unbound historical evidence.");
+    const source = from(selection.bundle);
+    // This validates the ORIGINAL tree, engine, configuration, timestamp, scope and raw hashes
+    // before any receipt can be selected. A current snapshot must never re-sign older output.
+    const replay = replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
+    const receipt = [...replay.evidence.current, ...replay.evidence.history.map((row) => row.receipt)].find((row) => row.id === selection.receiptId);
+    if (!receipt) throw new Error(`Original bound receipt not found: ${selection.receiptId}`);
+    return {
+      scope: receipt.scope, generatedAt: receipt.generatedAt, producer: receipt.producer, result: receipt.result,
+      rawArtifacts: receipt.rawArtifacts.map((raw) => join(source, raw.path)),
+      ...(receipt.legacyReason ? { legacyReason: receipt.legacyReason } : {}),
+      ...(receipt.historicalOrigin ? { historicalOrigin: receipt.historicalOrigin } : {}),
+      ...(receipt.supersedes ? { supersedes: receipt.supersedes } : {}),
+    };
   });
-  return writeAuditReplayBundle(out, { binding, scopes: recipe.scopes, passes, ...(recipe.metaFile ? { meta: json(from(recipe.metaFile)) as FindingsDocument["meta"] } : {}), ...(recipe.sbomFile ? { sbomPath: from(recipe.sbomFile) } : {}) });
+  let sbomPath: string | undefined;
+  if (recipe.sbomBundle) {
+    const source = from(recipe.sbomBundle);
+    const replay = replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
+    if (!replay.sbom) throw new Error("Original bound SBOM is missing from the selected bundle");
+    const manifest = json(join(source, "audit-replay.json")) as { sbom: { path: string } };
+    sbomPath = join(source, manifest.sbom.path);
+  }
+  return writeAuditReplayBundle(out, { binding, scopes: recipe.scopes, passes, ...(recipe.metaFile ? { meta: json(from(recipe.metaFile)) as FindingsDocument["meta"] } : {}), ...(sbomPath ? { sbomPath } : {}) });
 }
 
 interface LegacyReconciliation {

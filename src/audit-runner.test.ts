@@ -360,7 +360,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m2?.reason).toMatch(/no local supabase stack/);
   });
 
-  it("M7 without DB creds is partial — it loses the advisor layer but still ran on source", () => {
+  it("M7 without connected execution intent is partial and still reports source coverage", () => {
     const m7 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
     expect(m7?.reason).toMatch(/advisors/);
@@ -1315,8 +1315,11 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(m1?.detail).not.toMatch(/WARNING/);
   });
 
-  it("M2 reads ran when a fresh dynamic pen-test artifact exists — the reachable-stack evidence #356 wanted", () => {
-    expect(status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic" }), "M2")?.status).toBe("ran");
+  it("M2 retains a legacy dynamic pass as partial because application-route and tenant scopes are unbound", () => {
+    const row = status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic", summary: "PostgREST only; no application routes tested" }), "M2");
+    expect(row?.status).toBe("partial");
+    expect(row?.reason).toContain("do not establish application-route isolation");
+    expect(row?.reason).toContain("falsifier:");
   });
 
   it("M6 reads ran when a fresh verdict artifact exists — the one thing that clears its never-run alarm", () => {

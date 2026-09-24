@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { importLegacyAuditEvidence } from "./audit-evidence-import.js";
-import { replayAuditBundle } from "./audit-replay.js";
+import { bundleAuditEvidenceRecipe, importLegacyAuditEvidence } from "./audit-evidence-import.js";
+import { createAuditReplayBinding, replayAuditBundle, writeAuditReplayBundle, type AuditEvidenceInput } from "./audit-replay.js";
 import { deliverAuditReplay } from "./audit-replay-delivery.js";
 import type { FindingsDocument } from "./findings.js";
 
@@ -57,4 +57,30 @@ it("refuses a historical acceptance receipt for another revision", () => {
   const validation = JSON.parse(readFileSync(f.options.validation, "utf8")); validation.target.actual_head = "d".repeat(40);
   writeFileSync(f.options.validation, JSON.stringify(validation));
   expect(() => importLegacyAuditEvidence(f.options)).toThrow(/identities disagree/);
+});
+
+it.each(["valid", "unbound", "tree", "configuration", "raw"])("recipe preserves original execution provenance (%s)", (kind) => {
+  const f = inputs();
+  const target = join(f.root, "source"); mkdirSync(target);
+  const source = join(target, "source.ts"); writeFileSync(source, "original source");
+  const raw = join(f.root, "producer.json"); writeFileSync(raw, "original output");
+  const effectiveConfig = { mutate: ["src/**/*.ts"] };
+  const binding = createAuditReplayBinding(target, effectiveConfig);
+  const pass: AuditEvidenceInput = { scope: { module: "M3", workspace: ".", tier: "source", surface: "ranked-files", wholeModule: false }, generatedAt: new Date().toISOString(), producer: { name: "original", version: "1" }, rawArtifacts: [raw], result: { kind: "examined", unitsExamined: 4, scope: "ranked files", detail: "Original command", findings: [] } };
+  const original = join(f.root, "original");
+  writeAuditReplayBundle(original, { binding, scopes: [pass.scope], passes: [pass] });
+  const originalReplay = replayAuditBundle(original, target);
+  const recipe = { target, expectedRevision: binding.target.revision, effectiveConfig, scopes: [pass.scope], passes: [kind === "unbound" ? { ...pass, resultFile: raw } : { bundle: original, receiptId: originalReplay.evidence.current[0]!.id }] };
+  if (kind === "tree") writeFileSync(source, "changed source at the same revision");
+  if (kind === "configuration") recipe.effectiveConfig = { mutate: ["different/**/*.ts"] };
+  if (kind === "raw") writeFileSync(join(original, originalReplay.evidence.current[0]!.rawArtifacts[0]!.path), "tampered output");
+  const path = join(f.root, "recipe.json"); writeFileSync(path, JSON.stringify(recipe));
+  if (kind !== "valid") expect(() => bundleAuditEvidenceRecipe(path, join(f.root, "combined"))).toThrow(/original bound|mismatch|Tampered/);
+  else {
+    const combined = join(f.root, "combined"); bundleAuditEvidenceRecipe(path, combined);
+    const replay = replayAuditBundle(combined, target);
+    expect(replay.evidence.current[0]!.id).toBe(originalReplay.evidence.current[0]!.id);
+    expect(replay.evidence.current[0]!.generatedAt).toBe(pass.generatedAt);
+    expect(replay.evidence.binding.target).toEqual(binding.target);
+  }
 });

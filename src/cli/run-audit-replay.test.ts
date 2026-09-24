@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -6,20 +5,26 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AUDIT_MODULES } from "../audit-coverage.js";
 import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
+import { runGuardCommand, type GuardCommandResult } from "../guard-mutation-process.js";
 
 const repo = resolve(import.meta.dirname, "../..");
 let root: string, target: string, bundle: string, preload: string;
 let delivery: { code: number | null; stdout: string; stderr: string };
+const children: Promise<GuardCommandResult>[] = [];
+const teardown = new AbortController();
 const meta: ReportMeta = { client: "CLI replay", subtitle: "evidence", date: "2026-09-24", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 5, tenantIsolation: "Unverified", authModel: "fixture", headline: "Scoped receipts", scope: "ten modules", methodology: "replay", outOfScope: "missing surfaces" };
 
-function run(extra: string[], env: Record<string, string> = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolveResult, reject) => {
-    const child = spawn(process.execPath, ["--require", preload, "--import", "tsx", "src/cli/run-audit.ts", target, "--assemble", bundle, ...extra], { cwd: repo, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on("error", reject); child.on("close", (code) => resolveResult({ code, stdout, stderr }));
+async function run(extra: string[], env: Record<string, string> = {}, assemble = true): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = runGuardCommand({
+    command: ["/usr/bin/env", ...Object.entries(env).map(([key, value]) => `${key}=${value}`), process.execPath, "--require", preload, "--import", "tsx", "src/cli/run-audit.ts", target, ...(assemble ? ["--assemble", bundle] : []), ...extra],
+    cwd: repo, bundleDir: root, outputPrefix: `child-${children.length}`, timeoutMs: 20_000,
+    killGraceMs: 1_000, signal: teardown.signal,
   });
+  children.push(child);
+  const receipt = await child;
+  expect(receipt.state, JSON.stringify(receipt)).toBe("exited");
+  expect(receipt.terminationAcknowledged).toBe(true);
+  return { code: receipt.exitCode, stdout: readFileSync(join(root, receipt.stdout.path), "utf8"), stderr: readFileSync(join(root, receipt.stderr.path), "utf8") };
 }
 
 beforeAll(async () => {
@@ -59,9 +64,20 @@ if (process.env.REPLAY_TRIP_NETWORK) globalThis.fetch('https://example.invalid/m
   writeAuditReplayBundle(bundle, { binding: createAuditReplayBinding(target, { network: false, model: false }), scopes: passes.slice(0, 11).map((pass) => pass.scope), passes, meta, sbomPath: sbom });
   delivery = await run(["--findings-out", join(root, "findings.json"), "--sarif-out", join(root, "findings.sarif"), "--sbom-out", join(root, "inventory.json"), "--out", join(root, "coverage.json"), "--html-out", join(root, "report.html"), "--conservation-out", join(root, "ledger.json")]);
 });
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(async () => {
+  teardown.abort();
+  const receipts = await Promise.allSettled(children);
+  expect(receipts.every((receipt) => receipt.status === "fulfilled" && receipt.value.terminationAcknowledged), "Every owned child must close before fixtures are removed").toBe(true);
+  if (root) rmSync(root, { recursive: true, force: true });
+});
 
 describe("run-audit assembly capability boundary", () => {
+  it("refuses to re-sign unbound legacy passes as fresh retained execution before invoking scanners", async () => {
+    const result = await run(["--retain-artifacts", join(root, "laundered"), "--artifacts-dir", join(root, "legacy")], {}, false);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("legacy pass files lack original target tree/configuration/engine bindings");
+    expect(result.stderr).not.toContain("REPLAY TRIPWIRE");
+  });
   it("writes JSON/SARIF/SBOM/coverage/HTML and conservation with every external capability trapped", () => {
     expect(delivery, delivery.stderr).toMatchObject({ code: 0 });
     expect(delivery.stdout).toContain("ASSEMBLY PASS");

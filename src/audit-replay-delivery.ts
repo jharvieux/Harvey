@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { assembleEngagementDocument } from "./audit-report.js";
 import { replayAuditBundle, type AuditEvidenceReconciliation } from "./audit-replay.js";
@@ -8,6 +8,7 @@ import { enrichFindingsCwe } from "./cwe-map.js";
 import { validateFindings, type FindingsDocument, type ReportMeta } from "./findings.js";
 import { toSarif } from "./sarif.js";
 import { renderReport } from "../report-template/render.mjs";
+import { statSafe } from "./fs-walk.js";
 
 export async function deliverAuditReplay(options: {
   target: string; bundle: string; findingsOut?: string; coverageOut?: string; sarifOut?: string;
@@ -53,7 +54,10 @@ export async function deliverAuditReplay(options: {
   for (const path of requested) rmSync(path, { force: true });
   for (const [path, data] of outputs) if (path) writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
   await renderReport(doc, { htmlPath: options.htmlOut, pdfPath: options.pdfOut });
-  for (const path of requested) if (!statSync(path).isFile() || statSync(path).size === 0) throw new Error(`Requested replay export was not written: ${path}`);
+  for (const path of requested) {
+    const stat = statSafe(path);
+    if (!stat?.isFile() || stat.size === 0) throw new Error(`Requested replay export was not written: ${path}`);
+  }
   console.log(formatLedger(doc.conservation));
   console.log(`ASSEMBLY PASS — ${doc.findings.length} findings; ${requested.length} exports written from bound local evidence. No scanner, target command, network or model execution.`);
 }

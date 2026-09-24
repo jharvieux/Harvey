@@ -98,11 +98,69 @@ describe("bound audit replay", () => {
     expect(conservation.findingOwners.find((row: { id: string }) => row.id === "M3-TREND-00").rawArtifacts.length).toBeGreaterThan(0);
   });
 
-  it("retains recorded M3 trend evidence when the base hotspot probe also succeeds", () => {
+  it.each(["", "\nM3 REDUCED TIER", "\nM3 UNRANKED"])("retains recorded M3 trend evidence when the base hotspot probe also succeeds (%s)", (banner) => {
     const planted = finding("M3-TREND-00", "M3");
-    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M3")!.run({ targetDir: "/fixture", env: { connected: false, dynamic: false, llm: false }, captureDir: "/capture", artifactsDir: "/passes", exists: () => true, exec: () => ({ ok: true, output: "M3 hotspot table — /fixture (4 rows, worst first)" }), readArtifact: (path) => path.includes(".pass.") ? { module: "M3", target: "/fixture", pass: "trend", generatedAt: new Date().toISOString(), findings: [planted] } : { findings: [finding("M3-BASE", "M3")], topK: [] } });
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M3")!.run({ targetDir: "/fixture", env: { connected: false, dynamic: false, llm: false }, captureDir: "/capture", artifactsDir: "/passes", exists: () => true, exec: () => ({ ok: true, output: `M3 hotspot table — /fixture (4 rows, worst first)${banner}` }), readArtifact: (path) => path.includes(".pass.") ? { module: "M3", target: "/fixture", pass: "trend", generatedAt: new Date().toISOString(), findings: [planted] } : { findings: [finding("M3-BASE", "M3")], topK: [] } });
     expect((result as Examined).unitsExamined).toBe(4);
     expect((result as Examined).findings.map((row) => row.id)).toContain("M3-BASE");
     expect((result as Examined).findings.map((row) => row.id)).toContain("M3-TREND-00");
+    if (banner.includes("REDUCED")) expect((result as Examined).reason).toContain("reduced M3 tier");
+    if (banner.includes("UNRANKED")) expect((result as Examined).reason).toContain("complexity-only");
+  });
+
+  it.each([[75.1, 29.4], [29.4, 75.1]])("keeps native M8 score %s over older recorded score %s, including its own scope", (nativeScore, recordedScore) => {
+    const now = Date.now();
+    const artifact = { summary: { overall: { mutationScore: nativeScore, mutationScoreBasedOnCoveredCode: 80.4 }, coveredScope: ["native/**/*.ts"] }, reportRows: [], scope: { verified: true, scoped: true, note: "Native current configured scope" }, moduleRecord: { status: "partial", note: "Native current configured scope" } };
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M8")!.run({ targetDir: "/fixture", env: { connected: false, dynamic: false, llm: false }, captureDir: "/capture", artifactsDir: "/passes", now, exists: () => true, exec: (_command, args) => ({ ok: true, output: args.includes("mutation-scan") ? JSON.stringify(artifact) : "loaded 4 source files (4 product source, 0 config, 0 test/story) from /fixture" }), readFindings: () => [], readArtifact: (path) => path.includes(".pass.") ? { module: "M8", target: "/fixture", pass: "mutation", generatedAt: new Date(now - 60_000).toISOString(), findings: [], testQuality: quality(recordedScore) } : artifact });
+    const measured = (Array.isArray(result) ? result[0] : result) as Examined;
+    expect(measured.testQuality?.mutationScore).toBe(nativeScore);
+    expect(measured.testQuality?.mutationScoreBasedOnCoveredCode).toBe(80.4);
+    expect(measured.testQuality?.coveredScope).toEqual(["native/**/*.ts"]);
+    expect(measured.testQuality?.scopeNote).toBe("Native current configured scope");
+  });
+
+  it.each([false, true])("uses the newest recorded M8 table when the native invocation has no measurement (reverse order=%s)", (reverse) => {
+    const now = Date.now();
+    const old = { module: "M8", target: "/fixture", pass: "old", generatedAt: new Date(now - 60_000).toISOString(), findings: [], testQuality: quality(75.1) };
+    const latest = { ...old, pass: "latest", generatedAt: new Date(now - 1_000).toISOString(), testQuality: quality(29.4) };
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M8")!.run({ targetDir: "/fixture", env: { connected: false, dynamic: false, llm: false }, captureDir: "/capture", artifactsDir: "/passes", now, exists: () => true, exec: (_command, args) => ({ ok: !args.includes("mutation-scan"), output: args.includes("mutation-scan") ? "blocked" : "loaded 4 source files (4 product source, 0 config, 0 test/story) from /fixture" }), readFindings: () => [], readArtifact: () => reverse ? { ...old, priorPasses: [latest] } : { ...latest, priorPasses: [old] } });
+    const measured = (Array.isArray(result) ? result[0] : result) as Examined;
+    expect(measured.testQuality?.mutationScore).toBe(29.4);
+    expect(measured.reason).toContain("mutation tier blocked");
+  });
+
+  it("keeps advisor-only M7 findings without inventing Lighthouse measurements or absent credentials", () => {
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M7")!.run({ targetDir: "/fixture", env: { connected: false, dynamic: false, llm: false }, captureDir: "/capture", artifactsDir: "/passes", exists: () => true, exec: () => ({ ok: true, output: "loaded 4 source files (4 product source, 0 config, 0 test/story) from /fixture" }), readFindings: () => [], readArtifact: () => ({ module: "M7", target: "/fixture", pass: "advisors", generatedAt: new Date().toISOString(), summary: "Authenticated advisors completed", findings: [finding("M7-ADVISOR", "M7")] }) }) as Examined;
+    expect(result.findings.map((row) => row.id)).toContain("M7-ADVISOR");
+    expect(result.reason).not.toContain("Core Web Vitals WERE measured");
+    expect(result.reason).not.toContain("no DB creds");
+    expect(result.reason).toContain("credential availability was not assessed");
+    expect(result.reason).toContain("Core Web Vitals were not measured");
+  });
+
+  it("keeps the full connected permission failure and executable repair instruction", () => {
+    const detail = `${"response preamble ".repeat(20)}HTTP 403: project.read permission denied`;
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M7")!.run({ targetDir: "/fixture", env: { connected: true, dynamic: false, llm: false }, supabaseRef: "project", exists: () => true, exec: (_command, args) => args.includes("perf-scan") ? { ok: false, output: detail } : { ok: true, output: "loaded 4 source files (4 product source, 0 config, 0 test/story) from /fixture" } });
+    const row = (Array.isArray(result) ? result[0] : result) as Examined;
+    expect(row.reason).toContain(detail);
+    expect(row.reason).toContain("falsifier: rerun pnpm perf-scan project");
+  });
+
+  it("links each final disambiguated finding ID to its exact owning receipts through delivery", async () => {
+    const f = fixture();
+    const scope = { ...f.scopes[2]!, tier: "trend", surface: "history", wholeModule: false };
+    const different = { ...finding("M3-BASE", "M3"), evidence: "Different specialist body" };
+    f.scopes.push(scope);
+    f.passes.push({ ...f.passes[2]!, scope, result: { kind: "examined", unitsExamined: 4, scope: "trend files", detail: "Trend", findings: [different, different] } });
+    f.write();
+    const json = join(f.root, "collision.json");
+    await deliverAuditReplay({ target: f.target, bundle: f.bundle, findingsOut: json });
+    const doc = JSON.parse(readFileSync(json, "utf8"));
+    for (const id of ["M3-BASE", "M3-BASE#2"]) expect(doc.findings.filter((row: Finding) => row.id === id)).toHaveLength(1);
+    const owner = doc.auditEvidence.findingOwners.find((row: { id: string }) => row.id === "M3-BASE#2");
+    expect(owner.receipts).toHaveLength(1);
+    expect(doc.auditEvidence.current.find((row: { id: string }) => row.id === owner.receipts[0]).scope.tier).toBe("trend");
+    expect(owner.rawArtifacts).toHaveLength(1);
+    expect(doc.conservation.ok).toBe(true); expect(doc.conservation.deduped).toBe(1);
   });
 });

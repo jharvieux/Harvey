@@ -649,7 +649,8 @@ export async function renderReport(data, { htmlPath, pdfPath, screenshotPath } =
     await context.route("**/*", (route) => route.abort());
     const page = await context.newPage();
     await page.setContent(html, { waitUntil: "load" });
-    await page.locator("details.linked-findings").evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
+    // PDF has no disclosure controls. Include every rolled-up location, not only linked cards.
+    await page.locator("details").evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
     if (pdfPath) await page.pdf({
       path: pdfPath, format: "A4", printBackground: true,
       margin: { top: "0", bottom: "26px", left: "0", right: "0" },

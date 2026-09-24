@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv } from "./audit-coverage.js";
 import { MAX_PASS_AGE_MS } from "./audit-pass-artifact.js";
 import { runAudit, toOutcome, type ModuleRunner, type ProbeReport, type ProbeResult } from "./audit-runner.js";
 import type { ReportMeta, TestQuality } from "./findings.js";
+import { readEntriesLstatSafe } from "./fs-walk.js";
 
 /** Scope identity is independent of a pass's display name. One surface never replaces another. */
 export interface AuditEvidenceScope {
@@ -103,7 +104,7 @@ function treeDigest(root: string, paths = ["."]): string {
       throw new Error(`Replay requires a materialized source snapshot; symlink: ${rel} -> ${readlinkSync(path)}`);
     }
     if (stat.isDirectory()) {
-      for (const name of readdirSync(path).sort()) {
+      for (const { name } of readEntriesLstatSafe(path).sort((a, b) => a.name.localeCompare(b.name))) {
         if ([".git", "node_modules", ".pnpm-store"].includes(name)) continue;
         walk(join(path, name));
       }
@@ -265,7 +266,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
     if (!manifest.scopes.some((scope) => scope.module === module)) missing.push({ module, workspace: ".", tier: "unrecorded", surface: "module", wholeModule: false });
   }
   const testQualityByScope: AuditEvidenceReconciliation["testQualityByScope"] = [];
-  const findingOwners = new Map<string, AuditEvidenceReconciliation["findingOwners"][number]>();
+  const findingSources: AuditEvidenceReceipt[] = [];
   const runners: ModuleRunner[] = AUDIT_MODULES.map((module) => ({
     module, producers: [], typed: true,
     run: (): ProbeResult[] => {
@@ -278,13 +279,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
           const outcome = "kind" in receipt.result ? toOutcome(receipt.result) : receipt.result;
           if (outcome.status === "requires-live-run") return [];
           if (outcome.testQuality) testQualityByScope.push({ scope: receipt.scope, receipt: receipt.id, testQuality: outcome.testQuality });
-          for (const finding of outcome.findings ?? []) {
-            const id = workspace === "." ? finding.id : `${finding.id}@${workspace}`;
-            const owner = findingOwners.get(id) ?? { id, receipts: [], rawArtifacts: [] };
-            if (!owner.receipts.includes(receipt.id)) owner.receipts.push(receipt.id);
-            owner.rawArtifacts.push(...receipt.rawArtifacts);
-            findingOwners.set(id, owner);
-          }
+          findingSources.push(...(outcome.findings ?? []).map(() => receipt));
           return outcome.findings ?? [];
         });
         const outcomes = selected.map((receipt) => ({ receipt, outcome: "kind" in receipt.result ? toOutcome(receipt.result) : receipt.result }));
@@ -314,6 +309,17 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
   }));
   const env: EngagementEnv = { connected: false, dynamic: false, llm: false };
   const result = runAudit(runners, { targetDir: target, env, exists: existsSync, exec: () => { throw new Error("Replay cannot execute commands"); } });
+  // runAudit preserves production order while namespacing and disambiguating IDs. Associate
+  // receipts with that final sequence, so colliding bodies retain their own raw evidence.
+  if (result.findings.length !== findingSources.length) throw new Error("Replay finding ownership diverged from the produced union");
+  const findingOwners = new Map<string, AuditEvidenceReconciliation["findingOwners"][number]>();
+  result.findings.forEach((finding, index) => {
+    const receipt = findingSources[index]!;
+    const owner = findingOwners.get(finding.id) ?? { id: finding.id, receipts: [], rawArtifacts: [] };
+    if (!owner.receipts.includes(receipt.id)) owner.receipts.push(receipt.id);
+    for (const raw of receipt.rawArtifacts) if (!owner.rawArtifacts.some((prior) => prior.path === raw.path && prior.sha256 === raw.sha256)) owner.rawArtifacts.push(raw);
+    findingOwners.set(finding.id, owner);
+  });
   const evidence: AuditEvidenceReconciliation = { binding: manifest.binding, current, history, missing, findingOwners: [...findingOwners.values()], testQualityByScope };
   return { result, evidence, meta: manifest.meta, sbom: manifest.sbom ? JSON.parse(readRaw(dir, manifest.sbom).toString("utf8")) as unknown : undefined };
 }
