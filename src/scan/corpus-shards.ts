@@ -42,7 +42,7 @@ export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
 };
 
 // An unmeasured target still receives a positive estimate and an owner. Its first hosted elapsed
-// row must replace this fallback; the fallback cannot prove that a newly expanded population fits.
+// row must replace this fallback before the expanded population is considered budgeted.
 export const DEFAULT_SCAN_SECONDS = 120;
 
 // Hosted scoring uses four jobs on every full-population event. Local all-target runs retain
