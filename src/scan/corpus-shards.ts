@@ -12,52 +12,49 @@
 
 // Per-target scan cost in SECONDS.
 //
-// PROVENANCE: re-measured on the pinned 1.173 toolchain from pull-request run 32578027739
-// (2026-08-22), producer jobs 97043194001/97043193929/97043193919. The integer seconds below are
-// the per-target elapsed rows emitted by corpus-drift.ts. Shard 3 hit its unchanged 30-minute hard
-// timeout after starting documenso, so its three omitted rows come from prior complete exact-version
-// run 32576123221, independent replay job 97038691019: conservative ceiling seconds between its
-// exact target boundary timestamps (documenso 493s, supabase-security-labs 65s, effective 70s).
-// These three are deliberately partition hints from the replay surface, not producer wall-time
-// claims, and should be replaced after the next complete four-shard producer run.
+// PROVENANCE: maximum of each target's elapsed row in pinned-toolchain PR run 35964551348 and
+// main run 35968096776 (2026-09-24). These are wall-clock target durations, not the sum of
+// overlapping PHASE timers. Both runs used fresh mechanical execution and restored dependency
+// preparation stores; a changed partition still needs hosted cold-store acceptance.
 //
 // These are a PARTITIONING HINT, not a claim about any future run — clone times, runner class and
-// upstream tool versions all move them. Nothing is scored against them and no gate reads them; the
-// only consequence of a stale weight is a less even split. `--shard` prints each target's ACTUAL
-// elapsed seconds so a real run always re-measures what this table only estimates.
-//
-// n=1. Carbon remains indivisible at 1409s. Four shards keep it alone and distribute the remaining
-// 2898 measured seconds without putting another target on that critical path.
+// upstream tool versions all move them. No baseline is scored against them. A stale weight can
+// exhaust a runner's deadline, so `--shard` prints each target's ACTUAL elapsed seconds and hosted
+// acceptance must include setup, cache publication, scorecards, liveness and runner teardown.
 export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
-  carbon: 1409,
-  documenso: 493,
-  "inbox-zero": 584,
-  "tanstack-com": 265,
-  ghostfolio: 212,
-  rallly: 206,
-  cravab: 171,
-  "flori-web": 167,
-  proposit: 121,
-  boxyhq: 116,
-  "saas-lite": 94,
-  "mvp-boilerplate": 91,
-  "multi-tenant-starter": 86,
-  "launch-mvp": 79,
-  "subscription-payments": 78,
-  effective: 70,
-  "supabase-security-labs": 65,
+  carbon: 2057,
+  documenso: 898,
+  "inbox-zero": 865,
+  "tanstack-com": 390,
+  ghostfolio: 356,
+  rallly: 410,
+  cravab: 235,
+  "flori-web": 224,
+  proposit: 149,
+  boxyhq: 159,
+  "saas-lite": 185,
+  "mvp-boilerplate": 93,
+  "multi-tenant-starter": 94,
+  "launch-mvp": 105,
+  "subscription-payments": 92,
+  effective: 96,
+  "supabase-security-labs": 71,
 };
 
-// A target added to EXTERNAL_CORPUS after the table was measured has no entry. It gets a weight at
-// the heavier end of the measured spread deliberately: under-weighting a new target concentrates it
-// with others and skews one shard long, while over-weighting only isolates it. The cost of being
-// wrong is asymmetric, so the default leans to the safe side rather than to the median.
+// An unmeasured target still receives a positive estimate and an owner. Its first hosted elapsed
+// row must replace this fallback; the fallback cannot prove that a newly expanded population fits.
 export const DEFAULT_SCAN_SECONDS = 120;
 
 // Hosted scoring uses four jobs on every full-population event. Local all-target runs retain
 // the same canonical ownership: a target always reads and writes one of these four roots.
 export const CORPUS_CACHE_SHARD_COUNT = 4;
-export const CORPUS_CACHE_PARTITION_POLICY = "corpus-lpt-four-owner-v1";
+export const CORPUS_CACHE_PARTITION_POLICY = "corpus-capacity-lpt-four-owner-v2";
+
+// These are the existing whole-job limits, not a request to extend them. Keep setup, transport
+// verification/publication, scorecard delivery and runner teardown out of the target capacity.
+// The workflow contract checks the actual YAML limits; the scope receipt binds both inputs.
+export const CORPUS_SHARD_JOB_BUDGET_SECONDS = [45 * 60, 35 * 60, 30 * 60, 30 * 60] as const;
+export const CORPUS_SHARD_OVERHEAD_SECONDS = 5 * 60;
 
 /** POSIX-style byte ordering for identities shared across runners and locales. */
 export const compareUtf8Bytes = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
@@ -70,13 +67,11 @@ const weightFrom = (
 export const weightOf = (slug: string): number => weightFrom(slug, TARGET_SCAN_SECONDS);
 
 /**
- * Longest-processing-time-first partition: sort by descending cost, then repeatedly assign the next
- * target to the shard that is currently lightest. Ties break on slug so the split is deterministic —
- * a given corpus and shard count always produce the same assignment, which is what lets a shard be
- * addressed by index from a CI matrix without any coordination between runners.
- *
- * LPT rather than round-robin because the corpus is heavily skewed: round-robin over a list whose
- * largest element is 44% of the total pairs that element with others and wastes the parallelism.
+ * Longest-processing-time-first partition: sort by descending cost, then assign each target to
+ * the least projected utilization of the available job time. The canonical four owners have
+ * unequal deadlines; balancing raw seconds stranded capacity on the longer jobs while a 30m
+ * owner timed out during publication. Other local shard counts retain equal-capacity LPT.
+ * UTF-8 slug order and lower-namespace ties keep every producer/replay/cache owner deterministic.
  */
 export function partitionTargets(
   slugs: readonly string[],
@@ -86,14 +81,22 @@ export function partitionTargets(
   if (!Number.isInteger(shardCount) || shardCount < 1) {
     throw new Error(`shard count must be a positive integer, got ${shardCount}`);
   }
-  const shards = Array.from({ length: shardCount }, () => ({ slugs: [] as string[], load: 0 }));
+  const shards = Array.from({ length: shardCount }, (_, index) => ({
+    slugs: [] as string[],
+    load: 0,
+    capacity: shardCount === CORPUS_CACHE_SHARD_COUNT
+      ? CORPUS_SHARD_JOB_BUDGET_SECONDS[index]! - CORPUS_SHARD_OVERHEAD_SECONDS
+      : 1,
+  }));
   const selectedWeight = weights === TARGET_SCAN_SECONDS ? weightOf : (slug: string): number => weightFrom(slug, weights);
 
   const ordered = [...slugs].sort((a, b) => selectedWeight(b) - selectedWeight(a) || compareUtf8Bytes(a, b));
   for (const slug of ordered) {
-    const lightest = shards.reduce((a, b) => (b.load < a.load ? b : a));
+    const weight = selectedWeight(slug);
+    const lightest = shards.reduce((a, b) =>
+      (b.load + weight) * a.capacity < (a.load + weight) * b.capacity ? b : a);
     lightest.slugs.push(slug);
-    lightest.load += selectedWeight(slug);
+    lightest.load += weight;
   }
   return shards.map((s) => s.slugs);
 }

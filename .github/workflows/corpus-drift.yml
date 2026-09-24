@@ -209,12 +209,11 @@ jobs:
   # namespace and publish uniquely named parts; the required aggregate validates the whole target
   # population before publishing canonical scorecard and live observation artifacts.
   #
-  # Four, re-measured on pinned-toolchain runs 32578027739/32576123221: Carbon is an indivisible
-  # 1409s, while the old three-way assignment put 1454 measured seconds plus setup on one runner and
-  # hit the unchanged 30-minute timeout during Documenso. Four keeps Carbon alone and all other
-  # measured shard loads below 990s. The split itself lives in src/scan/corpus-shards.ts, which
-  # asserts it is exhaustive and disjoint — a target silently dropped from the partition would stop
-  # being scored while every shard still exited 0.
+  # The canonical partition in src/scan/corpus-shards.ts uses measured target elapsed time and
+  # these existing unequal job limits, reserving five minutes for setup and evidence publication.
+  # Equal-load partitioning left spare time on the longer jobs while a 30m owner timed out after
+  # successful scoring (#2171). Ownership receipts bind the capacities, reserve and partition;
+  # producer, replay and local cache routing all derive the same exhaustive, disjoint owners.
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs

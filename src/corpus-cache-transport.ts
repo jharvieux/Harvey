@@ -7,6 +7,8 @@ import {
   compareUtf8Bytes,
   CORPUS_CACHE_PARTITION_POLICY,
   CORPUS_CACHE_SHARD_COUNT,
+  CORPUS_SHARD_JOB_BUDGET_SECONDS,
+  CORPUS_SHARD_OVERHEAD_SECONDS,
   DEFAULT_SCAN_SECONDS,
   partitionTargets,
   TARGET_SCAN_SECONDS,
@@ -30,6 +32,7 @@ export interface CorpusCacheOwnershipScope {
   shardCount: typeof CORPUS_CACHE_SHARD_COUNT;
   namespace: number;
   defaultWeightSeconds: number;
+  executionBudgets: Array<{ namespace: number; jobSeconds: number; reservedSeconds: number }>;
   weights: Array<{ slug: string; seconds: number }>;
   partitions: Array<{ namespace: number; targets: string[] }>;
   population: Array<{
@@ -129,6 +132,11 @@ export function corpusCacheOwnershipScope(
     shardCount: CORPUS_CACHE_SHARD_COUNT,
     namespace,
     defaultWeightSeconds: DEFAULT_SCAN_SECONDS,
+    executionBudgets: CORPUS_SHARD_JOB_BUDGET_SECONDS.map((jobSeconds, index) => ({
+      namespace: index + 1,
+      jobSeconds,
+      reservedSeconds: CORPUS_SHARD_OVERHEAD_SECONDS,
+    })),
     weights: Object.entries(weights)
       .sort(([a], [b]) => compareUtf8Bytes(a, b))
       .map(([slug, seconds]) => ({ slug, seconds })),

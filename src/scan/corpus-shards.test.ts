@@ -9,6 +9,8 @@ import {
   corpusCacheNamespaceForTarget,
   CORPUS_CACHE_PARTITION_POLICY,
   CORPUS_CACHE_SHARD_COUNT,
+  CORPUS_SHARD_JOB_BUDGET_SECONDS,
+  CORPUS_SHARD_OVERHEAD_SECONDS,
   DEFAULT_SCAN_SECONDS,
   partitionTargets,
   shardTargets,
@@ -21,18 +23,18 @@ const SLUGS = EXTERNAL_CORPUS.map((t) => t.slug);
 const load = (shard: string[]): number => shard.reduce((n, s) => n + weightOf(s), 0);
 const WORKFLOW_TEXT = readFileSync(new URL("../../.github/workflows/corpus-drift.yml", import.meta.url), "utf8");
 const FOUR_SHARD_ASSIGNMENT = [
-  ["carbon"],
-  ["inbox-zero", "flori-web", "saas-lite", "launch-mvp", "supabase-security-labs"],
-  ["documenso", "cravab", "proposit", "mvp-boilerplate", "subscription-payments"],
-  ["tanstack-com", "ghostfolio", "rallly", "boxyhq", "multi-tenant-starter", "effective"],
+  ["carbon", "mvp-boilerplate"],
+  ["documenso", "ghostfolio", "saas-lite", "launch-mvp", "subscription-payments"],
+  ["inbox-zero", "flori-web", "proposit", "multi-tenant-starter"],
+  ["rallly", "tanstack-com", "cravab", "boxyhq", "effective", "supabase-security-labs"],
 ];
-const FOUR_SHARD_LOADS = [1409, 989, 954, 955];
+const FOUR_SHARD_LOADS = [2150, 1636, 1332, 1361];
 
 const EXPECTED_WEIGHTS: Readonly<Record<string, number>> = {
-  carbon: 1409, documenso: 493, "inbox-zero": 584, "tanstack-com": 265,
-  ghostfolio: 212, rallly: 206, cravab: 171, "flori-web": 167, proposit: 121,
-  boxyhq: 116, "saas-lite": 94, "mvp-boilerplate": 91, "multi-tenant-starter": 86,
-  "launch-mvp": 79, "subscription-payments": 78, effective: 70, "supabase-security-labs": 65,
+  carbon: 2057, documenso: 898, "inbox-zero": 865, "tanstack-com": 390,
+  ghostfolio: 356, rallly: 410, cravab: 235, "flori-web": 224, proposit: 149,
+  boxyhq: 159, "saas-lite": 185, "mvp-boilerplate": 93, "multi-tenant-starter": 94,
+  "launch-mvp": 105, "subscription-payments": 92, effective: 96, "supabase-security-labs": 71,
 };
 
 interface WorkflowStep {
@@ -78,6 +80,7 @@ function contractErrors(
     const expectedTimeouts = snapshot ? [45, 35, 30, 30] : [120, 120, 120, 120];
     for (const [index, expectedTimeout] of expectedTimeouts.entries()) {
       if (eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1) !== expectedTimeout) errors.push(`${event}: shard ${index + 1} timeout`);
+      if (snapshot && CORPUS_SHARD_JOB_BUDGET_SECONDS[index] !== expectedTimeout * 60) errors.push(`${event}: shard ${index + 1} planned budget`);
     }
   }
   if (JSON.stringify(workflow.jobs["current-replay"].strategy.matrix.shard) !== "[1,2,3,4]") errors.push("post-merge replay matrix is not fixed at four");
@@ -118,21 +121,24 @@ describe("corpus shard partition (#1586)", () => {
   });
 
   it("gives every target one fixed four-way cache owner independent of execution shard count", () => {
-    expect(CORPUS_CACHE_PARTITION_POLICY).toBe("corpus-lpt-four-owner-v1");
+    expect(CORPUS_CACHE_PARTITION_POLICY).toBe("corpus-capacity-lpt-four-owner-v2");
     expect(CORPUS_CACHE_SHARD_COUNT).toBe(4);
     const owners = FOUR_SHARD_ASSIGNMENT.flatMap((members, index) => members.map((slug) => [slug, index + 1] as const));
     expect(owners.map(([slug]) => [slug, corpusCacheNamespaceForTarget(SLUGS, slug)])).toEqual(owners);
     expect(() => corpusCacheNamespaceForTarget(SLUGS, "not-in-corpus")).toThrow("has no canonical owner");
   });
 
-  // The point of sharding is wall clock, so this asserts the OUTCOME rather than the mechanism: at
-  // 4 shards the longest shard must be the single heaviest target, i.e. the split is already
-  // optimal and bounded only by an indivisible target. If a future corpus change makes the split
-  // worse than that floor, this fails and the shard count wants revisiting.
-  it("at 4 shards the longest shard is bounded by the heaviest single target", () => {
-    const heaviest = Math.max(...SLUGS.map(weightOf));
-    const longest = Math.max(...partitionTargets(SLUGS, 4).map(load));
-    expect(longest).toBe(heaviest);
+  it("fits a divisible workload into unequal deadlines while preserving publication time", () => {
+    const slugs = Array.from({ length: 24 }, (_, index) => `target-${String(index).padStart(2, "0")}`);
+    const weights = Object.fromEntries(slugs.map((slug) => [slug, 300]));
+    const assigned = partitionTargets(slugs, 4, weights);
+    expect(CORPUS_SHARD_OVERHEAD_SECONDS).toBe(300);
+    expect(assigned.map((members) => members.length * 300)).toEqual([2400, 1800, 1500, 1500]);
+    for (const [index, members] of assigned.entries()) {
+      expect(members.length * 300 + CORPUS_SHARD_OVERHEAD_SECONDS).toBeLessThanOrEqual(CORPUS_SHARD_JOB_BUDGET_SECONDS[index]!);
+    }
+    // Equal deadlines outside the canonical hosted topology retain ordinary LPT.
+    expect(partitionTargets(slugs, 3, weights).map((members) => members.length)).toEqual([8, 8, 8]);
   });
 
   it("beats the serial run it replaces", () => {
@@ -199,7 +205,7 @@ describe("corpus workflow four-shard production contract", () => {
     for (const event of ["push", "pull_request", "merge_group"]) {
       for (const [index, members] of partitionTargets(SLUGS, 4).entries()) {
         const minutes = Number(eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1));
-        expect(load(members) + 5 * 60).toBeLessThan(minutes * 60);
+        expect(load(members) + CORPUS_SHARD_OVERHEAD_SECONDS).toBeLessThan(minutes * 60);
       }
     }
     for (const event of ["schedule", "workflow_dispatch"]) {
