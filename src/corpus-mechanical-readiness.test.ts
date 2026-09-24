@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -25,10 +25,37 @@ import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 const digest = "a".repeat(64);
-const packBody = Buffer.from("x");
+const packBody = Buffer.from("rules:\n  - id: fixture-rule\n    message: fixture\n    severity: WARNING\n    languages: [typescript]\n    pattern: $X\n");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
 const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
+const originalPath = process.env.PATH;
+const validatorRoot = mkdtempSync(join(tmpdir(), "harvey-readiness-semgrep-validator-"));
+const validator = join(validatorRoot, "semgrep");
+writeFileSync(validator, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version --disable-version-check") { process.stdout.write("1.173.0\\n"); process.exit(0); }
+if (args[0] !== "scan" || !args.includes("--strict") || !args.includes("--json") || !args.includes("--disable-version-check") || args[args.indexOf("--metrics") + 1] !== "off") process.exit(91);
+const target = args.at(-1);
+if (fs.realpathSync(target) !== fs.realpathSync(process.cwd()) || fs.readdirSync(target).length !== 0) process.exit(93);
+const files = args.flatMap((arg, index) => arg === "--config" ? [args[index + 1]] : []);
+if (files.length !== 6) process.exit(92);
+for (const file of files) {
+  const body = fs.readFileSync(file, "utf8");
+  for (const field of ["id", "message", "severity", "languages"]) {
+    if (!new RegExp("^\\\\s*[- ]*" + field + ":", "m").test(body)) process.exit(2);
+  }
+  if (!/^\\s*(pattern|mode):/m.test(body)) process.exit(2);
+}
+`);
+chmodSync(validator, 0o755);
+
+beforeAll(() => { process.env.PATH = `${validatorRoot}:${originalPath ?? ""}`; });
+afterAll(() => {
+  process.env.PATH = originalPath;
+  rmSync(validatorRoot, { recursive: true, force: true });
+});
 const mixedRun = JSON.parse(readFileSync(new URL("./__fixtures__/current-mechanical-run-32334325227.json", import.meta.url), "utf8")) as {
   runId: number;
   commonRuntime: CurrentMechanicalExecutionArtifact["runtime"];
@@ -107,7 +134,7 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
     options: { skipNetworkChecks: true, skipBundleScan: true, advisoryMode: "snapshot", phaseCache: side === "hosted-producer" ? "hosted-content-addressed" : "off", bundleDir: null, handrolledIndicators: false, authGuards: [] },
     targetPinsSha256: currentTargetPinsSha256([target]),
     allTargets: [target],
-    semgrepRegistry: { schema: 1, aggregateSha256: packAggregate, files: Array.from({ length: 6 }, (_, ordinal) => ({ ordinal, name: `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`, bytes: 1, sha256: packDigest, bodyBase64: packBody.toString("base64") })) },
+    semgrepRegistry: { schema: 1, aggregateSha256: packAggregate, files: Array.from({ length: 6 }, (_, ordinal) => ({ ordinal, name: `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`, bytes: packBody.byteLength, sha256: packDigest, bodyBase64: packBody.toString("base64") })) },
     runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1" },
     shard: { index: 1, count: 1 },
     targets: {

@@ -697,6 +697,36 @@ describe("effectiveness producer inventory (#1910)", () => {
     expectRestoredBaseline();
   });
 
+  it("rejects correlated deletion of venue calls and their family-binding copies", () => {
+    const baseline = freshInventory();
+    const intactBytes = serializeEffectivenessInventory(baseline);
+    const removedVenueReferences = baseline.venues.reduce((sum, venue) => sum + venue.callReceiptIds.length, 0);
+    const removedBindingReferences = baseline.receipt.familyCoverage
+      .flatMap((receipt) => receipt.scoredBindings)
+      .reduce((sum, binding) => sum + binding.callReceiptIds.length, 0);
+    expect(removedVenueReferences).toBeGreaterThan(0);
+    expect(removedBindingReferences).toBeGreaterThan(0);
+
+    const planted: EffectivenessInventory = {
+      ...baseline,
+      venues: baseline.venues.map((venue) => ({ ...venue, callReceiptIds: [] })),
+      receipt: {
+        ...baseline.receipt,
+        familyCoverage: baseline.receipt.familyCoverage.map((receipt) => ({
+          ...receipt,
+          scoredBindings: receipt.scoredBindings.map((binding) => ({ ...binding, callReceiptIds: [] })),
+        })),
+      },
+    };
+    const problems = validateEffectivenessInventory(planted);
+    expect(problems.filter((problem) => problem.includes("static source reachability call receipts do not close"))).toHaveLength(baseline.venues.length);
+    expect(problems.some((problem) => problem.includes("scorer call path does not close"))).toBe(false);
+    expect(problems.every((problem) => problem.includes("runtime client delivery requires producer execution receipts"))).toBe(true);
+
+    expect(validateEffectivenessInventory(baseline)).toEqual([]);
+    expect(serializeEffectivenessInventory(baseline)).toBe(intactBytes);
+  });
+
   it("fails an incomplete structured exemption and passes when restored", () => {
     const baseline = freshInventory();
     const id = "exemption:m2-live-score";

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,23 @@ function fixture(rootBody: string): string {
   writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id: string; taxonomy: string }\nexport function produce(): Finding[] { return [] }\n");
   writeFileSync(join(root, "src", "root.ts"), rootBody);
   return root;
+}
+
+function nodeCommandFixture(args: readonly string[]): string {
+  const root = fixture("export {};\n");
+  symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+  mkdirSync(join(root, "src", "cli"));
+  writeFileSync(join(root, "src", "cli", "run-audit.ts"), "export {};\n");
+  writeFileSync(join(root, "src", "preload.ts"), "export {};\n");
+  writeFileSync(join(root, "preload.cjs"), "module.exports = {};\n");
+  writeFileSync(join(root, "src", "child.ts"), 'import { produce } from "./producer.ts"; produce(); console.log("PRODUCER_EXECUTED");\n');
+  writeFileSync(join(root, "src", "venue.ts"), `import { execFileSync } from "node:child_process"; execFileSync("node", ${JSON.stringify(args)});\n`);
+  return root;
+}
+
+function runNode(root: string, args: readonly string[]): { status: number | null; executed: boolean } {
+  const run = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", timeout: 10_000 });
+  return { status: run.status, executed: run.stdout.includes("PRODUCER_EXECUTED") };
 }
 
 const implementation = { producerId: "one", file: "src/producer.ts", symbol: "produce", kind: "function" as const, deliveryKind: "registry-dispatch" as const };
@@ -77,6 +95,66 @@ describe("schema-v3 route graph", () => {
     expect(batch.venues.map((graph) => graph.routes.length)).toEqual([1, 0]);
     expect(batch.venues[0]!.calls.map((call) => call.id)).toContain("command:src/invoke.ts->src/child.ts");
     expect(batch.venues[1]!.calls.map((call) => call.id)).not.toContain("command:src/invoke.ts->src/child.ts");
+  });
+
+  it.each([
+    { name: "separate import", args: ["--import", "tsx", "src/child.ts"] },
+    { name: "equals import", args: ["--import=tsx", "src/child.ts"] },
+    { name: "source preload", args: ["--import", "./src/preload.ts", "src/child.ts"] },
+    { name: "equals source preload", args: ["--import=./src/preload.ts", "src/child.ts"] },
+    { name: "short require", args: ["-r", "./preload.cjs", "src/child.ts"] },
+    { name: "long require", args: ["--require", "./preload.cjs", "src/child.ts"] },
+    { name: "equals long require", args: ["--require=./preload.cjs", "src/child.ts"] },
+    { name: "short condition", args: ["-C", "development", "src/child.ts"] },
+    { name: "separate condition", args: ["--conditions", "development", "src/child.ts"] },
+    { name: "equals condition", args: ["--conditions=development", "src/child.ts"] },
+    { name: "boolean flag", args: ["--no-warnings", "src/child.ts"] },
+    { name: "second boolean flag", args: ["--trace-warnings", "src/child.ts"] },
+    { name: "mixed supported options", args: ["--conditions", "development", "--import", "tsx", "--no-warnings", "src/child.ts"] },
+    { name: "option terminator", args: ["--", "src/child.ts"] },
+    { name: "script argument after entry", args: ["src/child.ts", "--harvey-script-flag"] },
+  ])("preserves execution and invocation provenance for $name", ({ args }) => {
+    const root = nodeCommandFixture(args);
+    expect(runNode(root, args)).toEqual({ status: 0, executed: true });
+    const single = discoverEffectivenessRouteGraph(root, [implementation], ["src/venue.ts"], { detectUnknown: false });
+    const graph = discoverEffectivenessRouteGraphs(root, [implementation], ["src/venue.ts"]).venues[0]!;
+    expect(graph).toEqual(single);
+    expect(graph.calls.map((call) => call.id)).toContain("command:src/venue.ts->src/child.ts");
+    expect(graph.routes).toEqual([
+      expect.objectContaining({
+        producerId: "one",
+        rootId: "src/venue.ts",
+        callReceiptIds: expect.arrayContaining([
+          "command:src/venue.ts->src/child.ts",
+          "call:src/child.ts->src/producer.ts#produce",
+        ]),
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "missing import value", args: ["--import"] },
+    { name: "missing import value before terminator", args: ["--import", "--", "src/child.ts"] },
+    { name: "missing import value before flag", args: ["--import", "--no-warnings", "src/child.ts"] },
+    { name: "empty equals import", args: ["--import=", "src/child.ts"] },
+    { name: "attached short require", args: ["-r./preload.cjs", "src/child.ts"] },
+    { name: "attached short condition", args: ["-Cdevelopment", "src/child.ts"] },
+    { name: "eval mode", args: ["--eval", "console.log('not a file')", "src/child.ts"] },
+    { name: "attached eval mode", args: ["-econsole.log('not a file')", "src/child.ts"] },
+    { name: "check-only mode", args: ["--check", "src/child.ts"] },
+    { name: "help mode", args: ["--help", "src/child.ts"] },
+    { name: "version mode", args: ["--version", "src/child.ts"] },
+    { name: "unknown option", args: ["--harvey-unsupported-flag", "src/child.ts"] },
+    { name: "input type with file", args: ["--input-type=module", "src/child.ts"] },
+    { name: "snapshot-building mode", args: ["--experimental-sea-config=missing.json", "src/child.ts"] },
+    { name: "unsupported extension", args: ["src/child.txt"] },
+  ])("does not claim execution for $name", ({ args }) => {
+    const root = nodeCommandFixture(args);
+    writeFileSync(join(root, "src", "child.txt"), "not executable source\n");
+    expect(runNode(root, args).executed).toBe(false);
+    const graph = discoverEffectivenessRouteGraphs(root, [implementation], ["src/venue.ts"]).venues[0]!;
+    expect(graph.calls).toEqual([]);
+    expect(graph.routes).toEqual([]);
   });
 
   it("keeps compiler-resolved package imports in a venue's executor scope", () => {

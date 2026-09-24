@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { buildImportGraph, collectPathAliases, detectAppRouterFindings, resolveImport, type SourceInput } from "./app-router.js";
 import { parse } from "./common.js";
@@ -940,6 +941,24 @@ const SSR_API = "M9 — SSR-only API misuse";
 // hydration-mismatches. The FP boundary is the two standard safe idioms: a useEffect/handler
 // (deferred, browser-only) and a `typeof window` guard.
 describe("SSR-only browser API misuse (#381)", () => {
+  it("proves unresolved optional and direct window access throw without browser globals (#2108)", () => {
+    const errorName = (source: string): string | undefined => {
+      try {
+        runInNewContext(source);
+      } catch (error) {
+        return error instanceof Error || (typeof error === "object" && error !== null && "name" in error)
+          ? String(error.name)
+          : undefined;
+      }
+      return undefined;
+    };
+    expect(errorName("window?.innerWidth")).toBe("ReferenceError");
+    expect(errorName("window.innerWidth")).toBe("ReferenceError");
+    expect(runInNewContext('typeof window === "undefined" ? undefined : window.innerWidth')).toBeUndefined();
+    expect(runInNewContext("globalThis.window?.innerWidth")).toBeUndefined();
+    expect(runInNewContext("const window = undefined; window?.innerWidth")).toBeUndefined();
+  });
+
   it("flags a Server Component that reads window.innerWidth directly in its render body", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"));
     const hits = findings.filter((f) => f.taxonomy === SSR_API);
@@ -1004,20 +1023,26 @@ describe("SSR-only browser API misuse (#381)", () => {
     expect(taxonomies(findings)).toContain(SSR_API);
   });
 
-  // #964: optional-chaining a browser global (`window?.x`) is the author's explicit absent-guard —
-  // even in a `.tsx` component render body it must not fire.
-  it("does not flag an optional-chained browser-global read (`window?.x`) in a component body", () => {
+  it("flags an optional-chained unresolved browser global in a component render body (#2108)", () => {
     const findings = detectAppRouterFindings([
       { path: "app/screen.tsx", text: `export default function Screen() {\n  const w = window?.innerWidth ?? 0;\n  return <div>{w}</div>;\n}\n` },
     ]);
-    expect(taxonomies(findings)).not.toContain(SSR_API);
+    const hits = findings.filter((finding) => finding.taxonomy === SSR_API);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("window?.innerWidth");
   });
 
-  // #964: an inner unguarded read (`window.ts`) is still safe when an enclosing `if (window?.ts)`
-  // optional-chaining guard gates it.
-  it("does not flag a read gated by an enclosing `if (window?.x)` optional-chaining guard", () => {
+  it("flags an optional-chained browser-global condition because it also evaluates on the server (#2108)", () => {
     const findings = detectAppRouterFindings([
       { path: "app/widget.tsx", text: `export default function Widget() {\n  if (window?.ts) {\n    return <div>{window.ts.version}</div>;\n  }\n  return null;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SSR_API);
+  });
+
+  it("does not flag an optional chain on globalThis.window or a declared nullable binding (#2108)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/global-this.tsx", text: `export default function GlobalThisScreen() {\n  const w = globalThis.window?.innerWidth ?? 0;\n  return <div>{w}</div>;\n}\n` },
+      { path: "app/declared.tsx", text: `const window: { innerWidth: number } | undefined = undefined;\nexport default function DeclaredScreen() {\n  return <div>{window?.innerWidth ?? 0}</div>;\n}\n` },
     ]);
     expect(taxonomies(findings)).not.toContain(SSR_API);
   });

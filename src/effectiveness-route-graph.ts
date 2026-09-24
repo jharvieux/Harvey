@@ -12,6 +12,32 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] as cons
 const byText = (a: string, b: string): number => a.localeCompare(b);
 const slash = (value: string): string => value.split(sep).join("/");
 
+// Command discovery is deliberately narrower than Node's complete, versioned CLI.
+// Every accepted form below has an execution-backed route test. Unknown options
+// are rejected before interpreting a later source argument as an entrypoint.
+const NODE_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-r",
+  "--conditions",
+  "--import",
+  "--require",
+]);
+
+const NODE_ENTRY_FLAGS = new Set(["--no-warnings", "--trace-warnings"]);
+
+// These modes consume, validate, or print without executing a later file as the
+// program entrypoint. Their operands and trailing arguments are never routes.
+const NODE_NON_ENTRY_MODES = [
+  "-c", "--check",
+  "-e", "--eval",
+  "-h", "--help",
+  "-p", "--print",
+  "-v", "--version",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+] as const;
+
 function repoRelative(root: string, file: string): string | undefined {
   const rel = slash(relative(root, file));
   return rel === "" || rel === ".." || rel.startsWith("../") ? undefined : rel;
@@ -184,6 +210,37 @@ function literalArray(checker: ts.TypeChecker, expression: ts.Expression): strin
   return result;
 }
 
+function nodeEntrypoint(args: readonly string[]): string | undefined {
+  let parseOptions = true;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (parseOptions && argument === "--") {
+      parseOptions = false;
+      continue;
+    }
+    if (parseOptions) {
+      if (NODE_NON_ENTRY_MODES.some((option) => argument === option
+        || argument.startsWith(`${option}=`)
+        || (option.length === 2 && argument.startsWith(option) && argument.length > 2))) return undefined;
+      const exactValueOption = NODE_OPTIONS_WITH_VALUE.has(argument);
+      if (exactValueOption) {
+        const value = args[index + 1];
+        if (!value || value.startsWith("-")) return undefined;
+        index += 1;
+        continue;
+      }
+      if ([...NODE_OPTIONS_WITH_VALUE].some((option) => option.startsWith("--") && argument.startsWith(`${option}=`))) {
+        if (argument.endsWith("=")) return undefined;
+        continue;
+      }
+      if (NODE_ENTRY_FLAGS.has(argument)) continue;
+      if (argument.startsWith("-")) return undefined;
+    }
+    return SOURCE_EXTENSIONS.includes(extname(argument) as typeof SOURCE_EXTENSIONS[number]) ? argument : undefined;
+  }
+  return undefined;
+}
+
 function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>()): string | undefined {
   const manager = manifest.packageManager?.split("@")[0];
   const executable = slash(bin).split("/").at(-1);
@@ -198,7 +255,9 @@ function invocationTarget(root: string, manifest: PackageManifest, bin: string, 
     return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script])) : undefined;
   }
   if (executable !== "tsx" && executable !== "node") return undefined;
-  const entry = args.find((argument) => !argument.startsWith("-"));
+  const entry = executable === "node"
+    ? nodeEntrypoint(args)
+    : args.find((argument) => !argument.startsWith("-"));
   if (!entry || !SOURCE_EXTENSIONS.includes(extname(entry) as typeof SOURCE_EXTENSIONS[number])) return undefined;
   const target = resolve(root, entry);
   return repoRelative(root, target) && existsSync(target) ? target : undefined;
@@ -373,6 +432,8 @@ export interface RouteGraphImplementation extends ProducerImplementation {
 }
 
 interface EffectivenessRouteGraph {
+  /** Every source file parsed for this static reachability graph. */
+  readonly examinedFiles: readonly string[];
   readonly roots: readonly string[];
   readonly calls: readonly EffectivenessCallReceipt[];
   readonly consumers: readonly EffectivenessConsumerReceipt[];
@@ -407,6 +468,30 @@ export function discoverEffectivenessRouteGraphs(
 ): { readonly production: EffectivenessRouteGraph; readonly venues: readonly EffectivenessRouteGraph[] } {
   const production = productionRoots(root, implementations).map((file) => resolve(root, file));
   const venues = venueRoots.map((file) => [resolve(root, file)]);
+  const [productionGraph, ...venueGraphs] = discoverEffectivenessGraphs(root, implementations, [
+    { roots: production, detectUnknown: true },
+    ...venues.map((roots) => ({ roots, detectUnknown: false })),
+  ]);
+  return { production: productionGraph!, venues: venueGraphs };
+}
+
+/** Derive only scored-venue graphs for independent inventory validation. */
+export function discoverEffectivenessVenueRouteGraphs(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  venueRoots: readonly string[],
+): readonly EffectivenessRouteGraph[] {
+  return discoverEffectivenessGraphs(root, implementations, venueRoots.map((file) => ({
+    roots: [resolve(root, file)],
+    detectUnknown: false,
+  })));
+}
+
+function discoverEffectivenessGraphs(
+  root: string,
+  implementations: readonly RouteGraphImplementation[],
+  inputs: readonly { readonly roots: readonly string[]; readonly detectUnknown: boolean }[],
+): EffectivenessRouteGraph[] {
   const packagePath = join(root, "package.json");
   const manifest = existsSync(packagePath)
     ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
@@ -425,7 +510,7 @@ export function discoverEffectivenessRouteGraphs(
       program = programForSources([...reachability.files], program);
     }
   };
-  return { production: graph(production, true), venues: venues.map((roots) => graph(roots, false)) };
+  return inputs.map((input) => graph(input.roots, input.detectUnknown));
 }
 
 function routeGraphForReachability(
@@ -565,6 +650,10 @@ function routeGraphForReachability(
     }
   }
   return {
+    examinedFiles: [...reachability.files]
+      .map((file) => repoRelative(root, file))
+      .filter((file): file is string => !!file)
+      .sort(byText),
     roots: roots.map((entry) => repoRelative(root, entry)).filter((entry): entry is string => !!entry).sort(byText),
     calls: [...calls.values()].sort((a, b) => a.id.localeCompare(b.id)),
     consumers: consumers.sort((a, b) => a.id.localeCompare(b.id)),

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
@@ -11,7 +12,7 @@ import { binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalE
 import { buildMechanicalPhaseCache } from "./scan/mechanical-phase-identity.js";
 import { shardTargets } from "./scan/corpus-shards.js";
 import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
-import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt, type SemgrepPlannedExecutionReceipt } from "./scan/semgrep.js";
+import { REGISTRY_PACK_FETCH_POLICY, REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, validateRegistryPackConfigs, type SemgrepExecutionPlanReceipt, type SemgrepPlannedExecutionReceipt } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
 export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/shared-pruned-scan-root/copy-before-install/bundle-off-v3" as const;
@@ -289,6 +290,10 @@ export function semgrepPackReceipt(files: readonly string[], aggregateSha256: st
   if (!SHA256.test(aggregateSha256)) throw new Error("Semgrep registry aggregate identity is not SHA-256");
   if (files.length !== 6) throw new Error(`Semgrep registry pack contains ${files.length} files, expected 6`);
   const rows = files.map((path, ordinal) => {
+    const size = statSafe(path)?.size;
+    if (size === undefined || size > REGISTRY_PACK_FETCH_POLICY.maxResponseBytes) {
+      throw new Error(`Semgrep registry file ${ordinal} exceeds ${REGISTRY_PACK_FETCH_POLICY.maxResponseBytes} bytes`);
+    }
     const body = readFileSync(path);
     return { ordinal, name: path.split("/").pop()!, bytes: body.byteLength, sha256: sha256(body), bodyBase64: body.toString("base64") };
   });
@@ -308,6 +313,9 @@ export function validateRestoredSemgrepPackArtifact(dir: string): RestoredSemgre
   const receiptPath = join(dir, "receipt.json");
   if (!existsSync(currentPath)) throw new Error(`restored Semgrep artifact is not canonical: registry-packs/current.json is missing under ${dir}`);
   if (!existsSync(receiptPath)) throw new Error(`restored Semgrep artifact is not canonical: receipt.json is missing under ${dir}`);
+  const maximumReceiptBytes = REGISTRY_PACKS.length * (Math.ceil(REGISTRY_PACK_FETCH_POLICY.maxResponseBytes / 3) * 4 + 1_024);
+  if ((statSafe(currentPath)?.size ?? Number.POSITIVE_INFINITY) > 4_096) throw new Error("restored Semgrep artifact current.json exceeds its bounded size");
+  if ((statSafe(receiptPath)?.size ?? Number.POSITIVE_INFINITY) > maximumReceiptBytes) throw new Error("restored Semgrep artifact receipt.json exceeds its bounded size");
 
   let manifest: { schema?: unknown; identity?: unknown };
   let receipt: SemgrepPackReceipt;
@@ -510,14 +518,30 @@ function validatePack(pack: SemgrepPackReceipt, source: string): void {
   if (pack.schema !== 1 || pack.files.length !== 6) throw new Error(`${source}: Semgrep receipt is incomplete`);
   assertSha(pack.aggregateSha256, `${source}: Semgrep aggregate`);
   pack.files.forEach((file, ordinal) => {
+    const maximumBase64Length = Math.ceil(REGISTRY_PACK_FETCH_POLICY.maxResponseBytes / 3) * 4;
+    if (!Number.isInteger(file.bytes) || file.bytes <= 0 || file.bytes > REGISTRY_PACK_FETCH_POLICY.maxResponseBytes
+      || typeof file.bodyBase64 !== "string" || file.bodyBase64.length > maximumBase64Length) {
+      throw new Error(`${source}: Semgrep file ${ordinal} exceeds the bounded response population`);
+    }
     const body = typeof file.bodyBase64 === "string" ? Buffer.from(file.bodyBase64, "base64") : Buffer.alloc(0);
     const expectedName = `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`;
-    if (file.ordinal !== ordinal || !Number.isInteger(file.bytes) || file.bytes <= 0 || file.name !== expectedName || body.byteLength !== file.bytes) throw new Error(`${source}: Semgrep file receipt name/order/population/bytes is invalid`);
+    if (file.ordinal !== ordinal || file.name !== expectedName || body.byteLength !== file.bytes) throw new Error(`${source}: Semgrep file receipt name/order/population/bytes is invalid`);
     assertSha(file.sha256, `${source}: Semgrep file ${ordinal}`);
     if (sha256(body) !== file.sha256) throw new Error(`${source}: Semgrep file ${ordinal} bytes differ from their digest`);
   });
   const actual = registryPackIdentity(pack.files.map((file, ordinal) => ({ pack: REGISTRY_PACKS[ordinal]!, body: Buffer.from(file.bodyBase64, "base64").toString("utf8") })));
   if (actual !== pack.aggregateSha256) throw new Error(`${source}: Semgrep aggregate differs from its exact ordered bytes`);
+  const validationRoot = mkdtempSync(join(tmpdir(), "harvey-semgrep-receipt-validation-"));
+  try {
+    const files = pack.files.map((file) => {
+      const path = join(validationRoot, file.name);
+      writeFileSync(path, Buffer.from(file.bodyBase64, "base64"));
+      return path;
+    });
+    validateRegistryPackConfigs(files, source);
+  } finally {
+    rmSync(validationRoot, { recursive: true, force: true });
+  }
 }
 
 function normalizedProducer(record: MechanicalProducerRecord): unknown {

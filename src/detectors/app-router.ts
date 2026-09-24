@@ -2361,10 +2361,6 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
 //   - guarded by `typeof window !== "undefined"` (or any browser global).
 const BROWSER_GLOBALS = new Set(["window", "document", "localStorage", "sessionStorage", "navigator"]);
 const TYPEOF_GUARD = /typeof\s+(window|document|localStorage|sessionStorage|navigator)\b/;
-// Optional-chaining a browser global (`window?.x`, `document?.foo`) is the author's explicit signal
-// that the global may be absent — treated as an SSR guard, same as `typeof` (#964). Matched both on
-// the access itself and on an enclosing `if (window?.x)` condition.
-const OPTIONAL_CHAIN_GUARD = /\b(window|document|localStorage|sessionStorage|navigator)\?\./;
 
 // Names bound anywhere in the file (imports, params, variable/function/class declarations). If a
 // browser-global name is also a local binding, the access is not the DOM global — skip it, so an
@@ -2750,8 +2746,8 @@ function ssrReadSite(node: ts.Node): string {
 }
 
 // True when a browser-global guard gates this node — an enclosing `if`, ternary, or `&&`/`||` whose
-// condition/left operand tests a browser global via `typeof` or optional chaining (`window?.x`).
-// The two standard SSR-safe guards.
+// condition/left operand tests a browser global via `typeof`. Optional chaining does not guard an
+// unresolved identifier: `window?.x` still throws before optional chaining is evaluated.
 // #1293: an EARLY-RETURN guard is a preceding sibling, not an ancestor —
 // `if (typeof window === "undefined") return null;` followed by the read. Walking only ancestors
 // missed it, and the finding's own evidence asserts no such guard exists, so the row was not merely
@@ -2774,7 +2770,7 @@ function precedingGuardExits(node: ts.Node, sf: ts.SourceFile, guards: (text: st
 }
 
 function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
-  const guards = (text: string) => TYPEOF_GUARD.test(text) || OPTIONAL_CHAIN_GUARD.test(text);
+  const guards = (text: string) => TYPEOF_GUARD.test(text);
   if (precedingGuardExits(node, sf, guards)) return true;
   for (let cur = node.parent; cur; cur = cur.parent) {
     if (ts.isIfStatement(cur) && guards(cur.expression.getText(sf))) return true;
@@ -2803,10 +2799,7 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         !declared.has(node.expression.text);
       if (onGlobal) {
         const global = (node.expression as ts.Identifier).text;
-        // An optional-chained access (`window?.x`) is itself a guard — the author signalled the
-        // global may be absent, so it never throws a bare ReferenceError shape we flag (#964).
-        const optionalChained = (node as ts.PropertyAccessExpression | ts.ElementAccessExpression).questionDotToken !== undefined;
-        if (!optionalChained && isOnSsrRenderPath(node, sf, ctx) && !isSsrGuarded(node, sf)) {
+        if (isOnSsrRenderPath(node, sf, ctx) && !isSsrGuarded(node, sf)) {
           const readSite = ssrReadSite(node);
           findings.push(
             makeFinding(nextId, {

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,20 @@ function run(mutation: string) {
   const dir = mkdtempSync(join(tmpdir(), "corpus-observation-cli-"));
   directories.push(dir);
   const source = join(dir, "source");
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const validator = join(bin, "semgrep");
+  writeFileSync(validator, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version --disable-version-check") { console.log("1.173.0"); process.exit(0); }
+if (args[0] !== "scan" || !args.includes("--strict") || !args.includes("--json") || !args.includes("--disable-version-check") || args[args.indexOf("--metrics") + 1] !== "off") process.exit(91);
+const target = args.at(-1);
+if (fs.realpathSync(target) !== fs.realpathSync(process.cwd()) || fs.readdirSync(target).length !== 0) process.exit(93);
+const files = args.flatMap((arg, index) => arg === "--config" ? [args[index + 1]] : []);
+if (files.length !== 6 || files.some((file) => fs.readFileSync(file, "utf8") !== "rules: []\\n")) process.exit(2);
+`);
+  chmodSync(validator, 0o755);
   const snapshots = join(source, "src/scan/__fixtures__/corpus-advisories");
   const partsDir = join(dir, "advisory-parts");
   mkdirSync(snapshots, { recursive: true });
@@ -42,7 +56,7 @@ function run(mutation: string) {
   const manifestBytes = JSON.stringify(manifest);
   writeFileSync(join(snapshots, "manifest.json"), manifestBytes);
   const registry = join(source, ".harvey-current-semgrep");
-  const bodies = REGISTRY_PACKS.map((pack, index) => ({ pack, body: `rules:\n  - id: fixture-${index}\n    message: ${pack}\n` }));
+  const bodies = REGISTRY_PACKS.map((pack) => ({ pack, body: "rules: []\n" }));
   const registrySha256 = registryPackIdentity(bodies);
   const packs = join(registry, "registry-packs", registrySha256);
   mkdirSync(packs, { recursive: true });
@@ -76,7 +90,7 @@ function run(mutation: string) {
   parts.forEach((part, index) => writeFileSync(join(partsDir, `corpus-advisory-observation-shard${index + 1}.json`), JSON.stringify(part)));
   const result = spawnSync("bash", ["-c", 'pnpm() { [ "$1" = exec ] && [ "$2" = tsx ] || return 99; shift 2; "$TEST_NODE" --import "$TEST_TSX" "$TEST_SOURCE/$1" "${@:2}"; }\n' + command], {
     cwd: source, encoding: "utf8",
-    env: { ...process.env, TEST_NODE: process.execPath, TEST_TSX: tsxLoader, TEST_SOURCE: root, GITHUB_SHA: provenance.headSha, GITHUB_RUN_ID: provenance.runId, GITHUB_RUN_ATTEMPT: provenance.runAttempt },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, TEST_NODE: process.execPath, TEST_TSX: tsxLoader, TEST_SOURCE: root, GITHUB_SHA: provenance.headSha, GITHUB_RUN_ID: provenance.runId, GITHUB_RUN_ATTEMPT: provenance.runAttempt },
   });
   const path = join(dir, "corpus-advisory-observation.json");
   return { result, parts, artifact: existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as CorpusAdvisoryObservationArtifact : undefined };
