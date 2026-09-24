@@ -155,23 +155,27 @@ function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker):
         if (ts.isCallExpression(node)) {
           const called = expressionSymbol(checker, node.expression);
           if (has(called)) {
-            let owner: ts.Node | undefined = node.parent;
-            while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
-            if (owner) {
-              const declaration = owner as ts.FunctionLikeDeclaration;
+            let functionOwner: ts.Node | undefined = node.parent;
+            while (functionOwner && !ts.isFunctionLike(functionOwner)) functionOwner = functionOwner.parent;
+            if (functionOwner) {
+              const declaration = functionOwner as ts.FunctionLikeDeclaration;
+              let memberExpression: ts.Node = declaration;
+              while (memberExpression.parent && transparentExpressionOperand(memberExpression.parent) === memberExpression) {
+                memberExpression = memberExpression.parent;
+              }
               const symbols: (ts.Symbol | undefined)[] = [
                 declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
                   ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
-                  : ts.isVariableDeclaration(declaration.parent) && ts.isIdentifier(declaration.parent.name)
-                    ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.parent.name))
+                  : ts.isVariableDeclaration(memberExpression.parent) && ts.isIdentifier(memberExpression.parent.name)
+                    ? canonicalSymbol(checker, checker.getSymbolAtLocation(memberExpression.parent.name))
                     : undefined,
               ];
               // Object-property functions are the ordinary shape for an injected executor
               // (`ctx.exec`). An arrow has no symbol of its own and a method's literal symbol can
               // differ from its contextual interface member, so retain both identities. Otherwise
               // wrapping `execFileSync` makes every command behind that interface disappear.
-              const property = ts.isPropertyAssignment(declaration.parent)
-                ? declaration.parent
+              const property = ts.isPropertyAssignment(memberExpression.parent)
+                ? memberExpression.parent
                 : ts.isMethodDeclaration(declaration) && ts.isObjectLiteralExpression(declaration.parent)
                   ? declaration
                   : undefined;
@@ -411,7 +415,18 @@ function symbolIdentity(root: string, checker: ts.TypeChecker, symbol: ts.Symbol
   return undefined;
 }
 
+function transparentExpressionOperand(node: ts.Node): ts.Expression | undefined {
+  if (ts.isParenthesizedExpression(node)
+    || ts.isAsExpression(node)
+    || ts.isTypeAssertionExpression(node)
+    || ts.isSatisfiesExpression(node)
+    || ts.isNonNullExpression(node)) return node.expression;
+  return undefined;
+}
+
 function expressionSymbol(checker: ts.TypeChecker, expression: ts.Expression): ts.Symbol | undefined {
+  const operand = transparentExpressionOperand(expression);
+  if (operand) return expressionSymbol(checker, operand);
   if (ts.isPropertyAccessExpression(expression)) {
     const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
