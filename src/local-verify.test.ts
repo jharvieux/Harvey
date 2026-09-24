@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ function git(dir: string, args: string[]): string {
   return execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
 }
 
-function fixture(changes: Record<string, string>, options: { failDiff?: boolean } = {}): { root: string; base: string; marker: string; gitMarker: string; bin: string } {
+function fixture(changes: Record<string, string>, options: { failDiff?: boolean; failDiffCheck?: boolean } = {}): { root: string; base: string; marker: string; gitMarker: string; bin: string } {
   const root = mkdtempSync(join(tmpdir(), "harvey-local-verify-"));
   created.push(root);
   git(root, ["init", "-q", "-b", "main"]);
@@ -68,6 +68,7 @@ function fixture(changes: Record<string, string>, options: { failDiff?: boolean 
     "#!/bin/sh",
     'printf "%s\\n" "$*" >> "$HARVEY_LOCAL_VERIFY_GIT_MARKER"',
     options.failDiff ? '[ "$1" = diff ] && exit 2' : "",
+    options.failDiffCheck ? '[ "$1" = diff ] && [ "$2" = --check ] && exit 23' : "",
     'exec "' + realGit + '" "$@"',
   ].filter(Boolean).join("\n"));
   execFileSync("chmod", ["+x", join(bin, "git")]);
@@ -92,7 +93,7 @@ function runFixture(f: ReturnType<typeof fixture>, options: { base?: string; fai
 
 function marker(path: string): string[] {
   try {
-    return execFileSync("cat", [path], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
+    return readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
   } catch {
     return [];
   }
@@ -155,6 +156,7 @@ describe("local-verify CLI entrypoint", () => {
     ]);
     expect(marker(f.gitMarker)).toContain("merge-base " + f.base + " HEAD");
     expect(marker(f.gitMarker)).toContain("diff --name-only " + f.base);
+    expect(marker(f.gitMarker)).toContain("diff --check " + f.base);
   });
 
   it("selects the full gate for source, mixed, empty, missing-base, and failed-diff states", () => {
@@ -177,8 +179,16 @@ describe("local-verify CLI entrypoint", () => {
   it("propagates malformed TOML child failure and stops before the focused suite", () => {
     const f = fixture({ ".codex/agents/broken.toml": "not = [valid\n" });
     const result = runFixture(f);
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
     expect(marker(f.marker)).toEqual(["python3 -c import sys,tomllib; [tomllib.load(open(path,'rb')) for path in sys.argv[1:]] .codex/agents/broken.toml"]);
+  });
+
+  it("propagates a diff-hygiene child failure and stops before TOML parsing or the suite", () => {
+    const f = fixture({ ".codex/agents/check.toml": 'name = "check"\n' }, { failDiffCheck: true });
+    const result = runFixture(f);
+    expect(result.status).toBe(23);
+    expect(marker(f.marker)).toEqual([]);
+    expect(marker(f.gitMarker)).toContain("diff --check " + f.base);
   });
 
   it("propagates a deliberate selected-child failure", () => {

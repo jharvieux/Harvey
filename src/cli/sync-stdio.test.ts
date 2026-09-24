@@ -6,15 +6,22 @@
 // it fails the way CI failed, so deleting sync-stdio.ts's body turns this file red (#1628/#1738 —
 // 223 of 384 corpus positives once had no failing direction, which is how this class hides).
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import {
+  cliTypeScriptFiles,
+  discoverExitingCliFiles,
+  unguardedExitingCliFiles,
+} from "./verify-sync-stdio.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SYNC_STDIO = pathToFileURL(join(REPO_ROOT, "src", "cli", "sync-stdio.ts")).href;
+const CLI_DIR = join(REPO_ROOT, "src", "cli");
+const VERIFY_SYNC_STDIO = join(CLI_DIR, "verify-sync-stdio.ts");
 const MARKER = "THE-VERDICT-LINE";
 const SYNC_STDIO_IMPORT = 'import "./sync-stdio.js";';
 // Comfortably past a 64 KiB pipe buffer, so the queue is guaranteed non-empty at exit. The volume
@@ -59,14 +66,6 @@ function fixture(withGuard: boolean): string {
 // tell a TRUNCATED capture from an ABSENT one.
 const READ_CHUNK_BYTES = 4096;
 const READ_TICK_MS = 5;
-
-function findUnguardedExitingClis(
-  files: readonly string[],
-  libraries: ReadonlySet<string>,
-  readSource: (file: string) => string,
-): string[] {
-  return files.filter((file) => !libraries.has(file) && !readSource(file).includes(SYNC_STDIO_IMPORT));
-}
 
 /** stdio exactly as validate-calibration.test.ts and every CI step spawn a gate. */
 function runPiped(file: string): Promise<{ code: number | null; out: string }> {
@@ -157,19 +156,17 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
   // A module imported by other src files is not a program: its entry point already installed the
   // guard before anything could write. `args.ts` is the only one today — it is imported by 10 CLIs
   // and by no test as an entry. A file that STOPS being a library shows up as a failure here.
-  const LIBRARIES = new Set(["src/cli/args.ts"]);
+  const LIBRARIES = new Set([join(CLI_DIR, "args.ts")]);
 
   it("has no unguarded exiting CLI", () => {
-    const files = execFileSync("git", ["grep", "-l", "process\\.exit([1-9]", "--", "src/cli/*.ts"], { cwd: REPO_ROOT, encoding: "utf8" })
-      .trim()
-      .split("\n")
-      .filter((f) => !f.includes(".test."));
+    const files = cliTypeScriptFiles(CLI_DIR);
+    const exiting = discoverExitingCliFiles(files, LIBRARIES, (file) => readFileSync(file, "utf8"));
 
-    // If this ever reads 0, the grep stopped matching and the check below would pass vacuously —
+    // If this ever reads 0, discovery stopped matching and the check below would pass vacuously —
     // the shape #1388/#1509 exist to prevent. The population is the measurement.
-    expect(files.length, "no exiting CLI found at all — the discovery grep is broken, not the tree").toBeGreaterThan(20);
+    expect(exiting.length, "no exiting CLI found at all — syntax discovery is broken, not the tree").toBeGreaterThan(20);
 
-    const unguarded = findUnguardedExitingClis(files, LIBRARIES, (file) => readFileSync(join(REPO_ROOT, file), "utf8"));
+    const unguarded = unguardedExitingCliFiles(files, LIBRARIES, (file) => readFileSync(file, "utf8"));
     expect(
       unguarded,
       `these CLIs call process.exit() with a non-zero code but do not import ./sync-stdio.js, so whatever they print last can be discarded when stdout is a pipe (#1758). Add the import as the FIRST import, or add the file to LIBRARIES if it is not a program.`,
@@ -180,17 +177,52 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
     // Exercise the SAME filter as the tree assertion with independent sources. Exact membership
     // proves both directions: the bare program must be included, while a guarded program and the
     // named library must be excluded. Returning [] or every input therefore reddens this test.
-    const bare = "src/cli/made-up-bare-gate.ts";
-    const guarded = "src/cli/made-up-guarded-gate.ts";
-    const library = "src/cli/args.ts";
+    const bare = join(CLI_DIR, "made-up-bare-gate.ts");
+    const guarded = join(CLI_DIR, "made-up-guarded-gate.ts");
+    const library = join(CLI_DIR, "args.ts");
     const sources = new Map([
       [bare, "process.exit(1);"],
       [guarded, `${SYNC_STDIO_IMPORT}\nprocess.exit(1);`],
       [library, "process.exit(1);"],
     ]);
 
-    const pretendUnguarded = findUnguardedExitingClis([bare, guarded, library], LIBRARIES, (file) => sources.get(file) ?? "");
+    const pretendUnguarded = unguardedExitingCliFiles([bare, guarded, library], LIBRARIES, (file) => sources.get(file) ?? "");
 
     expect(pretendUnguarded).toEqual([bare]);
+  });
+
+  it("discovers exit variants and first-import violations from planted source files", () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), "harvey-sync-stdio-discovery-"));
+    try {
+      const files = {
+        "dynamic.ts": 'import "./sync-stdio.js";\nprocess.exit(code);\n',
+        "exit-code.ts": 'import "./sync-stdio.js";\nprocess.exitCode = 1;\n',
+        "literal.ts": 'import "./sync-stdio.js";\nprocess.exit(1);\n',
+        "library.ts": "process.exit(1);\n",
+        "late.ts": 'import { readFileSync } from "node:fs";\nimport "./sync-stdio.js";\nprocess.exit(1);\n',
+        "comment-only.ts": '// import "./sync-stdio.js";\nprocess.exit(1);\n',
+        "zero.ts": "process.exit(0);\n",
+      };
+      for (const [name, source] of Object.entries(files)) writeFileSync(join(fixtureDir, name), source);
+      const sourceFiles = cliTypeScriptFiles(fixtureDir);
+      const libraries = new Set([join(fixtureDir, "library.ts")]);
+      const read = (file: string) => readFileSync(file, "utf8");
+      expect(discoverExitingCliFiles(sourceFiles, libraries, read).map((file) => file.split("/").pop())).toEqual([
+        "comment-only.ts", "dynamic.ts", "exit-code.ts", "late.ts", "literal.ts",
+      ]);
+      expect(unguardedExitingCliFiles(sourceFiles, libraries, read).map((file) => file.split("/").pop())).toEqual([
+        "comment-only.ts", "late.ts",
+      ]);
+
+      const result = spawnSync("node_modules/.bin/tsx", [VERIFY_SYNC_STDIO, fixtureDir, join(fixtureDir, "library.ts")], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("comment-only.ts");
+      expect(result.stderr).toContain("late.ts");
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 });
