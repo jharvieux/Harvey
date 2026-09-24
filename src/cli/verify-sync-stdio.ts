@@ -7,14 +7,23 @@ import ts from "typescript";
 export const SYNC_STDIO_IMPORT = "./sync-stdio.js";
 
 function isProcessProperty(node: ts.Expression, property: string): boolean {
-  return ts.isPropertyAccessExpression(node)
+  if (ts.isPropertyAccessExpression(node)) {
+    return ts.isIdentifier(node.expression) && node.expression.text === "process" && node.name.text === property;
+  }
+  return ts.isElementAccessExpression(node)
     && ts.isIdentifier(node.expression)
     && node.expression.text === "process"
-    && node.name.text === property;
+    && node.argumentExpression !== undefined
+    && ts.isStringLiteralLike(node.argumentExpression)
+    && node.argumentExpression.text === property;
 }
 
 function isLiteralZero(node: ts.Expression | undefined): boolean {
   return node !== undefined && ts.isNumericLiteral(node) && Number(node.text) === 0;
+}
+
+function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
+  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
 }
 
 // Dynamic exit arguments are treated as risky. Guessing a dynamic value is zero would leave a
@@ -28,7 +37,7 @@ export function hasNonzeroExit(source: string, file = "cli.ts"): boolean {
       exits = node.arguments.length > 0 && !isLiteralZero(node.arguments[0]);
     } else if (
       ts.isBinaryExpression(node)
-      && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && isAssignmentOperator(node.operatorToken.kind)
       && isProcessProperty(node.left, "exitCode")
     ) {
       exits = !isLiteralZero(node.right);
@@ -45,6 +54,7 @@ export function hasFirstSyncStdioImport(source: string, file = "cli.ts"): boolea
   const first = parsed.statements[0];
   return first !== undefined
     && ts.isImportDeclaration(first)
+    && first.importClause === undefined
     && ts.isStringLiteral(first.moduleSpecifier)
     && first.moduleSpecifier.text === SYNC_STDIO_IMPORT;
 }

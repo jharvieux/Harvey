@@ -6,7 +6,7 @@
 // it fails the way CI failed, so deleting sync-stdio.ts's body turns this file red (#1628/#1738 —
 // 223 of 384 corpus positives once had no failing direction, which is how this class hides).
 
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -195,12 +195,16 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), "harvey-sync-stdio-discovery-"));
     try {
       const files = {
+        "bracket-exit-code.ts": 'process["exitCode"] ||= 1;\n',
+        "bracket-exit.ts": 'process["exit"](1);\n',
         "dynamic.ts": 'import "./sync-stdio.js";\nprocess.exit(code);\n',
         "exit-code.ts": 'import "./sync-stdio.js";\nprocess.exitCode = 1;\n',
+        "compound-exit-code.ts": "process.exitCode += 1;\n",
         "literal.ts": 'import "./sync-stdio.js";\nprocess.exit(1);\n',
         "library.ts": "process.exit(1);\n",
         "late.ts": 'import { readFileSync } from "node:fs";\nimport "./sync-stdio.js";\nprocess.exit(1);\n',
         "comment-only.ts": '// import "./sync-stdio.js";\nprocess.exit(1);\n',
+        "type-only.ts": 'import type {} from "./sync-stdio.js";\nprocess.exit(1);\n',
         "zero.ts": "process.exit(0);\n",
       };
       for (const [name, source] of Object.entries(files)) writeFileSync(join(fixtureDir, name), source);
@@ -208,10 +212,10 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
       const libraries = new Set([join(fixtureDir, "library.ts")]);
       const read = (file: string) => readFileSync(file, "utf8");
       expect(discoverExitingCliFiles(sourceFiles, libraries, read).map((file) => file.split("/").pop())).toEqual([
-        "comment-only.ts", "dynamic.ts", "exit-code.ts", "late.ts", "literal.ts",
+        "bracket-exit-code.ts", "bracket-exit.ts", "comment-only.ts", "compound-exit-code.ts", "dynamic.ts", "exit-code.ts", "late.ts", "literal.ts", "type-only.ts",
       ]);
       expect(unguardedExitingCliFiles(sourceFiles, libraries, read).map((file) => file.split("/").pop())).toEqual([
-        "comment-only.ts", "late.ts",
+        "bracket-exit-code.ts", "bracket-exit.ts", "comment-only.ts", "compound-exit-code.ts", "late.ts", "type-only.ts",
       ]);
 
       const result = spawnSync("node_modules/.bin/tsx", [VERIFY_SYNC_STDIO, fixtureDir, join(fixtureDir, "library.ts")], {
@@ -219,8 +223,12 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
         encoding: "utf8",
       });
       expect(result.status).toBe(1);
+      expect(result.stderr).toContain("bracket-exit-code.ts");
+      expect(result.stderr).toContain("bracket-exit.ts");
       expect(result.stderr).toContain("comment-only.ts");
+      expect(result.stderr).toContain("compound-exit-code.ts");
       expect(result.stderr).toContain("late.ts");
+      expect(result.stderr).toContain("type-only.ts");
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
     }
