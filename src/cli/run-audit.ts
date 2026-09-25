@@ -372,8 +372,8 @@ if (findingsOut || sarifOut) {
   // #1096 invariant (1): every finding the probes produced is delivered, or the pipeline says why.
   // Asserted here, on the real engagement path, because that is where a loss reaches a client — the
   // #1040/#1050/#1061/#1062 breaks all shipped through this function and every one of them exited 0.
-  // The baseline diff below runs AFTER, and legitimately carries rows in from a prior engagement, so
-  // it is outside the ledger's seam (docs/design/conservation-of-findings.md).
+  // The baseline comparison below preserves current occurrences and keeps prior-only rows in
+  // its separate resolved/unresolved populations. Both seams have their own conservation check.
   const ledger = conservationLedger(findings, doc.findings, findingsByModule);
   doc.conservation = ledger;
   console.log(`\n${formatLedger(ledger)}`);
@@ -383,9 +383,8 @@ if (findingsOut || sarifOut) {
     process.exit(1);
   }
 
-  // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
-  // full findings.json from a previous audit of the SAME client; we diff by finding identity
-  // (src/audit-diff.ts) and tag each current finding resolved/persistent/new.
+  // Compare full documents so provenance can distinguish source changes from checkpoints,
+  // changed tools/scope and unknown evidence before reporting new or resolved findings.
   if (baselinePath) {
     const prior = JSON.parse(readFileSync(baselinePath, "utf8")) as FindingsDocument;
     if (!Array.isArray(prior.findings)) {
