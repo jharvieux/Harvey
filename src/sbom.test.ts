@@ -169,8 +169,9 @@ describe("declared lockfile range edges (#1774)", () => {
     const key = version === "5.4" ? "/parent/1.0.0" : version === "6.0" ? "/parent@1.0.0" : "parent@1.0.0";
     const parsed = parsePnpmLock(`lockfileVersion: '${version}'\n${declarations}packages:\n  '${key}':\n    dependencies:\n      child: 2.0.1\n    peerDependencies:\n      react: ^18.0.0\n`);
     expect(parsed.components).toEqual([{ name: "parent", version: "1.0.0" }]);
-    expect(parsed.ranges).toMatchObject({ sourceVersion: version, status: "present-but-unread", edges: [], unread: 1, unsupported: 1, excluded: { peer: 1 } });
-    expect(parsed.ranges.detail).toContain("1 importer/root specifier value(s) are present but unread");
+    expect(parsed.ranges).toMatchObject({ sourceVersion: version, status: "partial", unread: 1, unsupported: 1, excluded: { peer: 1 } });
+    expect(parsed.ranges.edges).toEqual([expect.objectContaining({ ownerPath: "package.json", name: "child", range: "^2.0.0", section: "dependencies", direct: true })]);
+    expect(parsed.ranges.detail).toContain("1 importer/root specifier value(s) were validated");
     expect(parsed.ranges.detail).toContain("1 package/snapshot dependency reference(s)");
   });
 
@@ -193,7 +194,7 @@ describe("declared lockfile range edges (#1774)", () => {
     ["peer map", { snapshots: { "parent@1.0.0": { peerDependencies: "malformed" } } }],
   ])("counts a malformed pnpm %s as an unread boundary, never a guessed edge", (_label, fields) => {
     const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields }));
-    expect(ranges).toMatchObject({ status: "present-but-unread", edges: [], examined: 1, unread: 1, unsupported: 1, excluded: { peer: 0 } });
+    expect(ranges).toMatchObject({ status: "partial", edges: [], examined: 1, unread: 1, excluded: { peer: 0 } });
     expect(ranges.detail).toContain("0 importer/root specifier value(s)");
     expect(ranges.detail).toContain("1 malformed map boundary");
     expect(ranges.detail).toContain("not guessed dependency edges");
@@ -208,8 +209,9 @@ describe("declared lockfile range edges (#1774)", () => {
       ".": { dependencies: { child: { specifier: "^1.0.0", version: "1.0.1" }, untrusted: { specifier: { raw: "unread" } } } },
       "apps/web": { dependencies: "malformed" },
     } }));
-    expect(ranges).toMatchObject({ examined: 3, unread: 3, edges: [] });
-    expect(ranges.detail).toContain("2 importer/root specifier value(s)");
+    expect(ranges).toMatchObject({ examined: 3, unread: 2 });
+    expect(ranges.edges).toEqual([expect.objectContaining({ ownerPath: "package.json", name: "child", range: "^1.0.0" })]);
+    expect(ranges.detail).toContain("1 importer/root specifier value(s)");
     expect(ranges.detail).toContain("1 malformed map boundary");
   });
 
@@ -332,6 +334,18 @@ describe("licenseScope (#1213)", () => {
     dir = mkdtempSync(join(tmpdir(), "sbom-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("binds a referenced private workspace package to its local manifest before registry metadata", async () => {
+    mkdirSync(join(dir, "packages/private"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "workspace:*" } }));
+    writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", private: true, scripts: { postinstall: "node build.js" } }));
+    const candidate = licenseScope(dir).candidates.find((value) => value.name === "@local/private")!;
+    expect(candidate.localMetadata).toEqual({ manifest: "packages/private/package.json", private: true, hasInstallScript: true });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "MIT" }))) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({ coordinate: "@local/private", status: "private-unpublished", provenance: "packages/private/package.json#license", installScriptAssessment: "present" }));
+  });
 
   it("carries the whole tree, marking which packages a manifest actually declared", () => {
     writeFileSync(

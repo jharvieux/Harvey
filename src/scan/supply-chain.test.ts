@@ -365,6 +365,35 @@ describe("checkLicenseCompliance", () => {
     expect(findings[0]?.evidence).toContain("GPL-3.0");
   });
 
+  it("prefers local workspace metadata and classifies a private package with no license without a registry call", async () => {
+    const fetchImpl = packument({ license: "GPL-3.0" });
+    const findings = await checkLicenseCompliance(scope([
+      { name: "@local/licensed", direct: true, localMetadata: { manifest: "packages/licensed/package.json", private: true, license: "MIT", hasInstallScript: false } },
+      { name: "@local/private", direct: true, localMetadata: { manifest: "packages/private/package.json", private: true, hasInstallScript: true } },
+    ]), { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const receipt = findings.find((finding) => finding.id === "SUP-METADATA-00")!;
+    expect(receipt.dependencyMetadataEvidence?.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ coordinate: "@local/licensed", status: "local-manifest", license: "MIT", installScriptAssessment: "absent" }),
+      expect.objectContaining({ coordinate: "@local/private", status: "private-unpublished", installScriptAssessment: "present" }),
+    ]));
+    expect(findings.find((finding) => finding.id === "SUP-LICENSE-00")?.fix).toContain("private workspace package's license");
+  });
+
+  it.each([[404, "registry-not-found"], [403, "registry-access-denied"]] as const)("records HTTP %s with its distinct metadata outcome", async (status, outcome) => {
+    const findings = await checkLicenseCompliance(scope([{ name: "private-lib", version: "1.0.0", direct: true }]), { fetchImpl: packument({}, status), emitAssessment: true });
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes[0]).toMatchObject({ status: outcome, installScriptAssessment: "unsupported" });
+    expect(findings.find((finding) => finding.id === "SUP-LICENSE-00")?.fix).toMatch(status === 404 ? /coordinate|unpublished/ : /credentials/);
+  });
+
+  it("uses registry script metadata when present and says unsupported when that source omits scripts", async () => {
+    const present = await checkLicenseCompliance(scope([{ name: "builder", version: "1.0.0", direct: true }]), { fetchImpl: packument({ license: "MIT", scripts: { postinstall: "node build.js" } }), emitAssessment: true });
+    expect(present.map((finding) => finding.id)).toContain("SUP-INSTALL-SCRIPT-METADATA-builder@1.0.0");
+    expect(present.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes[0]?.installScriptAssessment).toBe("present");
+    const unsupported = await checkLicenseCompliance(scope([{ name: "plain", version: "1.0.0", direct: true }]), { fetchImpl: packument({ license: "MIT" }), emitAssessment: true });
+    expect(unsupported.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes[0]?.installScriptAssessment).toBe("unsupported");
+  });
+
   it("discloses SUP-LICENSE-00 naming the indeterminate packages on a network error (#1067)", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
@@ -391,20 +420,25 @@ describe("checkLicenseCompliance", () => {
     expect(findings[0]?.fix).toContain("Commit a lockfile Harvey can parse");
   });
 
-  // #1213: a pnpm/yarn lockfile records no license, so every candidate needs the network — for a
-  // real monorepo that is thousands of requests. The cap bounds it; the row names what it cost.
-  it("caps registry lookups, spends the budget on declared dependencies first, and names the rest", async () => {
+  it("finishes a population larger than 300 in bounded batches and resumes entirely from cache", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-metadata-cache-"));
     const fetchImpl = packument({ license: "MIT" });
     const candidates: LicenseCandidate[] = [
       ...Array.from({ length: 400 }, (_, i) => ({ name: `transitive-${i}`, version: "1.0.0", direct: false })),
       { name: "declared-lib", version: "1.0.0", direct: true },
     ];
-    const findings = await checkLicenseCompliance(scope(candidates), { fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(300);
-    expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://registry.npmjs.org/declared-lib/1.0.0");
-    const coverage = findings.find((f) => f.id === "SUP-LICENSE-00");
-    expect(coverage?.evidence).toContain("per-run registry-lookup cap of 300");
-    expect(coverage?.title).toContain("101 packages");
+    try {
+      const findings = await checkLicenseCompliance(scope(candidates), { fetchImpl, cacheDir, batchSize: 17, emitAssessment: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(401);
+      expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://registry.npmjs.org/declared-lib/1.0.0");
+      const receipt = findings.find((finding) => finding.id === "SUP-METADATA-00")!;
+      expect(receipt.dependencyMetadataEvidence).toMatchObject({ population: 401, processed: 401, cacheHits: 0, registryRequests: 401, complete: true });
+      expect(receipt.dependencyMetadataEvidence?.outcomes).toHaveLength(401);
+      const resumedFetch = vi.fn(async () => { throw new Error("cache miss"); }) as unknown as typeof fetch;
+      const resumed = await checkLicenseCompliance(scope(candidates), { fetchImpl: resumedFetch, cacheDir, emitAssessment: true });
+      expect(resumedFetch).not.toHaveBeenCalled();
+      expect(resumed.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence).toMatchObject({ population: 401, processed: 401, cacheHits: 401, registryRequests: 0, complete: true });
+    } finally { rmSync(cacheDir, { recursive: true, force: true }); }
   });
 
   // #1213: license classification off a lockfile needs no network, so unlike checkSlopsquat this
@@ -559,7 +593,7 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
       expect(finding.evidence).toContain(`${range.source} (${range.format} version ${range.sourceVersion}`);
       expect(finding.evidence).toContain(`${range.edges.length} admitted third-party range edges`);
       expect(`${finding.evidence} ${finding.fix}`).not.toMatch(forbidden);
-      expect(finding.fix).toContain("npm v2/v3 declaration ranges are assessed");
+      expect(finding.fix).toContain("npm v2/v3 transitive declaration ranges and validated pnpm importer declarations are assessed");
     }
     expect(pnpm.detail).toContain("present but unread");
     expect(yarn.detail).toContain("selector range(s)");

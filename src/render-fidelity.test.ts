@@ -274,8 +274,8 @@ describe("pnpm range disclosure delivery (#1774)", () => {
       context = new MechanicalScanContext(dir);
       const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline pnpm boundary fixture" }, skipNetworkChecks: true }, "supply");
       const scope = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
-      expect(scope.evidence).toContain("0 admitted third-party range edges");
-      expect(scope.evidence).toContain(`${specifiers + boundaries} input unit(s) examined, ${specifiers + boundaries} present/unread unit(s)`);
+      expect(scope.evidence).toContain(`${specifiers} admitted third-party range edges`);
+      expect(scope.evidence).toContain(`${specifiers + boundaries} input unit(s) examined, ${boundaries} present/unread unit(s)`);
       expect(scope.evidence).toContain(`${specifiers} importer/root specifier value(s)`);
       expect(scope.evidence).toContain(`${boundaries} malformed map boundar`);
       const doc = assembleEngagementDocument(RECORDED, ENV, [scope], META);
@@ -285,6 +285,31 @@ describe("pnpm range disclosure delivery (#1774)", () => {
       const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
       expect(delivered.findings.find((finding) => finding.id === scope.id)?.evidence).toBe(scope.evidence);
       expect(html).toContain(esc(scope.evidence));
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("dependency metadata delivery (#2141)", () => {
+  it("preserves the complete per-package receipt through assembly, JSON validation, and rendered evidence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-metadata-report-"));
+    const pkg = { name: "metadata-report", dependencies: { child: "1.0.0" } };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "metadata-report", dependencies: { child: "1.0.0" } }, "node_modules/child": { name: "child", version: "1.0.0", license: "MIT", hasInstallScript: false } } }));
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline metadata fixture" }, skipNetworkChecks: true }, "supply");
+      const receipt = result.findings.find((finding) => finding.id === "SUP-METADATA-00")!;
+      expect(receipt.dependencyMetadataEvidence).toMatchObject({ population: 1, processed: 1, complete: true, outcomes: [{ coordinate: "child@1.0.0", status: "lockfile", provenance: "package-lock.json", license: "MIT", installScriptAssessment: "absent" }] });
+      const doc = assembleEngagementDocument(RECORDED, ENV, [receipt], META);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
+      expect(validateFindings(delivered).errors).toEqual([]);
+      expect(delivered.findings[0]?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      const html = buildHtml(doc);
+      expect(html).toContain("Complete per-package outcomes are attached");
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
     } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
