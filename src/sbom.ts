@@ -941,18 +941,46 @@ function licenses(c: SbomComponent): object[] | undefined {
 // hex digest. A hash Harvey cannot convert is omitted rather than emitted in the wrong encoding —
 // a consumer verifying against a malformed digest gets a mismatch, which is worse than no hash.
 const SRI_ALG: Record<string, string> = { sha1: "SHA-1", sha256: "SHA-256", sha384: "SHA-384", sha512: "SHA-512" };
+const SRI_BYTES: Record<string, number> = { sha1: 20, sha256: 32, sha384: 48, sha512: 64 };
 
 function hashes(c: SbomComponent): object[] | undefined {
   const [, alg, b64] = /^(sha1|sha256|sha384|sha512)-(.+)$/.exec(c.integrity ?? "") ?? [];
   if (!alg || !b64) return undefined;
-  return [{ alg: SRI_ALG[alg], content: Buffer.from(b64, "base64").toString("hex") }];
+  // Buffer's base64 decoder is deliberately forgiving: it silently ignores invalid characters
+  // and accepts truncated input. An SBOM digest is a verification claim, so require standard,
+  // canonical base64 and the exact byte length for the named algorithm before publishing it.
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) return undefined;
+  const digest = Buffer.from(b64, "base64");
+  if (digest.length !== SRI_BYTES[alg] || digest.toString("base64") !== b64) return undefined;
+  return [{ alg: SRI_ALG[alg], content: digest.toString("hex") }];
 }
 
 export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: string } = {}): { bom: object; warning?: string } {
   const deps = collectDependencies(dir);
+  // Alias declarations name an install path, not necessarily the package published at that path.
+  // licenseScope owns that proof boundary for every supported lockfile format; reuse its accepted
+  // coordinates so the SBOM cannot publish the path key as a different package identity.
+  const scope = licenseScope(dir);
+  const acceptedCoordinates = new Set(scope.candidates
+    .filter((candidate) => candidate.version && !candidate.unresolvedAlias)
+    .map((candidate) => `${candidate.name}\u0000${candidate.version}`));
+  const components = deps.components.filter((component) => acceptedCoordinates.has(`${component.name}\u0000${component.version}`));
+  const aliasGaps = [...new Map(scope.candidates
+    .filter((candidate) => candidate.unresolvedAlias)
+    .map((candidate) => {
+      const alias = candidate.unresolvedAlias!;
+      const owner = alias.ownerPath ? ` at ${alias.ownerPath}` : "";
+      const reach = candidate.direct ? "direct" : "transitive";
+      const value = `${reach} alias ${candidate.name} declares ${alias.declared}${owner}; published identity and selected version are unproved`;
+      return [`${candidate.name}\u0000${alias.declared}\u0000${alias.ownerPath ?? ""}`, value] as const;
+    })).values()];
+  const completeness: SbomCompleteness = aliasGaps.length > 0 && deps.completeness === "complete" ? "incomplete" : deps.completeness;
+  const note = aliasGaps.length > 0 ? `${deps.note} Unresolved alias identity: ${aliasGaps.join("; ")}.` : deps.note;
   const ref = (c: SbomComponent): string => `${c.name}@${c.version}`;
+  const componentHashes = new Map(components.map((component) => [component, hashes(component)]));
 
   const bom = {
+    $schema: "http://cyclonedx.org/schema/bom-1.5.schema.json",
     bomFormat: "CycloneDX",
     specVersion: SPEC_VERSION,
     version: 1,
@@ -961,18 +989,18 @@ export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: 
       tools: { components: [{ type: "application", name: "Harvey", publisher: "Harvey" }] },
       component: { type: "application", "bom-ref": "root", name: opts.targetName ?? "target" },
       properties: [
-        { name: "harvey:completeness", value: deps.completeness },
+        { name: "harvey:completeness", value: completeness },
         { name: "harvey:source", value: deps.source },
-        { name: "harvey:note", value: deps.note },
+        { name: "harvey:note", value: note },
+        ...aliasGaps.map((value) => ({ name: "harvey:unresolved-alias", value })),
         // #1079: licenses and hashes are the two fields a buyer checks, and how many components
         // actually carry them depends on the lockfile format (package-lock records both; pnpm and
         // yarn record only the integrity hash). State the coverage rather than letting a
-        // half-populated field read as the whole picture.
-        { name: "harvey:license-coverage", value: `${deps.components.filter((c) => c.license).length}/${deps.components.length} components carry a license from ${deps.source}` },
-        { name: "harvey:hash-coverage", value: `${deps.components.filter((c) => c.integrity).length}/${deps.components.length} components carry an integrity hash from ${deps.source}` },
+        { name: "harvey:license-coverage", value: `${components.filter((c) => c.license).length}/${components.length} components carry a license from ${deps.source}` },
+        { name: "harvey:hash-coverage", value: `${components.filter((c) => componentHashes.get(c)).length}/${components.length} components carry a valid integrity hash from ${deps.source}` },
       ],
     },
-    components: deps.components.map((c) => ({
+    components: components.map((c) => ({
       type: "library",
       "bom-ref": ref(c),
       name: c.name,
@@ -981,12 +1009,12 @@ export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: 
       // CycloneDX scope: dev-only dependencies are not part of the shipped artifact.
       ...(c.dev ? { scope: "optional" as const } : {}),
       ...(licenses(c) ? { licenses: licenses(c) } : {}),
-      ...(hashes(c) ? { hashes: hashes(c) } : {}),
+      ...(componentHashes.get(c) ? { hashes: componentHashes.get(c) } : {}),
     })),
     // CycloneDX's own completeness statement. Kept alongside the properties above because a
     // consumer that ignores compositions must still be told, and vice versa.
-    compositions: [{ aggregate: deps.completeness, dependencies: ["root"] }],
+    compositions: [{ aggregate: completeness, dependencies: ["root"] }],
   };
 
-  return { bom, ...(deps.completeness === "complete" ? {} : { warning: deps.note }) };
+  return { bom, ...(completeness === "complete" ? {} : { warning: note }) };
 }

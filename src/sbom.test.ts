@@ -1,10 +1,24 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Ajv } from "ajv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 import { checkLicenseCompliance } from "./scan/supply-chain.js";
 import { buildHtml } from "../report-template/render.mjs";
+
+const schemaRoot = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__", "schemas");
+const schemaDocument = (path: string): object => JSON.parse(readFileSync(join(schemaRoot, path), "utf8")) as object;
+const cycloneDxAjv = new Ajv({ allErrors: true, strict: false, unicodeRegExp: false, validateFormats: false });
+cycloneDxAjv.addSchema(schemaDocument("cyclonedx-1.5/spdx.schema.json"));
+cycloneDxAjv.addSchema(schemaDocument("cyclonedx-1.5/jsf-0.82.schema.json"));
+const cycloneDx15 = cycloneDxAjv.compile(schemaDocument("cyclonedx-1.5/bom-1.5.schema.json"));
+const validateCycloneDx15 = (value: unknown): { valid: boolean; errors: unknown[] } => {
+  const valid = cycloneDx15(value);
+  return { valid, errors: valid ? [] : [...(cycloneDx15.errors ?? [])] };
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
@@ -280,13 +294,15 @@ describe("CycloneDX document", () => {
   // lockfile Harvey parses. The SRI hash is base64; CycloneDX wants hex, and a digest emitted in
   // the wrong encoding fails verification more confusingly than an absent one.
   it("emits CycloneDX licenses and hashes, converting SRI base64 to hex", () => {
+    const bytes = Buffer.from("valid sha512 fixture", "utf8");
+    const digest = createHash("sha512").update(bytes).digest();
     writeFileSync(
       join(dir, "package-lock.json"),
-      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: "sha512-3q2+7w==" } } }),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: `sha512-${digest.toString("base64")}` } } }),
     );
     const c = bomOf(dir).components[0];
     expect(c.licenses).toEqual([{ license: { id: "MIT" } }]);
-    expect(c.hashes).toEqual([{ alg: "SHA-512", content: Buffer.from("3q2+7w==", "base64").toString("hex") }]);
+    expect(c.hashes).toEqual([{ alg: "SHA-512", content: digest.toString("hex") }]);
   });
 
   it("uses CycloneDX `expression` for a compound license — an expression in the id field fails schema validation", () => {
@@ -1012,5 +1028,130 @@ describe("completeness is always stated", () => {
     const src = collectDependencies(dir);
     expect(src.completeness).toBe("unknown");
     expect(src.note).toContain("not a dependency-free project");
+  });
+});
+
+describe("CycloneDX independent export contract (#2059, #2078)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- this deliberately consumes serialized, untrusted CycloneDX before schema validation.
+  const serializedBom = (dir: string): any => JSON.parse(JSON.stringify(buildSbom(dir, {
+    targetName: "contract-fixture",
+    timestamp: "2026-09-25T00:00:00.000Z",
+  }).bom));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const propertyValues = (bom: any, name: string): string[] => bom.metadata.properties
+    .filter((property: { name: string }) => property.name === name)
+    .map((property: { value: string }) => property.value);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const unresolved = (bom: any): string[] => propertyValues(bom, "harvey:unresolved-alias");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const referenceErrors = (bom: any): string[] => {
+    const refs = new Set<string>([
+      bom.metadata?.component?.["bom-ref"],
+      ...(bom.components ?? []).map((component: { "bom-ref"?: string }) => component["bom-ref"]),
+    ].filter((value): value is string => typeof value === "string"));
+    return (bom.compositions ?? []).flatMap((composition: { dependencies?: string[] }, index: number) =>
+      (composition.dependencies ?? []).filter((ref) => !refs.has(ref)).map((ref) => `compositions[${index}] -> ${ref}`));
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const identityErrors = (bom: any): string[] => [
+    ...(bom.$schema === "http://cyclonedx.org/schema/bom-1.5.schema.json" ? [] : ["unexpected schema identity"]),
+    ...(bom.bomFormat === "CycloneDX" ? [] : ["unexpected BOM format"]),
+    ...(bom.specVersion === "1.5" ? [] : ["unexpected CycloneDX version"]),
+  ];
+
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "harvey-sbom-contract-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it.each([
+    ["npm v3 root", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+        "node_modules/alias": { version: "2.0.0" },
+      } }));
+    }],
+    ["npm v1 descriptor", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 1, dependencies: {
+        alias: { version: "npm:@actual/pkg@2.0.0" },
+      } }));
+    }],
+    ["npm v3 lock-only transitive", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": { version: "1.0.0", dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+        "node_modules/parent/node_modules/alias": { version: "2.0.0" },
+      } }));
+    }],
+    ["Yarn lock-only selector", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+      writeFileSync(join(dir, "yarn.lock"), 'parent@1.0.0:\n  version "1.0.0"\n\n"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n');
+    }],
+  ] as const)("does not publish an unrelated purl for an unresolved %s alias", (_label, arrange) => {
+    arrange();
+    const { bom, warning } = buildSbom(dir, { targetName: "alias-contract", timestamp: "2026-09-25T00:00:00.000Z" });
+    const serialized = JSON.parse(JSON.stringify(bom));
+    expect(serialized.components.some((component: { name: string }) => component.name === "alias")).toBe(false);
+    expect(JSON.stringify(serialized)).not.toContain("pkg:npm/alias@");
+    expect(unresolved(serialized).join("\n")).toContain("@actual/pkg");
+    expect(unresolved(serialized).join("\n")).toContain("unproved");
+    expect(serialized.compositions[0].aggregate).toBe("incomplete");
+    expect(warning).toContain("@actual/pkg");
+    expect(validateCycloneDx15(serialized)).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it.each([
+    ["ordinary npm package", { dependencies: { ordinary: "1.0.0" } }, { "": { dependencies: { ordinary: "1.0.0" } }, "node_modules/ordinary": { version: "1.0.0" } }, "ordinary"],
+    ["proved npm alias", { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, { "": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, "node_modules/alias": { name: "@actual/pkg", version: "2.0.0" } }, "@actual/pkg"],
+  ] as const)("preserves the canonical identity for a %s", (_label, manifest, packages, expected) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify(manifest));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages }));
+    const bom = serializedBom(dir);
+    expect(bom.components.map((component: { name: string }) => component.name)).toEqual([expected]);
+    expect(bom.components[0].purl).toContain(expected.replace(/^@/, "%40"));
+    expect(unresolved(bom)).toEqual([]);
+    expect(bom.compositions[0].aggregate).toBe("complete");
+  });
+
+  it("validates a serialized full BOM with the pinned official 1.5 schema and independently checks its digest", () => {
+    const bytes = Buffer.from("independent digest fixture", "utf8");
+    const digest = createHash("sha256").update(bytes).digest();
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/hashed": { version: "1.0.0", license: "MIT", integrity: `sha256-${digest.toString("base64")}` },
+    } }));
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    const hash = bom.components[0].hashes[0];
+    expect(hash).toEqual({ alg: "SHA-256", content: createHash("sha256").update(bytes).digest("hex") });
+    expect(hash.content).toMatch(/^[a-f0-9]{64}$/);
+    expect(referenceErrors(bom)).toEqual([]);
+  });
+
+  it.each(["sha512-3q2+7w==", "sha256-not-base64!!", "sha384-"])("omits malformed or wrong-length integrity %s and reports zero hash coverage", (integrity) => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/bad-hash": { version: "1.0.0", integrity },
+    } }));
+    const bom = serializedBom(dir);
+    expect(bom.components[0].hashes).toBeUndefined();
+    expect(propertyValues(bom, "harvey:hash-coverage")).toEqual(["0/1 components carry a valid integrity hash from package-lock.json"]);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("validates an empty BOM and rejects schema and reference corruption through independent consumers", () => {
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    expect(identityErrors(bom)).toEqual([]);
+    expect(referenceErrors(bom)).toEqual([]);
+    const badVersion = structuredClone(bom);
+    badVersion.specVersion = "9.9";
+    expect(identityErrors(badVersion)).toContain("unexpected CycloneDX version");
+    const badFormat = structuredClone(bom);
+    badFormat.bomFormat = "not-CycloneDX";
+    expect(validateCycloneDx15(badFormat).valid).toBe(false);
+    const badReference = structuredClone(bom);
+    badReference.compositions[0].dependencies = ["missing-component"];
+    expect(referenceErrors(badReference)).toEqual(["compositions[0] -> missing-component"]);
   });
 });
