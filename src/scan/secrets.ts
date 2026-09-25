@@ -237,7 +237,7 @@ function keyProofShape(source: string): string {
   };
   return fn?.body ? JSON.stringify([fn.parameters.map(serialize), serialize(fn.body)]) : "";
 }
-const BYTE_ENCODER_SHAPE = keyProofShape(BYTE_ENCODER_BODY);
+let byteEncoderShape: string | undefined;
 
 function credentialBindingContains(node: ts.Node, names: ReadonlySet<string>): boolean {
   if (ts.isIdentifier(node)) return names.has(node.text);
@@ -272,7 +272,7 @@ function isProvedByteEncoder(sf: ts.SourceFile, name: string): boolean {
     ts.forEachChild(node, inspect);
   };
   inspect(source);
-  return Boolean(!override && fn?.body && keyProofShape(fn.getText(source)) === BYTE_ENCODER_SHAPE);
+  return Boolean(!override && fn?.body && keyProofShape(fn.getText(source)) === (byteEncoderShape ??= keyProofShape(BYTE_ENCODER_BODY)));
 }
 
 function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undefined {
