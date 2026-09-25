@@ -243,8 +243,26 @@ describe("bundle-analyzer stats JSON (#179)", () => {
     expect(route?.evidence).not.toContain("/about"); // under budget
   });
 
-  it("returns nothing for a missing or unparsable stats file", () => {
+  it("returns no analyzer findings when the stats file is missing", () => {
     expect(parseBundleAnalyzerStats(join(statsDir, "does-not-exist.json"))).toHaveLength(0);
+  });
+
+  it("returns no analyzer findings without throwing for malformed existing JSON (#2119)", () => {
+    const malformedPath = join(statsDir, "malformed-existing.json");
+    writeFileSync(malformedPath, '{ "namedChunkGroups": { "app/broken/page": ');
+    expect(parseBundleAnalyzerStats(malformedPath)).toEqual([]);
+  });
+
+  it("distinguishes a valid over-budget route from valid below-budget analyzer input (#2119)", () => {
+    const measuredPath = join(statsDir, "measured-route.json");
+    const report = (size: number) => ({ modules: [], namedChunkGroups: { "app/measured/page": { assets: [{ name: "static/chunks/measured.js", size }] } } });
+    writeFileSync(measuredPath, JSON.stringify(report(96 * 1024)));
+    const findings = parseBundleAnalyzerStats(measuredPath, { routeBudgetBytes: 64 * 1024 });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: "M7B-06", location: "/measured", confidence: "Confirmed" });
+    expect(findings[0]?.evidence).toContain("/measured (96 KB)");
+    writeFileSync(measuredPath, JSON.stringify(report(32 * 1024)));
+    expect(parseBundleAnalyzerStats(measuredPath, { routeBudgetBytes: 64 * 1024 })).toEqual([]);
   });
 });
 
