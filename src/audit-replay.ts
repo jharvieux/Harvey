@@ -147,7 +147,8 @@ function assertResult(result: ProbeReport): void {
   const outcome = "kind" in result ? toOutcome(result) : result;
   if (!["ran", "partial", "requires-live-run"].includes(outcome.status)) throw new Error("Evidence result has an invalid status");
   if (outcome.status !== "ran" && !outcome.reason?.trim()) throw new Error("Partial evidence needs its current limitation");
-  if (outcome.status !== "requires-live-run" && (!outcome.detail?.trim() || (outcome.findings && !Array.isArray(outcome.findings)))) throw new Error("Evidence needs a measured detail and findings array");
+  if (outcome.findings !== undefined && !Array.isArray(outcome.findings)) throw new Error("Evidence findings must be an array regardless of assessment status");
+  if (outcome.status !== "requires-live-run" && !outcome.detail?.trim()) throw new Error("Evidence needs a measured detail");
   if ("kind" in result && result.kind === "not-assessed" && (!result.falsifier?.trim() || !["MEASURED", "TRIED", "ASSUMED"].includes(result.provenance))) throw new Error("Unassessed evidence needs provenance and a rerun falsifier");
 }
 
@@ -277,8 +278,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
         const absent = missing.filter((scope) => scope.module === module && scope.workspace === workspace);
         const findings = selected.flatMap((receipt) => {
           const outcome = "kind" in receipt.result ? toOutcome(receipt.result) : receipt.result;
-          if (outcome.status === "requires-live-run") return [];
-          if (outcome.testQuality) testQualityByScope.push({ scope: receipt.scope, receipt: receipt.id, testQuality: outcome.testQuality });
+          if (outcome.status !== "requires-live-run" && outcome.testQuality) testQualityByScope.push({ scope: receipt.scope, receipt: receipt.id, testQuality: outcome.testQuality });
           findingSources.push(...(outcome.findings ?? []).map(() => receipt));
           return outcome.findings ?? [];
         });
@@ -297,7 +297,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
         ];
         if (!scopes.some((scope) => scope.workspace === workspace && scope.wholeModule)) reasons.push("Only the explicitly listed surfaces were assessed; full module coverage is unverified [ASSUMED; falsifier: record a complete module scope assessment]");
         const instance = workspace !== "." ? { instance: workspace } : {};
-        if (!outcomes.some(({ outcome }) => outcome.status !== "requires-live-run")) return { kind: "not-assessed", reason: reasons.join("; "), provenance: "MEASURED", falsifier: `record missing ${module} evidence for ${workspace}`, ...instance };
+        if (!outcomes.some(({ outcome }) => outcome.status !== "requires-live-run")) return { kind: "not-assessed", reason: reasons.join("; "), provenance: "MEASURED", falsifier: `record missing ${module} evidence for ${workspace}`, findings, ...instance };
         const detail = outcomes.map(({ receipt, outcome }) => `${receipt.scope.tier}/${receipt.scope.surface} — ${outcome.status === "requires-live-run" ? "not assessed" : outcome.detail} [receipt ${receipt.id}; producer ${receipt.producer.name}@${receipt.producer.version}; ${receipt.generatedAt}]`).join("; ");
         const measured = outcomes.filter(({ outcome }) => outcome.status !== "requires-live-run");
         const hotspots = measured.flatMap(({ outcome }) => outcome.status !== "requires-live-run" ? outcome.hotspots ?? [] : []);

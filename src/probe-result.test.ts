@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { AUDIT_MODULES } from "./audit-coverage.js";
 import { type Examined, type ModuleRunner, type NotAssessed, runAudit, toOutcome, TYPED_PROBES, UNTYPED_PROBES } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { piiProtectionScope } from "./pii-protection-review.js";
 
 describe("the typed probe result makes the silent-empty state unrepresentable", () => {
   it("does not compile without saying what was examined", () => {
@@ -41,6 +42,13 @@ describe("the typed probe result makes the silent-empty state unrepresentable", 
     const outcome = toOutcome({ kind: "not-assessed", reason: "no stack reachable", provenance: "MEASURED", falsifier: "pnpm exec tsx src/cli/pentest.ts" });
     expect(outcome.status).toBe("requires-live-run");
     expect(outcome.status === "requires-live-run" && outcome.reason).toContain("[MEASURED; falsifier: pnpm exec tsx src/cli/pentest.ts]");
+  });
+
+  it("preserves a produced scope finding while keeping unavailable assessment status", () => {
+    const finding = piiProtectionScope({ assessed: false, reason: "catalog permission denied" });
+    const result = toOutcome({ kind: "not-assessed", findings: [finding], reason: "zero catalog columns examined", provenance: "MEASURED", falsifier: "restore catalog access and rerun" });
+    expect(result).toMatchObject({ status: "requires-live-run", findings: [finding] });
+    expect(result).not.toHaveProperty("detail");
   });
 
   // SEEDED: a probe claims it examined the target and reports zero units. That is not a clean scan,

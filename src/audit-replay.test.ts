@@ -7,6 +7,7 @@ import { createAuditReplayBinding, replayAuditBundle, writeAuditReplayBundle, ty
 import { deliverAuditReplay } from "./audit-replay-delivery.js";
 import { runAudit, type Examined, type ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { piiProtectionScope } from "./pii-protection-review.js";
 import type { Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 
 const scratch: string[] = [];
@@ -44,6 +45,32 @@ describe("bound audit replay", () => {
     expect(replay.evidence.current.map((row) => row.scope)).toEqual(f.scopes);
     expect(replay.result.recorded.every((row) => row.detail?.includes("examined 4 source files"))).toBe(true);
     expect(spies.every((spy) => spy.mock.calls.length === 0)).toBe(true); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("conserves unavailable M10 scope findings and original ownership (wholeModule=%s)", async (wholeModule) => {
+    const f = fixture();
+    f.scopes[9]!.wholeModule = wholeModule;
+    const scopeFinding = piiProtectionScope({ assessed: false, reason: "catalog permission denied; examined no columns" });
+    const result = { kind: "not-assessed" as const, reason: "catalog query failed", provenance: "MEASURED" as const, falsifier: "grant catalog visibility and rerun", findings: [scopeFinding] };
+    f.passes[9]!.result = result;
+    f.write();
+    const replay = replayAuditBundle(f.bundle, f.target, { now: f.now });
+    expect(replay.result.recorded.find((r) => r.module === "M10")).toMatchObject({ status: "requires-live-run" });
+    expect(replay.result.findingsByModule.M10).toEqual([scopeFinding]);
+    const receipt = replay.evidence.current.find((r) => r.scope.module === "M10")!;
+    expect(receipt.result).toEqual(result);
+    expect(replay.evidence.findingOwners.find((r) => r.id === "M10-PROT-00")).toMatchObject({ receipts: [receipt.id], rawArtifacts: receipt.rawArtifacts });
+    const findingsOut = join(f.root, "unavailable.json"), htmlOut = join(f.root, "unavailable.html"), conservationOut = join(f.root, "unavailable-conservation.json");
+    await deliverAuditReplay({ target: f.target, bundle: f.bundle, findingsOut, htmlOut, conservationOut });
+    expect(readFileSync(htmlOut, "utf8")).toContain("catalog permission denied; examined no columns");
+    const ledger = JSON.parse(readFileSync(conservationOut, "utf8"));
+    expect(ledger).toMatchObject({ ok: true, produced: 10, delivered: 11, deliveredFromProduced: 10, synthesized: 1, unaccounted: 0 });
+  });
+
+  it.each([null, {}, "not an array"])("rejects malformed unavailable findings: %j", (findings) => {
+    const f = fixture();
+    f.passes[9]!.result = { kind: "not-assessed", reason: "catalog query failed", provenance: "MEASURED", falsifier: "rerun", findings } as never;
+    expect(f.write).toThrow(/findings must be an array/);
   });
 
   it.each(["target", "configuration", "raw", "missing", "manifest", "future", "stale"])("rejects %s evidence before delivery", (kind) => {

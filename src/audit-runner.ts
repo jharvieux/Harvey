@@ -33,7 +33,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 // EVERY module's findings with an onHotspot/hotspotRank tag. Only the M3 probe sets it.
 // #682: `subStatus: "sub-step-blocked"` on a partial says a sub-step was BLOCKED while a sibling
 // sub-step ran and surfaced `findings` — so a blocked Stryker run never discards the test-intent
-// tier's findings by degrading to requires-live-run (which carries none).
+// tier's findings by degrading without retaining its explicit review/scope evidence.
 // `dataMap` (#1049): M10's table→PII/PHI/PCI classification, surfaced so the assembler can weight
 // EVERY module's severities by the sensitivity of the data they touch. Only the M10 probe sets it.
 // `testQuality` (#1045): M8's per-module §3b measurement is a module-level TABLE, not findings, so
@@ -42,7 +42,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 export type ProbeOutcome =
   | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; testQuality?: TestQuality; producerExecutionReceipts?: ProducerExecutionReceipt[] }
   | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; subStatus?: ModuleSubStatus; testQuality?: TestQuality; producerExecutionReceipts?: ProducerExecutionReceipt[] }
-  | { status: "requires-live-run"; reason: string; instance?: string };
+  | { status: "requires-live-run"; reason: string; instance?: string; findings?: Finding[] };
 
 // ---- #1096 invariant (2): the typed non-empty result ----
 //
@@ -81,6 +81,8 @@ export interface Examined {
 
 export interface NotAssessed {
   kind: "not-assessed";
+  /** Preserve produced scope/review rows without claiming any examined units. */
+  findings?: Finding[];
   reason: string;
   /** MEASURED = a command was run and this is what it did. TRIED = attempted, this happened.
    *  ASSUMED = inferred, never tested. The four blockers falsified on 2026-07-24 were ASSUMED
@@ -130,7 +132,7 @@ export const UNTYPED_PROBES: { module: AuditModule; reason: string }[] = [];
 export function toOutcome(result: ProbeResult): ProbeOutcome {
   const instance = result.instance ? { instance: result.instance } : {};
   if (result.kind === "not-assessed") {
-    return { status: "requires-live-run", reason: `${result.reason} [${result.provenance}; falsifier: ${result.falsifier}]`, ...instance };
+    return { status: "requires-live-run", reason: `${result.reason} [${result.provenance}; falsifier: ${result.falsifier}]`, ...(result.findings !== undefined ? { findings: result.findings } : {}), ...instance };
   }
   if (result.unitsExamined <= 0) {
     throw new Error(
@@ -488,7 +490,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       // the deliverable was never written. Namespace ids by the instance they belong to so each
       // app's finding is distinct (and the location/instance still says which app it is). Only when
       // an instance is set: a single-target run keeps its ids unchanged.
-      if (outcome.status !== "requires-live-run" && outcome.findings) {
+      if (outcome.findings) {
         const produced = outcome.instance ? outcome.findings.map((f) => ({ ...f, id: `${f.id}@${outcome.instance}` })) : outcome.findings;
         findings.push(...produced);
         findingsByModule[module] = [...(findingsByModule[module] ?? []), ...produced];
