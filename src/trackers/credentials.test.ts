@@ -151,6 +151,7 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     const seenAuth: string[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       seenAuth.push((init?.headers as Record<string, string>)?.Authorization ?? "");
+      if (String(_url).includes("/api/v4/projects/") && String(_url).includes("/issues?")) return Response.json([]);
       // Superset body: an empty result set for every adapter's marker search shape, plus the Linear
       // GraphQL sub-objects its updateStory label-resolution path reads (team labels, label create,
       // issue update) — one canned response that satisfies findByMarker and updateStory for all five.

@@ -40,6 +40,8 @@ interface JsonPatchOp {
 interface AdoWorkItem {
   id: number;
   _links: { html: { href: string } };
+  fields?: Record<string, string>;
+  relations?: {rel: string; url: string}[];
 }
 
 interface AdoAttachment {
@@ -117,19 +119,34 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
   // WIQL text search (real shape, #50), then a follow-up GET for the html link since WIQL only
   // returns work-item ids.
   async findByMarker(marker: string): Promise<CreatedRef | null> {
-    const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.#project}' AND [System.Description] CONTAINS '${marker.replace(/'/g, "''")}'`;
+    const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.#project.replace(/'/g, "''")}' AND [System.Description] CONTAINS '${marker.replace(/'/g, "''")}'`;
     const result = await trackerFetchJson<AdoWiqlResult>(
       this.#fetch,
       `${this.#orgUrl}/${this.#project}/_apis/wit/wiql?api-version=${this.#apiVersion}`,
       { method: "POST", headers: { Authorization: this.#auth, "Content-Type": "application/json" }, body: JSON.stringify({ query: wiql }) },
     );
-    const hit = result.workItems[0];
-    if (!hit) return null;
-    const wi = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(String(hit.id))}?api-version=${this.#apiVersion}`, {
-      method: "GET",
-      headers: { Authorization: this.#auth },
-    });
-    return { id: String(wi.id), url: wi._links.html.href };
+    const matches = new Map<string, CreatedRef>();
+    for (const hit of result.workItems) {
+      const wi = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(String(hit.id))}?api-version=${this.#apiVersion}`, {
+        method: "GET", headers: {Authorization: this.#auth},
+      });
+      if (wi.fields?.["System.TeamProject"] === this.#project && wi.fields["System.Description"]?.includes(marker)) matches.set(String(wi.id), {id: String(wi.id), url: wi._links.html.href});
+      if (matches.size > 1) throw new Error("Azure marker lookup ambiguous: multiple exact matches in project");
+    }
+    return [...matches.values()][0] ?? null;
+  }
+
+  async completeStory(id: string, _input: ItemInput, labels: string[], epicId?: string): Promise<void> {
+    const wi = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(id)}?$expand=relations&api-version=${this.#apiVersion}`, {method: "GET", headers: {Authorization: this.#auth}});
+    const existing = (wi.fields?.["System.Tags"] ?? "").split(";").map(label => label.trim()).filter(Boolean);
+    const ops: JsonPatchOp[] = [];
+    if (labels.some(label => !existing.includes(label))) ops.push({op: "add", path: "/fields/System.Tags", value: [...new Set([...existing, ...labels])].join("; ")});
+    if (epicId) {
+      const parents = (wi.relations ?? []).filter(rel => rel.rel === "System.LinkTypes.Hierarchy-Reverse");
+      if (parents.some(parent => parent.url !== this.#workItemApiUrl(epicId))) throw new Error("Azure story already belongs to another epic");
+      if (!parents.length) ops.push({op: "add", path: "/relations/-", value: {rel: "System.LinkTypes.Hierarchy-Reverse", url: this.#workItemApiUrl(epicId)}});
+    }
+    if (ops.length) await this.#patchWorkItem(id, ops);
   }
 
   async setLabels(id: string, labels: string[]): Promise<void> {
@@ -149,6 +166,22 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
   // configured process-template state name; a wrong name for the project's process fails the PATCH
   // loudly (surfaced as a write-back failure), it is never silently absorbed.
   async addComment(id: string, body: string): Promise<void> {
+    const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
+    if (marker) {
+      let token: string | undefined;
+      const seen = new Set<string>();
+      let complete = false;
+      for (let page = 0; page < 100; page++) {
+        const query = new URLSearchParams({"api-version": `${this.#apiVersion}-preview.4`, "$top": "200", includeDeleted: "false"});
+        if (token) query.set("continuationToken", token);
+        const result = await trackerFetchJson<{comments: {text: string}[]; continuationToken?: string}>(this.#fetch, `${this.#orgUrl}/${this.#project}/_apis/wit/workItems/${id}/comments?${query}`, {method: "GET", headers: {Authorization: this.#auth}});
+        if (result.comments.some(comment => comment.text.includes(marker))) return;
+        if (!result.continuationToken) {complete = true; break;}
+        if (seen.has(result.continuationToken)) throw new Error("Azure comment recovery incomplete: repeated cursor");
+        token = result.continuationToken; seen.add(token);
+      }
+      if (!complete) throw new Error("Azure comment recovery incomplete: pagination limit");
+    }
     await this.#patchWorkItem(id, [{ op: "add", path: "/fields/System.History", value: body }]);
   }
 

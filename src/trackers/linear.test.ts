@@ -75,7 +75,7 @@ describe("LinearTracker", () => {
   });
 
   it("finds an existing item by a description-contains filter, returning null on no hit", async () => {
-    const { tracker, calls } = harness(() => ({ issues: { nodes: [{ id: "iss-9", url: "u9" }] } }));
+    const { tracker, calls } = harness(() => ({ issues: { nodes: [{ id: "iss-9", url: "u9", description: "<!-- epic-builder:csv-export/epic -->", team: { id: "team-1" } }] } }));
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
     expect(ref).toEqual({ id: "iss-9", url: "u9" });
     expect(calls[0]?.variables.marker).toBe("<!-- epic-builder:csv-export/epic -->");

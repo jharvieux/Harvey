@@ -90,9 +90,9 @@ describe("GitHubTracker", () => {
     const { tracker } = harness((call) => {
       expect(call.method).toBe("GET");
       expect(call.url).toContain("/search/issues?q=");
-      const q = decodeURIComponent(call.url.split("?q=")[1] ?? "");
-      expect(q).toBe('repo:acme/app in:body "<!-- epic-builder:csv-export/epic -->"');
-      return { items: [{ number: 41, html_url: "https://github.com/acme/app/issues/41", body: "..." }] };
+      const q = new URL(call.url).searchParams.get("q");
+      expect(q).toBe('repo:acme/app is:issue in:body "<!-- epic-builder:csv-export/epic -->"');
+      return { items: [{ number: 41, html_url: "https://github.com/acme/app/issues/41", body: "<!-- epic-builder:csv-export/epic -->" }] };
     });
 
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");

@@ -88,7 +88,7 @@ describe("AzureDevOpsTracker", () => {
 
   it("finds an existing item by marker via a WIQL CONTAINS query, then fetches its html link (#50)", async () => {
     const { tracker, calls } = harness((call) =>
-      call.url.includes("/wiql?") ? { workItems: [{ id: 9 }] } : workItem(9),
+      call.url.includes("/wiql?") ? { workItems: [{ id: 9 }] } : {...workItem(9), fields: {"System.TeamProject": "Audit", "System.Description": "<!-- epic-builder:csv-export/epic -->"}},
     );
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
 

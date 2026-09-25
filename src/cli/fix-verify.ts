@@ -152,6 +152,7 @@ async function main(): Promise<void> {
   } else {
     if (!trackerKind) throw new Error("--tracker is required with --confirm (github|gitlab|jira|linear|azure)");
     const res = await writeBackVerification(makeWriteback(trackerKind), report);
+    writeFileSync(`${outPath}.writeback.json`, `${JSON.stringify(res, null, 2)}\n`);
     console.log(`\nWrite-back: closed ${res.closed}, reopened ${res.reopened}, failed ${res.failed}.`);
     for (const rec of res.records) {
       if (rec.error) console.error(`  ✗ ${rec.findingId}: ${rec.reason} — write-back FAILED: ${rec.error}`);

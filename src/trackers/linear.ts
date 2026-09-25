@@ -62,6 +62,10 @@ export class LinearTracker implements Tracker, TicketWriteback {
       body: JSON.stringify({ query, variables }),
     });
     if (res.errors?.length) throw new Error(`Linear GraphQL error: ${res.errors.map((e) => e.message).join("; ")}`);
+    if (!res.data) throw new Error("Linear GraphQL response has no data");
+    for (const [operation, value] of Object.entries(res.data)) {
+      if (value && typeof value === "object" && "success" in value && value.success !== true) throw new Error(`Linear ${operation} failed: success was not true`);
+    }
     return res.data as T;
   }
 
@@ -75,7 +79,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
 
   async #createIssue(input: ItemInput, parentId?: string): Promise<CreatedRef> {
     const data = await this.#graphql<{ issueCreate: { issue: IssueRef } }>(
-      `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { issue { id url } } }`,
+      `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id url } } }`,
       { input: { teamId: this.#teamId, title: input.title, description: input.description, parentId } },
     );
     const issue = data.issueCreate.issue;
@@ -83,12 +87,32 @@ export class LinearTracker implements Tracker, TicketWriteback {
   }
 
   async findByMarker(marker: string): Promise<CreatedRef | null> {
-    const data = await this.#graphql<{ issues: { nodes: IssueRef[] } }>(
-      `query($marker: String!) { issues(filter: { description: { contains: $marker } }, first: 1) { nodes { id url } } }`,
-      { marker },
-    );
-    const hit = data.issues.nodes[0];
-    return hit ? { id: hit.id, url: hit.url } : null;
+    const matches = new Map<string, CreatedRef>();
+    const seen = new Set<string>();
+    let after: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const data = await this.#graphql<{ issues: { nodes: (IssueRef & { description?: string; team?: { id: string } })[]; pageInfo?: { hasNextPage: boolean; endCursor?: string } } }>(
+        `query($marker: String!, $teamId: String!, $after: String) { issues(filter: { description: { contains: $marker }, team: { id: { eq: $teamId } } }, first: 100, after: $after) { nodes { id url description team { id } } pageInfo { hasNextPage endCursor } } }`,
+        { marker, teamId: this.#teamId, after });
+      for (const hit of data.issues.nodes) {
+        if (hit.team?.id === this.#teamId && hit.description?.includes(marker)) matches.set(hit.id, { id: hit.id, url: hit.url });
+      }
+      if (matches.size > 1) throw new Error("Linear marker lookup ambiguous: multiple exact matches in team");
+      if (!data.issues.pageInfo?.hasNextPage) return [...matches.values()][0] ?? null;
+      const cursor = data.issues.pageInfo.endCursor;
+      if (!cursor || seen.has(cursor)) throw new Error("Linear marker lookup incomplete: invalid pagination");
+      after = cursor; seen.add(cursor);
+    }
+    throw new Error("Linear marker lookup incomplete: pagination limit");
+  }
+
+  async completeStory(id: string, _input: ItemInput, labels: string[]): Promise<void> {
+    const data = await this.#graphql<{ issue: { labels: { nodes: { id: string }[]; pageInfo: { hasNextPage: boolean } } } }>(
+      `query($id: String!) { issue(id: $id) { labels(first: 250) { nodes { id } pageInfo { hasNextPage } } } }`, { id });
+    if (data.issue.labels.pageInfo.hasNextPage) throw new Error("Linear label recovery incomplete: pagination limit");
+    const existing = data.issue.labels.nodes.map(label => label.id);
+    const requested = await this.#resolveLabelIds(labels);
+    if (requested.some(label => !existing.includes(label))) await this.#updateIssue(id, { labelIds: [...new Set([...existing, ...requested])] });
   }
 
   async setLabels(id: string, labels: string[]): Promise<void> {
@@ -110,7 +134,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
 
   async attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef> {
     const data = await this.#graphql<{ commentCreate: { comment: { url: string } } }>(
-      `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { comment { url } } }`,
+      `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { url } } }`,
       { input: { issueId: id, body: briefMarkdown } },
     );
     return { url: data.commentCreate.comment.url };
@@ -121,8 +145,24 @@ export class LinearTracker implements Tracker, TicketWriteback {
   // states at call time by their workflow-invariant `type`: "closed" takes the first completed-type
   // state; "reopened" prefers unstarted, falling back to backlog. No candidate ⇒ throw (fail loud).
   async addComment(id: string, body: string): Promise<void> {
+    const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
+    if (marker) {
+      let after: string | undefined;
+      const seen = new Set<string>();
+      let complete = false;
+      for (let page = 0; page < 100; page++) {
+        const data = await this.#graphql<{ issue: { comments: { nodes: { body: string }[]; pageInfo: { hasNextPage: boolean; endCursor?: string } } } }>(
+          `query($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { body } pageInfo { hasNextPage endCursor } } } }`, { id, after });
+        if (data.issue.comments.nodes.some(comment => comment.body.includes(marker))) return;
+        if (!data.issue.comments.pageInfo.hasNextPage) { complete = true; break; }
+        const cursor = data.issue.comments.pageInfo.endCursor;
+        if (!cursor || seen.has(cursor)) throw new Error("Linear comment recovery incomplete: invalid pagination");
+        seen.add(cursor); after = cursor;
+      }
+      if (!complete) throw new Error("Linear comment recovery incomplete: pagination limit");
+    }
     await this.#graphql(
-      `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { comment { url } } }`,
+      `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { url } } }`,
       { input: { issueId: id, body } },
     );
   }
@@ -141,11 +181,12 @@ export class LinearTracker implements Tracker, TicketWriteback {
     await this.#updateIssue(id, { stateId: state.id });
   }
 
-  #updateIssue(id: string, input: Record<string, unknown>): Promise<{ issueUpdate: { success: boolean } }> {
-    return this.#graphql(
+  async #updateIssue(id: string, input: Record<string, unknown>): Promise<void> {
+    const data = await this.#graphql<{ issueUpdate: { success: boolean } }>(
       `mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
       { id, input },
     );
+    if (data.issueUpdate?.success !== true) throw new Error("Linear issueUpdate failed: success was not true");
   }
 
   // Map label names to Linear label ids, creating any the team doesn't have yet.
@@ -166,7 +207,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
 
   async #createLabel(name: string): Promise<string> {
     const data = await this.#graphql<{ issueLabelCreate: { issueLabel: { id: string } } }>(
-      `mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { issueLabel { id } } }`,
+      `mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id } } }`,
       { input: { teamId: this.#teamId, name } },
     );
     return data.issueLabelCreate.issueLabel.id;

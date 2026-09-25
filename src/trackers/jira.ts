@@ -37,7 +37,9 @@ interface JiraAttachment {
 }
 
 interface JiraSearchResponse {
-  issues: JiraCreatedIssue[];
+  issues: (JiraCreatedIssue & { fields?: { project?: { key?: string }; description?: AdfNode } })[];
+  nextPageToken?: string;
+  isLast?: boolean;
 }
 
 interface JiraTransitionsResponse {
@@ -108,19 +110,35 @@ export class JiraTracker implements Tracker, TicketWriteback {
     return { id: created.key, url: `${this.#baseUrl}/browse/${created.key}` };
   }
 
-  // JQL text search (real shape, #50) — NOTE: Jira's `text ~` operator tokenizes on punctuation,
-  // so a marker like `<!-- epic-builder:slug/story -->` will not match as an exact phrase the way
-  // GitHub's search does; confirm against a real Jira Cloud instance before relying on this for
-  // recovery. Quoting the marker keeps it a single JQL string literal in the meantime.
+  // Search is candidate discovery: verify the complete marker and configured project locally.
   async findByMarker(marker: string): Promise<CreatedRef | null> {
-    const jql = `project = ${this.#projectKey} AND text ~ "${marker.replace(/"/g, '\\"')}"`;
-    const res = await trackerFetchJson<JiraSearchResponse>(
-      this.#fetch,
-      `${this.#baseUrl}/rest/api/3/search?jql=${encodeURIComponent(jql)}`,
-      { method: "GET", headers: this.#jsonHeaders() },
-    );
-    const hit = res.issues[0];
-    return hit ? { id: hit.key, url: `${this.#baseUrl}/browse/${hit.key}` } : null;
+    const quote = (value: string) => value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+    const jql = `project = "${quote(this.#projectKey)}" AND text ~ "${quote(marker)}"`;
+    const text = (node: AdfNode): string => (node.text ?? "") + (node.content?.map(text).join("") ?? "");
+    const matches = new Map<string, CreatedRef>();
+    const seen = new Set<string>();
+    let token = "";
+    for (let page = 0; page < 100; page++) {
+      const query = new URLSearchParams({ jql, fields: "description,project", maxResults: "100", ...(token ? { nextPageToken: token } : {}) });
+      const res = await trackerFetchJson<JiraSearchResponse>(this.#fetch, `${this.#baseUrl}/rest/api/3/search/jql?${query}`,
+        { method: "GET", headers: this.#jsonHeaders() });
+      for (const hit of res.issues) {
+        if (hit.fields?.project?.key === this.#projectKey && hit.fields.description && text(hit.fields.description).includes(marker)) {
+          matches.set(hit.key, { id: hit.key, url: `${this.#baseUrl}/browse/${hit.key}` });
+        }
+      }
+      if (matches.size > 1) throw new Error("Jira marker lookup ambiguous: multiple exact matches in project");
+      if (res.isLast !== false && !res.nextPageToken) return [...matches.values()][0] ?? null;
+      if (!res.nextPageToken || seen.has(res.nextPageToken)) throw new Error("Jira marker lookup incomplete: invalid pagination");
+      token = res.nextPageToken; seen.add(token);
+    }
+    throw new Error("Jira marker lookup incomplete: pagination limit");
+  }
+
+  async completeStory(id: string, _input: ItemInput, labels: string[]): Promise<void> {
+    const issue = await trackerFetchJson<{ fields: { labels: string[] } }>(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}?fields=labels`, { method: "GET", headers: this.#jsonHeaders() });
+    const existing = issue.fields.labels;
+    if (labels.some(label => !existing.includes(label))) await this.setLabels(id, [...new Set([...existing, ...labels])]);
   }
 
   async setLabels(id: string, labels: string[]): Promise<void> {
@@ -150,6 +168,20 @@ export class JiraTracker implements Tracker, TicketWriteback {
   // category, falling back to any non-done transition. No candidate ⇒ throw (fail loud — a ticket
   // that cannot be transitioned must surface as a write-back failure, never a silent skip).
   async addComment(id: string, body: string): Promise<void> {
+    const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
+    if (marker) {
+      const text = (node: AdfNode): string => (node.text ?? "") + (node.content?.map(text).join("") ?? "");
+      let complete = false;
+      let startAt = 0;
+      for (let page = 0; page < 100; page++) {
+        const res = await trackerFetchJson<{ comments: { body: AdfNode }[]; total: number }>(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}/comment?startAt=${startAt}&maxResults=100`, { method: "GET", headers: this.#jsonHeaders() });
+        if (res.comments.some(comment => text(comment.body).includes(marker))) return;
+        startAt += res.comments.length;
+        if (startAt >= res.total) { complete = true; break; }
+        if (!res.comments.length) throw new Error("Jira comment recovery incomplete: empty page");
+      }
+      if (!complete) throw new Error("Jira comment recovery incomplete: pagination limit");
+    }
     await trackerFetch(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}/comment`, {
       method: "POST",
       headers: this.#jsonHeaders(),

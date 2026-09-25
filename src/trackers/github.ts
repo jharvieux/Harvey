@@ -21,6 +21,7 @@
 // #50: findByMarker uses the Issues Search API (in:body) scoped to this repo; updateStory PATCHes
 // the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
+import { PartialTrackerWriteError } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -36,6 +37,9 @@ interface GitHubIssue {
   number: number;
   html_url: string;
   body: string | null;
+  labels?: ({ name: string } | string)[];
+  repository_url?: string;
+  pull_request?: unknown;
 }
 
 interface GitHubContentResponse {
@@ -44,6 +48,8 @@ interface GitHubContentResponse {
 
 interface GitHubSearchResponse {
   items: GitHubIssue[];
+  total_count?: number;
+  incomplete_results?: boolean;
 }
 
 export class GitHubTracker implements Tracker, TicketWriteback {
@@ -84,13 +90,19 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   }
 
   async createStory(input: ItemInput, epicId: string): Promise<CreatedRef> {
-    const story = await trackerFetchJson<GitHubIssue>(this.#fetch, this.#repoUrl("/issues"), {
-      method: "POST",
-      headers: this.#headers(),
-      body: JSON.stringify({ title: input.title, body: input.description }),
-    });
-    await this.#linkToEpic(epicId, story.number, input.title);
-    return { id: String(story.number), url: story.html_url };
+    const marker = input.description.match(/<!-- (?:harvey-finding|epic-builder):[^\n]*? -->/)?.[0];
+    const existing = marker ? await this.findByMarker(marker) : null;
+    const ref = existing ?? await this.createEpic(input);
+    try { await this.#linkToEpic(epicId, Number(ref.id), input.title); }
+    catch (error) { throw new PartialTrackerWriteError(ref, "link", error); }
+    return ref;
+  }
+
+  async completeStory(id: string, input: ItemInput, labels: string[], epicId?: string): Promise<void> {
+    if (epicId) await this.#linkToEpic(epicId, Number(id), input.title);
+    const issue = await trackerFetchJson<GitHubIssue>(this.#fetch, this.#repoUrl(`/issues/${id}`), { method: "GET", headers: this.#headers() });
+    const existing = (issue.labels ?? []).map(label => typeof label === "string" ? label : label.name);
+    if (labels.some(label => !existing.includes(label))) await this.setLabels(id, [...new Set([...existing, ...labels])]);
   }
 
   // Read-modify-write the epic body so the story shows up as a tracked task-list item.
@@ -99,6 +111,7 @@ export class GitHubTracker implements Tracker, TicketWriteback {
       method: "GET",
       headers: this.#headers(),
     });
+    if (epic.body?.split("\n").some(line => line.startsWith(`- [ ] #${storyNumber} `) || line.startsWith(`- [x] #${storyNumber} `))) return;
     const taskLine = `- [ ] #${storyNumber} ${storyTitle}`;
     const body = epic.body ? `${epic.body}\n${taskLine}` : taskLine;
     await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${epicId}`), {
@@ -111,14 +124,24 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   // Issue search scoped to this repo's body text (design §8.2 mechanism 2). GitHub's search index
   // lags writes by a few seconds, which is an accepted MVP limitation here — same as the design.
   async findByMarker(marker: string): Promise<CreatedRef | null> {
-    const q = `repo:${this.#owner}/${this.#repo} in:body "${marker}"`;
-    const res = await trackerFetchJson<GitHubSearchResponse>(
-      this.#fetch,
-      `${this.#base}/search/issues?q=${encodeURIComponent(q)}`,
-      { method: "GET", headers: this.#headers() },
-    );
-    const hit = res.items[0];
-    return hit ? { id: String(hit.number), url: hit.html_url } : null;
+    const q = `repo:${this.#owner}/${this.#repo} is:issue in:body "${marker.replaceAll('"', '\\"')}"`;
+    const matches = new Map<string, CreatedRef>();
+    for (let page = 1; page <= 10; page++) {
+      const res = await trackerFetchJson<GitHubSearchResponse>(this.#fetch,
+        `${this.#base}/search/issues?q=${encodeURIComponent(q)}&per_page=100&page=${page}`,
+        { method: "GET", headers: this.#headers() });
+      if (res.incomplete_results) throw new Error("GitHub marker lookup incomplete; refusing ambiguous recovery");
+      for (const hit of res.items) {
+        const repository = hit.repository_url ?? hit.html_url.replace(/\/issues\/\d+$/, "");
+        const expected = hit.repository_url ? this.#repoUrl("") : `${new URL(hit.html_url).origin}/${this.#owner}/${this.#repo}`;
+        if (!hit.pull_request && repository === expected && hit.body?.includes(marker)) {
+          matches.set(String(hit.number), { id: String(hit.number), url: hit.html_url });
+        }
+      }
+      if (matches.size > 1) throw new Error("GitHub marker lookup ambiguous: multiple exact matches in repository");
+      if (page * 100 >= (res.total_count ?? res.items.length)) return [...matches.values()][0] ?? null;
+    }
+    throw new Error("GitHub marker lookup exceeds search limit; refusing incomplete recovery");
   }
 
   async setLabels(id: string, labels: string[]): Promise<void> {
@@ -144,6 +167,16 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   // have edited); state maps directly to GitHub's open/closed. state_reason distinguishes a
   // verified-resolved close from "not planned".
   async addComment(id: string, body: string): Promise<void> {
+    const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
+    if (marker) {
+      let complete = false;
+      for (let page = 1; page <= 100; page++) {
+        const comments = await trackerFetchJson<{ body: string }[]>(this.#fetch, this.#repoUrl(`/issues/${id}/comments?per_page=100&page=${page}`), { method: "GET", headers: this.#headers() });
+        if (comments.some(comment => comment.body.includes(marker))) return;
+        if (comments.length < 100) { complete = true; break; }
+      }
+      if (!complete) throw new Error("GitHub comment recovery incomplete: pagination limit");
+    }
     await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}/comments`), {
       method: "POST",
       headers: this.#headers(),

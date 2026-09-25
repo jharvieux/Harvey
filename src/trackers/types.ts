@@ -53,6 +53,8 @@ export interface TicketWriteback {
 }
 
 export interface Tracker {
+  // Repair metadata after a prior create succeeded. Preserve client descriptions and labels.
+  completeStory?(id: string, input: ItemInput, labels: string[], epicId?: string): Promise<void>;
   createEpic(input: ItemInput): Promise<CreatedRef>;
   createStory(input: ItemInput, epicId: string): Promise<CreatedRef>;
   setLabels(id: string, labels: string[]): Promise<void>;
