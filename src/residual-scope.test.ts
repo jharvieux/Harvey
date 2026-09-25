@@ -50,6 +50,22 @@ describe("residual scope inventory (#2142)", () => {
     expect(residualScopeErrors(inventory).join("\n")).toContain("owner: required"); cache.owner = "#1196"; inventory.summary.unresolved += 1;
     expect(residualScopeErrors(inventory)).toContain("residualScope.summary: row and unresolved populations must reconcile");
   });
+  it("rejects truncated Vitals populations in the canonical document validator", () => {
+    const inventory = buildResidualScopeInventory(fixture(), { revision: "fixture", vitalsArtifact: { populationComplete: true, population: ["src/a.ts", "src/b.ts"] } });
+    const row = inventory.rows.find((item) => item.domain === "vitals")!;
+    const document: FindingsDocument = { meta, findings: [], residualScope: inventory };
+    expect(validateFindings(document).ok).toBe(true);
+    row.population.files.pop();
+    expect(validateFindings(document).errors.join("\n")).toContain("Vitals examined count must match");
+  });
+  it.each([{ file_health: {} }, { populationComplete: true, population: [] }, { populationComplete: true, population: ["a.ts", "a.ts"] }])("does not certify an empty or repeated Vitals population %j", (vitalsArtifact) => {
+    if (Array.isArray(vitalsArtifact.population) && vitalsArtifact.population.length) {
+      expect(() => buildResidualScopeInventory(fixture(), { revision: "fixture", vitalsArtifact })).toThrow("population: invalid");
+    } else {
+      const inventory = buildResidualScopeInventory(fixture(), { revision: "fixture", vitalsArtifact });
+      expect(inventory.rows.find((row) => row.domain === "vitals")).toMatchObject({ status: "owned-follow-up", owner: "#2206", population: { examined: 0, unresolved: 1 } });
+    }
+  });
   it("ships the CLI inventory into the same document the report renderer consumes", () => {
     const target = fixture(); const findings = join(target, "findings.json"); const out = join(target, "client.json");
     writeFileSync(findings, JSON.stringify({ meta, findings: [] }));

@@ -80,7 +80,7 @@ function vitalsPopulation(vitals: unknown): { files: string[]; complete: boolean
   // Vitals 0.2.0's file_health contract is one entry per scored code file and is not display-capped.
   // The capped hotspots/knowledge/coupling projections remain separate and are never called full.
   const historicalOnly = value.currentSourceExamined === false;
-  const complete = !historicalOnly && (health !== undefined || value.populationComplete === true || value.completePopulation === true);
+  const complete = files.length > 0 && new Set(files).size === files.length && !historicalOnly && (health !== undefined || value.populationComplete === true || value.completePopulation === true);
   return { files, complete, detail: historicalOnly ? `Historical cache population retained (${files.length} paths), but it did not freshly examine the bound source revision and cannot replace the empty recorded raw capture.` : health !== undefined ? "Vitals file_health is the complete scored-file machine population; capped hotspot, coupling and knowledge projections remain separate." : complete ? "Artifact declares a complete population." : "Artifact does not declare its population complete." };
 }
 
@@ -147,8 +147,8 @@ export function buildResidualScopeInventory(root: string, options: BuildOptions)
     },
     {
       id: "vitals-complete-population", domain: "vitals", status: vitals.complete ? "implemented" : "owned-follow-up", title: "Traceable Vitals full population export",
-      population: { examined: vitals.files.length, unresolved: vitals.complete ? 0 : 1, files: vitals.files }, coverage: `${vitals.detail} The inventory retains the complete supplied path list rather than a display cap.`, owner: vitals.complete ? undefined : "#2135",
-      reason: vitals.complete ? "The producer explicitly bound completeness to the machine export." : "A top-K list or an unmarked file list cannot prove the full population.", provenance: "Supplied Vitals machine artifact.", falsifier: "Remove the completeness marker or one source path; validation must reject or report the export as incomplete.", nextStep: vitals.complete ? "Use concise report rollups while retaining this full machine list." : "Supply the accepted #2135 complete population artifact and regenerate.",
+      population: { examined: vitals.files.length, unresolved: vitals.complete ? 0 : 1, files: vitals.files }, coverage: `${vitals.detail} The inventory retains the complete supplied path list rather than a display cap.`, owner: vitals.complete ? undefined : "#2206",
+      reason: vitals.complete ? "The producer explicitly bound completeness to the machine export." : "A top-K list or an unmarked file list cannot prove the full population.", provenance: "Supplied Vitals machine artifact.", falsifier: "Remove the completeness marker or one source path; validation must reject or report the export as incomplete.", nextStep: vitals.complete ? "Use concise report rollups while retaining this full machine list." : "Use the isolated #2135 producer to resolve #2206 with a complete revision-bound population, then regenerate.",
     },
     {
       id: "database-drift-table-policy-rls", domain: "database-drift", status: "implemented", title: "Deployed table, policy and RLS-state identity drift",
@@ -162,7 +162,7 @@ export function buildResidualScopeInventory(root: string, options: BuildOptions)
     },
     {
       id: "database-drift-deployed-column-shape", domain: "database-drift", status: "owned-follow-up", title: "Deployed column identity and nullability drift",
-      population: { examined: 0, unresolved: 1, files: migrationFiles }, coverage: "The current connected drift query does not fetch deployed columns or nullability; table agreement cannot clear this class.", owner: "#2142",
+      population: { examined: 0, unresolved: 1, files: migrationFiles }, coverage: "The current connected drift query does not fetch deployed columns or nullability; table agreement cannot clear this class.", owner: "#2205",
       reason: "No complete authorized live-column population is present in the supplied artifacts.", provenance: "Negative capability census of src/scan/supabase-drift.ts and the supplied connected artifacts.", falsifier: "A bound connected receipt containing complete authorized live-column identities/nullability plus migration expectations makes this class comparable.", nextStep: "Add a read-only catalog adapter and compare this population independently of table/policy identity.",
     },
     {
@@ -190,14 +190,16 @@ export function residualScopeErrors(value: unknown): string[] {
   const ids = new Set<string>();
   for (const [index, row] of inventory.rows.entries()) {
     const at = `residualScope.rows[${index}]`;
+    if (!row || typeof row !== "object") { errors.push(`${at}: expected an object`); continue; }
     if (!row.id || ids.has(row.id)) errors.push(`${at}.id: required and unique`); else ids.add(row.id);
     if (!RESIDUAL_SCOPE_STATUSES.includes(row.status)) errors.push(`${at}.status: invalid`);
     if (!row.reason || !row.provenance || !row.falsifier || !row.nextStep) errors.push(`${at}: reason, provenance, falsifier and nextStep are required`);
     if ((row.status === "manual-review" || row.status === "owned-follow-up") && !row.owner) errors.push(`${at}.owner: required for unresolved owned work`);
-    if (!row.population || !Number.isInteger(row.population.examined) || !Number.isInteger(row.population.unresolved) || !Array.isArray(row.population.files)) errors.push(`${at}.population: invalid`);
+    if (!row.population || !Number.isInteger(row.population.examined) || row.population.examined < 0 || !Number.isInteger(row.population.unresolved) || row.population.unresolved < 0 || !Array.isArray(row.population.files) || row.population.files.some((file) => typeof file !== "string" || !file.trim()) || new Set(row.population.files).size !== row.population.files.length) errors.push(`${at}.population: invalid`);
+    else if (row.domain === "vitals" && (row.population.examined !== row.population.files.length || (row.status === "implemented" && row.population.examined === 0))) errors.push(`${at}.population: Vitals examined count must match the retained complete path population`);
   }
   if (inventory.summary) {
-    const unresolved = inventory.rows.reduce((sum, row) => sum + (row.population?.unresolved ?? 0), 0);
+    const unresolved = inventory.rows.reduce((sum, row) => sum + (row?.population?.unresolved ?? 0), 0);
     if (inventory.summary.rows !== inventory.rows.length || inventory.summary.unresolved !== unresolved) errors.push("residualScope.summary: row and unresolved populations must reconcile");
   } else errors.push("residualScope.summary: required");
   return errors;
