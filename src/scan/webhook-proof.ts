@@ -168,11 +168,18 @@ function objectFields(object: ts.ObjectLiteralExpression): Map<string, ts.Expres
   }
   return fields;
 }
+function primitiveValue(expr: ts.Expression): boolean {
+  expr = unwrapped(expr);
+  if (ts.isStringLiteral(expr) || ts.isNumericLiteral(expr)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(expr.kind)) return true;
+  return ts.isIdentifier(expr) && expr.text === "undefined";
+}
 function pureValue(expr: ts.Expression): boolean {
   expr = unwrapped(expr);
-  if (ts.isStringLiteral(expr) || ts.isNumericLiteral(expr) || ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)
-    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(expr.kind)) return true;
-  if (ts.isIdentifier(expr)) return expr.text === "undefined";
+  if (primitiveValue(expr)) return true;
+  // Restrict returned/passed data to passive values: async returns adopt thenables,
+  // and consumers can invoke conversion hooks or nested callbacks.
+  if (ts.isArrayLiteralExpression(expr)) return expr.elements.every(pureValue);
   if (ts.isObjectLiteralExpression(expr)) return Boolean(objectFields(expr) && [...objectFields(expr)!.values()].every(pureValue));
   return false;
 }
@@ -205,7 +212,7 @@ function effectCallback(expr: ts.Expression, bindings: SourceBindings): boolean 
       const fields = objectFields(value);
       return Boolean(fields && [...fields.values()].every(data));
     }
-    return bindings.inertValue(value) && !ts.isArrowFunction(value) && !ts.isFunctionExpression(value);
+    return pureValue(value);
   };
   return effect.arguments.every(data);
 }
@@ -319,7 +326,8 @@ function provesCaller(fn: ts.FunctionLikeDeclaration, call: ts.CallExpression, b
       const exit = ts.isBlock(stmt.thenStatement) && stmt.thenStatement.statements.length === 1 ? stmt.thenStatement.statements[0] : stmt.thenStatement;
       const rejects = exit && ((ts.isReturnStatement(exit) && (!exit.expression || pureValue(exit.expression)))
         || (ts.isThrowStatement(exit) && ts.isNewExpression(exit.expression) && ts.isIdentifier(exit.expression.expression)
-          && exit.expression.expression.text === "Error" && exit.expression.arguments?.every(pureValue)));
+          && exit.expression.expression.text === "Error" && (exit.expression.arguments?.length ?? 0) <= 1
+          && (!exit.expression.arguments?.[0] || primitiveValue(exit.expression.arguments[0]))));
       if (!rejects) return false;
       guardedSecrets.add(bindings.declaration(stmt.expression.operand)!);
       continue;

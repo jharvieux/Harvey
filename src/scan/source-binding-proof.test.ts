@@ -1,6 +1,9 @@
+import { createHmac, webcrypto } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { parseGitleaksFindings } from "./secrets.js";
 import { checkUnsignedWebhookHandlers } from "./supabase-config.js";
@@ -50,6 +53,38 @@ function keyFindings(text: string, dependencies: Record<string, string> = {}) {
     for (const [name, source] of Object.entries(dependencies)) writeFileSync(join(directory, name), source);
     return parseGitleaksFindings([{ RuleID: "private-key", File: file, Match: text.split("`")[1], StartLine: text.slice(0, text.indexOf("-----BEGIN")).split("\n").length }], "source");
   } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+async function executeWebhook(helper: string, caller: string, secret?: string, signed = false) {
+  let effects = 0;
+  const environment = {
+    crypto: webcrypto, TextEncoder,
+    Deno: { env: { get: () => secret } },
+    database: { entitlements: { upsert: async () => { effects++; } } },
+  };
+  const compile = (source: string) => ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const helpers = {};
+  runInNewContext(compile(helper), { ...environment, exports: helpers }, { timeout: 1_000 });
+  const entry = {} as { handle: (request: Request) => Promise<unknown> };
+  runInNewContext(compile(caller), {
+    ...environment, exports: entry,
+    require: (path: string) => {
+      if (path !== "./implementation.ts") throw new Error(`Unexpected fixture import: ${path}`);
+      return helpers;
+    },
+  }, { timeout: 1_000 });
+  const body = "forged";
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = signed ? createHmac("sha256", secret!).update(`${timestamp}.${body}`).digest("hex") : "00";
+  let result: unknown;
+  try {
+    result = await entry.handle(new Request("https://fixture.invalid/", {
+      method: "POST", body, headers: { "Stripe-Signature": `t=${timestamp},v1=${signature}` },
+    }));
+  } catch { /* Missing-secret cases deliberately throw after evaluating the message. */ }
+  return { effects, result };
 }
 
 describe("source proof resolves every runtime binding through the compiler (#2130)", () => {
@@ -158,5 +193,55 @@ describe("source proof requires inert initialization and a supported execution p
     expect(webhookFindings(implementation, handler.replace('database.entitlements.upsert({ userId })', 'Object.assign(crypto.subtle, {sign: async () => new Uint8Array([0])})'))).toHaveLength(1);
     expect(keyFindings(generated.replace("  await signFixtureJwt(pem);", "  install();\n  await signFixtureJwt(pem);"))[0]!.severity).toBe("High");
     expect(keyFindings('function signFixtureJwt(pem) { Object.assign(crypto.subtle, {}); }\n' + generated)[0]!.severity).toBe("High");
+  });
+});
+
+describe("source proof includes implicit coercion and async return callbacks (#2130)", () => {
+  const mutate = 'database.entitlements.upsert({userId:"forged"});';
+  const conversion = `()=>{${mutate}return "missing";}`;
+  const then = `(resolve)=>{${mutate}resolve(false);}`;
+  const guards: readonly [string, string, number][] = [
+    ["primitive string", 'throw new Error("Missing webhook secret")', 0],
+    ["literal return", "return {ok:false}", 0],
+    ["primitive number", "throw new Error(7)", 0],
+    ["primitive null", "throw new Error(null)", 0],
+    ["arrow conversion", `throw new Error({toString:${conversion}})`, 1],
+    ["function conversion", `throw new Error({toString:function(){${mutate}return "missing";}})`, 1],
+    ["method conversion", `throw new Error({toString(){${mutate}return "missing";}})`, 1],
+    ["getter conversion", `throw new Error({get toString(){${mutate}return ()=>"missing";}})`, 1],
+    ["symbol conversion", `throw new Error({[Symbol.toPrimitive]:${conversion}})`, 1],
+    ["inherited conversion", `throw new Error({__proto__:{toString:${conversion}}})`, 1],
+    ["array conversion", `throw new Error([{toString:${conversion}}])`, 1],
+    ["error option getter", `throw new Error("missing",{get cause(){${mutate}return "cause";}})`, 1],
+    ["async return callback", `return {then:${then}}`, 1],
+    ["async return getter", `return {get then(){${mutate}return (resolve)=>resolve(false);}}`, 1],
+    ["inherited async callback", `return {__proto__:{then:${then}}}`, 1],
+  ];
+
+  it.each(guards)("accounts for runtime effects in %s", async (_name, guard, effects) => {
+    const caller = handler.replace('throw new Error("Missing webhook secret")', guard);
+    const runtime = await executeWebhook(implementation, caller);
+    expect(runtime.effects).toBe(effects);
+    const findings = webhookFindings(implementation, caller);
+    expect(findings).toHaveLength(effects ? 1 : 0);
+    if (effects) expect(findings[0]!.precisionTier).toBe("review");
+  });
+
+  it("checks Promise adoption in the helper's invalid-signature return", async () => {
+    const helper = implementation.replace("return { ok: false };", `return {then:${then}};`);
+    expect((await executeWebhook(helper, handler, "server-only-secret")).effects).toBe(1);
+    expect(webhookFindings(helper, handler)).toHaveLength(1);
+  });
+
+  it("keeps executable values out of nested effect arguments", () => {
+    const caller = handler.replace("database.entitlements.upsert({ userId })",
+      `database.entitlements.upsert({userId, details:[{toString:${conversion}}]})`);
+    expect(webhookFindings(implementation, caller)).toHaveLength(1);
+  });
+
+  it("preserves the real HMAC rejection and signed effect", async () => {
+    expect((await executeWebhook(implementation, handler, "server-only-secret")).effects).toBe(0);
+    expect(await executeWebhook(implementation, handler, "server-only-secret", true)).toEqual({ effects: 1, result: { ok: true } });
+    expect(webhookFindings(implementation, handler)).toEqual([]);
   });
 });
