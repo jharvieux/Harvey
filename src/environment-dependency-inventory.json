@@ -155435,7 +155435,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 132,
+        "line": 141,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -155509,7 +155509,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 132,
+        "line": 141,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -155546,7 +155546,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 145,
+        "line": 153,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -155583,7 +155583,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 28,
+        "line": 33,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -367594,8 +367594,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "df23956fe6eb297b7a4bbcacc6dcf80102cf2761",
-    "commitPayload": "dHJlZSBlNDQ5M2FhZWM4ZjgxNzQ0MWM0ZGU2MjAzYTllNmYyNjg2ODQwMWM4CnBhcmVudCAzMGYzNzZmNTlmOTA1NDhmZjQ3NzZiYTEyN2RkYzJkM2ViMjQ4YWE5CnBhcmVudCAyNzdhMjA2ZmZlODkyMGFiZDgzZDY0YTc5MDJlNGIxYzc5ZmIwZDhmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM1MDA4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM1MDA4IC0wNTAwCgpJbnRlZ3JhdGUgY29tbWFuZCByZWNlaXB0cyBpbnRvIHNvdXJjZSBwcm9vZiByZXBhaXIgKCMyMTMwKQo=",
+    "commit": "86a1bcf769a492344d70b4905976f795c514779b",
+    "commitPayload": "dHJlZSBlOTI5MDkwODJiOGVhNzdmNmYzY2Y5YjU1YmUzN2VlOWJlYjIzMDE1CnBhcmVudCA3ZDBmNjIwYzM4YTYxMzdlMTUzN2VhZGFlODdiMTUwZmZhMDhjOGJjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM1OTQwIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM3MDkzIC0wNTAwCgpZaWVsZCBkdXJpbmcgZHJ5LXJ1biB3b3JrZmxvdyBjaGlsZCBjaGVja3MgKCMyMTM0KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -367604,13 +367604,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "3a0fa081b0951177ac3c6ec5069422e2433df8c5",
+        "gitOid": "adf8bbf7fa53595c869e7e6423e9e0719c39441e",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "706dfc1d7817704688ab74d5edde916604bd9d34d2c3b11918f52c00aaf7cb38",
-    "tree": "e4493aaec8f817441c4de6203a9e6f26868401c8"
+    "populationSha256": "65b37b6799ccbfd3c5f9f9844ae3443187bff67cd526c69305cd9d95ad03eb81",
+    "tree": "e92909082b8ea77f6f3cf9b55be37ee9beb23015"
   },
   "venues": [
     {
@@ -385974,19 +385974,19 @@
       "sha256": "a568d73359f7297b5189f742fd1ae2f3ae68a450974dff536ca8caa432cb2dee"
     },
     {
-      "bytes": 11157,
+      "bytes": 11715,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6e4d6e1b8a1b1c84fac5137a6982ccb3ee459a37",
+      "gitOid": "988beacac5cd98107db7729d8340be744fd65311",
       "id": "src/dry-run-drift.test.ts",
       "kind": "source",
-      "literalCount": 208,
-      "literalSha256": "1c1cfc48e2de6667150e4458dfe3314fb6263a33190ffe8f4ccab2764daa435b",
+      "literalCount": 213,
+      "literalSha256": "213adcf8204e9823f16037949d3469b037e53b636184d6d5313393b05824b64a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/dry-run-drift.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cc5f6f3b7ffa39fef5661cda7f3518d7fb5048737704fd8d42b9833f23ec8a83"
+      "sha256": "3c3b25e8692cf48518e52fc2bdb0ad272cc4eb418471b8e2caa6c45457e536c9"
     },
     {
       "bytes": 14905,
