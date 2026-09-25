@@ -54,6 +54,12 @@ export interface DriftLivePolicy {
   name: string;
 }
 
+export interface DriftComparisonScope {
+  schemas: { schema: string; status: "queried" | "unassessed"; reason?: string }[];
+  queriesAttempted: number;
+  queriesCompleted: number;
+}
+
 export interface MigrationFile {
   file: string;
   sql: string;
@@ -136,9 +142,9 @@ export function loadMigrations(dir: string): MigrationFile[] {
 // run that COMPARED from one that only reported the topic without re-deriving the wording (#1280).
 const DRIFT_NOT_ASSESSED_PREFIX = "No comparison was made.";
 
-function driftScopeFinding(migrationCount: number, reason?: string): Finding {
+function driftScopeFinding(migrationCount: number, reason?: string, scopeDetail = ""): Finding {
   const ran = migrationCount > 0 && !reason;
-  return mechanicalFinding({
+  const finding = mechanicalFinding({
     id: "SB-DRIFT-00",
     title: ran
       ? `Prod-vs-migration drift: what was compared against ${migrationCount} migration file${migrationCount === 1 ? "" : "s"}`
@@ -149,7 +155,7 @@ function driftScopeFinding(migrationCount: number, reason?: string): Finding {
     taxonomy: "Coverage — prod-vs-migration drift scope",
     location: "(supabase project schema)",
     evidence: ran
-      ? `The deployed database was compared against the end state of ${migrationCount} committed migration file${migrationCount === 1 ? "" : "s"}. COMPARED: which public-schema tables exist on each side; whether row-level security is enabled on each table; and the identities (schema, table, name) of the RLS policies on each side. NOT COMPARED: column definitions, types, defaults and nullability; indexes and constraints; triggers; functions, including SECURITY DEFINER bodies; grants, roles and default privileges; installed extensions; and the BODIES of policies — Postgres stores a policy's USING/WITH CHECK clause as a normalised expression tree rather than the text the migration wrote, so a textual diff reports every policy as drifted and is not attempted here.`
+      ? `The deployed database was compared against the end state of ${migrationCount} committed migration file${migrationCount === 1 ? "" : "s"}. COMPARED: which tables exist on each side within the explicitly compared schema set; whether row-level security is enabled on each table; and the identities (schema, table, name) of the RLS policies on each side. NOT COMPARED: column definitions, types, defaults and nullability; indexes and constraints; triggers; functions, including SECURITY DEFINER bodies; grants, roles and default privileges; installed extensions; and the BODIES of policies — Postgres stores a policy's USING/WITH CHECK clause as a normalised expression tree rather than the text the migration wrote, so a textual diff reports every policy as drifted and is not attempted here.`
       : `${DRIFT_NOT_ASSESSED_PREFIX} ${reason}`,
     impact: ran
       ? "A policy whose name is unchanged but whose USING clause was edited in the dashboard is NOT detected by this pass, and neither is a column, index, trigger, function or grant that differs between the deployed database and the migrations. The absence of a drift finding for those classes means they were never compared, not that they match."
@@ -160,19 +166,22 @@ function driftScopeFinding(migrationCount: number, reason?: string): Finding {
     precisionTier: "high",
     bftb: { value: 1, ease: 4, safety: 5 },
   });
+  finding.evidence += scopeDetail ? ` ${scopeDetail}` : "";
+  return finding;
 }
 
-// Diff the deployed public schema against the migration-derived expectation. Read-only on both
+// Diff only the explicitly queried deployed schemas against the migration-derived expectation. Read-only on both
 // sides: the live half is already-fetched query output, the expectation is a fold over .sql files.
 export function checkMigrationDrift(
   liveTables: DriftLiveTable[],
   livePolicies: DriftLivePolicy[],
   migrations: MigrationFile[],
   notAssessedReason?: string,
+  scope: DriftComparisonScope = { schemas: [{ schema: "public", status: "queried" }], queriesAttempted: 0, queriesCompleted: 0 },
 ): Finding[] {
   // Exactly one SB-DRIFT-00 on every run, from here — the caller does not emit its own, so there is
   // no path on which the topic appears twice or not at all.
-  if (migrations.length === 0) {
+  if (migrations.length === 0 || notAssessedReason) {
     return [
       driftScopeFinding(
         0,
@@ -182,10 +191,13 @@ export function checkMigrationDrift(
     ];
   }
 
-  const findings: Finding[] = [driftScopeFinding(migrations.length)];
+  const findings: Finding[] = [];
+  const comparedSchemas = new Set(scope.schemas.filter((s) => s.status === "queried").map((s) => s.schema));
+  const inScope = (schema: string): boolean => comparedSchemas.has(schema);
   const concatenated = migrations.map((m) => m.sql).join("\n");
 
-  const expectedTables = new Set(parseLiveTableNames(concatenated).map((t) => key(t.schema, t.table)));
+  const allExpectedTables = parseLiveTableNames(concatenated);
+  const expectedTables = new Set(allExpectedTables.filter((t) => inScope(t.schema)).map((t) => key(t.schema, t.table)));
   const namedInMigrations = mentionedTables(migrations);
   const expectedRls = expectedRlsEnabled(migrations);
   const parsedPolicies = parseLivePolicies(migrations);
@@ -197,10 +209,17 @@ export function checkMigrationDrift(
     ...parsedPolicies.unparsed.map((p) => policyKey(p.schema, p.table, p.name)),
   ]);
 
-  const publicLiveTables = liveTables.filter((t) => t.schema === "public");
-  const liveTableKeys = new Set(publicLiveTables.map((t) => key(t.schema, t.name)));
+  const scopedLiveTables = liveTables.filter((t) => inScope(t.schema));
+  const migrationSchemas = new Set(allExpectedTables.map((t) => t.schema));
+  const unassessed = [
+    ...scope.schemas.filter((s) => s.status === "unassessed").map((s) => `${s.schema}: ${s.reason ?? "catalog access not established"}`),
+    ...[...migrationSchemas].filter((schema) => !scope.schemas.some((s) => s.schema === schema)).map((schema) => `${schema}: not queried (outside the authorized comparison scope)`),
+  ];
+  const scopeDetail = `EXAMINED: ${comparedSchemas.size}/${scope.schemas.length} authorized schemas (${[...comparedSchemas].join(", ") || "none"}); ${scopedLiveTables.length} live relations, ${expectedTables.size} migration relations, ${livePolicies.filter((p) => inScope(p.schema)).length} live policies. Catalog queries completed ${scope.queriesCompleted}/${scope.queriesAttempted}. UNASSESSED RELATIONS: ${allExpectedTables.length - expectedTables.size} migration-declared; live relation counts remain unknown in unqueried or inaccessible schemas. UNASSESSED SCHEMAS: ${unassessed.join("; ") || "none in the supplied scope"}. Unqueried or inaccessible schemas are never classified as missing from production. Re-run with authorized catalog access and --drift-schemas listing these schemas to resolve the unassessed scope.`;
+  findings.push(driftScopeFinding(migrations.length, comparedSchemas.size === 0 ? "No authorized schema had a complete accessible catalog response." : undefined, scopeDetail));
+  const liveTableKeys = new Set(scopedLiveTables.map((t) => key(t.schema, t.name)));
 
-  for (const t of publicLiveTables) {
+  for (const t of scopedLiveTables) {
     const k = key(t.schema, t.name);
 
     // The security-relevant direction: the repo says protected, the deployed database is not.
@@ -230,7 +249,7 @@ export function checkMigrationDrift(
           category: "Supabase config",
           taxonomy: "Prod-vs-migration drift — table not in migrations",
           location: `${t.schema}.${t.name}`,
-          evidence: `The deployed public schema contains ${t.schema}.${t.name}, and no committed migration creates it (and it is not owned by an installed extension). It was created directly against the database.`,
+          evidence: `The compared deployed schema contains ${t.schema}.${t.name}, and no committed migration creates it (and it is not owned by an installed extension). It was created directly against the database.`,
           impact: `The table is not reproducible: a fresh environment built from the migrations will not have it, and any code that reads it will fail there while working in production. Its RLS and grants are also outside review, since nothing in the repo describes them.`,
           fix: `Capture the table in a migration (\`supabase db diff\` will generate one from the deployed state), or drop it if it is a leftover.`,
           precisionTier: "review",
@@ -250,7 +269,7 @@ export function checkMigrationDrift(
         category: "Supabase config",
         taxonomy: "Prod-vs-migration drift — migration not applied",
         location: k,
-        evidence: `The committed migrations end with ${k} created and not dropped. The deployed public schema does not contain it.`,
+        evidence: `The committed migrations end with ${k} created and not dropped. The complete queried catalog for its compared schema does not contain it.`,
         impact: `The deployed database is behind the committed migration history, or the table was dropped by hand. Code paths that use it are broken in production while passing every check that reads the repo.`,
         fix: `Confirm which migrations have actually been applied to this project (\`supabase migration list\`) and apply the outstanding ones.`,
         precisionTier: "review",
@@ -258,7 +277,7 @@ export function checkMigrationDrift(
     );
   }
 
-  const livePolicyKeys = new Set(livePolicies.filter((p) => p.schema === "public").map((p) => policyKey(p.schema, p.table, p.name)));
+  const livePolicyKeys = new Set(livePolicies.filter((p) => inScope(p.schema)).map((p) => policyKey(p.schema, p.table, p.name)));
 
   for (const k of expectedPolicies) {
     // A policy on a table that is itself missing is already reported as the missing table; a second
@@ -283,7 +302,7 @@ export function checkMigrationDrift(
     );
   }
 
-  for (const p of livePolicies.filter((x) => x.schema === "public")) {
+  for (const p of livePolicies.filter((x) => inScope(x.schema))) {
     const k = policyKey(p.schema, p.table, p.name);
     if (expectedPolicies.has(k)) continue;
     // Only for tables the migrations DO manage — an unmanaged table's policies are covered by the

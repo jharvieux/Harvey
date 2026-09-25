@@ -1,0 +1,118 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildHtml } from "../../report-template/render.mjs";
+import { esc } from "../../report-template/sections.mjs";
+import type { FindingsDocument, ReportMeta } from "../findings.js";
+import { runSupabaseScan } from "./supabase.js";
+
+const dirs: string[] = [];
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+function fixture(failure?: "denied" | "query" | "foreign") {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-drift-scope-"));
+  dirs.push(dir);
+  writeFileSync(join(dir, "001.sql"), [
+    "create table extensions.maintenance_heartbeats (\n id uuid\n);",
+    "create table public.missing_table (\n id uuid\n);",
+    "create table public.same_name (\n id uuid\n);",
+    "create table extensions.same_name (\n id uuid\n);",
+  ].join("\n"));
+  const queries: string[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+    const path = String(url);
+    if (path.includes("/advisors/")) return Response.json({ lints: [] });
+    if (path.endsWith("/config/auth")) return Response.json({});
+    if (path.endsWith("/postgrest")) return Response.json({ db_schema: "public" });
+    const { query, read_only } = JSON.parse(String(init?.body)) as { query: string; read_only: boolean };
+    expect(read_only).toBe(true);
+    queries.push(query);
+    const schema = /(?:n\.nspname|schemaname) = '([^']+)'/.exec(query)?.[1];
+    if (query.includes("catalogAccessible")) return Response.json([{ schema, catalogAccessible: !(schema === "extensions" && failure === "denied") }]);
+    if (query.includes("extensionOwned")) {
+      if (schema === "extensions" && failure === "query") return new Response("access denied", { status: 403 });
+      const names = schema === "extensions" ? ["maintenance_heartbeats"] : ["same_name"];
+      return Response.json(names.map((name) => ({ schema: failure === "foreign" ? "foreign" : schema, name, rlsEnabled: true, extensionOwned: false })));
+    }
+    if (query.includes("nspname = 'cron'")) return Response.json([{ exists: false }]);
+    return Response.json([]);
+  });
+  return { dir, fetchImpl, queries };
+}
+
+describe("connected drift schema populations (#2129)", () => {
+  it("delivers authorized scope through the real scan CLI and machine export", () => {
+    const f = fixture();
+    const loader = join(f.dir, "local-fetch.mjs");
+    const out = join(f.dir, "findings.json");
+    writeFileSync(loader, `
+globalThis.fetch = async (url, init) => {
+  if (url.includes('/advisors/')) return Response.json({ lints: [] });
+  if (url.endsWith('/config/auth')) return Response.json({});
+  if (url.endsWith('/postgrest')) return Response.json({ db_schema: 'public' });
+  const { query, read_only } = JSON.parse(init.body);
+  if (read_only !== true) throw new Error('Query lost read-only boundary');
+  const schema = query.includes("= 'extensions'") ? 'extensions' : 'public';
+  if (query.includes('catalogAccessible')) return Response.json([{ schema, catalogAccessible: true }]);
+  if (query.includes('extensionOwned')) return Response.json([{ schema, name: schema === 'extensions' ? 'maintenance_heartbeats' : 'same_name', rlsEnabled: true, extensionOwned: false }]);
+  if (query.includes("nspname = 'cron'")) return Response.json([{ exists: false }]);
+  return Response.json([]);
+};`);
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+    const run = spawnSync(process.execPath, ["--import", loader, "--import", "tsx", "src/cli/scan.ts", "--supabase", "synthetic", "--migrations", f.dir, "--drift-schemas", "public,extensions", "--out", out], {
+      cwd: root, encoding: "utf8", env: { ...process.env, SUPABASE_ACCESS_TOKEN: "synthetic-fixture-token" },
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const rows = JSON.parse(readFileSync(out, "utf8")) as { id: string; evidence: string }[];
+    expect(rows.filter((row) => row.id.startsWith("SB-DRIFT-")).map((row) => row.id)).toEqual([
+      "SB-DRIFT-00", "SB-DRIFT-TABLE-MISSING-public-missing_table", "SB-DRIFT-TABLE-MISSING-extensions-same_name",
+    ]);
+    expect(rows.find((row) => row.id === "SB-DRIFT-00")?.evidence).toContain("2/2 authorized schemas (public, extensions)");
+  });
+
+  it("defaults both sides to public and discloses unqueried migration schemas", async () => {
+    const f = fixture();
+    const findings = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir });
+    const drift = findings.filter((row) => row.id.startsWith("SB-DRIFT-"));
+    expect(drift.map((row) => row.id)).toEqual(["SB-DRIFT-00", "SB-DRIFT-TABLE-MISSING-public-missing_table"]);
+    expect(drift[0]?.evidence).toContain("extensions: not queried");
+    expect(drift[0]?.evidence).toContain("EXAMINED: 1/1 authorized schemas (public); 1 live relations, 2 migration relations");
+    expect(drift[0]?.evidence).toContain("Catalog queries completed 3/3");
+    expect(f.queries.filter((q) => /catalogAccessible|extensionOwned|policyname/.test(q)).every((q) => !q.includes("'extensions'"))).toBe(true);
+  });
+
+  it("queries authorized non-public schemas and preserves schema-qualified identities through report output", async () => {
+    const f = fixture();
+    const findings = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir, driftSchemas: ["public", "extensions"] });
+    const drift = findings.filter((row) => row.id.startsWith("SB-DRIFT-"));
+    expect(drift.map((row) => row.id)).toEqual(["SB-DRIFT-00", "SB-DRIFT-TABLE-MISSING-public-missing_table", "SB-DRIFT-TABLE-MISSING-extensions-same_name"]);
+    expect(drift[0]?.evidence).toContain("EXAMINED: 2/2 authorized schemas (public, extensions); 2 live relations, 4 migration relations");
+    expect(drift[0]?.evidence).toContain("Catalog queries completed 6/6");
+    const meta: ReportMeta = { client: "Synthetic", subtitle: "Scope", date: "2026-09-25", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not verified", authModel: "Supabase", headline: "Schema comparison", scope: "Synthetic catalog", methodology: "M1", outOfScope: "Production rows" };
+    const document = JSON.parse(JSON.stringify({ meta, findings })) as FindingsDocument;
+    const html = buildHtml(document);
+    expect(html).toContain(esc(drift[0]!.evidence));
+    expect(html).toContain("public.missing_table");
+    expect(html).not.toContain("maintenance_heartbeats is created by the migrations but is absent");
+  });
+
+  it.each(["denied", "query", "foreign"] as const)("discloses %s catalog access without alleging missing non-public tables", async (failure) => {
+    const f = fixture(failure);
+    const findings = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir, driftSchemas: ["public", "extensions"] });
+    const drift = findings.filter((row) => row.id.startsWith("SB-DRIFT-"));
+    // A foreign response invalidates public too; otherwise independent public comparison survives.
+    expect(drift.map((row) => row.id)).toEqual(failure === "foreign" ? ["SB-DRIFT-00"] : ["SB-DRIFT-00", "SB-DRIFT-TABLE-MISSING-public-missing_table"]);
+    expect(drift[0]?.evidence).toContain("UNASSESSED SCHEMAS:");
+    expect(drift[0]?.evidence).toContain("extensions:");
+    expect(drift.some((row) => row.id.startsWith("SB-DRIFT-TABLE-MISSING-extensions"))).toBe(false);
+  });
+
+  it("rejects unsupported or injection-shaped schema names before any query", async () => {
+    const f = fixture();
+    await expect(runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir, driftSchemas: ["public';select 1;--"] })).rejects.toThrow(/schema names/);
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+  });
+});
