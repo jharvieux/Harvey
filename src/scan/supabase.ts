@@ -55,7 +55,7 @@
 // Management API surface in this session.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { loadSources } from "../detectors/load-sources.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
@@ -221,6 +221,14 @@ function readEdgeFunctionSources(functionsDir: string, targetRoot: string): Edge
     });
   }
   return sources;
+}
+
+function edgeFunctionTargetRoot(functionsDir: string): string {
+  const absolute = resolve(functionsDir);
+  const supabaseDir = dirname(absolute);
+  return basename(absolute) === "functions" && basename(supabaseDir) === "supabase"
+    ? dirname(supabaseDir)
+    : absolute;
 }
 
 async function managementApiGet<T>(path: string, token: string, fetchImpl: typeof fetch): Promise<T> {
@@ -546,7 +554,7 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
   }
 
   if (opts.functionsDir) {
-    const targetRoot = resolve(opts.functionsDir, "..", "..");
+    const targetRoot = edgeFunctionTargetRoot(opts.functionsDir);
     const edgeFunctions = readEdgeFunctionSources(opts.functionsDir, targetRoot);
     const projectSources = loadSources(targetRoot);
     const denoConfigPath = join(opts.functionsDir, "deno.json");

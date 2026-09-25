@@ -302,6 +302,29 @@ describe("runSupabaseScan", () => {
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir: dir });
       expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(true);
     });
+
+    it("resolves a repository import map and clears only a verifier that guards the effect", async () => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-fns-imported-"));
+      const functionsDir = join(dir, "supabase", "functions");
+      const webhookDir = join(functionsDir, "stripe-webhook");
+      mkdirSync(webhookDir, { recursive: true });
+      for (const name of ["handler", "shared", "implementation"]) {
+        writeFileSync(
+          join(webhookDir, `${name}.ts`),
+          readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts`, import.meta.url), "utf8"),
+        );
+      }
+      writeFileSync(join(webhookDir, "index.ts"), readFileSync(join(webhookDir, "handler.ts"), "utf8"));
+      writeFileSync(join(functionsDir, "deno.json"), JSON.stringify({ imports: { "@fixture/shared/stripe": "./stripe-webhook/implementation.ts" } }));
+
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
+      expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(false);
+
+      writeFileSync(join(webhookDir, "implementation.ts"), readFileSync(new URL("./__fixtures__/source-precision/webhook-no-verification/implementation.ts", import.meta.url), "utf8"));
+      const broken = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
+      expect(broken.find((f) => f.taxonomy === "Unsigned/unverified webhook handler")?.precisionTier).toBe("review");
+    });
   });
 
   // #54 — local mode now runs Splinter (via the injectable splinterImpl, mirroring fetchImpl
