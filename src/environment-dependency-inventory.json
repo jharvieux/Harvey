@@ -364543,8 +364543,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "aaca44b703d59da030949c942667eb7c98bd88db",
-    "commitPayload": "dHJlZSA3ZjU5ZmI5YjI3NzMzNGM3MTU5N2JiYmYyMDg5NjYzZGZlNmJlOTNjCnBhcmVudCBiOTdiZWY5MGExMGEyOTk3YThhYWIzMmM2ZTNkN2FlMjQyZjNkYzFmCnBhcmVudCAwNDUyOTJiM2MxZGRhOTMzNzI4MDAzODU4MmExNzY3MTM2ZTJlMDk5CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI2NDUzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI2NDUzIC0wNTAwCgpNZXJnZSB2ZXJpZmllZCBDSSBjb21wbGV0aW9uIHdpbmRvdyBmb3IgIzIwOTQK",
+    "commit": "0316ebf9fd992420db64a30c1cd27d7f89e2ae23",
+    "commitPayload": "dHJlZSBjMjM3OWE3MjYwMDY0ZDM0ZmE0M2QxMTY3NmM3MDQzMDJkNDcyNTI5CnBhcmVudCAwZWUyYmQxZmQwZjkzMzM1MDY1YTFlZWUwOTFlZDkyMjAwZDIwNDA1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI3NzU0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI3NzU0IC0wNTAwCgpVc2Ugc2hhcmVkIFBvc3RncmVTUUwgdGVzdCBidWRnZXQgZm9yICMyMTA5Cg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364553,13 +364553,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "0737e1a34f34fddc92c41100ecc9fa39dcf8389a",
+        "gitOid": "96cd162afc49198fb7fa01587cbd414af98e1078",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "6ae968c86eaaab90c4c3785b73aa3d7a174dd81c3feb9667d6993af30021b136",
-    "tree": "7f59fb9b277334c71597bbbf2089663dfe6be93c"
+    "populationSha256": "50a0e2b058fe9c148140e2cd81e8197568f0d74c5a1cc4a91af39c4acd6fd9da",
+    "tree": "c2379a7260064d34fa43d11676c704302d472529"
   },
   "venues": [
     {
@@ -370308,19 +370308,19 @@
       "sha256": "cce8f0195a2efe385a932b1681ae352a69664b18f1dc2d5afdccde92786ae2ef"
     },
     {
-      "bytes": 6171,
+      "bytes": 6147,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "704bb194f59b0441542219e8305e9f776ea31e63",
+      "gitOid": "976943a7ba002d0624456e9b69c1ffa57435f99b",
       "id": "src/__tests__/pentest-boundary-postgres.test.ts",
       "kind": "source",
-      "literalCount": 103,
-      "literalSha256": "ee3850a0a2a70944b7edacbe702d51edddfa59e0eac7936fb0f9c17495c58840",
+      "literalCount": 100,
+      "literalSha256": "accb04419aae90c4572aee5afdec90f5a75247e6cd2a2c89471863513e80ae1a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/__tests__/pentest-boundary-postgres.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "814626cb8410b0dab7445945c2a610739f2c6fdfb4df965f1c7188774a02f7d4"
+      "sha256": "3d23d1858600446aa820502b10dbe2c18738a24e1d399206088ff77070eb8b3d"
     },
     {
       "bytes": 67953,
