@@ -155,6 +155,15 @@ export class JiraTracker implements Tracker, TicketWriteback {
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     const fields: Record<string, unknown> = {};
     if (patch.body !== undefined) fields.description = markdownToAdf(patch.body);
+    if (patch.appendBody !== undefined) {
+      const issue = await trackerFetchJson<{ fields: { description: AdfNode | null } }>(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}?fields=description`, { method: "GET", headers: this.#jsonHeaders() });
+      const current = issue.fields?.description;
+      if (current !== null && (!current || current.type !== "doc" || !Array.isArray(current.content))) throw new Error("Jira description is unavailable; refusing to overwrite client content");
+      const text = (node: AdfNode): string => (node.text ?? "") + (node.content?.map(text).join("") ?? "");
+      if (!current?.content?.some(node => text(node).trim() === patch.appendBody!.trim())) {
+        fields.description = { ...(current ?? { type: "doc", version: 1 }), content: [...(current?.content ?? []), ...markdownToAdf(patch.appendBody).content] };
+      }
+    }
     if (patch.labels !== undefined) fields.labels = patch.labels;
     if (Object.keys(fields).length === 0) return;
     await trackerFetch(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}`, {

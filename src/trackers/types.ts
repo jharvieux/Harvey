@@ -29,6 +29,8 @@ export interface ItemInput {
 // Minimal patch payload for updateStory: only the fields the epic-builder's publish orchestrator
 // needs to touch after creation. Omitted fields are left untouched by the adapter.
 export interface UpdateStoryPatch {
+  // Append once to the current remote description, preserving client edits on retry.
+  appendBody?: string;
   body?: string;
   labels?: string[];
 }

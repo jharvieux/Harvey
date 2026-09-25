@@ -70,3 +70,12 @@ export function assertTrackerRef(ref: CreatedRef): CreatedRef {
     || !validUrl) throw new Error("Tracker creation returned an invalid reference; completed state is unknown");
   return ref;
 }
+
+// Returning undefined means the exact line is already present. Unknown remote content is
+// never replaced with an empty body, because that would erase client annotations.
+export function appendTrackerBody(current: unknown, addition: string): string | undefined {
+  if (current !== null && typeof current !== "string") throw new Error("Tracker description is unavailable; refusing to overwrite client content");
+  const body = current ?? "";
+  if (body.split("\n").some(line => line.trim() === addition.trim())) return undefined;
+  return `${body}\n\n${addition}\n`;
+}

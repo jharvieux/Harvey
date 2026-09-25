@@ -20,7 +20,7 @@
 // JQL search, confirm the `description` filter behaves as an exact substring match against a real
 // Linear workspace before relying on it for idempotency recovery.
 
-import { assertTrackerRef } from "./recovery.js";
+import { appendTrackerBody, assertTrackerRef } from "./recovery.js";
 import { trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -129,6 +129,12 @@ export class LinearTracker implements Tracker, TicketWriteback {
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     const input: Record<string, unknown> = {};
     if (patch.body !== undefined) input.description = patch.body;
+    if (patch.appendBody !== undefined) {
+      const data = await this.#graphql<{ issue: { description: string | null } }>(
+        `query($id: String!) { issue(id: $id) { description } }`, { id });
+      const body = appendTrackerBody(data.issue?.description, patch.appendBody);
+      if (body !== undefined) input.description = body;
+    }
     if (patch.labels !== undefined) input.labelIds = await this.#resolveLabelIds(patch.labels);
     if (Object.keys(input).length === 0) return;
     await this.#updateIssue(id, input);

@@ -21,7 +21,7 @@
 // #50: findByMarker uses the Issues Search API (in:body) scoped to this repo; updateStory PATCHes
 // the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
-import { assertTrackerRef, PartialTrackerWriteError, trackerNextLink, trackerRecoveryPages } from "./recovery.js";
+import { appendTrackerBody, assertTrackerRef, PartialTrackerWriteError, trackerNextLink, trackerRecoveryPages } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -174,11 +174,16 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   }
 
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
-    if (patch.body !== undefined) {
+    let body = patch.body;
+    if (patch.appendBody !== undefined) {
+      const issue = await trackerFetchJson<GitHubIssue>(this.#fetch, this.#repoUrl(`/issues/${id}`), { method: "GET", headers: this.#headers() });
+      body = appendTrackerBody(issue.body, patch.appendBody);
+    }
+    if (body !== undefined) {
       await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}`), {
         method: "PATCH",
         headers: this.#headers(),
-        body: JSON.stringify({ body: patch.body }),
+        body: JSON.stringify({ body }),
       });
     }
     if (patch.labels !== undefined) await this.setLabels(id, patch.labels);

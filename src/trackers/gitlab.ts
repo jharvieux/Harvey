@@ -18,7 +18,7 @@
 // findByMarker searches the project's issue descriptions (`in=description`); updateStory PUTs the
 // description and/or labels via the same issue endpoint setLabels uses.
 
-import { assertTrackerRef, PartialTrackerWriteError, trackerRecoveryPages } from "./recovery.js";
+import { appendTrackerBody, assertTrackerRef, PartialTrackerWriteError, trackerRecoveryPages } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -135,6 +135,11 @@ export class GitLabTracker implements Tracker, TicketWriteback {
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     const fields: Record<string, unknown> = {};
     if (patch.body !== undefined) fields.description = patch.body;
+    if (patch.appendBody !== undefined) {
+      const issue = await trackerFetchJson<{ description: string | null }>(this.#fetch, this.#issuesUrl(`/${id}`), { method: "GET", headers: this.#headers() });
+      const body = appendTrackerBody(issue.description, patch.appendBody);
+      if (body !== undefined) fields.description = body;
+    }
     if (patch.labels !== undefined) fields.labels = patch.labels.join(",");
     if (Object.keys(fields).length === 0) return;
     await trackerFetch(this.#fetch, this.#issuesUrl(`/${id}`), {

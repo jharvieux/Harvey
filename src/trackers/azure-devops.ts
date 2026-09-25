@@ -14,7 +14,7 @@
 // #50: findByMarker runs a WIQL CONTAINS query then fetches the hit for its html link; updateStory
 // PATCHes System.Description / System.Tags via the same JSON-Patch endpoint setLabels/setEstimate use.
 
-import { assertTrackerRef } from "./recovery.js";
+import { appendTrackerBody, assertTrackerRef } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -160,6 +160,11 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     const ops: JsonPatchOp[] = [];
     if (patch.body !== undefined) ops.push({ op: "add", path: "/fields/System.Description", value: patch.body });
+    if (patch.appendBody !== undefined) {
+      const item = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(id)}?api-version=${this.#apiVersion}`, { method: "GET", headers: { Authorization: this.#auth } });
+      const body = appendTrackerBody(item.fields?.["System.Description"], patch.appendBody);
+      if (body !== undefined) ops.push({ op: "add", path: "/fields/System.Description", value: body });
+    }
     if (patch.labels !== undefined) ops.push({ op: "add", path: "/fields/System.Tags", value: patch.labels.join("; ") });
     if (ops.length === 0) return;
     await this.#patchWorkItem(id, ops);
