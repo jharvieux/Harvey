@@ -1,11 +1,21 @@
-import type { CreatedRef } from "./types.js";
+import type { AttachedRef, CreatedRef } from "./types.js";
 import { trackerFetch } from "./http.js";
 
 // Preserve a successful remote creation even when a later operation fails.
 export class PartialTrackerWriteError extends Error {
-  constructor(readonly ref: CreatedRef, readonly stage: string, cause: unknown) {
+  constructor(readonly ref: CreatedRef, readonly stage: string, cause: unknown, readonly attachedRef?: AttachedRef) {
     super(`${stage} failed after ticket ${ref.id} was created: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "PartialTrackerWriteError";
+  }
+}
+
+// An attachment upload is its own irreversible remote write on Azure DevOps. Surface its validated
+// receipt when the following relation write fails so the publisher can persist it before returning
+// the failure and resume only the outstanding relation.
+export class PartialAttachmentWriteError extends Error {
+  constructor(readonly attachedRef: AttachedRef, readonly stage: string, cause: unknown) {
+    super(`${stage} failed after attachment ${attachedRef.url} was uploaded: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "PartialAttachmentWriteError";
   }
 }
 

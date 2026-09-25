@@ -62,6 +62,10 @@ export interface Tracker {
   setLabels(id: string, labels: string[]): Promise<void>;
   setEstimate(id: string, estimate: number): Promise<void>;
   attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef>;
+  // Some trackers upload bytes and link them to the ticket in separate remote writes. When the
+  // upload is durable but the link is not, the publisher persists the upload receipt and resumes
+  // only this relation operation. Adapters with atomic attachment writes omit this method.
+  completeAttachment?(id: string, attached: AttachedRef): Promise<void>;
   // Idempotency recovery (#50, design §8.2 mechanism 2): look up an item already created by a
   // prior run via the hidden marker the epic-builder stamps into every created body (see
   // publish.ts `marker()`). Returns null on no match — never throws for "not found".

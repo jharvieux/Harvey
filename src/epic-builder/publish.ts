@@ -5,10 +5,10 @@
 // identity proves creation, not completion of labels, links or brief delivery.
 
 import type { Tracker, CreatedRef, ItemInput, AttachedRef } from "../trackers/types.js";
-import type { DraftSession, PublishedRef, StoryState } from "./types.js";
+import type { DraftSession, PublicationProgress, PublishedRef, StoryState } from "./types.js";
 import { draftExists, readDraft, readFileRaw, writeDraft, writeFile } from "./workspace.js";
 import { contentHash, renderStoryBody, renderSummary, type SummaryRow } from "./render.js";
-import { assertTrackerRef, PartialTrackerWriteError } from "../trackers/recovery.js";
+import { assertTrackerRef, PartialAttachmentWriteError, PartialTrackerWriteError } from "../trackers/recovery.js";
 import type { FrontmatterData } from "./frontmatter.js";
 
 interface PublishOptions {
@@ -46,9 +46,9 @@ function writePublished(data: FrontmatterData, ref: PublishedRef): void {
 
 // Stage receipts distinguish remote creation from completion. Legacy receipts resume
 // metadata and brief stages from their saved remote identity.
-function publication(data: FrontmatterData): Record<string, string> | undefined {
+function publication(data: FrontmatterData): PublicationProgress | undefined {
   const value = data.publication;
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as unknown as PublicationProgress : undefined;
 }
 
 export async function publish(
@@ -158,9 +158,28 @@ export async function publish(
         if (brief) {
           stage = "brief attachment";
           if (!progress.briefUrl) {
-            const attached = await tracker.attachBrief(ref.ref, brief);
-            progress.briefUrl = assertTrackerRef({ id: ref.ref, url: attached.url }).url;
-            doc.data.brief = attached.url;
+            try {
+              const attached = await tracker.attachBrief(ref.ref, brief);
+              progress.briefUrl = assertTrackerRef({ id: ref.ref, url: attached.url }).url;
+              progress.briefAttachment = "complete";
+              doc.data.brief = progress.briefUrl;
+              save(story.file, doc);
+            } catch (error) {
+              if (error instanceof PartialAttachmentWriteError) {
+                progress.briefUrl = assertTrackerRef({ id: ref.ref, url: error.attachedRef.url }).url;
+                progress.briefAttachment = "pending";
+                doc.data.brief = progress.briefUrl;
+                save(story.file, doc);
+                stage = "brief attachment relation";
+              }
+              throw error;
+            }
+          }
+          if (progress.briefAttachment === "pending") {
+            stage = "brief attachment relation";
+            if (!tracker.completeAttachment) throw new Error("Tracker cannot resume an incomplete attachment relation");
+            await tracker.completeAttachment(ref.ref, { url: progress.briefUrl });
+            progress.briefAttachment = "complete";
             save(story.file, doc);
           }
           stage = "brief link";
@@ -168,7 +187,14 @@ export async function publish(
         }
         progress.state = "complete";
         save(story.file, doc);
-      } catch (error) { throw new PartialTrackerWriteError({ id: ref.ref, url: ref.url }, stage, error); }
+      } catch (error) {
+        throw new PartialTrackerWriteError(
+          { id: ref.ref, url: ref.url },
+          stage,
+          error,
+          error instanceof PartialAttachmentWriteError ? error.attachedRef : undefined,
+        );
+      }
     }
     refByStorySlug.set(slug, ref);
     storyRefs.push({ file: story.file, ref });

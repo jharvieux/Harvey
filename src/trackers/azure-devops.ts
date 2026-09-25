@@ -14,7 +14,7 @@
 // #50: findByMarker runs a WIQL CONTAINS query then fetches the hit for its html link; updateStory
 // PATCHes System.Description / System.Tags via the same JSON-Patch endpoint setLabels/setEstimate use.
 
-import { appendTrackerBody, assertTrackerRef } from "./recovery.js";
+import { appendTrackerBody, assertTrackerRef, PartialAttachmentWriteError } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -228,13 +228,30 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
       headers: { Authorization: this.#auth, "Content-Type": "application/octet-stream" },
       body: briefMarkdown,
     });
+    const attached = { url: assertTrackerRef({ id, url: attachment.url }).url };
+    try {
+      await this.completeAttachment(id, attached);
+    } catch (error) {
+      throw new PartialAttachmentWriteError(attached, "Azure attachment relation", error);
+    }
+    return attached;
+  }
+
+  async completeAttachment(id: string, attached: AttachedRef): Promise<void> {
+    const url = assertTrackerRef({ id, url: attached.url }).url;
+    // A failed response can arrive after Azure accepted the relation. Read before retrying so the
+    // durable upload receipt resumes idempotently without adding a duplicate AttachedFile row.
+    const workItem = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(id)}?$expand=relations&api-version=${this.#apiVersion}`, {
+      method: "GET",
+      headers: { Authorization: this.#auth },
+    });
+    if ((workItem.relations ?? []).some((relation) => relation.rel === "AttachedFile" && relation.url === url)) return;
     await this.#patchWorkItem(id, [
       {
         op: "add",
         path: "/relations/-",
-        value: { rel: "AttachedFile", url: attachment.url, attributes: { comment: "Implementation brief" } },
+        value: { rel: "AttachedFile", url, attributes: { comment: "Implementation brief" } },
       },
     ]);
-    return { url: attachment.url };
   }
 }

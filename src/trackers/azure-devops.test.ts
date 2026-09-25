@@ -81,9 +81,45 @@ describe("AzureDevOpsTracker", () => {
 
     expect(calls[0]?.url).toBe("https://dev.azure.com/acme/Audit/_apis/wit/attachments?fileName=brief-6.md&api-version=7.1");
     expect(calls[0]?.headers["Content-Type"]).toBe("application/octet-stream");
-    const patch = JSON.parse(calls[1]!.bodyText) as { value: { rel: string; url: string } }[];
+    expect(calls[1]?.url).toBe("https://dev.azure.com/acme/_apis/wit/workItems/6?$expand=relations&api-version=7.1");
+    const patch = JSON.parse(calls[2]!.bodyText) as { value: { rel: string; url: string } }[];
     expect(patch[0]?.value.rel).toBe("AttachedFile");
     expect(patch[0]?.value.url).toBe(attachmentUrl);
+  });
+
+  it("surfaces a completed upload receipt and resumes only an outstanding relation", async () => {
+    const attachmentUrl = "https://dev.azure.com/acme/Audit/_apis/wit/attachments/durable";
+    let linked = false;
+    let uploads = 0;
+    let relationPatches = 0;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const requestUrl = String(url);
+      const method = init?.method ?? "GET";
+      if (requestUrl.includes("/attachments?") && method === "POST") {
+        uploads++;
+        return Response.json({ url: attachmentUrl });
+      }
+      if (method === "GET") {
+        return Response.json({ ...workItem(6), relations: linked ? [{ rel: "AttachedFile", url: attachmentUrl }] : [] });
+      }
+      relationPatches++;
+      // Model an ambiguous transport response: Azure committed the relation, then the caller saw
+      // failure. Recovery must observe that completed state instead of adding another relation.
+      linked = true;
+      return new Response("response lost after relation commit", { status: 500 });
+    };
+    const tracker = new AzureDevOpsTracker({ orgUrl: "https://dev.azure.com/acme", project: "Audit", pat: "fixture", fetchImpl });
+
+    let failure: unknown;
+    try { await tracker.attachBrief("6", "# Brief"); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({
+      name: "PartialAttachmentWriteError",
+      stage: "Azure attachment relation",
+      attachedRef: { url: attachmentUrl },
+    });
+    await tracker.completeAttachment("6", { url: attachmentUrl });
+    expect(uploads).toBe(1);
+    expect(relationPatches).toBe(1);
   });
 
   it("finds an existing item by marker via a WIQL CONTAINS query, then fetches its html link (#50)", async () => {

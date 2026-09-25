@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "../trackers/types.js";
 import { LinearTracker } from "../trackers/linear.js";
 import { GitHubTracker } from "../trackers/github.js";
+import { PartialAttachmentWriteError } from "../trackers/recovery.js";
 import { NoopTracker, publish } from "./publish.js";
 import type { DraftSession } from "./types.js";
 import { createWorkspace, readDraft, writeDraft, writeFile } from "./workspace.js";
@@ -46,6 +47,7 @@ class FakeTracker implements Tracker {
     this.briefs.push(briefMarkdown);
     return { url: `https://tracker.test/brief/${id}` };
   }
+  completeAttachment?: (id: string, attached: AttachedRef) => Promise<void>;
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     this.updates.push({ id, patch });
   }
@@ -216,6 +218,41 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
 });
 
 describe("publication stages survive post-create failures (#2113)", () => {
+  it("persists a completed upload receipt and resumes only its pending relation", async () => {
+    const { dir, session } = seedWorkspace();
+    session.stories = session.stories.slice(0, 1);
+    const tracker = new FakeTracker();
+    const url = "https://tracker.test/upload/already-complete";
+    let uploads = 0;
+    let relations = 0;
+    tracker.attachBrief = async () => {
+      uploads++;
+      throw new PartialAttachmentWriteError({ url }, "fixture relation", new Error("controlled relation failure"));
+    };
+    tracker.completeAttachment = async (_id, attached) => {
+      expect(attached).toEqual({ url });
+      relations++;
+    };
+
+    await expect(publish(dir, session, tracker)).rejects.toMatchObject({
+      name: "PartialTrackerWriteError",
+      stage: "brief attachment relation",
+      attachedRef: { url },
+    });
+    const pending = readDraft(dir, "stories/01-endpoint.md").data;
+    expect(pending.publication).toMatchObject({ state: "pending", briefUrl: url, briefAttachment: "pending" });
+    expect(pending.brief).toBe(url);
+
+    await publish(dir, session, tracker);
+    expect(uploads).toBe(1);
+    expect(relations).toBe(1);
+    expect(readDraft(dir, "stories/01-endpoint.md").data.publication).toMatchObject({
+      state: "complete",
+      briefUrl: url,
+      briefAttachment: "complete",
+    });
+  });
+
   it.each(["", "javascript:alert(1)"])("keeps an invalid attachment reference %s pending", async url => {
     const { dir, session } = seedWorkspace();
     const tracker = new FakeTracker();
