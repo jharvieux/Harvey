@@ -219,7 +219,7 @@ export function runMutationWorkspaces(plan: MutationWorkspacePlan, options: { st
     results.push(result);
     const raw = result.artifact?.effectiveReport as StrykerReport | undefined;
     const label = plan.workspaces.filter(row => row.directory === workspace.directory).length > 1 ? `[${workspace.id}]/` : "";
-    if (raw?.files) {
+    if (raw?.files && (result.state === "complete" || result.state === "bounded")) {
       for (const [path, row] of Object.entries(raw.files)) combined.files[`${label}${posix(join(workspace.invocationDirectory, path))}`] = row;
     }
     const childFindings = (result.artifact?.findings as Finding[] | undefined) ?? [];
@@ -234,7 +234,8 @@ export function runMutationWorkspaces(plan: MutationWorkspacePlan, options: { st
   const incomplete = plan.gaps.length > 0 || missing.length > 0 || results.some(result => !["complete", "no-production"].includes(result.state));
   const summary = summarizeMutationReport(combined);
   return {
-    schemaVersion: 1, mutationWorkspacePlan: plan, workspaces: results, findings, summary, reportRows: toReportRows(summary),
+    schemaVersion: 1, mutationWorkspacePlan: plan, workspaces: results, findings,
+    ...(Object.keys(combined.files).length ? { summary, reportRows: toReportRows(summary) } : {}),
     workspaceCoverage: { complete: !incomplete, planned: plan.workspaces.length, observed: results.length, missing: missing.map(row => row.id), production: [...new Set(plan.workspaces.flatMap(row => [...row.productionSources, ...row.configuredSources]))].length, reported: new Set(results.flatMap(result => result.reportedSources)).size },
     ...(incomplete ? { moduleRecord: { status: "partial", note: `Workspace mutation coverage is incomplete. ${plan.gaps.join("; ")} ${missing.map(row => `${row.id}: missing execution`).join("; ")} ${results.filter(row => !["complete", "no-production"].includes(row.state)).map(row => `${row.id}: ${row.state}: ${row.reason}`).join("; ")}` } } : {}),
     rawReports: results.flatMap(result => result.artifact?.rawReport ? [{ workspace: result.id, report: result.artifact.rawReport }] : []),

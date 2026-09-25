@@ -1410,7 +1410,8 @@ const m8: ModuleRunner = {
     if (!measured) {
       return {
         kind: "not-assessed",
-        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${trimOut(output)}`,
+        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${verdict.kind === "partial" ? verdict.note : trimOut(output)}`,
+        findings,
         provenance: "MEASURED",
         falsifier: `${staticCmd} && ${command}`,
       };

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mutationWorkspaceFinding, planMutationWorkspaces } from "./mutation-workspace.js";
 import { runMutationWorkspaces } from "./mutation-workspace-runner.js";
+import { testQualityFromArtifact } from "./mutation-scan.js";
 import { findingFamilyKind } from "./findings.js";
 
 const roots: string[] = [];
@@ -88,6 +89,9 @@ describe("mutation workspace execution plan", () => {
     const output = runMutationWorkspaces(plan, { storage: "/unused", cliPath: "/unused", planOnly: true });
     expect(output.workspaceCoverage).toMatchObject({ complete: false, planned: 3, observed: 3 });
     expect(output.moduleRecord).toMatchObject({ status: "partial" });
+    expect(output).not.toHaveProperty("summary");
+    expect(output).not.toHaveProperty("reportRows");
+    expect(testQualityFromArtifact(output)).toBeUndefined();
     const findings = output.findings as ReturnType<typeof mutationWorkspaceFinding>[];
     expect(findings.some(row => row.location === "apps/rag/package.json")).toBe(true);
     expect(findings.every(row => findingFamilyKind(row) === "coverage-disclosure")).toBe(true);
