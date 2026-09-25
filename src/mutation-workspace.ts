@@ -158,6 +158,6 @@ export function mutationWorkspaceFinding(workspace: MutationWorkspace, state: st
     evidence: `${reason} Production population: ${workspace.productionSources.length}; configured: ${workspace.configuredSources.length}; selected: ${workspace.selectedSources.length}; candidate test files: ${workspace.candidateTests.length}. Unselected sources: ${workspace.unselectedSources.join(", ") || "none"}.`,
     impact: "This workspace contributes only its observed mutation results; unassessed source and related-test populations remain outside the score.",
     fix: "Use the retained workspace plan, configuration and command receipts to resolve this limitation, then rerun the remaining production population and prove related tests complete.",
-    value: 0, ease: 0, safety: 5,
+    value: 1, ease: 1, safety: 5,
   };
 }

@@ -15,6 +15,7 @@ import { assembleEngagementDocument } from "./audit-report.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
 import { MAX_PASS_FUTURE_SKEW_MS } from "./audit-pass-artifact.js";
 import { renderReport } from "../report-template/render.mjs";
+import { mutationWorkspaceFinding, planMutationWorkspaces } from "./mutation-workspace.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -765,19 +766,25 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   });
 
   it("M8 delivers a failed workspace beside a measured sibling with the partial reason rendered", async () => {
-    const finding: Finding = { id: "M8-WORKSPACE-rag", status: "Open", category: "Test quality", title: "RAG related-test discovery failed", severity: "Info", confidence: "N/A", taxonomy: "M8 — Workspace mutation coverage", location: "apps/rag/package.json", evidence: "Zero related tests; all 47 configured production sources remain unassessed", impact: "RAG has no measured mutation score", fix: "Repair related-test discovery and rerun RAG", value: 0, ease: 0, safety: 5 };
+    const directory = mkdtempSync(join(tmpdir(), "mutation-workspace-delivery-"));
+    mkdirSync(join(directory, "apps/rag/src"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ workspaces: ["apps/rag"] }));
+    writeFileSync(join(directory, "apps/rag/package.json"), JSON.stringify({ name: "rag" }));
+    writeFileSync(join(directory, "apps/rag/src/unit.ts"), "export const unit = 1");
+    const workspace = planMutationWorkspaces(directory).workspaces.find(row => row.directory === "apps/rag")!;
+    const finding = mutationWorkspaceFinding(workspace, "discovery-failed", "Zero related tests; the configured production source remains unassessed");
     const artifact = { summary: { overall: { totalMutants: 5, mutationScore: 80 } }, findings: [finding], moduleRecord: { status: "partial", note: "Main measured; RAG discovery-failed: zero related tests" } };
     const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
     const result = runAudit(AUDIT_RUNNERS, context);
     expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial" });
     expect(result.findings).toContainEqual(finding);
     const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
-    const directory = mkdtempSync(join(tmpdir(), "mutation-workspace-delivery-"));
+    expect(validateFindings(document)).toEqual({ ok: true, errors: [] });
     try {
       const htmlPath = join(directory, "report.html");
       await renderReport(document, { htmlPath });
       const html = readFileSync(htmlPath, "utf8");
-      expect(html).toContain("47 configured production sources remain unassessed");
+      expect(html).toContain("the configured production source remains unassessed");
       expect(html).toContain("RAG discovery-failed: zero related tests");
     } finally { rmSync(directory, { recursive: true, force: true }); }
     expect(conservationLedger(result.findings, document.findings).unaccounted).toBe(0);

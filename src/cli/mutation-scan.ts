@@ -732,6 +732,7 @@ if (!reportPath && !stubCheck && !detectOnly && !args.includes("--single-workspa
   if (selection !== undefined && (!Array.isArray(selection) || selection.some(path => typeof path !== "string"))) throw new Error("--mutation-selection must name a JSON array of repository-relative production paths");
   const plan = planMutationWorkspaces(targetDir, { selection: selection as string[] | undefined });
   if (plan.workspaces.length > 1 || args.includes("--workspaces") || args.includes("--plan")) {
+    if (compareRunPath) plan.gaps.push("Requested --compare-run is not assessed for independent workspace invocations: match each retained original workspace receipt before comparing mutation stability. The prior artifact remains a protected input.");
     if (configPath) {
       const override = readStaticConfigObject(resolve(configPath));
       const mutate = Array.isArray(override.value?.mutate) && override.value.mutate.every(value => typeof value === "string") ? override.value.mutate as string[] : undefined;
@@ -743,6 +744,7 @@ if (!reportPath && !stubCheck && !detectOnly && !args.includes("--single-workspa
         workspace.unselectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => !workspace.selectedSources.includes(path));
         if (override.value) {
           workspace.configuration = override.value;
+          workspace.selectedConfiguration = resolve(configPath);
           workspace.invocationDirectory = ".";
           workspace.configurationDirectory = ".";
           if (typeof override.value.testRunner === "string") workspace.runner = override.value.testRunner;
@@ -754,7 +756,7 @@ if (!reportPath && !stubCheck && !detectOnly && !args.includes("--single-workspa
     for (const workspace of plan.workspaces) for (const config of workspace.strykerConfigurations) registerProtectedInput(join(targetDir, config.path));
     const pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), [...protectedInputPaths]);
     const storage = allocateMutationWorkspaceStorage(join(scratchRoot(), "workspaces-"));
-    const forwarded = [...(concurrency ? ["--concurrency", concurrency] : []), ...(incremental ? ["--incremental"] : []), ...(install ? ["--install"] : [])];
+    const forwarded = [...(concurrency ? ["--concurrency", concurrency] : []), ...(incremental ? ["--incremental"] : []), ...(install ? ["--install"] : []), ...(hotspotsPath ? ["--hotspots", resolve(hotspotsPath)] : [])];
     const output = runMutationWorkspaces(plan, { storage, cliPath: fileURLToPath(import.meta.url), flags: forwarded, planOnly: args.includes("--plan") });
     assertTreePristine(pristine, "#1285");
     output.targetTreeUntouched = { pristine: true, scratchDir: storage, note: `${args.includes("--plan") ? "Plan-only; no workspace commands executed." : "Invoked workspace commands used disposable source copies."} Original source, configurations and existing reports passed the complete target snapshot assertion.` };
