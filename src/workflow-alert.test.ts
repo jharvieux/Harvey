@@ -29,6 +29,13 @@ describe("CI alert identity and recovery", () => {
     expect(main.incident).toBe("main");
   });
 
+  it("describes a setup-stage heavy failure without claiming tests ran", () => {
+    const message = buildWorkflowAlert("heavy", run("workflow_dispatch", "refs/heads/feature/work", "4"), "setup step before test execution");
+    expect(message.body).toContain("heavy-cli job failed at setup step before test execution");
+    expect(message.body).toContain("event `workflow_dispatch`");
+    expect(message.body).not.toContain("tests ran with the real mechanical binaries");
+  });
+
   it("rejects the former hard-coded scheduled/main wording across the three real identities", () => {
     const identities = [
       run("workflow_dispatch", "refs/heads/feature/work", "1111111111111111"),

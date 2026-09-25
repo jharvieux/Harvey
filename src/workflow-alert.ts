@@ -66,7 +66,7 @@ export function buildWorkflowAlert(scope: WorkflowAlertScope, identity: Workflow
   }
   const title = scope === "heavy" ? `heavy-cli ${subject} failing` : `CI ${subject} is red`;
   const detail = scope === "heavy"
-    ? "The heavy child-process tests ran with the real mechanical binaries; inspect the failing shard before attributing the cause."
+    ? `The heavy-cli job failed${shard ? ` at ${shard}` : ""}; inspect the failed job before attributing the cause.`
     : "The aggregate verify job failed; inspect the contributing job before attributing the cause.";
   return { kind, incident, title, recovery, body: `${title}. Identity: ${context}. ${detail} ${recovery}` };
 }
