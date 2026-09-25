@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import type { MutationRunnerValidity, StrykerReport } from "./mutation-scan.js";
+import { assertCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -51,12 +52,21 @@ describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
       rawReport: StrykerReport;
       effectiveReport: StrykerReport;
       runnerValidity: MutationRunnerValidity;
+      executionReceipt: CommandExecutionReceipt;
       summary: { overall: { survived: number; runtimeErrors: number; noCoverage: number; killed: number } };
     };
     const report = artifact.rawReport;
     expect(report, `CLI stderr:\n${cli.stderr}\nartifact:\n${JSON.stringify(artifact, null, 2)}`).toBeTruthy();
     expect(report.framework).toMatchObject({ name: "StrykerJS", version: "9.6.1" });
     expect(report.config).toMatchObject({ testRunner: "vitest", coverageAnalysis: "perTest", vitest: { related: false, configFile: "vitest.config.ts" } });
+    assertCommandExecutionReceipt(artifact.executionReceipt);
+    verifyCommandExecutionReceiptArtifacts(artifact.executionReceipt);
+    expect(artifact.executionReceipt).toMatchObject({
+      outcome: { state: "exited", exitCode: 0 },
+      toolchain: expect.arrayContaining([{ name: "StrykerJS", version: "9.6.1" }, { name: "vitest", version: "3.2.6" }]),
+      measurements: { completedTests: 2, testsDiscovered: 2, suiteLoadErrors: 1 },
+      artifacts: [{ role: "report" }],
+    });
     const arithmetic = report.files["src/subject.ts"]!.mutants.filter((mutant) => mutant.mutatorName === "ArithmeticOperator");
     expect(arithmetic.map(({ status, testsCompleted }) => ({ status, testsCompleted }))).toEqual([
       { status: "NoCoverage", testsCompleted: undefined },
@@ -74,6 +84,15 @@ describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
         suiteErrors: [expect.stringContaining("dimension metadata failed to load")],
         nativeComparison: { completedTests: 0, exitCode: 1, selectedTests: ["src/subject.test.ts"] },
       }],
+    });
+    const nativeReceipt = artifact.runnerValidity.issues[0]!.nativeComparison!.receipt!;
+    assertCommandExecutionReceipt(nativeReceipt);
+    verifyCommandExecutionReceiptArtifacts(nativeReceipt);
+    expect(nativeReceipt).toMatchObject({
+      outcome: { state: "exited", exitCode: 1 },
+      toolchain: [{ name: "vitest", version: "3.2.6" }],
+      measurements: { completedTests: 0, testsDiscovered: 2, suiteLoadErrors: 1 },
+      artifacts: [{ role: "report" }],
     });
     expect(artifact.effectiveReport.files["src/subject.ts"]!.mutants.find((mutant) => mutant.id === importFailure.id)).toMatchObject({ status: "RuntimeError", testsCompleted: 0 });
     expect(artifact.summary.overall).toMatchObject({ killed: 1, survived: 1, noCoverage: 1, runtimeErrors: 1 });

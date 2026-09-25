@@ -15,6 +15,7 @@
 
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
+import type { CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 export type MutantStatus =
   | "Killed"
@@ -70,6 +71,7 @@ export interface StrykerFileReport {
 
 export interface StrykerReport {
   schemaVersion?: string;
+  framework?: { name?: string; version?: string };
   thresholds?: { high: number; low: number };
   files: Record<string, StrykerFileReport>;
   // #1076: "Free-format object that represents the configuration used to run mutation testing"
@@ -92,6 +94,7 @@ export interface NativeMutationComparison {
   suiteErrors: string[];
   stdoutSha256: string;
   stderrSha256: string;
+  receipt?: CommandExecutionReceipt;
 }
 
 export interface MutationRunnerValidityIssue {

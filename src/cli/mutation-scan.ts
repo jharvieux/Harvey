@@ -101,8 +101,8 @@
 // Stryker runs against the copy instead of the target itself whenever there's something to rewrite.
 
 import "./sync-stdio.js";
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -117,6 +117,7 @@ import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub
 import { mirrorNodeModules } from "../stub-worktree.js";
 import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
 import { redactSecrets } from "../secret-redact.js";
+import { createCommandExecutionReceipt, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
 import {
   coveredScopeLine,
   applyReportedMutation,
@@ -200,6 +201,16 @@ const scopeOutPath = arg("--scope-out");
 // below (the same case where reportPath/configPath are redirected).
 let coverageCwd = targetDir;
 const install = process.argv.includes("--install");
+
+function receiptArtifactBesideOutput(suffix: string): string | undefined {
+  if (!outPath) return undefined;
+  const output = resolve(outPath);
+  const rel = relative(targetDir, output);
+  // The CLI's existing pristine assertion runs before writing --out. Receipt sidecars must follow
+  // the stronger rule and never add extra files to the audited checkout at all.
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return `${output}.${suffix}`;
+  return undefined;
+}
 
 function warnIfNotPerTest(cfgPath: string): void {
   if (!cfgPath.endsWith(".json")) return; // .mjs/.cjs configs aren't statically inspectable here
@@ -997,7 +1008,26 @@ function instrumentedFileCount(output: string): number | undefined {
   return count === undefined ? undefined : Number(count);
 }
 
-function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string; ts7Crash?: boolean; phases?: { testBaselineMs: number; mutationMs: number }; instrumentedFileCount?: number } {
+interface CommandObservation {
+  executable: string;
+  argv: string[];
+  cwd: string;
+  startedAt: string;
+  finishedAt: string;
+  outcome: { state: CommandTerminalState; exitCode: number | null; signal: string | null; errorCode?: string };
+  stdout: string;
+  stderr: string;
+}
+
+interface StrykerRunResult {
+  dryRunFailure?: string;
+  ts7Crash?: boolean;
+  phases?: { testBaselineMs: number; mutationMs: number };
+  instrumentedFileCount?: number;
+  execution: CommandObservation;
+}
+
+function runStryker(cfgPath: string | undefined, cwd: string = targetDir): StrykerRunResult {
   const strykerArgs = ["run"];
   if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
@@ -1009,39 +1039,50 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dry
   // node_modules/.bin, not globally.
   const localBin = join(cwd, "node_modules", ".bin", "stryker");
   const strykerBin = existsSync(localBin) ? localBin : "stryker";
-  try {
-    // Stryker exits non-zero when the mutation score is under its configured break threshold —
-    // that's not a wrapper failure, the report is still written; only a missing binary should throw.
-    const stdout = execFileSync(strykerBin, strykerArgs, { cwd, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-    process.stderr.write(stdout);
+  const startedAt = new Date().toISOString();
+  // Stryker exits non-zero when the mutation score is under its configured break threshold —
+  // that's not a wrapper failure, the report is still written. spawnSync retains both streams on
+  // success as well as failure so the receipt digests the command's complete observation.
+  const child = spawnSync(strykerBin, strykerArgs, { cwd, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  if ((child.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    throw new Error("stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo (see this file's header comment)");
+  }
+  const stdout = child.stdout ?? "";
+  const stderr = child.stderr ?? "";
+  process.stderr.write(stdout);
+  process.stderr.write(stderr);
+  const outcome = child.status !== null
+    ? { state: "exited" as const, exitCode: child.status, signal: null }
+    : child.signal
+      ? { state: "signaled" as const, exitCode: null, signal: child.signal }
+      : { state: "unknown-exit" as const, exitCode: null, signal: null, ...((child.error as NodeJS.ErrnoException | undefined)?.code ? { errorCode: (child.error as NodeJS.ErrnoException).code } : {}) };
+  const execution: CommandObservation = { executable: strykerBin, argv: strykerArgs, cwd, startedAt, finishedAt: new Date().toISOString(), outcome, stdout, stderr };
+  if (child.status === 0) {
     const phases = strykerPhaseDurations(stdout);
     const instrumented = instrumentedFileCount(stdout);
-    return { ...(phases ? { phases } : {}), ...(instrumented === undefined ? {} : { instrumentedFileCount: instrumented }) };
-  } catch (err) {
-    const e = err as { code?: string; stdout?: string; stderr?: string };
-    if (e.code === "ENOENT") {
-      throw new Error("stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo (see this file's header comment)");
-    }
-    const captured = `${e.stdout ?? ""}\n${e.stderr ?? ""}`;
-    process.stderr.write(captured);
-    const dryRun = detectDryRunFailure(captured);
-    if (dryRun.failed) {
-      const phases = strykerPhaseDurations(captured);
-      return { dryRunFailure: dryRun.detail, ...(phases ? { phases } : {}) };
-    }
-    // #773: the reactive safety net — fires when the proactive TS7 bypass below wasn't applied
-    // (non-JSON target config) or missed the incompatibility (TypeScript resolved from outside the
-    // dir this tool checked). Caught by exact crash signature so this never falls through to the
-    // opaque "mutation report not found" this incompatibility used to produce.
-    if (detectTs7TsconfigCrash(captured)) {
-      const phases = strykerPhaseDurations(captured);
-      return { ts7Crash: true, ...(phases ? { phases } : {}) };
-    }
-    // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
-    const phases = strykerPhaseDurations(captured);
-    const instrumented = instrumentedFileCount(captured);
-    return { ...(phases ? { phases } : {}), ...(instrumented === undefined ? {} : { instrumentedFileCount: instrumented }) };
+    return {
+      ...(phases ? { phases } : {}), ...(instrumented === undefined ? {} : { instrumentedFileCount: instrumented }),
+      execution,
+    };
   }
+  const captured = `${stdout}\n${stderr}`;
+  const dryRun = detectDryRunFailure(captured);
+  if (dryRun.failed) {
+    const phases = strykerPhaseDurations(captured);
+    return { dryRunFailure: dryRun.detail, ...(phases ? { phases } : {}), execution };
+  }
+  // #773: the reactive safety net — fires when the proactive TS7 bypass below wasn't applied
+  // (non-JSON target config) or missed the incompatibility (TypeScript resolved from outside the
+  // dir this tool checked). Caught by exact crash signature so this never falls through to the
+  // opaque "mutation report not found" this incompatibility used to produce.
+  if (detectTs7TsconfigCrash(captured)) {
+    const phases = strykerPhaseDurations(captured);
+    return { ts7Crash: true, ...(phases ? { phases } : {}), execution };
+  }
+  // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
+  const phases = strykerPhaseDurations(captured);
+  const instrumented = instrumentedFileCount(captured);
+  return { ...(phases ? { phases } : {}), ...(instrumented === undefined ? {} : { instrumentedFileCount: instrumented }), execution };
 }
 
 // #819: the headline "coverage-vs-mutation-score gap" needs line coverage, which Stryker's own
@@ -1133,10 +1174,20 @@ function safeNativeDiagnostic(value: string): string {
   return redactSecrets(value).slice(0, 4_096);
 }
 
+function installedPackageVersion(root: string, packageName: string): string {
+  try {
+    const packagePath = join(root, "node_modules", ...packageName.split("/"), "package.json");
+    const value = JSON.parse(readFileSync(packagePath, "utf8")) as { version?: unknown };
+    return typeof value.version === "string" ? value.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Re-run a suspect zero-completed survivor through native Vitest in a disposable copy. This is
  * a comparison oracle, not a reclassification as Killed: a suite-load error completed no tests,
  * so the effective report remains explicit RuntimeError/uncheckable. */
-function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["files"][string]["mutants"][number], report: StrykerReport): NativeMutationComparison | undefined {
+function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["files"][string]["mutants"][number], report: StrykerReport, receiptArtifactPath?: string): NativeMutationComparison | undefined {
   if (report.config?.testRunner !== "vitest") return undefined;
   const sourcePath = resolve(targetDir, file);
   const rel = relative(targetDir, sourcePath);
@@ -1160,8 +1211,10 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   const bin = existsSync(localBin) ? localBin : "vitest";
   let exitCode: number | null = 0;
   let signal: string | null = null;
+  let errorCode: string | undefined;
   let stdout = "";
   let stderr = "";
+  const startedAt = new Date().toISOString();
   try {
     copySource(targetDir, runDir);
     if (existsSync(join(targetDir, "node_modules"))) mirrorSourceDependencies(targetDir, runDir);
@@ -1169,9 +1222,10 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     writeFileSync(staged, applyReportedMutation(readFileSync(staged, "utf8"), mutant));
     stdout = execFileSync(bin, args, { cwd: runDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
   } catch (error) {
-    const failure = error as { status?: number; signal?: string; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+    const failure = error as { code?: string; status?: number; signal?: string; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
     exitCode = typeof failure.status === "number" ? failure.status : null;
     signal = failure.signal ?? null;
+    errorCode = failure.code;
     stdout = typeof failure.stdout === "string" ? failure.stdout : failure.stdout?.toString("utf8") ?? "";
     stderr = typeof failure.stderr === "string" ? failure.stderr : failure.stderr?.toString("utf8") ?? failure.message ?? "";
   }
@@ -1196,9 +1250,36 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     const diagnostic = `${stdout}\n${stderr}`.split("\n").map((line) => line.trim()).find((line) => /(?:Error|Failed Suites|failed to load)/i.test(line));
     suiteErrors.push(safeNativeDiagnostic(diagnostic ?? "native Vitest exited before completing a test and emitted no structured suite error"));
   }
+  const finishedAt = new Date().toISOString();
+  const artifact = receiptArtifactPath && existsSync(resultPath)
+    ? (() => { mkdirSync(dirname(receiptArtifactPath), { recursive: true }); writeFileSync(receiptArtifactPath, readFileSync(resultPath)); return receiptArtifactPath; })()
+    : undefined;
+  const outcome = exitCode !== null
+    ? { state: "exited" as const, exitCode, signal: null }
+    : signal
+      ? { state: "signaled" as const, exitCode: null, signal }
+      : { state: "unknown-exit" as const, exitCode: null, signal: null, ...(errorCode ? { errorCode } : {}) };
+  const receipt = createCommandExecutionReceipt({
+    invocationId: randomUUID(),
+    command: { executable: bin, argv: args, cwd: runDir },
+    target: { identity: `${file}:${mutant.id}`, value: { file, mutantId: mutant.id, replacement: mutant.replacement } },
+    toolchain: [{ name: "vitest", version: installedPackageVersion(targetDir, "vitest") }],
+    configuration: { identity: "stryker-effective-vitest-config", value: { stryker: report.config ?? {}, selectedTests } },
+    startedAt,
+    finishedAt,
+    outcome,
+    stdout,
+    stderr,
+    artifacts: artifact ? [{ role: "report", path: artifact }] : [],
+    measurements: {
+      completedTests,
+      testsDiscovered: Object.values(report.testFiles ?? {}).reduce((count, testFile) => count + testFile.tests.length, 0),
+      suiteLoadErrors: suiteErrors.length,
+    },
+  });
   rmSync(runDir, { recursive: true, force: true });
   rmSync(dirname(resultPath), { recursive: true, force: true });
-  return { command: ["vitest", ...args], selectedTests, exitCode, signal, completedTests, suiteErrors: [...new Set(suiteErrors)], stdoutSha256: sha256Text(stdout), stderrSha256: sha256Text(stderr) };
+  return { command: ["vitest", ...args], selectedTests, exitCode, signal, completedTests, suiteErrors: [...new Set(suiteErrors)], stdoutSha256: sha256Text(stdout), stderrSha256: sha256Text(stderr), receipt };
 }
 
 const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
@@ -1286,6 +1367,7 @@ let pristine: PristineSnapshot | undefined;
 let strykerPhases: { testBaselineMs: number; mutationMs: number } | undefined;
 let strykerInstrumentedFileCount: number | undefined;
 let mutationInvocationRoot: string | undefined;
+let strykerExecution: CommandObservation | undefined;
 
 let resolvedReportPath: string;
 if (reportPath) {
@@ -1309,6 +1391,7 @@ if (reportPath) {
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
   const run = runStryker(redirect.cfgPath, runCwd);
+  strykerExecution = run.execution;
   strykerPhases = run.phases;
   strykerInstrumentedFileCount = run.instrumentedFileCount;
   // Before the degrade branches, not after: a crashed or dry-run-failed Stryker is exactly when a
@@ -1351,12 +1434,45 @@ if (!reportPath) {
   for (const [file, fileReport] of Object.entries(rawReport.files)) {
     for (const mutant of fileReport.mutants) {
       if (mutant.status !== "Survived" || (Number.isSafeInteger(mutant.testsCompleted) && Number(mutant.testsCompleted) > 0)) continue;
-      const comparison = compareMutantWithNativeVitest(file, mutant, rawReport);
+      const nativeReportArtifact = receiptArtifactBesideOutput(`native-${sha256Text(`${file}\0${mutant.id}`).slice(0, 12)}.vitest.json`);
+      const comparison = compareMutantWithNativeVitest(file, mutant, rawReport, nativeReportArtifact);
       if (comparison) nativeComparisons.set(`${file}\0${mutant.id}`, comparison);
     }
   }
 }
 const { report, validity: runnerValidity } = validateMutationRunnerReport(rawReport, nativeComparisons);
+let executionReceipt: CommandExecutionReceipt | undefined;
+if (strykerExecution) {
+  const reportArtifact = receiptArtifactBesideOutput("raw-stryker.json");
+  if (reportArtifact) {
+    mkdirSync(dirname(reportArtifact), { recursive: true });
+    writeFileSync(reportArtifact, readFileSync(resolvedReportPath));
+  }
+  const mutants = Object.values(rawReport.files).flatMap((fileReport) => fileReport.mutants);
+  executionReceipt = createCommandExecutionReceipt({
+    invocationId: randomUUID(),
+    command: { executable: strykerExecution.executable, argv: strykerExecution.argv, cwd: strykerExecution.cwd },
+    target: { identity: targetDir, value: { targetDir, files: Object.keys(rawReport.files).sort() } },
+    toolchain: [
+      { name: rawReport.framework?.name ?? "StrykerJS", version: rawReport.framework?.version ?? "unknown" },
+      { name: "vitest", version: installedPackageVersion(targetDir, "vitest") },
+    ],
+    configuration: { identity: effectiveConfigPath ?? "effective-stryker-report-config", value: rawReport.config ?? {} },
+    startedAt: strykerExecution.startedAt,
+    finishedAt: strykerExecution.finishedAt,
+    outcome: strykerExecution.outcome,
+    stdout: strykerExecution.stdout,
+    stderr: strykerExecution.stderr,
+    artifacts: reportArtifact ? [{ role: "report", path: reportArtifact }] : [],
+    measurements: {
+      // Command-level corroboration: Stryker's report counts completed tests per mutant, so this
+      // is their aggregate. The per-mutant counts remain authoritative in runnerValidity.
+      completedTests: mutants.reduce((count, mutant) => count + (Number.isSafeInteger(mutant.testsCompleted) ? Number(mutant.testsCompleted) : 0), 0),
+      testsDiscovered: Object.values(rawReport.testFiles ?? {}).reduce((count, testFile) => count + testFile.tests.length, 0),
+      suiteLoadErrors: runnerValidity.issues.filter((issue) => issue.suiteErrors.length > 0).length,
+    },
+  });
+}
 const hotspotFiles = hotspotsPath
   ? readFileSync(hotspotsPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
   : [];
@@ -1481,6 +1597,7 @@ const output = {
   // fixture/regression capture can now be pulled straight from a real --out artifact instead of
   // reconstructed by hand.
   runnerValidity,
+  executionReceipt,
   // The untouched upstream report remains the provenance record. Summary/findings above use the
   // effective validated report so a zero-completed survivor cannot influence the score.
   rawReport,
