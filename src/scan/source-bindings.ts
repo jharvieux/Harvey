@@ -34,7 +34,7 @@ export class SourceBindings {
 
   declaration(reference: ts.Identifier): ts.Declaration | undefined {
     const declarations = this.symbol(reference)?.declarations;
-    // Merged/duplicate declarations cannot certify one specific runtime implementation.
+    // Require one declaration when certifying a specific runtime implementation.
     return declarations?.length === 1 ? declarations[0] : undefined;
   }
 
@@ -63,5 +63,46 @@ export class SourceBindings {
       return ts.forEachChild(node, (child) => visit(child) || undefined) ?? false;
     };
     return visit(this.source);
+  }
+
+  inertValue(node: ts.Expression): boolean {
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)
+      || ts.isSatisfiesExpression(node)) return this.inertValue(node.expression);
+    if (ts.isLiteralExpression(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)
+      || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
+    if (ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)
+      && ts.isNumericLiteral(node.operand)) return true;
+    if (ts.isArrayLiteralExpression(node)) return node.elements.every((element) => this.inertValue(element));
+    if (ts.isObjectLiteralExpression(node)) return node.properties.every((property) => ts.isPropertyAssignment(property)
+      && !ts.isComputedPropertyName(property.name) && this.inertValue(property.initializer));
+    return false;
+  }
+
+  inertStatement(statement: ts.Statement, dependency: (specifier: string) => boolean = () => false): boolean {
+    if (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return true;
+    if (ts.isFunctionDeclaration(statement) || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement) || ts.isEmptyStatement(statement)) return true;
+    if (ts.isVariableStatement(statement)) return Boolean(statement.declarationList.flags & ts.NodeFlags.Const)
+      && statement.declarationList.declarations.every((declaration) => ts.isIdentifier(declaration.name)
+        && declaration.initializer && this.inertValue(declaration.initializer));
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause;
+      if (clause?.isTypeOnly || (clause && !clause.name && clause.namedBindings && ts.isNamedImports(clause.namedBindings)
+        && clause.namedBindings.elements.length > 0 && clause.namedBindings.elements.every((item) => item.isTypeOnly))) return true;
+      return ts.isStringLiteral(statement.moduleSpecifier) && dependency(statement.moduleSpecifier.text);
+    }
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.isTypeOnly || (statement.exportClause && ts.isNamedExports(statement.exportClause)
+        && statement.exportClause.elements.length > 0 && statement.exportClause.elements.every((item) => item.isTypeOnly))) return true;
+      return !statement.moduleSpecifier || (ts.isStringLiteral(statement.moduleSpecifier) && dependency(statement.moduleSpecifier.text));
+    }
+    if (ts.isExportAssignment(statement)) return this.inertValue(statement.expression);
+    // Calls, property reads, computed keys, class/static initialization, namespaces,
+    // writes and unknown statement forms require review, irrespective of spelling.
+    return false;
+  }
+
+  inertModule(dependency: (specifier: string) => boolean, entry?: ts.Statement): boolean {
+    return this.source.statements.every((statement) => statement === entry || this.inertStatement(statement, dependency));
   }
 }

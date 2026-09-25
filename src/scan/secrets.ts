@@ -244,6 +244,34 @@ function credentialReference(node: ts.Node, name: string): ts.Identifier | undef
   return ts.forEachChild(node, (child) => credentialReference(child, name));
 }
 
+function keyImport(source: ts.SourceFile, specifier: string): ts.SourceFile | undefined {
+  if (!specifier.startsWith(".")) return undefined;
+  const path = resolve(dirname(source.fileName), specifier);
+  const stem = path.replace(/\.js$/, "");
+  const target = [path, `${stem}.ts`, `${stem}.js`].find((candidate) => statSafe(candidate)?.isFile());
+  return target ? ts.createSourceFile(target, readFileSync(target, "utf8"), ts.ScriptTarget.Latest, true) : undefined;
+}
+
+function inertKeyModule(source: ts.SourceFile, entry?: ts.Statement, seen = new Set<string>()): boolean {
+  if (seen.has(source.fileName)) return false;
+  const visited = new Set([...seen, source.fileName]);
+  return new SourceBindings(source).inertModule((specifier) => {
+    const dependency = keyImport(source, specifier);
+    return Boolean(dependency && inertKeyModule(dependency, undefined, visited));
+  }, entry);
+}
+
+function supportedKeyEntry(fn: ts.FunctionLikeDeclaration, bindings: SourceBindings): ts.Statement | undefined {
+  if (fn.parameters.length || !ts.isCallExpression(fn.parent) || fn.parent.arguments.length !== 2
+    || fn.parent.arguments[1] !== fn || !ts.isStringLiteral(fn.parent.arguments[0]!)
+    || !ts.isExpressionStatement(fn.parent.parent) || !ts.isSourceFile(fn.parent.parent.parent)) return undefined;
+  const registration = fn.parent.expression;
+  const root = ts.isIdentifier(registration) && ["it", "test"].includes(registration.text) ? registration
+    : ts.isPropertyAccessExpression(registration) && registration.name.text === "test"
+      && ts.isIdentifier(registration.expression) && registration.expression.text === "Deno" ? registration.expression : undefined;
+  return root && bindings.unboundWithin(root, new Set([root.text])) ? fn.parent.parent : undefined;
+}
+
 function isProvedByteEncoder(sf: ts.SourceFile, reference: ts.Identifier, bindings: SourceBindings): boolean {
   let source = sf;
   let declaration = bindings.declaration(reference);
@@ -252,11 +280,9 @@ function isProvedByteEncoder(sf: ts.SourceFile, reference: ts.Identifier, bindin
     const stmt = clause.parent;
     if (declaration.isTypeOnly || clause.isTypeOnly || !ts.isImportDeclaration(stmt)
       || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.moduleSpecifier.text.startsWith(".")) return false;
-    const path = resolve(dirname(sf.fileName), stmt.moduleSpecifier.text);
-    const stem = path.replace(/\.js$/, "");
-    const target = [path, `${stem}.ts`, `${stem}.js`].find((candidate) => statSafe(candidate)?.isFile());
-    if (!target) return false;
-    source = ts.createSourceFile(target, readFileSync(target, "utf8"), ts.ScriptTarget.Latest, true);
+    const imported = keyImport(sf, stmt.moduleSpecifier.text);
+    if (!imported || !inertKeyModule(imported)) return false;
+    source = imported;
     const localName = declaration.propertyName?.text ?? declaration.name.text;
     const fn = source.statements.find((stmt): stmt is ts.FunctionDeclaration => ts.isFunctionDeclaration(stmt)
       && stmt.name?.text === localName && Boolean(stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)));
@@ -306,6 +332,19 @@ function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undef
   const exported = constant(block.statements[index - 1]);
   if (!generated?.initializer || !exported?.initializer || !constant(statement)) return undefined;
   const bindings = new SourceBindings(sf);
+  const entry = supportedKeyEntry(block.parent, bindings);
+  if (!entry || !inertKeyModule(sf, entry)
+    || !block.statements.slice(0, index - 2).every((statement) => bindings.inertStatement(statement))) return undefined;
+  // After materialization, allow inert declarations or handing this exact PEM to
+  // the external test consumer. Keep local setup/mutators out of repeated runs too.
+  if (!block.statements.slice(index + 1).every((tail) => {
+    if (bindings.inertStatement(tail)) return true;
+    if (!ts.isExpressionStatement(tail)) return false;
+    const expression = ts.isAwaitExpression(tail.expression) ? tail.expression.expression : tail.expression;
+    return ts.isCallExpression(expression) && !expression.questionDotToken && ts.isIdentifier(expression.expression)
+      && !bindings.declaration(expression.expression) && expression.arguments.length === 1
+      && ts.isIdentifier(expression.arguments[0]!) && bindings.declaration(expression.arguments[0]) === pem.parent;
+  })) return undefined;
   if (!ts.isIdentifier(generated.name) || !ts.isIdentifier(exported.name)
     || bindings.declaration(generated.name) !== generated || bindings.declaration(exported.name) !== exported) return undefined;
   const awaitedCall = (expr: ts.Expression): ts.CallExpression | undefined =>
@@ -341,7 +380,7 @@ function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undef
   const primitives = new Set(["crypto", "Uint8Array"]);
   if (![generateCall, exportCall, interpolation].every((node) => bindings.unboundWithin(node, primitives))
     || bindings.hasWrite(new Set([...primitives, "String", "btoa", encoder.text]))) return undefined;
-  return `the exact matched PEM interpolation is bound to crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${generated.name.getText(sf)}.privateKey) -> ${pkcs8}, followed by a source-proved byte encoder in the same test function`;
+  return `the exact matched PEM interpolation is bound to crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${generated.name.getText(sf)}.privateKey) -> ${pkcs8}, followed by a source-proved byte encoder in one supported test callback with inert module initialization and setup`;
 }
 
 // #1078 — the two suppressions that used to happen inside the gitleaks config, where they left no

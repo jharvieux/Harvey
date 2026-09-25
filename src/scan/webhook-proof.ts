@@ -79,6 +79,16 @@ class SourceGraph {
     if (!this.scopes.has(sf)) this.scopes.set(sf, new SourceBindings(sf));
     return this.scopes.get(sf)!;
   }
+  inert(path: string, seen = new Set<string>()): boolean {
+    if (seen.has(path)) return false;
+    const sf = this.source(path);
+    if (!sf) return false;
+    const dependencies = new Set([...seen, path]);
+    return this.bindings(sf).inertModule((specifier) => {
+      const target = this.importPath(path, specifier);
+      return Boolean(target && this.inert(target, dependencies));
+    });
+  }
   reference(path: string, name: ts.Identifier, seen = new Set<string>()): ResolvedFunction | undefined {
     const sf = this.source(path);
     if (!sf) return undefined;
@@ -167,6 +177,39 @@ function pureValue(expr: ts.Expression): boolean {
   return false;
 }
 
+function effectCallback(expr: ts.Expression, bindings: SourceBindings): boolean {
+  expr = unwrapped(expr);
+  if (!ts.isArrowFunction(expr) && !ts.isFunctionExpression(expr)) return pureValue(expr);
+  if (expr.parameters.some((parameter) => !ts.isIdentifier(parameter.name) || parameter.initializer || parameter.dotDotDotToken)) return false;
+  let effect: ts.Node = expr.body;
+  if (ts.isBlock(effect)) {
+    if (effect.statements.length !== 1) return false;
+    const statement = effect.statements[0]!;
+    if (!ts.isReturnStatement(statement) && !ts.isExpressionStatement(statement)) return false;
+    if (!statement.expression) return false;
+    effect = statement.expression;
+  }
+  if (ts.isAwaitExpression(effect)) effect = effect.expression;
+  if (!ts.isCallExpression(effect) || effect.questionDotToken || !ts.isPropertyAccessExpression(effect.expression)) return false;
+  let receiver: ts.Expression = effect.expression.expression;
+  while (ts.isPropertyAccessExpression(receiver) && !receiver.questionDotToken) receiver = receiver.expression;
+  if (!ts.isIdentifier(receiver)) return false;
+  const external = bindings.declaration(receiver);
+  if (!external || !ts.isVariableDeclaration(external) || external.initializer
+    || !ts.isVariableDeclarationList(external.parent) || !ts.isVariableStatement(external.parent.parent)
+    || !external.parent.parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return false;
+  const data = (value: ts.Expression): boolean => {
+    value = unwrapped(value);
+    if (ts.isIdentifier(value)) return expr.parameters.includes(bindings.declaration(value) as ts.ParameterDeclaration);
+    if (ts.isObjectLiteralExpression(value)) {
+      const fields = objectFields(value);
+      return Boolean(fields && [...fields.values()].every(data));
+    }
+    return bindings.inertValue(value) && !ts.isArrowFunction(value) && !ts.isFunctionExpression(value);
+  };
+  return effect.arguments.every(data);
+}
+
 function requestInput(expr: ts.Expression, inputs: ReadonlyMap<ts.Declaration, Input>, bindings: SourceBindings): Input | undefined {
   expr = unwrapped(expr);
   const input = (name: ts.Identifier): Input | undefined => {
@@ -210,7 +253,7 @@ function provenVerifier(graph: SourceGraph, resolved: ResolvedFunction): boolean
   if (comparator.path !== resolved.path) return false;
   return bindings.unboundWithin(resolved.fn, primitives) && bindings.unboundWithin(comparator.fn, primitives)
     && !bindings.hasWrite(new Set([...primitives, "timingSafeEqual", resolved.fn.name!.text]))
-    && !resolved.sf.statements.some(ts.isExpressionStatement);
+    && graph.inert(resolved.path);
 }
 
 function provesHelper(graph: SourceGraph, helper: ResolvedFunction): boolean {
@@ -237,14 +280,25 @@ function provesHelper(graph: SourceGraph, helper: ResolvedFunction): boolean {
   const rejection = ts.isBlock(guard.thenStatement) && guard.thenStatement.statements.length === 1
     ? guard.thenStatement.statements[0] : guard.thenStatement;
   if (!rejection || !ts.isReturnStatement(rejection) || (rejection.expression && !pureValue(rejection.expression))) return false;
+  // Keep the supported post-verification path explicit. Unknown setup/helper calls
+  // here could replace dependencies before a subsequent request reaches verification.
+  if (!fn.body.statements.slice(2).every((statement) => {
+    if (ts.isReturnStatement(statement)) return !statement.expression || pureValue(statement.expression);
+    if (!ts.isExpressionStatement(statement) || !ts.isAwaitExpression(statement.expression)) return false;
+    const effect = statement.expression.expression;
+    return ts.isCallExpression(effect) && ts.isPropertyAccessExpression(effect.expression)
+      && property(effect.expression, parameterName, effect.expression.name.text)
+      && !effect.questionDotToken && effect.arguments.every(pureValue);
+  })) return false;
   const verifier = graph.reference(helper.path, verify.expression);
   const bindings = graph.bindings(helper.sf);
   return Boolean(verifier && bindings.unboundWithin(fn, new Set(["undefined"]))
-    && !bindings.hasWrite(new Set([verify.expression.text, fn.name!.text])) && provenVerifier(graph, verifier));
+    && graph.inert(helper.path) && !bindings.hasWrite(new Set([verify.expression.text, fn.name!.text])) && provenVerifier(graph, verifier));
 }
 
 function provesCaller(fn: ts.FunctionLikeDeclaration, call: ts.CallExpression, bindings: SourceBindings): boolean {
-  if (!fn.body || !ts.isBlock(fn.body) || fn.parameters.length !== 1 || !ts.isIdentifier(fn.parameters[0]!.name)) return false;
+  if (!fn.body || !ts.isBlock(fn.body) || fn.parameters.length !== 1 || !ts.isIdentifier(fn.parameters[0]!.name)
+    || fn.parameters[0]!.initializer || fn.parameters[0]!.dotDotDotToken) return false;
   if (!bindings.unboundWithin(fn, new Set(["Deno", "process", "Error", "undefined"]))
     || (ts.isIdentifier(call.expression) && bindings.hasWrite(new Set([call.expression.text])))) return false;
   const inputs = new Map<ts.Declaration, Input>([[fn.parameters[0]!, "request"]]);
@@ -257,7 +311,7 @@ function provesCaller(fn: ts.FunctionLikeDeclaration, call: ts.CallExpression, b
       const secret = fields?.get("secret");
       if (!secret || !ts.isIdentifier(secret) || !guardedSecrets.has(bindings.declaration(secret)!)) return false;
       if (!fields || fields.has("nowMs") || !["rawBody", "signatureHeader", "secret"].every((name) => fields.has(name) && requestInput(fields.get(name)!, inputs, bindings) === name)) return false;
-      return [...fields].every(([name, expr]) => ["rawBody", "signatureHeader", "secret"].includes(name) || pureValue(expr));
+      return [...fields].every(([name, expr]) => ["rawBody", "signatureHeader", "secret"].includes(name) || effectCallback(expr, bindings));
     }
     if (ts.isIfStatement(stmt) && !stmt.elseStatement && ts.isPrefixUnaryExpression(stmt.expression)
       && stmt.expression.operator === ts.SyntaxKind.ExclamationToken && ts.isIdentifier(stmt.expression.operand)
@@ -302,6 +356,6 @@ export function assessWebhookVerification(handler: EdgeFunctionSource, projectSo
   const hasOtherEntry = sf.statements.some((stmt) => ts.isExportAssignment(stmt)
     || (ts.isVariableStatement(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))
     || ts.isExpressionStatement(stmt));
-  const proved = !hasOtherEntry && assessments.length === 1 && assessments[0]!.verifiedBeforeEffect && entryFunctions.length === 1 && assessments[0]!.caller === entryFunctions[0];
+  const proved = graph.inert(path) && !hasOtherEntry && assessments.length === 1 && assessments[0]!.verifiedBeforeEffect && entryFunctions.length === 1 && assessments[0]!.caller === entryFunctions[0];
   return { verifiedBeforeEffect: proved, provenance: assessments.map((assessment) => assessment.provenance).join("; ") || "Imported verification provenance was not proved; no supported request-to-verifier call was resolved" };
 }
