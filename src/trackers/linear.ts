@@ -20,6 +20,7 @@
 // JQL search, confirm the `description` filter behaves as an exact substring match against a real
 // Linear workspace before relying on it for idempotency recovery.
 
+import { assertTrackerRef } from "./recovery.js";
 import { trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -63,8 +64,9 @@ export class LinearTracker implements Tracker, TicketWriteback {
     });
     if (res.errors?.length) throw new Error(`Linear GraphQL error: ${res.errors.map((e) => e.message).join("; ")}`);
     if (!res.data) throw new Error("Linear GraphQL response has no data");
+    if (/^\s*mutation\b/.test(query) && Object.keys(res.data).length === 0) throw new Error("Linear mutation response has no operation result");
     for (const [operation, value] of Object.entries(res.data)) {
-      if (value && typeof value === "object" && "success" in value && value.success !== true) throw new Error(`Linear ${operation} failed: success was not true`);
+      if (/^\s*mutation\b/.test(query) && (!value || typeof value !== "object" || !("success" in value) || value.success !== true)) throw new Error(`Linear ${operation} failed: success was not true`);
     }
     return res.data as T;
   }
@@ -83,7 +85,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
       { input: { teamId: this.#teamId, title: input.title, description: input.description, parentId } },
     );
     const issue = data.issueCreate.issue;
-    return { id: issue.id, url: issue.url };
+    return assertTrackerRef({ id: issue?.id, url: issue?.url });
   }
 
   async findByMarker(marker: string): Promise<CreatedRef | null> {
@@ -94,7 +96,9 @@ export class LinearTracker implements Tracker, TicketWriteback {
       const data = await this.#graphql<{ issues: { nodes: (IssueRef & { description?: string; team?: { id: string } })[]; pageInfo?: { hasNextPage: boolean; endCursor?: string } } }>(
         `query($marker: String!, $teamId: String!, $after: String) { issues(filter: { description: { contains: $marker }, team: { id: { eq: $teamId } } }, first: 100, after: $after) { nodes { id url description team { id } } pageInfo { hasNextPage endCursor } } }`,
         { marker, teamId: this.#teamId, after });
+      if (!Array.isArray(data.issues?.nodes) || typeof data.issues.pageInfo?.hasNextPage !== "boolean") throw new Error("Linear marker lookup has incomplete pagination");
       for (const hit of data.issues.nodes) {
+        if (typeof hit.team?.id !== "string" || !hit.team.id || typeof hit.id !== "string" || !hit.id || typeof hit.url !== "string") throw new Error("Linear marker lookup lacks verified scope or identity");
         if (hit.team?.id === this.#teamId && hit.description?.includes(marker)) matches.set(hit.id, { id: hit.id, url: hit.url });
       }
       if (matches.size > 1) throw new Error("Linear marker lookup ambiguous: multiple exact matches in team");
@@ -153,6 +157,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
       for (let page = 0; page < 100; page++) {
         const data = await this.#graphql<{ issue: { comments: { nodes: { body: string }[]; pageInfo: { hasNextPage: boolean; endCursor?: string } } } }>(
           `query($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { body } pageInfo { hasNextPage endCursor } } } }`, { id, after });
+        if (!Array.isArray(data.issue?.comments?.nodes) || typeof data.issue.comments.pageInfo?.hasNextPage !== "boolean") throw new Error("Linear comment recovery has incomplete pagination");
         if (data.issue.comments.nodes.some(comment => comment.body.includes(marker))) return;
         if (!data.issue.comments.pageInfo.hasNextPage) { complete = true; break; }
         const cursor = data.issue.comments.pageInfo.endCursor;

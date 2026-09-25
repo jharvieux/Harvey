@@ -14,6 +14,7 @@
 // #50: findByMarker runs a WIQL CONTAINS query then fetches the hit for its html link; updateStory
 // PATCHes System.Description / System.Tags via the same JSON-Patch endpoint setLabels/setEstimate use.
 
+import { assertTrackerRef } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -105,7 +106,7 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
       headers: { Authorization: this.#auth, "Content-Type": "application/json-patch+json" },
       body: JSON.stringify(patch),
     });
-    return { id: String(wi.id), url: wi._links.html.href };
+    return assertTrackerRef({ id: String(wi.id), url: wi._links?.html?.href });
   }
 
   #patchWorkItem(id: string, patch: JsonPatchOp[]): Promise<Response> {
@@ -126,10 +127,13 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
       { method: "POST", headers: { Authorization: this.#auth, "Content-Type": "application/json" }, body: JSON.stringify({ query: wiql }) },
     );
     const matches = new Map<string, CreatedRef>();
+    if (!Array.isArray(result.workItems)) throw new Error("Azure marker lookup returned an incomplete result");
     for (const hit of result.workItems) {
+      if (!Number.isSafeInteger(hit.id) || hit.id <= 0) throw new Error("Azure marker lookup returned invalid identity");
       const wi = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(String(hit.id))}?api-version=${this.#apiVersion}`, {
         method: "GET", headers: {Authorization: this.#auth},
       });
+      if (typeof wi.fields?.["System.TeamProject"] !== "string" || !wi.fields["System.TeamProject"] || wi.id !== hit.id || typeof wi._links?.html?.href !== "string") throw new Error("Azure marker lookup lacks verified scope or identity");
       if (wi.fields?.["System.TeamProject"] === this.#project && wi.fields["System.Description"]?.includes(marker)) matches.set(String(wi.id), {id: String(wi.id), url: wi._links.html.href});
       if (matches.size > 1) throw new Error("Azure marker lookup ambiguous: multiple exact matches in project");
     }
@@ -175,6 +179,7 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
         const query = new URLSearchParams({"api-version": `${this.#apiVersion}-preview.4`, "$top": "200", includeDeleted: "false"});
         if (token) query.set("continuationToken", token);
         const result = await trackerFetchJson<{comments: {text: string}[]; continuationToken?: string}>(this.#fetch, `${this.#orgUrl}/${this.#project}/_apis/wit/workItems/${id}/comments?${query}`, {method: "GET", headers: {Authorization: this.#auth}});
+        if (!Array.isArray(result.comments) || (result.continuationToken != null && typeof result.continuationToken !== "string")) throw new Error("Azure comment recovery has invalid pagination");
         if (result.comments.some(comment => comment.text.includes(marker))) return;
         if (!result.continuationToken) {complete = true; break;}
         if (seen.has(result.continuationToken)) throw new Error("Azure comment recovery incomplete: repeated cursor");

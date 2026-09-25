@@ -18,7 +18,7 @@
 // findByMarker searches the project's issue descriptions (`in=description`); updateStory PUTs the
 // description and/or labels via the same issue endpoint setLabels uses.
 
-import { PartialTrackerWriteError } from "./recovery.js";
+import { assertTrackerRef, PartialTrackerWriteError, trackerRecoveryPages } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -82,7 +82,7 @@ export class GitLabTracker implements Tracker, TicketWriteback {
       headers: this.#headers(),
       body: JSON.stringify({ title: input.title, description: input.description }),
     });
-    return { id: String(issue.iid), url: issue.web_url };
+    return assertTrackerRef({ id: String(issue.iid), url: issue.web_url });
   }
 
   // Read-modify-write the epic issue's description so the story shows up as a tracked task-list item.
@@ -103,19 +103,18 @@ export class GitLabTracker implements Tracker, TicketWriteback {
 
   async findByMarker(marker: string): Promise<CreatedRef | null> {
     const matches = new Map<string, CreatedRef>();
-    for (let page = 1; page <= 100; page++) {
-      const query = new URLSearchParams({search: marker, in: "description", scope: "all", per_page: "100", page: String(page)});
-      const rows = await trackerFetchJson<GitLabIssue[]>(this.#fetch, this.#issuesUrl(`?${query}`), {method: "GET", headers: this.#headers()});
+    const query = new URLSearchParams({search: marker, in: "description", scope: "all", per_page: "100", page: "1"});
+    for await (const rows of trackerRecoveryPages<GitLabIssue>(this.#fetch, this.#issuesUrl(`?${query}`), this.#headers())) {
       for (const hit of rows) {
+        if (!Number.isSafeInteger(hit.iid) || hit.iid <= 0 || typeof hit.web_url !== "string" || (/^\d+$/.test(this.#scopeId) && !Number.isSafeInteger(hit.project_id))) throw new Error("GitLab marker lookup lacks verified scope or identity");
         const inProject = /^\d+$/.test(this.#scopeId)
           ? String(hit.project_id) === this.#scopeId
           : new URL(hit.web_url).origin === new URL(this.#base).origin && new URL(hit.web_url).pathname === `/${this.#scopeId}/-/issues/${hit.iid}`;
         if (inProject && hit.description?.includes(marker)) matches.set(String(hit.iid), {id: String(hit.iid), url: hit.web_url});
       }
       if (matches.size > 1) throw new Error("GitLab marker lookup ambiguous: multiple exact matches in project");
-      if (rows.length < 100) return [...matches.values()][0] ?? null;
     }
-    throw new Error("GitLab marker lookup incomplete: pagination limit");
+    return [...matches.values()][0] ?? null;
   }
 
   async completeStory(id: string, input: ItemInput, labels: string[], epicId?: string): Promise<void> {
@@ -150,13 +149,10 @@ export class GitLabTracker implements Tracker, TicketWriteback {
   async addComment(id: string, body: string): Promise<void> {
     const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
     if (marker) {
-      let complete = false;
-      for (let page = 1; page <= 100; page++) {
-        const notes = await trackerFetchJson<{body: string}[]>(this.#fetch, this.#issuesUrl(`/${id}/notes?per_page=100&page=${page}`), {method: "GET", headers: this.#headers()});
-        if (notes.some(note => note.body.includes(marker))) return;
-        if (notes.length < 100) { complete = true; break; }
+      for await (const comments of trackerRecoveryPages<{ body: string }>(this.#fetch, this.#issuesUrl(`/${id}/notes?per_page=100&page=1`), this.#headers())) {
+        if (comments.some(comment => !comment || typeof comment.body !== "string")) throw new Error("gitlab comment recovery returned malformed content");
+        if (comments.some(comment => comment.body.includes(marker))) return;
       }
-      if (!complete) throw new Error("GitLab comment recovery incomplete: pagination limit");
     }
     await trackerFetch(this.#fetch, this.#issuesUrl(`/${id}/notes`), {
       method: "POST",

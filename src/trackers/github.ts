@@ -21,7 +21,7 @@
 // #50: findByMarker uses the Issues Search API (in:body) scoped to this repo; updateStory PATCHes
 // the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
-import { PartialTrackerWriteError } from "./recovery.js";
+import { assertTrackerRef, PartialTrackerWriteError, trackerRecoveryPages } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -86,7 +86,7 @@ export class GitHubTracker implements Tracker, TicketWriteback {
       headers: this.#headers(),
       body: JSON.stringify({ title: input.title, body: input.description }),
     });
-    return { id: String(issue.number), url: issue.html_url };
+    return assertTrackerRef({ id: String(issue.number), url: issue.html_url });
   }
 
   async createStory(input: ItemInput, epicId: string): Promise<CreatedRef> {
@@ -130,16 +130,17 @@ export class GitHubTracker implements Tracker, TicketWriteback {
       const res = await trackerFetchJson<GitHubSearchResponse>(this.#fetch,
         `${this.#base}/search/issues?q=${encodeURIComponent(q)}&per_page=100&page=${page}`,
         { method: "GET", headers: this.#headers() });
-      if (res.incomplete_results) throw new Error("GitHub marker lookup incomplete; refusing ambiguous recovery");
+      if (!Array.isArray(res.items) || !Number.isSafeInteger(res.total_count) || res.total_count! < 0 || res.incomplete_results !== false) throw new Error("GitHub marker lookup incomplete; refusing ambiguous recovery");
       for (const hit of res.items) {
-        const repository = hit.repository_url ?? hit.html_url.replace(/\/issues\/\d+$/, "");
-        const expected = hit.repository_url ? this.#repoUrl("") : `${new URL(hit.html_url).origin}/${this.#owner}/${this.#repo}`;
+        if (typeof hit.repository_url !== "string" || !hit.repository_url || !Number.isSafeInteger(hit.number) || hit.number <= 0 || typeof hit.html_url !== "string") throw new Error("GitHub marker lookup lacks verified scope or identity");
+        const repository = hit.repository_url;
+        const expected = this.#repoUrl("");
         if (!hit.pull_request && repository === expected && hit.body?.includes(marker)) {
           matches.set(String(hit.number), { id: String(hit.number), url: hit.html_url });
         }
       }
       if (matches.size > 1) throw new Error("GitHub marker lookup ambiguous: multiple exact matches in repository");
-      if (page * 100 >= (res.total_count ?? res.items.length)) return [...matches.values()][0] ?? null;
+      if (page * 100 >= res.total_count!) return [...matches.values()][0] ?? null;
     }
     throw new Error("GitHub marker lookup exceeds search limit; refusing incomplete recovery");
   }
@@ -169,13 +170,10 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   async addComment(id: string, body: string): Promise<void> {
     const marker = body.match(/<!-- harvey-writeback:[a-f0-9]+ -->/)?.[0];
     if (marker) {
-      let complete = false;
-      for (let page = 1; page <= 100; page++) {
-        const comments = await trackerFetchJson<{ body: string }[]>(this.#fetch, this.#repoUrl(`/issues/${id}/comments?per_page=100&page=${page}`), { method: "GET", headers: this.#headers() });
+      for await (const comments of trackerRecoveryPages<{ body: string }>(this.#fetch, this.#repoUrl(`/issues/${id}/comments?per_page=100&page=1`), this.#headers())) {
+        if (comments.some(comment => !comment || typeof comment.body !== "string")) throw new Error("github comment recovery returned malformed content");
         if (comments.some(comment => comment.body.includes(marker))) return;
-        if (comments.length < 100) { complete = true; break; }
       }
-      if (!complete) throw new Error("GitHub comment recovery incomplete: pagination limit");
     }
     await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}/comments`), {
       method: "POST",

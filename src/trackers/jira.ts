@@ -14,6 +14,7 @@
 // #50: findByMarker runs a JQL `text ~` search (see caveat on the method); updateStory PUTs
 // description/labels fields via the same endpoint setLabels/setEstimate use.
 
+import { assertTrackerRef } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -107,7 +108,7 @@ export class JiraTracker implements Tracker, TicketWriteback {
       headers: this.#jsonHeaders(),
       body: JSON.stringify({ fields }),
     });
-    return { id: created.key, url: `${this.#baseUrl}/browse/${created.key}` };
+    return assertTrackerRef({ id: created.key, url: `${this.#baseUrl}/browse/${created.key}` });
   }
 
   // Search is candidate discovery: verify the complete marker and configured project locally.
@@ -122,7 +123,9 @@ export class JiraTracker implements Tracker, TicketWriteback {
       const query = new URLSearchParams({ jql, fields: "description,project", maxResults: "100", ...(token ? { nextPageToken: token } : {}) });
       const res = await trackerFetchJson<JiraSearchResponse>(this.#fetch, `${this.#baseUrl}/rest/api/3/search/jql?${query}`,
         { method: "GET", headers: this.#jsonHeaders() });
+      if (!Array.isArray(res.issues) || typeof res.isLast !== "boolean" || (res.nextPageToken != null && typeof res.nextPageToken !== "string")) throw new Error("Jira marker lookup has incomplete pagination");
       for (const hit of res.issues) {
+        if (typeof hit.fields?.project?.key !== "string" || !hit.fields.project.key || typeof hit.key !== "string" || !hit.key) throw new Error("Jira marker lookup lacks verified scope or identity");
         if (hit.fields?.project?.key === this.#projectKey && hit.fields.description && text(hit.fields.description).includes(marker)) {
           matches.set(hit.key, { id: hit.key, url: `${this.#baseUrl}/browse/${hit.key}` });
         }
@@ -175,6 +178,7 @@ export class JiraTracker implements Tracker, TicketWriteback {
       let startAt = 0;
       for (let page = 0; page < 100; page++) {
         const res = await trackerFetchJson<{ comments: { body: AdfNode }[]; total: number }>(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}/comment?startAt=${startAt}&maxResults=100`, { method: "GET", headers: this.#jsonHeaders() });
+        if (!Array.isArray(res.comments) || !Number.isSafeInteger(res.total) || res.total < startAt + res.comments.length) throw new Error("Jira comment recovery has invalid pagination");
         if (res.comments.some(comment => text(comment.body).includes(marker))) return;
         startAt += res.comments.length;
         if (startAt >= res.total) { complete = true; break; }

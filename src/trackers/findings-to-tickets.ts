@@ -117,6 +117,7 @@ interface FileResult {
   failed: { marker: string; ref?: CreatedRef; stage: string; error: string }[];
   epicsCreated: number;
   epicsReused: number;
+  epics: { marker: string; ref: CreatedRef; status: "created" | "reused" }[];
 }
 
 // A compact, searchable dedup token. The #457 identity string carries spaces and "::"/"/"
@@ -215,25 +216,39 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
 // authorization. Grouped mode creates/reuses a category epic before filing its stories under it.
 export async function fileFindings(tracker: Tracker, findings: Finding[], opts: FileOptions = {}): Promise<FileResult> {
   const plan = planTickets(findings, opts);
-  const result: FileResult = { created: [], skipped: [], updated: [], failed: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
+  const result: FileResult = { created: [], skipped: [], updated: [], failed: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0, epics: [] };
   // #747: every tracker call goes through the pacer — spacing + backoff-and-retry on a rate limit.
   const pacer = opts.pacer ?? makePacer();
   const call = <T>(fn: () => Promise<T>) => pacer.run(fn);
 
   const epicIdByCategory = new Map<string, string>();
+  const failedEpicCategories = new Set<string>();
   for (const epic of plan.epics) {
-    const existing = await call(() => tracker.findByMarker(epic.marker));
-    if (existing) {
-      epicIdByCategory.set(epic.category, existing.id);
-      result.epicsReused++;
-      continue;
+    let stage = "epic lookup";
+    try {
+      const existing = await call(() => tracker.findByMarker(epic.marker));
+      stage = "epic create";
+      const ref = existing ?? await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
+      epicIdByCategory.set(epic.category, ref.id);
+      result.epics.push({ marker: epic.marker, ref, status: existing ? "reused" : "created" });
+      if (existing) result.epicsReused++;
+      else result.epicsCreated++;
+    } catch (error) {
+      failedEpicCategories.add(epic.category);
+      const ref = error instanceof PartialTrackerWriteError ? error.ref : undefined;
+      if (ref) {
+        result.epics.push({ marker: epic.marker, ref, status: "created" });
+        result.epicsCreated++;
+      }
+      result.failed.push({ marker: epic.marker, ...(ref ? { ref } : {}), stage: error instanceof PartialTrackerWriteError ? error.stage : stage, error: error instanceof Error ? error.message : String(error) });
     }
-    const ref = await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
-    epicIdByCategory.set(epic.category, ref.id);
-    result.epicsCreated++;
   }
 
   for (const t of plan.tickets) {
+    if (failedEpicCategories.has(t.group || "Uncategorized")) {
+      result.failed.push({ marker: t.marker, stage: "epic prerequisite", error: `Category epic for ${t.group || "Uncategorized"} was not confirmed; story creation deferred` });
+      continue;
+    }
     let ref: CreatedRef | undefined;
     let stage = "lookup";
     try {

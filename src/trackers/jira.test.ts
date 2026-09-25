@@ -85,7 +85,7 @@ describe("JiraTracker", () => {
   });
 
   it("finds an existing item by marker via a JQL text search (#50)", async () => {
-    const { tracker, calls } = harness(() => ({ issues: [{ key: "AUD-9", fields: { project: { key: "AUD" }, description: { type: "doc", content: [{ type: "text", text: "<!-- epic-builder:csv-export/epic -->" }] } } }] }));
+    const { tracker, calls } = harness(() => ({ isLast: true, issues: [{ key: "AUD-9", fields: { project: { key: "AUD" }, description: { type: "doc", content: [{ type: "text", text: "<!-- epic-builder:csv-export/epic -->" }] } } }] }));
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
 
     expect(ref).toEqual({ id: "AUD-9", url: "https://acme.atlassian.net/browse/AUD-9" });
@@ -95,7 +95,7 @@ describe("JiraTracker", () => {
   });
 
   it("returns null from findByMarker when the JQL search has no hits", async () => {
-    const { tracker } = harness(() => ({ issues: [] }));
+    const { tracker } = harness(() => ({ isLast: true, issues: [] }));
     expect(await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->")).toBeNull();
   });
 
