@@ -56,6 +56,8 @@ function coarseSummary(r: Result): string {
   const parts: string[] = [];
   const pub = r.probes.filter((p) => p.status === "warn").length;
   parts.push(`${pub} table${pub === 1 ? "" : "s"} publicly readable of ${r.tables} total`);
+  const inconclusive = r.probes.filter((p) => p.status === "info").length;
+  if (inconclusive) parts.push(`${inconclusive} read check${inconclusive === 1 ? "" : "s"} inconclusive`);
   const writable = r.writes.probes.filter((p) => p.status === "warn").length;
   if (writable > 0) parts.push(`${writable} anon-writable`);
   const cross = r.crossTenant.probes.filter((p) => p.status === "warn").length;
@@ -83,7 +85,7 @@ async function readIds(base: string, anon: string, token: string, table: string)
     headers: { apikey: anon, Authorization: `Bearer ${token}` },
   });
   if (res.status !== 200) return null;
-  const rows = (await res.json().catch(() => [])) as unknown[];
+  const rows: unknown = await res.json().catch(() => null);
   return Array.isArray(rows) ? rowIds(rows) : null;
 }
 
@@ -212,8 +214,9 @@ export default function Checker() {
       try {
         const res = await fetch(`${base}/rest/v1/${encodeURIComponent(t)}?select=*&limit=1`, { headers });
         if (res.status === 200) {
-          const rows = (await res.json()) as unknown[];
-          if (Array.isArray(rows) && rows.length > 0) {
+          const rows: unknown = await res.json();
+          if (!Array.isArray(rows)) throw new Error("Expected a row collection");
+          if (rows.length > 0) {
             probes.push({
               table: t,
               status: "warn",
@@ -263,7 +266,7 @@ export default function Checker() {
         continue;
       }
       try {
-        const { verdict } = await attemptWrite(base, anon, anon, t);
+        const { verdict, status: responseStatus } = await attemptWrite(base, anon, anon, t);
         if (verdict === "writable") {
           anonWritable.add(t);
           writes.push({
@@ -288,16 +291,23 @@ export default function Checker() {
             detail:
               "The write unexpectedly succeeded despite an empty payload — a column default or trigger filled in the omitted field, so a row may have been created here. This tool never sends a full payload; review this table directly.",
           });
+        } else {
+          writes.push({ table: t, status: "info", label: "Write check inconclusive", detail: `Unexpected response (HTTP ${responseStatus}); write access was not assessed.` });
         }
       } catch {
-        // network/parse error for this table — inconclusive, skip silently (other tables still run)
+        writes.push({ table: t, status: "info", label: "Write check inconclusive", detail: "Request failed; write access was not assessed." });
       }
     }
     const anonWarn = writes.filter((p) => p.status === "warn").length;
-    let writesNote =
-      anonWarn > 0
-        ? `${anonWarn} table${anonWarn === 1 ? "" : "s"} accepted a write from the public anon key. Nothing was saved — each attempt used an invalid payload on purpose — but a writable table means anyone with your public key could add or change data. Review each.`
-        : "No table accepted a write from the public anon key in this check. Nothing was written to your project. Writes appear locked to the anon role on the tables probed.";
+    const writeDenied = writes.filter((p) => p.status === "ok").length;
+    const writeUnknown = writes.filter((p) => p.status === "info").length;
+    const possiblyPersisted = writes.some((p) => p.label === "May have written a row");
+    let writesNote = anonWarn > 0
+      ? `${anonWarn} table${anonWarn === 1 ? "" : "s"} accepted a write from the public anon key. Review each result. ${possiblyPersisted ? "A row may have been created; review the affected table directly." : "The deliberately invalid payloads were rejected before a row was saved."}`
+      : writeDenied > 0 && writeUnknown === 0
+        ? `${writeDenied} tested table${writeDenied === 1 ? "" : "s"} denied the attempted INSERT from the public anon key.`
+        : "Write access is inconclusive: no successful assessment establishes that these tables deny writes.";
+    if (writeUnknown > 0) writesNote += ` ${writeUnknown} write check${writeUnknown === 1 ? "" : "s"} could not be assessed.`;
     if (writeSkipped > 0) {
       writesNote += ` (${writeSkipped} table${writeSkipped === 1 ? "" : "s"} skipped: no required column to probe safely without risking a stored row.)`;
     }
@@ -311,42 +321,58 @@ export default function Checker() {
       try {
         const tokenA = await signIn(base, anon, emailA.trim(), passA.trim());
         const tokenB = await signIn(base, anon, emailB.trim(), passB.trim());
+        let compared = 0;
         for (const t of toProbe) {
-          const idsA = await readIds(base, anon, tokenA, t);
-          const idsB = await readIds(base, anon, tokenB, t);
-          if (idsA === null || idsB === null || idsA.size === 0 || idsB.size === 0) continue;
-          const shared = [...idsA].filter((id) => idsB.has(id));
-          if (shared.length > 0) {
-            crossTenant.push({
-              table: t,
-              status: "warn",
-              label: "Cross-tenant read",
-              detail: `Both signed-in users returned ${shared.length} of the same row${shared.length === 1 ? "" : "s"} from this table. If these are tenant-owned records (not shared reference data), one tenant is reading another's — an RLS isolation gap.`,
-            });
-          }
-          // Non-destructive write-attempt as user A. An empty INSERT that passes RLS WITH CHECK
-          // (400/not-null) means the policy accepts an unscoped row from ANY signed-in user — a
-          // cross-tenant write exposure. Only surfaced when anon couldn't already write it (that's
-          // the stronger finding, already reported above).
-          if (canProbeWrite(defs[t]) && !anonWritable.has(t)) {
-            const { verdict } = await attemptWrite(base, anon, tokenA, t);
-            if (verdict === "writable") {
+          try {
+            const idsA = await readIds(base, anon, tokenA, t);
+            const idsB = await readIds(base, anon, tokenB, t);
+            if (idsA === null || idsB === null || idsA.size === 0 || idsB.size === 0) {
+              crossTenant.push({ table: t, status: "info", label: "Cross-tenant check inconclusive", detail: "Both users must return non-empty row collections to compare isolation; a request failed, was denied, or returned no rows." });
+              continue;
+            }
+            compared++;
+            const shared = [...idsA].filter((id) => idsB.has(id));
+            if (shared.length > 0) {
               crossTenant.push({
                 table: t,
                 status: "warn",
-                label: "Cross-tenant write",
-                detail:
-                  "A signed-in user was allowed to write an unscoped row here (nothing was saved — the payload was invalid on purpose). A write policy that accepts a row not tied to the caller's tenant lets one tenant write into another's data. Confirm the WITH CHECK policy scopes writes to the owner.",
+                label: "Cross-tenant read",
+                detail: `Both signed-in users returned ${shared.length} of the same row${shared.length === 1 ? "" : "s"} from this table. If these are tenant-owned records (not shared reference data), one tenant is reading another's — an RLS isolation gap.`,
               });
             }
+            // Non-destructive write-attempt as user A. An empty INSERT that passes RLS WITH CHECK
+            // (400/not-null) means the policy accepts an unscoped row from ANY signed-in user — a
+            // cross-tenant write exposure. Only surfaced when anon couldn't already write it (that's
+            // the stronger finding, already reported above).
+            if (canProbeWrite(defs[t]) && !anonWritable.has(t)) {
+              const { verdict } = await attemptWrite(base, anon, tokenA, t);
+              if (verdict === "writable") {
+                crossTenant.push({
+                  table: t,
+                  status: "warn",
+                  label: "Cross-tenant write",
+                  detail:
+                    "A signed-in user was allowed to write an unscoped row here (nothing was saved — the payload was invalid on purpose). A write policy that accepts a row not tied to the caller's tenant lets one tenant write into another's data. Confirm the WITH CHECK policy scopes writes to the owner.",
+                });
+              } else if (verdict === "persisted") {
+                crossTenant.push({ table: t, status: "warn", label: "May have written a row", detail: "The signed-in write unexpectedly succeeded. A row may have been created; review the table directly." });
+              } else if (verdict === "inconclusive") {
+                crossTenant.push({ table: t, status: "info", label: "Signed-in write inconclusive", detail: "The response did not establish whether writes are allowed." });
+              }
+            }
+          } catch {
+            crossTenant.push({ table: t, status: "info", label: "Cross-tenant check inconclusive", detail: "A request failed; this table was not fully assessed." });
           }
         }
         const crossReads = crossTenant.filter((p) => p.label === "Cross-tenant read").length;
         const crossWrites = crossTenant.filter((p) => p.label === "Cross-tenant write").length;
-        crossNote =
-          crossTenant.length > 0
-            ? `${[crossReads ? `${crossReads} table${crossReads === 1 ? "" : "s"} returned overlapping rows to two different users` : "", crossWrites ? `${crossWrites} accepted an unscoped write from a signed-in user` : ""].filter(Boolean).join("; ")}. Review each: if any hold tenant-owned data, that's a cross-tenant leak. (No write was saved — the payloads were invalid on purpose.)`
-            : "No table returned the same rows to both users, and none accepted an unscoped write, in this check. That's a good sign for tenant isolation on the tables probed — but it isn't proof; a real audit stands up a seeded stack and tests every path.";
+        const unknown = crossTenant.filter((p) => p.status === "info").length;
+        const persisted = crossTenant.some((p) => p.label === "May have written a row");
+        crossNote = `${compared} table${compared === 1 ? "" : "s"} compared using non-empty rows from both users; ${crossReads} with overlapping rows, ${crossWrites} with an accepted unscoped write. `;
+        crossNote += compared === 0 || unknown > 0
+          ? "Tenant isolation remains inconclusive: empty, denied, malformed, or failed checks are not evidence of isolation."
+          : "These sampled rows do not establish isolation for every row or route; review the individual results.";
+        if (persisted) crossNote += " A signed-in write may have created a row; review the affected table directly.";
       } catch (signInErr) {
         crossNote = `Couldn't run: ${(signInErr as Error).message}. The anon-read, anon-write, storage, and RPC results below still ran. (Passwords are sent only to your own project's auth endpoint, never to Harvey.)`;
       }
@@ -357,8 +383,9 @@ export default function Checker() {
     try {
       const res = await fetch(`${base}/storage/v1/bucket`, { headers });
       if (res.status === 200) {
-        const buckets = (await res.json().catch(() => [])) as Array<{ name?: string; public?: boolean }>;
-        const list = Array.isArray(buckets) ? buckets : [];
+        const buckets: unknown = await res.json();
+        if (!Array.isArray(buckets) || buckets.some((bucket) => !bucket || typeof bucket !== "object")) throw new Error("Expected a bucket collection");
+        const list = buckets as Array<{ name?: string; public?: boolean }>;
         const publicOnes = list.filter((b) => b.public).map((b) => b.name ?? "(unnamed)");
         storage = {
           table: "storage buckets",
@@ -369,16 +396,18 @@ export default function Checker() {
             (publicOnes.length ? ` Public buckets — readable by anyone: ${publicOnes.join(", ")}.` : "") +
             " Confirm this is intended.",
         };
-      } else {
+      } else if (res.status === 401 || res.status === 403) {
         storage = {
           table: "storage buckets",
           status: "ok",
           label: "Buckets not enumerable",
           detail: "The anon key can't list your storage buckets over the API. (Individual public buckets, if any, are still directly reachable by name.)",
         };
+      } else {
+        storage = { table: "storage buckets", status: "info", label: "Storage check inconclusive", detail: `Unexpected response (HTTP ${res.status}); storage access was not assessed.` };
       }
     } catch {
-      storage = null;
+      storage = { table: "storage buckets", status: "info", label: "Storage check inconclusive", detail: "Request failed or returned an invalid bucket collection; storage access was not assessed." };
     }
 
     const warnCount = probes.filter((p) => p.status === "warn").length;
@@ -392,7 +421,9 @@ export default function Checker() {
       note:
         warnCount > 0
           ? `${warnCount} table${warnCount === 1 ? "" : "s"} returned data to the public anon key. If any of those aren't meant to be public, that's a data-exposure risk worth a closer look.`
-          : "No table returned rows to the public anon key in this quick check. That's a good sign — but it's a thin slice, not a full audit (it can't test every route).",
+          : probes.length === 0 || probes.some((p) => p.status === "info")
+            ? "Read access remains inconclusive. Empty tables, unexpected responses, and failed requests do not establish that access is denied."
+            : "The tested tables denied these anonymous reads. This only covers the sampled tables and requests; it does not establish access control for every route.",
     });
     setStatus("done");
   }
@@ -413,7 +444,8 @@ export default function Checker() {
             <div className="answer-first" style={{ marginTop: "22px" }}>
               Paste your Supabase project URL and public anon key. This tool asks your project — <b>from your browser</b>
               , using your public key — which tables that key can read, and whether it can write to them (a
-              non-destructive check that never saves a row). Add two logins and it also tests whether one logged-in user
+              deliberately invalid INSERT intended to be rejected before a row is saved). Unexpected success is
+              reported for review. Add two logins and it also tests whether one logged-in user
               can read or write another&apos;s rows. Everything runs in your browser; nothing is sent to Harvey.
             </div>
           </div>
@@ -454,7 +486,8 @@ export default function Checker() {
                   (password sent only to your project&apos;s auth endpoint, never to Harvey) and flags any table where
                   both see the same rows — the tenant-isolation leak a source scan can&apos;t prove. It also tries a
                   non-destructive write as one user: every write attempt uses a deliberately-invalid payload that the
-                  database rejects before saving, so nothing is ever written to your project.
+                  database should reject before saving. If it unexpectedly succeeds, the result warns that a row may
+                  have been created.
                 </p>
                 <div className="field">
                   <label htmlFor="ea">User A — email</label>
