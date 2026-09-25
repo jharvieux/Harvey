@@ -365510,8 +365510,8 @@
       "classification": "authoritative-record",
       "consumer": {
         "location": {
-          "anchor": "registry-import-boundary/77324",
-          "line": 1251,
+          "anchor": "registry-import-boundary/78172",
+          "line": 1253,
           "path": "tools/pii-classify.mjs"
         },
         "reason": "Value-import initialization is reachable from src/scan/external-corpus.ts#EXTERNAL_CORPUS, including unused bindings. Every committed relative source dependency passes the finite initializer admission check.",
@@ -365519,8 +365519,8 @@
       },
       "decision": null,
       "declarationSource": {
-        "anchor": "registry-import-boundary/77324",
-        "line": 1251,
+        "anchor": "registry-import-boundary/78172",
+        "line": 1253,
         "path": "tools/pii-classify.mjs"
       },
       "declaredIdentity": "standalone-entry-point",
@@ -365528,8 +365528,8 @@
       "dependencyClass": "runtime",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
-        "anchor": "registry-import-boundary/77324",
-        "line": 1251,
+        "anchor": "registry-import-boundary/78172",
+        "line": 1253,
         "path": "tools/pii-classify.mjs"
       },
       "freshness": {
@@ -365538,7 +365538,7 @@
         "observedAt": null,
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
-      "id": "tools/pii-classify.mjs#registry-import-boundary/77324:runtime:standalone-entry-point",
+      "id": "tools/pii-classify.mjs#registry-import-boundary/78172:runtime:standalone-entry-point",
       "identitySource": null,
       "links": [
         "src/scan/external-corpus.ts#EXTERNAL_CORPUS",
@@ -365643,7 +365643,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 888,
+        "line": 906,
         "path": "tools/pii-classify.test.ts"
       },
       "freshness": {
@@ -366294,8 +366294,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "b66102f7b10f5e488518324e52ef9533389782ba",
-    "commitPayload": "dHJlZSAyOWY5ODQyODVmODliMzFjZDJkN2Q2OGYyOTAxYjQ2NDIwMzE0YjJhCnBhcmVudCA5MWNlMDZiNzc0NGVjYWYyNmU2NDBjNjIyY2ZlY2MzMDY5ZWVkYWU3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyNTg3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyNTg3IC0wNTAwCgpSb3V0ZSBNMTAgc2hhcmVkIHNvdXJjZSBpbnB1dHMgdG8gZWZmZWN0aXZlbmVzcyBjaGVja3MgKCMyMTM0KQo=",
+    "commit": "95a7182ded03a2183a29e8f3212fb74e0f381d25",
+    "commitPayload": "dHJlZSAzYWVjZDU0YmFiODgwYjYyYzNhNDcyOWRjNzg2ZjBjZmFmOTdlNDM3CnBhcmVudCAxY2NiMGQ0YWQ4MTMwZDk1ODZkZTIwOWM2ZGJkMGE4YjdiZDM0N2M4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMzOTM3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMzOTM3IC0wNTAwCgpLZWVwIHNjaGVtYS1vbmx5IGNsYXNzaWZpY2F0aW9uIGNsYWltcyBjb25kaXRpb25hbCAoIzIxMzQpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -366304,13 +366304,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "c72870f9b3b3837a358a1691a2d424207b210845",
+        "gitOid": "057934030a5b503e7861ff5c5754b270e1c7d956",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "f737db251c0be7f6b245b4b79b28102e1c3792c3273de6ac1f2516decad56bc7",
-    "tree": "29f984285f89b31cd2d7d68f2901b46420314b2a"
+    "populationSha256": "85486976299f7ec4d2469d9a25242c040fd0a48de2a9b66c86b202f4fe04714e",
+    "tree": "3aecd54bab880b62c3a4729dc786f0cfaf97e437"
   },
   "venues": [
     {
@@ -406769,34 +406769,34 @@
       "sha256": "84ee17cb399ce14ccd2248a4bb85ffa443173d233ee8f89592a06ac48347b746"
     },
     {
-      "bytes": 78042,
+      "bytes": 78890,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "860fa4f38740eb209951ee8324c9385396b31bce",
+      "gitOid": "0aba221998416f7ee2d7464239efbeeacf2b83f0",
       "id": "tools/pii-classify.mjs",
       "kind": "source",
-      "literalCount": 635,
-      "literalSha256": "7b6c5c58ddba76ad24d5fc51dc6effdb100a02b720e0f5fcbd2ea6060c5b50de",
+      "literalCount": 636,
+      "literalSha256": "5743b1e8c660d63123cf118b81de3c66e8b37916a59be60050d73e01d975d565",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "tools/pii-classify.mjs",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3deb87988336a4fdba53bb3d21d57ae8fa45390e45f20030fbb930f40c10059e"
+      "sha256": "c6f0a2a7dfbf508609b78bf84916b152e48668bd702c3538bd4d3e2a2d802d6a"
     },
     {
-      "bytes": 67355,
+      "bytes": 68501,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "7d3d5025d7097774896ad16ef8e47dae7d80be57",
+      "gitOid": "a61d5775ead70a30537c1f19c5101527a4660412",
       "id": "tools/pii-classify.test.ts",
       "kind": "source",
-      "literalCount": 1221,
-      "literalSha256": "84bf328ab30963d0919daa6492034d319c7669be3901dc8b3afba5511f789f8a",
+      "literalCount": 1240,
+      "literalSha256": "853db1ee442acea84d97f73144cb645eb87ef648b20f5a36cc464225d9682f41",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "tools/pii-classify.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "b71a8228e73bd4eb11acfe52efeee8ea2cd21c94c15ef1ef53d5e455d74a94b6"
+      "sha256": "7c555152d9a6777d1f5b52a158f473a4753f3f3551a359ae2c4089c65f31d6a8"
     },
     {
       "bytes": 137,
