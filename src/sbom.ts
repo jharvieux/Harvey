@@ -949,7 +949,7 @@ export function licenseScope(dir: string): LicenseScope {
             directResolved.add(`${installation.name}\u0000${installation.version}`);
           } else {
             // Success in another manifest never erases this declaration's unresolved coverage.
-            unresolved.set(declarationKey, aliasCandidate(name, specifier, true, manifest.label === "package.json" ? undefined : manifest.label));
+            unresolved.set(declarationKey, aliasCandidate(name, specifier, true, manifest.label));
           }
           if (installation && !origin?.explicitName) uncertainAliasPaths.add(installation.path);
           if (!npmTree && target) {

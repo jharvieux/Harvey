@@ -23,7 +23,7 @@ const validateCycloneDx15 = (value: unknown): { valid: boolean; errors: unknown[
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
 const inventory = ({ components, unmatched }: ReturnType<typeof parsePackageLock>) => ({ components, unmatched });
-const unresolvedAlias = (name: string, targetName: string, range: string, ownerPath?: string) => ({
+const unresolvedAlias = (name: string, targetName: string, range: string, ownerPath = "package.json") => ({
   name, direct: true, unresolvedAlias: { declared: `npm:${targetName}@${range}`, targetName, range, ...(ownerPath ? { ownerPath } : {}) },
 });
 
@@ -688,6 +688,15 @@ describe("npm alias provenance (#2046 B2)", () => {
       writeFileSync(join(dir, path, "package.json"), JSON.stringify(body));
     }
   }
+
+  it("retains root alias declaration provenance beside an unrelated selected lock", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:preact@^10.0.0" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '6.0'\npackages:\n  /ordinary@1.0.0:\n    resolution: {integrity: sha512-test}\n");
+    const scope = licenseScope(dir);
+    expect(scope.candidates.find((candidate) => candidate.name === "alias")).toEqual(unresolvedAlias("alias", "preact", "^10.0.0"));
+    const metadata = (await checkLicenseCompliance(scope, { skipRegistry: true, emitAssessment: true })).find((finding) => finding.id === "SUP-METADATA-00");
+    expect(metadata?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({ coordinate: 'alias@unresolved:["package.json","npm:preact@^10.0.0"]', provenance: "package.json" }));
+  });
 
   it.each([1, 2, 3])("retains each v%s installation path while deduplicating exported identities", (lockfileVersion) => {
     const alias = { name: "@actual/pkg", version: "1.0.0", license: "MIT" };
