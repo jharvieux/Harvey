@@ -389,8 +389,8 @@ not confirm an M1 finding. Legacy M1 observations remain pending review, M10 cla
 remains inventory, and current M2–M9 health findings retain their severity and priority.
 
 `auditContext` records engagement identity/kind, target identity/revision, producer versions,
-schema version and assessed scope/completeness. Assembly derives current bindings from verified
-receipts; supplied metadata cannot replace those bindings. Optional `identityMigrations` bind
+schema version and assessed scope/completeness. Assembly derives target, producer and assessed-scope fields from verified
+receipts. Engagement identity and kind use retained metadata. Optional `identityMigrations` bind
 one unique prior content key to one unique current content key with `reviewedBy` and `reason`.
 Ambiguous mappings stay unresolved. Display IDs and line-number churn alone do not establish
 new or resolved findings; SARIF fingerprints use the version-2 semantic/occurrence identities.
