@@ -6,6 +6,27 @@ import { checkNonRegistryDependencies } from "./scan/supply-chain.js";
 const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
 
 describe("validateFindings", () => {
+  it("requires measured identities and limitations for partial fresh audit context", () => {
+    const auditContext = {
+      engagementId: "fresh:test", kind: "client-audit", target: { id: "fixture", revision: "content:test" },
+      producerVersions: { engine: "measured" }, schemaVersion: "finding-dispositions/1", assessedScope: ["M7 source"], scopeComplete: false,
+      limitations: ["Only the M7 source tier was assessed."],
+      provenance: {
+        schema: 1, kind: "fresh-execution", target: { contentSha256: "a".repeat(64), complete: true, stable: true },
+        engine: { contentSha256: "b".repeat(64), complete: true, stable: true }, configurationSha256: "c".repeat(64),
+        inputBindings: [], moduleObservations: [{ module: "M7", instance: ".", status: "examined", unitsExamined: 1, scope: "source files" }],
+        commandReceiptSha256: [], producerIdentityComplete: false,
+      },
+    };
+    expect(validateFindings({ ...example, auditContext }).errors).toEqual([]);
+    for (const context of [
+      { ...auditContext, scopeComplete: true }, { ...auditContext, limitations: [] },
+      { ...auditContext, provenance: { ...auditContext.provenance, target: { ...auditContext.provenance.target, contentSha256: "HEAD" } } },
+      { ...auditContext, provenance: { ...auditContext.provenance, commandReceiptSha256: ["guessed"] } },
+      { ...auditContext, provenance: { ...auditContext.provenance, moduleObservations: [{ ...auditContext.provenance.moduleObservations[0], unitsExamined: 0 }] } },
+    ]) expect(validateFindings({ ...example, auditContext: context }).errors.some((error) => error.startsWith("auditContext."))).toBe(true);
+  });
+
   it("accepts the shipped example report (the renderer's reference input)", () => {
     const result = validateFindings(example);
     expect(result.errors).toEqual([]);

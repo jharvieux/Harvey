@@ -50,6 +50,19 @@ export interface AuditContext {
   schemaVersion: string;
   assessedScope: string[];
   scopeComplete: boolean;
+  limitations?: string[];
+  provenance?: {
+    schema: 1;
+    kind: "fresh-execution";
+    target: { contentSha256: string; gitRevision?: string; complete: boolean; stable: boolean };
+    engine: { contentSha256: string; complete: boolean; stable: boolean };
+    configurationSha256: string;
+    inputBindings: { role: string; identity: string; sha256: string; complete: boolean }[];
+    moduleObservations: { module: string; instance: string; status: "examined" | "not-assessed" | "legacy"; unitsExamined: number; scope: string; reason?: string }[];
+    commandReceiptSha256: string[];
+    producerIdentityComplete: boolean;
+    retainedBindingSha256?: string;
+  };
 }
 
 export interface IdentityMigration {
@@ -627,6 +640,28 @@ function validateAuditContext(value: unknown, at: string, errors: string[]): voi
   if (!isRecord(value.producerVersions) || !Object.keys(value.producerVersions).length || Object.values(value.producerVersions).some((x) => !nonempty(x))) errors.push(`${at}.producerVersions: requires versioned producers`);
   if (!Array.isArray(value.assessedScope) || !value.assessedScope.length || value.assessedScope.some((x) => !nonempty(x))) errors.push(`${at}.assessedScope: requires explicit scope units`);
   if (typeof value.scopeComplete !== "boolean") errors.push(`${at}.scopeComplete: expected boolean`);
+  if (value.limitations !== undefined && (!Array.isArray(value.limitations) || value.limitations.some((reason) => !nonempty(reason)))) errors.push(`${at}.limitations: expected nonempty reasons`);
+  if (value.provenance !== undefined) {
+    const p = value.provenance;
+    const sha = (x: unknown): boolean => typeof x === "string" && /^[a-f0-9]{64}$/.test(x);
+    if (!isRecord(p) || p.schema !== 1 || p.kind !== "fresh-execution") { errors.push(`${at}.provenance: unsupported fresh execution binding`); return; }
+    for (const key of ["target", "engine"]) {
+      const binding = p[key];
+      if (!isRecord(binding) || !sha(binding.contentSha256) || typeof binding.complete !== "boolean" || typeof binding.stable !== "boolean") errors.push(`${at}.provenance.${key}: expected content identity and observation completeness/stability`);
+    }
+    if (isRecord(p.target) && p.target.gitRevision !== undefined && (typeof p.target.gitRevision !== "string" || !/^[a-f0-9]{40,64}$/.test(p.target.gitRevision))) errors.push(`${at}.provenance.target.gitRevision: expected a measured Git revision`);
+    if (!sha(p.configurationSha256)) errors.push(`${at}.provenance.configurationSha256: expected SHA-256`);
+    if (!Array.isArray(p.inputBindings) || p.inputBindings.some((input) => !isRecord(input) || !nonempty(input.role) || !nonempty(input.identity) || !sha(input.sha256) || typeof input.complete !== "boolean")) errors.push(`${at}.provenance.inputBindings: invalid input binding`);
+    if (!Array.isArray(p.moduleObservations) || p.moduleObservations.some((row) => !isRecord(row) || !/^M(?:[1-9]|10)$/.test(String(row.module)) || !nonempty(row.instance) || !["examined", "not-assessed", "legacy"].includes(String(row.status)) || !Number.isInteger(row.unitsExamined) || Number(row.unitsExamined) < 0 || (row.status === "examined" && Number(row.unitsExamined) === 0) || !nonempty(row.scope) || (row.reason !== undefined && !nonempty(row.reason)))) errors.push(`${at}.provenance.moduleObservations: invalid measured scope`);
+    if (!Array.isArray(p.commandReceiptSha256) || p.commandReceiptSha256.some((digest) => !sha(digest))) errors.push(`${at}.provenance.commandReceiptSha256: expected receipt digests`);
+    if (typeof p.producerIdentityComplete !== "boolean") errors.push(`${at}.provenance.producerIdentityComplete: expected boolean`);
+    if (p.retainedBindingSha256 !== undefined && !sha(p.retainedBindingSha256)) errors.push(`${at}.provenance.retainedBindingSha256: expected SHA-256`);
+    const complete = isRecord(p.target) && p.target.complete && p.target.stable && isRecord(p.engine) && p.engine.complete && p.engine.stable && p.producerIdentityComplete
+      && Array.isArray(p.inputBindings) && p.inputBindings.every((input) => isRecord(input) && input.complete)
+      && Array.isArray(p.moduleObservations) && new Set(p.moduleObservations.filter(isRecord).map((row) => row.module)).size === 10 && p.moduleObservations.every((row) => isRecord(row) && row.status === "examined" && !row.reason);
+    if (value.scopeComplete && !complete) errors.push(`${at}.scopeComplete: incompatible with incomplete fresh execution evidence`);
+    if (!complete && (!Array.isArray(value.limitations) || !value.limitations.length)) errors.push(`${at}.limitations: incomplete fresh execution needs explicit limitations`);
+  }
 }
 
 // #1045: a malformed testQuality would render a table of "undefined%" — a mutation score is a
