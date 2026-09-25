@@ -48,7 +48,7 @@
     "authoritativeRecords": 2243,
     "authoritativeUnresolved": 1523,
     "authoritativeVenues": 108,
-    "candidateVenues": 2571,
+    "candidateVenues": 2572,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 243,
-        "candidateRows": 839,
+        "candidateRows": 840,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1082,
-        "unresolved": 1076,
-        "whollyUnbound": 1077
+        "rows": 1083,
+        "unresolved": 1077,
+        "whollyUnbound": 1078
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2682,
+        "candidateRows": 2683,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3798,
-        "unresolved": 3798,
-        "whollyUnbound": 3798
+        "rows": 3799,
+        "unresolved": 3799,
+        "whollyUnbound": 3799
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7361,
+    "noAssertions": 7363,
     "opaqueVenues": 3,
-    "residualRows": 2682,
-    "rows": 8512,
+    "residualRows": 2683,
+    "rows": 8514,
     "schemaAssertions": 10,
-    "venues": 2682,
-    "vocabularyCandidates": 3587
+    "venues": 2683,
+    "vocabularyCandidates": 3588
   },
   "reconciliations": [
     {
@@ -101745,6 +101745,80 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/cli/epic.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/cli/epic.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/cli/epic.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/cli/epic.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/cli/epic.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/cli/epic.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "package-manager",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
@@ -158204,7 +158278,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 306,
+        "line": 352,
         "path": "src/epic-builder/session.ts"
       },
       "freshness": {
@@ -364284,8 +364358,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "03ee628ae20e8b0c80fc79cfcfeb1a8cf522ec4a",
-    "commitPayload": "dHJlZSAzNWIxOWViYmQzNmFkNDljZDc2OTdmOTI5ZjUyMDI5Njc5YTdlYzU1CnBhcmVudCBiNWRmZDcyYjYzNmI3OGQ4YTE0ZDk4Njg4OGU2NTk0OTQ1MTMzYTQ2CnBhcmVudCBkOGNlYmQwYTU1MjA1MDIzYTQyZmExMTY0ZjJiMTljYTI1NWM4OWFjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIyMDkxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIyMDkxIC0wNTAwCgpJbnRlZ3JhdGUgcmVkaXJlY3QgbWFpbiBiZWZvcmUgY29uc2VydmF0aW9uIGZpbmFsaXphdGlvbiAoIzIxODgpCg==",
+    "commit": "a224063faa7db1e9bffcd1ef061bbc641e4b5bb1",
+    "commitPayload": "dHJlZSBhMTM0ZDA2NzQyNjY5YmJlYzkwOTYwNDVkZTMyODU2MTBhYWNiZGRkCnBhcmVudCA4YjIxY2IyZDRjNzE4ZjQ5NGUwYzIzMGQyZGUxZWI4YWI0NTRmYzVhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI2MjE5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzI2NDE0IC0wNTAwCgpSZWJpbmQgRXBpYyBlZGl0b3Igc3Bhd24gcG9saWN5ICgjMjA4MSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364294,13 +364368,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "bf29a70b5224e4451799b58fb833a1c6470a4a63",
+        "gitOid": "18d2fcca554630e64be362bb44876a8441fe7bf6",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "a4684495d2fa05e6aa5996131fbfa779a74cadbbaef0371f1e14b00da249632d",
-    "tree": "35b19ebbd36ad49cd7697f929f52029679a7ec55"
+    "populationSha256": "9ad7925da22e34d6d6ddad1b04b49dd523e8c99ecde011b97942e2aafcc1bf36",
+    "tree": "a134d06742669bbec9096045de3285610aacbddd"
   },
   "venues": [
     {
@@ -368129,19 +368203,19 @@
       "sha256": "0788baf3358fd4ce311d1d3a3760d243825fc72cbf4120af77cf0f4efc1234c7"
     },
     {
-      "bytes": 8934,
+      "bytes": 9188,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f38a67e4b8cf39e7ed07744d9d10705dc1d2ff8b",
+      "gitOid": "fb4d11adebb65f08f68463056af5ddb286d07158",
       "id": "epic-builder-web/lib/core.ts",
       "kind": "source",
-      "literalCount": 42,
-      "literalSha256": "a5b3dfd0577a20c4f21f553132d1e23cb09aef8ec32c58a40c8bb675ca0c360a",
+      "literalCount": 44,
+      "literalSha256": "6fc233dd1ba27b9b4668e4b60202319a234eeb582c80418303b037013e7878e7",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "epic-builder-web/lib/core.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "bc904e3bc94af7015ff7254a673a119413fedbb1d1e0d9571d588ae459d14805"
+      "sha256": "060177f7a0c6cfb978a16f138de1166deff39ed746df607d0bac1049a492a603"
     },
     {
       "bytes": 4694,
@@ -368294,19 +368368,19 @@
       "sha256": "ae4ed7f0f9831ab24c702b953cdeb720180033d002124bdb60fbb7bb8cb2be69"
     },
     {
-      "bytes": 7348,
+      "bytes": 10274,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "508cc94df0f79256f472cf0080ff80fd3580a514",
+      "gitOid": "b9e6cabb3cbff7aefdbc6d5998b13427a7862410",
       "id": "epic-builder-web/test/flow.test.ts",
       "kind": "source",
-      "literalCount": 82,
-      "literalSha256": "13894aebe8d7bb5fec3646d4364cfb19b448ed4bd873947bb7c5edf64629d442",
+      "literalCount": 116,
+      "literalSha256": "9fec93fec0d8cf6bc928fc136b0cfb86579f8be179a469a51fd35e7f548aa253",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "epic-builder-web/test/flow.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "48eee0d6b7a2cbbf8a44a4386017c9fcedcc8b09affa97bbe8e9f06cd5f8d0ea"
+      "sha256": "1a97ebb08b90905624ad8d9fa409ad59d0965d4a4f9f3a264d0b1a860fea97e6"
     },
     {
       "bytes": 6968,
@@ -368354,19 +368428,19 @@
       "sha256": "b28b4a02c0408b711f097c548367923d29442757753cdd4be7ebc71e00da7dc4"
     },
     {
-      "bytes": 4383,
+      "bytes": 7626,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "61077c975174c43ddd1ecf236dc5ee0abc3dd0c7",
+      "gitOid": "47239a0476c41b584027d69f8e20d61f2d4ed9cd",
       "id": "epic-builder-web/test/storage.test.ts",
       "kind": "source",
-      "literalCount": 47,
-      "literalSha256": "e7b0767c4c3aecc9af9136c918503b4e93734209ddb9f8cabdfff751b9ca3497",
+      "literalCount": 103,
+      "literalSha256": "66b4354b7fa54cf909d8f2e6c765eae2d1b45c77b1d1c9104a1230c60a4a7875",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "epic-builder-web/test/storage.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ef609562a062c334fa7ab9b955034f264bc47f2165f4b547bcd975c67c72aa0d"
+      "sha256": "decd702070c469e8426462123506887b752cd0e8d464be907f93dd5a24ebdb6b"
     },
     {
       "bytes": 608,
@@ -371234,11 +371308,26 @@
       "sha256": "5ad9a703c52f41a2c8699435e9b8326cbfede60d501441c5ca366604a4b35b8e"
     },
     {
-      "bytes": 10066,
+      "bytes": 2450,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6a2930fa4bab9eeb867324f9a6a186e6c3596540",
+      "gitOid": "9329af217d4347b27e34c0f95dea84bd6eb6d156",
+      "id": "src/cli/epic.test.ts",
+      "kind": "source",
+      "literalCount": 48,
+      "literalSha256": "49de767e8167ec3527400d8d06fe7ac3214da0ed897b7705eb7edfac812b4b1e",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/cli/epic.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "747665d4f218acc270b34ee218c1a11eb50935bae4a70550906afac51dfe825c"
+    },
+    {
+      "bytes": 10141,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "fff0f14030e371e837dc14e162332b6a736b34b1",
       "id": "src/cli/epic.ts",
       "kind": "source",
       "literalCount": 100,
@@ -371246,7 +371335,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/epic.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "4007f0251b18d3ec7ebae25800612ecf8e7c4226074e63b0cfe3cbf4c45d477e"
+      "sha256": "14ade46d0c3c558bd11f26c48a41206ba235cb8ae32a44b3468ae29f5ba2003e"
     },
     {
       "bytes": 5593,
@@ -382844,34 +382933,34 @@
       "sha256": "bd46c983ae10cd191a4517ca8a923f140907b59468835eff7aaba163f54f40f8"
     },
     {
-      "bytes": 1836,
+      "bytes": 2806,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "8aa221d5335f2e920b662eb3539d4da6f377aa85",
+      "gitOid": "c6f1f55a048bd861cf5da77f270eeb46b658a000",
       "id": "src/epic-builder/frontmatter.test.ts",
       "kind": "source",
-      "literalCount": 37,
-      "literalSha256": "41143954b794d000eec79ca6f6d9eb70608703b7b71b675e3fd7eb3c9fce1e29",
+      "literalCount": 53,
+      "literalSha256": "e871a3934e1d19710588d67dab0d57ed50a27dce183e16ca5ec8d573eac898eb",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/frontmatter.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "dd1131049309a46e77cd8e1f2e5d5cdbea324485ecb55753dc0647ad6e220686"
+      "sha256": "77f2e76a4258a6c8d937d9bfee68dcf47351413491bf0dec0f18753bfe273b9c"
     },
     {
-      "bytes": 3513,
+      "bytes": 4971,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "e30ae854cc49d50f41b2293abf90456a97003cee",
+      "gitOid": "2a49994d88e2d22c169402a92b38405d4d89807a",
       "id": "src/epic-builder/frontmatter.ts",
       "kind": "source",
-      "literalCount": 40,
-      "literalSha256": "3859935a723c8e737afb20896c1ac5859c2a7eed3d578ab91cea07a0769868c0",
+      "literalCount": 56,
+      "literalSha256": "da9ddf7ee813f2bf612cfe86e8ec36c86c63d2c64728e67021ed2fa48f5c8c8e",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/frontmatter.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "984f1cf4ae383c23ca48f7cd2a04fb0168ed30b612c9506fe3c87efc9c8fbc3e"
+      "sha256": "091bbbe9e2cf4961e60999865655508d0c597282ed2e74a6c9d2d39761046c27"
     },
     {
       "bytes": 3447,
@@ -382964,64 +383053,64 @@
       "sha256": "f6fef501c2d08ef1150d3088e69b05b359773af8a4605929c12a5e72d7eaba01"
     },
     {
-      "bytes": 6529,
+      "bytes": 13122,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "b7fdf88da5d7a9ce7191d15faaa4961dd35498ab",
+      "gitOid": "fa9e02ede38f2c6ce2b68b5ceb447052726dac30",
       "id": "src/epic-builder/session.test.ts",
       "kind": "source",
-      "literalCount": 84,
-      "literalSha256": "6859e2e22a10455536242280101a188ba95abb0ecb6ca07b014a6e3ff2450070",
+      "literalCount": 169,
+      "literalSha256": "65c7b3e51d96ebe9adcfdd1fa111efc066c541dcc748fe4a40dd75952f6fed7e",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/session.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "2a186e161fb73c06c7391ce92263b3c27d6595b2a19bfdc50351af3d135e504e"
+      "sha256": "7874af13a077639ac7814aa0d5116c190c6930170f799be4d12ea6319a18d6ea"
     },
     {
-      "bytes": 12295,
+      "bytes": 14550,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "fb5be1c5ebf12e0fbd40e7bc5a31673884d9d3d6",
+      "gitOid": "7488c3e806a3008691352efe3a801c36919adaf7",
       "id": "src/epic-builder/session.ts",
       "kind": "source",
-      "literalCount": 90,
-      "literalSha256": "078219c2da16495273d86c060bdcf03fac1bfeddc3375ca04bbe02b9dfedc29e",
+      "literalCount": 115,
+      "literalSha256": "15064e0c86a7ceab15af4c5ce3569b521116c95d506d85b7a87ba496a007e118",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/session.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "4f9da597796aa9c80b71fc106d800e7d4df15137d620cb148fde85b12bc63cb8"
+      "sha256": "22212495260168c4bcd8a517adf6309629657ceacd83ddd8f6f95094201edebe"
     },
     {
-      "bytes": 1713,
+      "bytes": 3600,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "7e0c1854dbe543708182d2cce9ca90f28d0b5aad",
+      "gitOid": "38ec370a5c24bfe88173333013db4af9c567c690",
       "id": "src/epic-builder/state-machine.test.ts",
       "kind": "source",
-      "literalCount": 51,
-      "literalSha256": "d0e4826553b8bc836d6624bc95fb369c8b610b861597a87efa31ed93d890877d",
+      "literalCount": 98,
+      "literalSha256": "1dc2539ef0364f47eb56e4ab9b97815dee109894869711f289e354eda5e995a2",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/state-machine.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "48b38e21c92da29457ad34e011052ef3fcad1a97ad4e5adfb083f2cb2f2ea4ce"
+      "sha256": "b25ead244ae3d8d3b5946e4f7669020712eef5ecdef4498dd39256fde0ad01a2"
     },
     {
-      "bytes": 2033,
+      "bytes": 2155,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "8bc31549431b00be32396721dddee84dcda4cc58",
+      "gitOid": "0bcff5f74bb62c0b2966de350e146fcf9fd3fdee",
       "id": "src/epic-builder/state-machine.ts",
       "kind": "source",
-      "literalCount": 38,
-      "literalSha256": "0969b751907762b29fb0481131c9f529058afa3bc47bc29df9f25eee37b23e32",
+      "literalCount": 39,
+      "literalSha256": "36523a47f33045a62ad438be8aacbb3c437c44e8b147563be0df2fd3b392c848",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/state-machine.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "336379c0f4d98b652d48adc6438bb173d12d04e4b5d00042c27fd3a743cc9f20"
+      "sha256": "dcb1ea26cc5c7c8acae3220786105d3f4842d3c0625872d9fa15506b16c8c26c"
     },
     {
       "bytes": 1518,
@@ -383054,11 +383143,11 @@
       "sha256": "d13f5a99d0661235bb94ca35502a314429dcb0ff52f1426ffa66c10468f439bf"
     },
     {
-      "bytes": 4142,
+      "bytes": 4210,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "d71fc49673f861b001f85d695dce0e7c2c9855ef",
+      "gitOid": "7a6698112bad9871c0a2de5de3ece2f1e158a629",
       "id": "src/epic-builder/types.ts",
       "kind": "source",
       "literalCount": 37,
@@ -383066,22 +383155,22 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/types.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "af49f1b2b538575f598e432b4c16f289d30321c6aa7b13c262fda51c2cd3ca36"
+      "sha256": "a9c0a68d5e3684c5fd41043345845bc6c0962ddc22fa843ecdf73d03f0df2168"
     },
     {
-      "bytes": 4093,
+      "bytes": 5700,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "2804d68eaaadb65bec9c5a495ec42f0bc1ff2bd6",
+      "gitOid": "88b4394f1a1cb821a937c9c9f419ad216b817a38",
       "id": "src/epic-builder/workspace.ts",
       "kind": "source",
-      "literalCount": 38,
-      "literalSha256": "de85d2d5395b8d0ab887c818428979637c3e9a1a4ac83648c22f09c627945aa1",
+      "literalCount": 53,
+      "literalSha256": "eeb5a153b81e60df52dc9821b5b56b0fc55edd582169c5390861d0ec0bb06963",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/workspace.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f2b9bbc4d4de921b2ae52ec9cb8643d57408e52954768d3372d96714f137e085"
+      "sha256": "38fb096d108ec9451ea31c5a3bc2504658d4bf35d15a5a7a022933e77cfb8286"
     },
     {
       "bytes": 7115,
@@ -391454,11 +391543,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 321028,
+      "bytes": 321654,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "4867e12055f979ab2d4a3f8fc2167c891c4651b5",
+      "gitOid": "2b671c1f92a395fa3136bffdbafc4dc2840247cd",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -391466,7 +391555,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "38c5a3e1bec253ac56a134770c88cc2f242bf6961af3cc9b77487b7c46de1252"
+      "sha256": "2a3876ee7b76d5d33fcdfe26d76eea21d90cfc822ddb54a980582dd855d34c70"
     },
     {
       "bytes": 10289,
