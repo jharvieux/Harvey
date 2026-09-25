@@ -12,7 +12,7 @@
 // including the exact defect that shipped, reconstructed verbatim — and asserts this gate goes red.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -152,6 +152,58 @@ function deliverable(): FindingsDocument {
   return assembleEngagementDocument(RECORDED, ENV, findings, META);
 }
 
+describe("fresh audit context delivery (#2136)", () => {
+  const sha = (character: string): string => character.repeat(64);
+  const context: NonNullable<FindingsDocument["auditContext"]> = {
+    engagementId: "engagement-fresh-001",
+    kind: "client-audit",
+    target: { id: "customer-app", revision: "release-2026-09-25" },
+    producerVersions: { harvey: "2.4.0" },
+    schemaVersion: "1",
+    assessedScope: ["application source", "committed dependency manifests"],
+    scopeComplete: false,
+    limitations: ["Dynamic authorization checks were unavailable <during capture> & require a connected rerun."],
+    provenance: {
+      schema: 1,
+      kind: "fresh-execution",
+      target: { contentSha256: sha("a"), gitRevision: sha("b"), complete: true, stable: true },
+      engine: { contentSha256: sha("c"), complete: true, stable: false },
+      configurationSha256: sha("d"),
+      inputBindings: [
+        { role: "source", identity: "customer-app@release", sha256: sha("e"), complete: true },
+        { role: "runtime", identity: "connected probes", sha256: sha("f"), complete: false },
+      ],
+      moduleObservations: [
+        { module: "M1", instance: "source", status: "examined", unitsExamined: 12, scope: "tenant access paths" },
+        { module: "M7", instance: "dynamic", status: "not-assessed", unitsExamined: 0, scope: "authorization behavior", reason: "No connected test account was available." },
+      ],
+      commandReceiptSha256: [sha("1")],
+      producerIdentityComplete: false,
+      retainedBindingSha256: sha("2"),
+    },
+  };
+
+  it("renders fresh provenance and concrete limitations without requiring a baseline", () => {
+    const document = { ...deliverable(), auditContext: context };
+    const retainedJson = JSON.stringify(document);
+    const html = buildHtml(document);
+    expect(JSON.stringify(document)).toBe(retainedJson);
+    expect(html).toContain("Audit evidence context");
+    expect(html).toContain("Partial for the stated scope");
+    expect(html).toContain("Dynamic authorization checks were unavailable &lt;during capture&gt; &amp; require a connected rerun.");
+    expect(html).toContain("No connected test account was available.");
+    expect(html).toContain("Complete at capture; source was changing");
+    expect(html).toContain("Producer identity</b><br>Incomplete");
+    expect(html).toContain("customer-app@release");
+    expect(html).toContain("does not claim that unexamined areas have no issues");
+    expect(html).not.toContain("<during capture>");
+  });
+
+  it("keeps legacy reports without audit context compatible", () => {
+    expect(buildHtml(deliverable())).not.toContain("Audit evidence context");
+  });
+});
+
 describe("dependency URL delivery (#1774)", () => {
   const spellings = [
     ["valid", "https://canary-user:canary-password@example.invalid/repo?token=canary-query"],
@@ -238,6 +290,11 @@ describe("dependency URL delivery (#1774)", () => {
       expect(validateFindings(delivered).errors).toEqual([]);
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
       const artifact = delivered.findings.find((finding) => finding.id === id)!.dependencyRangeEvidence!;
+      expect(delivered.coverage).toBeDefined();
+      const sarif = JSON.stringify(toSarif(delivered.findings, { coverage: delivered.coverage! }));
+      const parsedSarif = JSON.parse(sarif) as { runs: { results: { properties: { harveyId: string; dependencyRangeEvidence?: unknown } }[] }[] };
+      expect(parsedSarif.runs[0]!.results.find((result) => result.properties.harveyId === id)?.properties.dependencyRangeEvidence).toEqual(artifact);
+      for (const secret of ["canary-user", "canary-password", "canary-query", "canary%2duser", "canary%2dpassword"]) expect(sarif).not.toContain(secret);
       expect(artifact).toMatchObject({ examined: 1, matched: 1, distinctSpecifications: 1, displayedSpecifications: 1, edges: [{
         source: direct ? "package.json" : "package-lock.json", format: direct ? "package-json" : "package-lock", sourceVersion: direct ? "unversioned" : "3",
         ownerPath: direct ? "package.json" : "node_modules/parent", section: "dependencies", direct, redacted,
@@ -274,8 +331,8 @@ describe("pnpm range disclosure delivery (#1774)", () => {
       context = new MechanicalScanContext(dir);
       const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline pnpm boundary fixture" }, skipNetworkChecks: true }, "supply");
       const scope = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
-      expect(scope.evidence).toContain("0 admitted third-party range edges");
-      expect(scope.evidence).toContain(`${specifiers + boundaries} input unit(s) examined, ${specifiers + boundaries} present/unread unit(s)`);
+      expect(scope.evidence).toContain(`${specifiers} admitted third-party range edges`);
+      expect(scope.evidence).toContain(`${specifiers + boundaries} input unit(s) examined, ${boundaries} present/unread unit(s)`);
       expect(scope.evidence).toContain(`${specifiers} importer/root specifier value(s)`);
       expect(scope.evidence).toContain(`${boundaries} malformed map boundar`);
       const doc = assembleEngagementDocument(RECORDED, ENV, [scope], META);
@@ -285,6 +342,71 @@ describe("pnpm range disclosure delivery (#1774)", () => {
       const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
       expect(delivered.findings.find((finding) => finding.id === scope.id)?.evidence).toBe(scope.evidence);
       expect(html).toContain(esc(scope.evidence));
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("dependency metadata delivery (#2141)", () => {
+  it("preserves the complete per-package receipt through assembly, JSON validation, and rendered evidence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-metadata-report-"));
+    const child = `metadata-delivery-child-${process.pid}-${Date.now()}`;
+    const pkg = { name: "metadata-report", dependencies: { [child]: "1.0.0" } };
+    let context: MechanicalScanContext | undefined;
+    const originalFetch = globalThis.fetch;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "pnpm-lock.yaml"), `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      ${child}: {specifier: 1.0.0, version: 1.0.0}\npackages:\n  ${child}@1.0.0: {}\n`);
+      globalThis.fetch = (async (_input, init) => init?.method === "HEAD" ? new Response(null, { status: 200 }) : Response.json({ name: child, version: "1.0.0", license: "MIT", scripts: {} })) as typeof fetch;
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "bounded metadata fixture" }, skipNetworkChecks: false }, "supply");
+      const receipt = result.findings.find((finding) => finding.id === "SUP-METADATA-00")!;
+      const scopeFinding = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(receipt.dependencyMetadataEvidence).toMatchObject({ population: 1, processed: 1, complete: true, outcomes: [{ coordinate: `${child}@1.0.0`, status: "registry", provenance: `https://registry.npmjs.org/${child}/1.0.0`, license: "MIT", installScriptAssessment: "absent" }] });
+      expect(scopeFinding.evidence).toContain("registry/local metadata separately assessed 1 of 1 packages");
+      const doc = assembleEngagementDocument(RECORDED, ENV, result.findings, META);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
+      expect(validateFindings(delivered).errors).toEqual([]);
+      expect(delivered.findings.find((finding) => finding.id === receipt.id)?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      expect(delivered.coverage).toBeDefined();
+      const sarif = JSON.stringify(toSarif(delivered.findings, { coverage: delivered.coverage! }));
+      const parsedSarif = JSON.parse(sarif) as { runs: { results: { properties: { harveyId: string; dependencyMetadataEvidence?: unknown } }[] }[] };
+      expect(parsedSarif.runs[0]!.results.find((result) => result.properties.harveyId === receipt.id)?.properties.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      expect(delivered.findings.find((finding) => finding.id === scopeFinding.id)?.evidence).toBe(scopeFinding.evidence);
+      const html = buildHtml(doc);
+      expect(html).toContain("Dependency metadata outcomes");
+      expect(html).toContain("Package identity");
+      expect(html).toContain(`${child}@1.0.0`);
+      expect(html).toContain(`https://registry.npmjs.org/${child}/1.0.0`);
+      expect(html).toContain("absent");
+      expect(html).toContain(esc(scopeFinding.evidence));
+      expect(html).not.toContain("Complete per-package outcomes are attached");
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+    } finally { globalThis.fetch = originalFetch; context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("renders distinct local manifests with the same package name as separate proved identities", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-local-metadata-report-"));
+    const pkg = { name: "metadata-report", workspaces: ["packages/*"], dependencies: { "@local/shared": "file:packages/first" } };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      for (const path of ["packages/first", "packages/second", "packages/consumer"]) mkdirSync(join(dir, path), { recursive: true });
+      writeFileSync(join(dir, "packages/first/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "MIT" }));
+      writeFileSync(join(dir, "packages/second/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "GPL-3.0", scripts: { install: "node install.js" } }));
+      writeFileSync(join(dir, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/shared": "file:../second" } }));
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "bounded local identity fixture" }, skipNetworkChecks: true }, "supply");
+      const doc = assembleEngagementDocument(RECORDED, ENV, result.findings, META);
+      expect(validateFindings(doc).errors).toEqual([]);
+      const html = buildHtml(doc);
+      for (const coordinate of [
+        "@local/shared@local:packages/first/package.json",
+        "@local/shared@local:packages/second/package.json",
+      ]) expect(html).toContain(coordinate);
+      expect(html).toContain("packages/second/package.json#license/scripts");
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
     } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
@@ -609,6 +731,7 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     finding({
       id: `SB-RLS-POLICY-public.t${i}.t${i}_read`,
       title: "Permissive RLS policy",
+      assessment: { disposition: "confirmed", evidenceKind: "runtime", reviewStatus: "reviewed", sourceScope: "current", reason: "Synthetic independently reproduced policy failure", review: { reviewer: "fixture-reviewer", evidence: ["fixture/policy-reproduction"] } },
       taxonomy: "M1 — Multi-tenant security",
       severity: "High",
       location: `supabase/policies/t${i}.sql:1`,
@@ -642,7 +765,7 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     expect(broken, "the control must actually change the disclosed count").not.toBe(html);
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.map((b) => b.kind)).toEqual(["miscounted-rollup"]);
-    expect(breaches[0]?.detail).toContain("7 finding(s) of shape \"M1 — Multi-tenant security High\"");
+    expect(breaches[0]?.detail).toContain("7 finding(s) of shape \"M1 — Multi-tenant security High confirmed\"");
     expect(breaches[0]?.detail).toContain("the report discloses 3");
   });
 

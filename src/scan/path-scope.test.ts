@@ -416,7 +416,11 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
           { connected: false, dynamic: false, llm: false },
           produced, reportMeta, undefined, {},
         );
-        expect(document.findings, entry.rowId).toContainEqual(row);
+        const delivered = document.findings.filter((finding) => finding.id === entry.rowId);
+        expect(delivered, entry.rowId).toHaveLength(1);
+        expect(delivered[0], entry.rowId).toMatchObject(row!);
+        expect(delivered[0]!.assessment).toMatchObject({ disposition: "not-applicable", evidenceKind: "scope", reason: row!.evidence });
+        expect(delivered[0]!.origin?.producerId).toBe(entry.rowId);
         const html = buildHtml(document);
         expect(html, entry.rowId).toContain(esc(entry.rowId));
         expect(html, `${entry.rowId} rendered reason`).toContain(esc(row!.evidence));

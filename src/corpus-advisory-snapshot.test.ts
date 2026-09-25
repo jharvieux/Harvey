@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,11 @@ import {
   type CorpusAdvisorySnapshotEntry,
   type CorpusAdvisorySnapshotManifest,
 } from "./corpus-advisory-snapshot.js";
-import { runOsvScanner, parseOsvFindings, type OsvScanResult } from "./scan/dependencies.js";
+import { inventoryOsvInputs, runOsvScanner, parseOsvFindings, validateOsvAssessment, type OsvScanResult } from "./scan/dependencies.js";
+import { MechanicalScanContext } from "./scan/mechanical-context.js";
+import { observeOsvInputs } from "./scan/mechanical-dependency-registry.js";
+import { resolveScanScope } from "./scan/scan-scope.js";
+import { EXTERNAL_CORPUS } from "./scan/external-corpus.js";
 
 function advisoryInput(overrides: Record<string, unknown> = {}): OsvScanResult {
   return {
@@ -146,6 +150,53 @@ describe("immutable corpus advisory snapshots (#1876)", () => {
       const loaded = loadCorpusAdvisorySnapshot(target.slug, target.commit, { now: new Date("2026-08-21T02:00:00Z") });
       expect(loaded.digest).toMatch(/^[a-f0-9]{64}$/);
       expect(loaded.osvScannerVersion).toContain("2.3.8");
+    }
+  });
+
+  it("replays the committed pnpm v6 capture against its exact pinned dependency inputs", () => {
+    const pinned = JSON.parse(gunzipSync(readFileSync(new URL("./scan/__fixtures__/osv/subscription-payments.inputs.json.gz", import.meta.url))).toString("utf8")) as {
+      repo: string; commit: string; inputs: { path: string; sha256: string; content: string }[];
+    };
+    const target = EXTERNAL_CORPUS.find(({ slug }) => slug === "subscription-payments")!;
+    expect({ repo: pinned.repo, commit: pinned.commit }).toEqual({ repo: target.repo, commit: target.commit });
+    const dir = mkdtempSync(join(tmpdir(), "harvey-advisory-pinned-inputs-"));
+    dirs.push(dir);
+    for (const input of pinned.inputs) {
+      expect(createHash("sha256").update(input.content).digest("hex")).toBe(input.sha256);
+      writeFileSync(join(dir, input.path), input.content);
+    }
+    // Fixture replay has a fixed observation time; production expiry remains checked by the loader.
+    const snapshot = loadCorpusAdvisorySnapshot(target.slug, target.commit, { now: new Date("2026-09-25T16:00:00Z") });
+    const scoped = resolveScanScope(dir);
+    const context = new MechanicalScanContext(scoped.scanDir);
+    try {
+      const inventory = inventoryOsvInputs(scoped.scanDir, context.paths);
+      expect(inventory.inputs.map(({ path, sha256 }) => ({ path, sha256 }))).toEqual(pinned.inputs.map(({ path, sha256 }) => ({ path, sha256 })));
+      expect(inventory.inputs.find(({ path }) => path === "pnpm-lock.yaml")?.providerNormalization).toEqual({
+        kind: "pnpm-v6-scoped-peer-metadata", normalizedEntries: 18,
+        normalizedSha256: "08a36ec11e55821c106b82cfe32f18b87c39b21fdb356b73a168efcad4da5285",
+      });
+      const replay = observeOsvInputs(scoped.scanDir, context, snapshot, snapshot);
+      expect(replay.assessment.inventory).toEqual(inventory);
+      expect(replay.assessment.status).toBe("assessed");
+      expect(replay.assessment.invocations[0]?.examinedPackages).toEqual(inventory.inputs.find(({ path }) => path === "pnpm-lock.yaml")?.resolvedPackages);
+      expect(replay.assessment.invocations[0]?.unassessedPackages).toEqual([]);
+
+      // A self-consistent old preprocessing receipt still belongs to a different execution plan.
+      const stale = structuredClone(snapshot);
+      delete stale.assessment.inventory.inputs.find(({ path }) => path === "pnpm-lock.yaml")!.providerNormalization;
+      const oldHash = stale.assessment.inventory.sha256;
+      stale.assessment.inventory.sha256 = createHash("sha256").update(JSON.stringify(stale.assessment.inventory.inputs)).digest("hex");
+      stale.assessment.provenance = stale.assessment.provenance.replace(oldHash, stale.assessment.inventory.sha256).split(" Disposable pnpm v6 provider normalization")[0]!;
+      expect(() => validateOsvAssessment(stale.assessment, stale.result)).not.toThrow();
+      expect(() => observeOsvInputs(scoped.scanDir, context, stale)).toThrow("complete prepared-target population");
+      expect(() => observeOsvInputs(scoped.scanDir, context, snapshot, stale)).toThrow("complete prepared-target population");
+
+      writeFileSync(join(scoped.scanDir, "package.json"), `${pinned.inputs.find(({ path }) => path === "package.json")!.content}\n`);
+      expect(() => observeOsvInputs(scoped.scanDir, context, snapshot)).toThrow("complete prepared-target population");
+    } finally {
+      context.dispose();
+      scoped.cleanup();
     }
   });
 

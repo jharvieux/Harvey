@@ -119,7 +119,7 @@ describe("runSupabaseScan", () => {
 
     expect(taxonomies).toContain("rls_disabled_in_public");
     expect(taxonomies).toContain("Auth config: email confirmation disabled");
-    expect(taxonomies).toContain("Auto-exposed public-schema table");
+    expect(taxonomies).toContain("RLS-disabled table inventory");
     expect(taxonomies).toContain("Dangerous extension enabled");
     expect(taxonomies).toContain("Public bucket with no policies");
     expect(findings.every((f) => f.mechanical)).toBe(true);
@@ -232,13 +232,13 @@ describe("runSupabaseScan", () => {
       // From the live auth body: HIBP off with the email provider on.
       expect(findings.map((f) => f.id)).toContain("SB-AUTH-HIBP");
       // From the live table body: all 15 rows carry rlsEnabled true, so nothing is auto-exposed.
-      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+      expect(findings.some((f) => f.taxonomy === "RLS-disabled table inventory")).toBe(false);
     });
 
     it("CONTROL — one row's rlsEnabled flipped to false is graded, so the pass above is not vacuous", async () => {
       const flipped = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: false } : r));
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(flipped) });
-      expect(findings.filter((f) => f.taxonomy === "Auto-exposed public-schema table")).toHaveLength(1);
+      expect(findings.filter((f) => f.taxonomy === "RLS-disabled table inventory")).toHaveLength(1);
     });
 
     it("CONTROL — a driver that stringified the boolean would go silent, which is why the capture matters", async () => {
@@ -247,7 +247,7 @@ describe("runSupabaseScan", () => {
       // is what rules this out; this control states the cost of having assumed it.
       const stringy = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: "f" as unknown as boolean } : r));
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(stringy) });
-      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+      expect(findings.some((f) => f.taxonomy === "RLS-disabled table inventory")).toBe(false);
     });
   });
 
@@ -301,6 +301,83 @@ describe("runSupabaseScan", () => {
       });
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir: dir });
       expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(true);
+    });
+
+    it("resolves a repository import map and clears only a verifier that guards the effect", async () => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-fns-imported-"));
+      const functionsDir = join(dir, "supabase", "functions");
+      const webhookDir = join(functionsDir, "stripe-webhook");
+      mkdirSync(webhookDir, { recursive: true });
+      for (const name of ["handler", "shared", "implementation"]) {
+        writeFileSync(
+          join(webhookDir, `${name}.ts`),
+          readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts.txt`, import.meta.url), "utf8"),
+        );
+      }
+      writeFileSync(join(webhookDir, "index.ts"), readFileSync(join(webhookDir, "handler.ts"), "utf8"));
+      writeFileSync(join(functionsDir, "deno.json"), JSON.stringify({ imports: { "@fixture/shared/stripe": "./stripe-webhook/implementation.ts" } }));
+
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
+      expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(false);
+
+      writeFileSync(join(webhookDir, "implementation.ts"), readFileSync(new URL("./__fixtures__/source-precision/webhook-no-verification/implementation.ts.txt", import.meta.url), "utf8"));
+      const broken = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
+      expect(broken.find((f) => f.taxonomy === "Unsigned/unverified webhook handler")?.precisionTier).toBe("review");
+    });
+
+    it.each([
+      ["exported class entry", "export class Unsafe { static async handle() { await database.entitlements.upsert({ userId: 'forged' }); } }", true],
+      ["exported interface", "export interface PublicShape { handle: string }", false],
+      ["direct unsafe export", "export async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); }", true],
+      ["local unsafe alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe };", true],
+      ["local unsafe default alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe as default };", true],
+      ["named unsafe reexport", "export { unsafe } from './unsafe.ts';", true],
+      ["default unsafe reexport", "export { unsafe as default } from './unsafe.ts';", true],
+      ["star unsafe reexport", "export * from './unsafe.ts';", true],
+      ["namespace unsafe reexport", "export * as exposed from './unsafe.ts';", true],
+      ["unsafe arrow alias", "const unsafe = async () => database.entitlements.upsert({ userId: 'forged' }); export { unsafe };", true],
+      ["unsafe default arrow alias", "const unsafe = async () => database.entitlements.upsert({ userId: 'forged' }); export { unsafe as default };", true],
+      ["unsafe expression alias", "const unsafe = async function() { await database.entitlements.upsert({ userId: 'forged' }); }; export { unsafe as default };", true],
+      ["imported unsafe alias", "import { unsafe as imported } from './unsafe.ts'; export { imported as default };", true],
+      ["literal named export", "const version = 'fixture'; export { version };", false],
+      ["same verified default alias", "export { handle as default };", false],
+      ["same verified named alias", "export { handle as verified };", false],
+      ["type-only named export", "type Entry = string; export type { Entry };", false],
+      ["type-only specifier", "type Entry = string; export { type Entry };", false],
+      ["type-only star export", "export type * from './unsafe.ts';", false],
+    ] as const)("accounts for %s in the shipping webhook producer (#2130)", async (_name, appended, review) => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-exports-"));
+      const webhookDir = join(dir, "stripe-webhook");
+      mkdirSync(webhookDir);
+      const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts.txt`, import.meta.url), "utf8");
+      writeFileSync(join(webhookDir, "index.ts"), fixture("handler").replace("./shared.js", "./implementation.ts") + "\n" + appended);
+      writeFileSync(join(webhookDir, "implementation.ts"), fixture("implementation"));
+      writeFileSync(join(webhookDir, "unsafe.ts"), "export async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); }");
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = (await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir: dir })).filter((finding) => finding.taxonomy === "Unsigned/unverified webhook handler");
+      expect(findings).toHaveLength(review ? 1 : 0);
+      if (review) expect(findings[0]!.precisionTier).toBe("review");
+    });
+
+    it.each(["wrong-arguments", "conditional-verification", "caller-effect", "fake-verifier"])("delivers an unresolved %s webhook finding through the shipping producer (#2130)", async (variant) => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-fns-proof-"));
+      const functionsDir = join(dir, "supabase", "functions");
+      const webhookDir = join(functionsDir, "stripe-webhook");
+      mkdirSync(webhookDir, { recursive: true });
+      let handler = readFileSync(new URL("./__fixtures__/source-precision/webhook-valid/handler.ts.txt", import.meta.url), "utf8").replace("./shared.js", "./implementation.ts");
+      let implementation = readFileSync(new URL("./__fixtures__/source-precision/webhook-valid/implementation.ts.txt", import.meta.url), "utf8");
+      if (variant === "wrong-arguments") implementation = implementation.replace("verifyStripeSignature(params.rawBody, params.signatureHeader, params.secret)", 'verifyStripeSignature("other-body", "other-header", "other-secret")');
+      if (variant === "conditional-verification") implementation = implementation.replace("  const valid =", "  if (Math.random() > 0.5) {\n  const valid =").replace("  await params.grantEntitlement", "  }\n  await params.grantEntitlement");
+      if (variant === "caller-effect") handler = handler.replace("  return processWebhook", '  await database.entitlements.upsert({ userId: "unverified" });\n  return processWebhook');
+      if (variant === "fake-verifier") implementation = implementation.replace("  return diff === 0", "  return true");
+      writeFileSync(join(webhookDir, "index.ts"), handler);
+      writeFileSync(join(webhookDir, "implementation.ts"), implementation);
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = (await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir })).filter((finding) => finding.taxonomy === "Unsigned/unverified webhook handler");
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.precisionTier).toBe("review");
+      expect(findings[0]!.evidence).toContain("does not provably guard");
     });
   });
 

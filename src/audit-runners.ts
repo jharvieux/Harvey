@@ -271,20 +271,21 @@ const M7_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
 ]);
 
 const M8_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
+  binding({ id: "disclosure:mutation-workspace-plan", modules: ["M8"], tiers: ["connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-workspace.ts", "mutationWorkspaceFinding")], findingFamilies: [family("M8", "M8-WORKSPACE-*", "M8 — Workspace mutation coverage", "coverage-disclosure")] }),
   binding({ id: "mutation:surviving-mutants", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "survivingMutantFindings")], findingFamilies: [family("M8", "M8-MUT-*", "M8 — Denial/boundary path untested")] }),
   binding({ id: "mutation:vacuous-tests", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "vacuousTestFindings")], findingFamilies: [family("M8", "M8-VACUOUS-*", "M8 — Vacuous test*")] }),
   binding({ id: "mutation:no-coverage", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noCoverageFindings")], findingFamilies: [family("M8", "M8-NOCOV-*", "M8 — Module has no mutation test coverage")] }),
   binding({ id: "mutation:stub-survival", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/stub-check.ts", "stubSurvivalFindings")], findingFamilies: [family("M8", "M8-STUB-*", "M8 — Survives implementation deletion")] }),
-  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite")] }),
-  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)")] }),
-  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")] }),
+  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite"), family("M8", "M8-00-*", "M8 — No automated test suite")] }),
+  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)"), family("M8", "M8-03-*", "M8 — Suite fails unmutated dry run (env-fragile tests)")] }),
+  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure"), family("M8", "M8-04-*", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")] }),
 ]);
 
 const M10_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
   binding({ id: "m10:data-map", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "dataMapToFindings")], findingFamilies: [family("M10", "M10-<n>", "M10 — Data classification (PII/PHI/PCI)")] }),
   binding({ id: "m10:value-sampling", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "valueSamplingToFindings")], findingFamilies: [family("M10", "M10-VS-<n>", "M10 — Data classification (PII/PHI/PCI)"), family("M10", "M10-VS-00", "M10 — Data classification (PII/PHI/PCI)", "coverage-disclosure")] }),
-  binding({ id: "m10:pii-protection", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/pii-protection-review.ts", "piiProtectionFindings")], findingFamilies: [family("M10", "M10-PROT-*", "M10 — PII protection*")] }),
-  binding({ id: "disclosure:m10-protection-scope", modules: ["M10"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/pii-protection-review.ts", "piiProtectionScope")], findingFamilies: [family("M10", "M10-PROT-00", "M10 — PII protection*", "not-assessed")] }),
+  binding({ id: "m10:pii-protection", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/pii-protection-review.ts", "piiProtectionFindings")], findingFamilies: [family("M10", "M10-PII-*", "M10 — PII/PHI/PCI protection")] }),
+  binding({ id: "disclosure:m10-protection-scope", modules: ["M10"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/pii-protection-review.ts", "piiProtectionScope")], findingFamilies: [family("M10", "M10-PROT-00", "M10 — PII/PHI/PCI protection", "not-assessed")] }),
   binding({ id: "adapter:m10-classification", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "adapter", implementations: [impl("tools/pii-classify.mjs", "classifyColumn", "adapter"), impl("tools/pii-classify.mjs", "buildDataMap", "adapter"), impl("tools/pii-classify.mjs", "classifyWithFallback", "adapter"), impl("tools/pii-classify.mjs", "classifySampledValues", "adapter")] }),
 ]);
 
@@ -1433,7 +1434,8 @@ const m8: ModuleRunner = {
     if (!measured) {
       return {
         kind: "not-assessed",
-        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${trimOut(output)}`,
+        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${verdict.kind === "partial" ? verdict.note : trimOut(output)}`,
+        findings,
         provenance: "MEASURED",
         falsifier: `${staticCmd} && ${command}`,
       };
@@ -1593,7 +1595,7 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
   // RLS state, anon/authenticated grants and encryption facts that exist only on a live connection —
   // so say so here, because "M10: partial, rows not sampled" reads as though protection was covered.
   const schemaOnly =
-    "schema tier only — no live DB, so row-level data was not sampled AND PII protection was not verified (RLS state, anon/authenticated grants and encryption-at-rest are live-only facts); see the M10-PROT-00 row";
+    "schema tier only — name/type classification; row values were not sampled and PII protection was not verified. Effective column grants and row policies need connected catalog evidence; source encryption/masking behavior and infrastructure controls need attributable review. See the M10-PROT-00 row";
   const mapPath = dataMapOut(ctx, instanceName);
   const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])]);
   const command = `pnpm pii-classify --schema ${schemas.join(" ")}`;
@@ -1623,17 +1625,23 @@ const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeR
   const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
   const mapPath = dataMapOut(ctx, instanceName);
   const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])], execOpts);
-  if (!ok) return { kind: "not-assessed", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: "pnpm pii-classify", ...instance };
   const columns = columnsClassified(output);
-  if (!columns) return notClassified(ctx, output, columns, "pnpm pii-classify", instance);
+  const captured = outPath ? readCaptured(ctx, outPath) : [];
+  const scopeEvidence = captured.find((f) => f.id === "M10-PROT-00")?.evidence ?? output.split("\n").find((line) => line.startsWith("M10 scope:"));
+  if (!columns) return {
+    kind: "not-assessed",
+    reason: `M10 classified no confirmed columns${ok ? "" : " and exited non-zero"}; no clean result is inferred. ${scopeEvidence ?? trimOut(output)}`,
+    provenance: "MEASURED", falsifier: "pnpm pii-classify --schemas <authorized schemas> with readable catalog metadata and a non-zero column census", ...instance,
+    findings: captured,
+  };
   const dataMap = readDataMap(ctx, mapPath);
   return {
     kind: "examined",
-    detail: "pnpm pii-classify (live)",
+    detail: "pnpm pii-classify (live catalog)",
     unitsExamined: columns,
-    scope: "live database columns",
-    findings: outPath ? readCaptured(ctx, outPath) : [],
-    ...(outPath ? {} : { reason: `live classification ran, but ${M10_NOT_COLLECTED}` }),
+    scope: "database columns in configured authorized schemas",
+    findings: captured,
+    reason: `${ok ? "" : "Catalog assessment exited non-zero; partial results retained. "}Live classification and supported direct column authorization were assessed; protection remains partial (caller-dependent policies, views/RPCs, encryption behavior, storage/backups and key management require evidence). See M10-PROT-00.${outPath ? "" : ` ${M10_NOT_COLLECTED}`} ${scopeEvidence ?? "Detailed catalog scope was unavailable."}`,
     ...dataMap,
     ...instance,
   };

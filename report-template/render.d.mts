@@ -11,3 +11,4 @@ export declare function severityDonut(counts: Record<string, number>): string;
 export declare function completenessBanner(rows: CoverageRow[] | undefined): string;
 export declare function coverageSection(rows: CoverageRow[], m: ReportMeta): string;
 export declare function limitationsSection(rows: CoverageRow[]): string;
+export declare function residualScopeSection(inventory: FindingsDocument["residualScope"]): string;

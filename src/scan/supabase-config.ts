@@ -3,8 +3,11 @@
 // and Edge Function secret/webhook-signature hygiene. See src/scan/supabase.ts for how each
 // input is fetched (Management API / direct SQL against the project).
 
+import type { SourceInput } from "../detectors/common.js";
+import { assessWebhookVerification } from "./webhook-proof.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
+import type { TableAuthorization } from "./supabase-authorization.js";
 
 export interface StorageBucket {
   id: string;
@@ -13,9 +16,8 @@ export interface StorageBucket {
 }
 
 // policyCountByBucket: number of storage.objects RLS policies scoped to each bucket (by id).
-// A public bucket is fully open regardless of policies (public buckets skip storage RLS for
-// reads), but zero policies also means no write/delete restriction either — the highest-risk
-// combination, and what the issue calls out specifically.
+// Public object reads and SQL write authorization are separate contexts. A missing
+// bucket-specific predicate is inventory, not evidence of an allowed write/delete path.
 export function checkPublicBucketsWithNoPolicies(buckets: StorageBucket[], policyCountByBucket: Record<string, number>): Finding[] {
   return buckets
     .filter((b) => b.public && (policyCountByBucket[b.id] ?? 0) === 0)
@@ -23,14 +25,14 @@ export function checkPublicBucketsWithNoPolicies(buckets: StorageBucket[], polic
       mechanicalFinding({
         id: `SB-BUCKET-${b.id}`,
         title: `Public storage bucket "${b.name}" has zero access policies`,
-        severity: "High",
+        severity: "Info",
         category: "Supabase config",
         taxonomy: "Public bucket with no policies",
         location: `storage bucket: ${b.name}`,
         evidence: `Bucket "${b.name}" (public=true) has 0 storage.objects policies scoped to it.`,
-        impact: "Anyone can read every object, and with no policy restricting writes/deletes either, likely write/delete too.",
-        fix: "Add object-level RLS policies scoping access, or set the bucket private and serve via signed URLs.",
-        precisionTier: "high",
+        impact: "The public flag permits public object reads. This policy count establishes no write/delete access: enabled RLS denies ordinary roles without an applicable permissive policy, and generic policies may not name a bucket literally.",
+        fix: "Confirm public reads are intended and review applicable write/delete policies separately; use private buckets and signed URLs for private objects.",
+        precisionTier: "review",
       }),
     );
 }
@@ -41,24 +43,22 @@ export interface TableInfo {
   rlsEnabled: boolean;
 }
 
-// public-schema tables are auto-exposed via PostgREST/pg_graphql. A SQL-migration-created
-// table can land here before the Advisor cache picks it up, so this is checked directly
-// against the live table list rather than only via the rls_disabled_in_public advisor lint.
-export function checkAutoExposedTables(tables: TableInfo[]): Finding[] {
+// RLS state alone is posture. The effective-authorization pass owns row-read exposure.
+export function checkAutoExposedTables(tables: TableInfo[], authorization: readonly TableAuthorization[] = []): Finding[] {
   return tables
     .filter((t) => t.schema === "public" && !t.rlsEnabled)
     .map((t) =>
       mechanicalFinding({
         id: `SB-EXPOSED-${t.schema}-${t.name}`,
-        title: `public.${t.name} has RLS disabled and is auto-exposed via PostgREST`,
-        severity: "Critical",
+        title: `public.${t.name} has RLS disabled; evaluate effective access`,
+        severity: "Info",
         category: "Supabase config",
-        taxonomy: "Auto-exposed public-schema table",
+        taxonomy: "RLS-disabled table inventory",
         location: `${t.schema}.${t.name}`,
-        evidence: `Table is in the public schema (auto-exposed by PostgREST/pg_graphql) with row-level security disabled.`,
-        impact: "Every row is readable/writable (subject to grants) by anyone holding the anon key — no per-row restriction.",
+        evidence: `Table is in public with RLS disabled. ${authorization.find((a) => a.schema === t.schema && a.name === t.name)?.detail ?? "Effective grants, roles and API schema reachability were not established for this inventory row."}`,
+        impact: "RLS-disabled metadata does not establish current client access. Schema usage, table/column grants and an API or SQL caller path must also be established.",
         fix: "Enable RLS and add policies, or move the table out of the exposed API schema.",
-        precisionTier: "high",
+        precisionTier: "review",
       }),
     );
 }
@@ -243,13 +243,13 @@ export function checkDangerousExtensions(extensions: ExtensionInfo[]): Finding[]
     .map((e) =>
       mechanicalFinding({
         id: `SB-EXT-${e.name}`,
-        title: `Extension "${e.name}" is enabled — outbound HTTP callable from the database`,
-        severity: "Medium",
+        title: `Extension "${e.name}" is installed; outbound access needs review`,
+        severity: "Info",
         category: "Supabase config",
         taxonomy: "Dangerous extension enabled",
         location: `extension: ${e.name}${e.schema ? ` (schema ${e.schema})` : ""}`,
-        evidence: `${e.name}@${e.installed_version} is installed.`,
-        impact: "If callable from a permissive role or a SECURITY DEFINER function with an attacker-influenceable URL, this is a DB-originated SSRF primitive.",
+        evidence: `${e.name}@${e.installed_version} is installed. No attacker-controlled URL, executable function grant, or reachable caller path is established by extension presence.`,
+        impact: "This is capability inventory, not a demonstrated outbound-access or SSRF finding. A concrete callable path and controllable destination require separate evidence.",
         fix: "Confirm no permissive/SECURITY DEFINER function calls this extension with an untrusted URL; revoke EXECUTE from anon/authenticated where not needed.",
         precisionTier: "review",
       }),
@@ -259,6 +259,8 @@ export function checkDangerousExtensions(extensions: ExtensionInfo[]): Finding[]
 export interface EdgeFunctionSource {
   name: string;
   content: string;
+  /** Target-relative entrypoint path. Required for cross-file verifier proof. */
+  path?: string;
 }
 
 const HARDCODED_SECRET_HINT = /(SUPABASE_SERVICE_ROLE_KEY\s*=\s*["'][^"']|service_role["']?\s*:\s*["'][^"']{10,}|Authorization["']?\s*:\s*["']Bearer\s+sk_)/;
@@ -289,23 +291,21 @@ export interface RealtimeMessagesInfo {
   rlsEnabled: boolean;
 }
 
-// Realtime Authorization gates broadcast/presence through RLS policies on realtime.messages.
-// If RLS is disabled on that table, every subscriber with the anon key receives every channel's
-// messages regardless of channel privacy — the clear, DB-decidable misconfiguration. Whether an
-// app that *does* keep RLS on has actually marked its channels private is a client-code fact this
+// Realtime Authorization uses RLS policies on realtime.messages. Actual channel privacy,
+// subscriber grants and the application's channel use depend on runtime context that this
 // check can't see, so it only fires on the unambiguous RLS-off case and stays "review".
 export function checkRealtimeAuthorization(realtime: RealtimeMessagesInfo): Finding[] {
   if (!realtime.exists || realtime.rlsEnabled) return [];
   return [
     mechanicalFinding({
       id: "SB-REALTIME-NO-AUTHZ",
-      title: "Realtime messages table has RLS disabled — channels are unauthorized",
-      severity: "High",
+      title: "Realtime messages table has RLS disabled; review channel authorization",
+      severity: "Info",
       category: "Supabase config",
       taxonomy: "Realtime channel lacks authorization",
       location: "realtime.messages",
       evidence: "realtime.messages has row-level security disabled.",
-      impact: "Realtime Authorization is enforced by RLS on realtime.messages; with RLS off, any client holding the anon key can subscribe to broadcast/presence on any channel and receive other users' messages.",
+      impact: "This is channel authorization posture. RLS state alone does not establish the subscriber's grants, channel configuration or a reachable broadcast/presence path; client access remains review.",
       fix: "Enable RLS on realtime.messages and add policies scoping channel access, and mark private channels with { config: { private: true } } on the client.",
       precisionTier: "review",
     }),
@@ -318,12 +318,8 @@ export interface PublishedTable {
   rlsEnabled: boolean;
 }
 
-// A table in the `supabase_realtime` publication has its row changes (INSERT/UPDATE/DELETE)
-// broadcast to Realtime subscribers via the legacy postgres_changes stream. Broadcast rows are
-// filtered by the subscriber's RLS at subscribe time — so a published table with RLS DISABLED
-// live-streams every row change to any client holding the anon key, regardless of tenant. This is
-// distinct from checkRealtimeAuthorization (which covers the newer realtime.messages model): a
-// table can be broadcast via the publication even when realtime.messages RLS is fine. Fires only
+// Publication membership and RLS state are catalog posture. Effective subscriber grants and
+// the Realtime caller path need separate evidence before asserting row delivery. Fires only
 // on the unambiguous RLS-off case, so "review".
 export function checkRealtimePublicationRls(published: PublishedTable[]): Finding[] {
   return published
@@ -331,22 +327,21 @@ export function checkRealtimePublicationRls(published: PublishedTable[]): Findin
     .map((t) =>
       mechanicalFinding({
         id: `SB-REALTIME-PUB-${t.schema}-${t.name}`,
-        title: `Table ${t.schema}.${t.name} is broadcast by Realtime with RLS disabled`,
-        severity: "High",
+        title: `Table ${t.schema}.${t.name} is published for Realtime with RLS disabled`,
+        severity: "Info",
         category: "Supabase config",
         taxonomy: "Realtime publication broadcasts an unprotected table",
         location: `${t.schema}.${t.name}`,
         evidence: `${t.schema}.${t.name} is in the supabase_realtime publication and has row-level security disabled.`,
-        impact: "Every INSERT/UPDATE/DELETE on this table is streamed to any client subscribed with the anon key — with RLS off there is no per-row filter, so all tenants' row changes are broadcast to everyone.",
+        impact: "Publication membership does not establish successful subscription or delivery to a client role. Effective grants and the Realtime caller path remain review; no cross-tenant row stream is proved by these two catalog facts.",
         fix: "Enable RLS with tenant-scoped policies on the table, or remove it from the supabase_realtime publication if it doesn't need live broadcast.",
         precisionTier: "review",
       }),
     );
 }
 
-// PostgREST auto-exposes the schemas listed in its db-schema config over the REST/GraphQL API.
-// The Supabase default is public + graphql_public; any additional schema is directly reachable
-// with the anon key, so a broader list than intended is an exposure. Whether the extra schema is
+// PostgREST makes configured schemas eligible for API routing; effective object privileges and
+// row policies still govern access. Whether an extra schema beyond public + graphql_public is
 // *meant* to be public is a judgment call → "review".
 const DEFAULT_EXPOSED_SCHEMAS = new Set(["public", "graphql_public"]);
 
@@ -363,7 +358,7 @@ export function checkExposedSchemas(exposedSchemas: string[]): Finding[] {
         taxonomy: "PostgREST schema exposure wider than intended",
         location: `exposed schema: ${schema}`,
         evidence: `PostgREST db-schema config exposes "${schema}" beyond the public/graphql_public default.`,
-        impact: "Every table/function in the schema is reachable with the anon key (subject to grants/RLS) — an exposure surface that's easy to widen unintentionally.",
+        impact: "The schema is eligible for API routing. Current schema usage, object grants, row policies and function context determine which client operations are reachable.",
         fix: "Remove the schema from the exposed API schemas unless it's deliberately public; keep internal data in an unexposed schema.",
         precisionTier: "review",
       }),
@@ -463,24 +458,26 @@ export interface DefaultAclGrant {
   role: string;
   objectType: string; // decoded from pg_default_acl.defaclobjtype: "table" | "function" | "sequence" | ...
   privileges: string[];
+  owner?: string;
 }
 
-// ALTER DEFAULT PRIVILEGES ... GRANT ... TO anon/authenticated auto-grants every future
-// object created in that schema, not just what exists today — a time-bomb the RLS-on-current-
+const catalogIdPart = (value: string) => encodeURIComponent(value).replaceAll("-", "%2D");
+
+// Default ACLs describe future objects created by the named owner, a posture the current
 // tables checks above can't see. A deliberate public grant (e.g. a public read API) can be
-// legitimate, so this stays "review" rather than "high".
+// intended; keep its catalog record without asserting current exposure.
 export function checkDefaultPrivilegesToClientRoles(grants: DefaultAclGrant[]): Finding[] {
   return grants.map((g) =>
     mechanicalFinding({
-      id: `SB-DEFAULT-ACL-${g.schema}-${g.role}-${g.objectType}`,
+      id: `SB-DEFAULT-ACL-${[g.schema, g.role, g.objectType, ...(g.owner ? [g.owner] : [])].map(catalogIdPart).join("-")}`,
       title: `Default privileges auto-grant future ${g.objectType}s in schema "${g.schema}" to ${g.role}`,
-      severity: "Medium",
+      severity: "Info",
       category: "Supabase config",
       taxonomy: "Default privileges grant future objects to client role",
       location: `schema ${g.schema}: default privileges for ${g.role}`,
-      evidence: `ALTER DEFAULT PRIVILEGES in schema "${g.schema}" grants ${g.privileges.join(", ")} on future ${g.objectType}s to role "${g.role}".`,
-      impact: `Every new ${g.objectType} created in "${g.schema}" is automatically reachable by ${g.role} with no explicit review — a table added in a later migration is exposed before anyone adds RLS.`,
-      fix: `Confirm the default grant is intentional; otherwise ALTER DEFAULT PRIVILEGES IN SCHEMA ${g.schema} REVOKE ${g.privileges.join(", ")} ON ${g.objectType === "table" ? "TABLES" : `${g.objectType.toUpperCase()}S`} FROM ${g.role}, and grant per-object as needed.`,
+      evidence: `Default ACL in schema "${g.schema}" grants ${g.privileges.join(", ")} on future ${g.objectType}s to role "${g.role}"${g.owner ? ` when created by "${g.owner}"` : " (creating owner not supplied)"}.`,
+      impact: "Future-object posture does not establish access to any current object. A current object's effective grants, schema usage, RLS and caller context determine exposure; later revokes also apply.",
+      fix: `Confirm the creating owner's default grant is intentional; otherwise revoke the relevant default privileges${g.schema === "(global)" ? " globally" : ` in schema ${g.schema}`} for that owner and grant per object as needed.`,
       precisionTier: "review",
     }),
   );
@@ -499,39 +496,39 @@ export interface ColumnGrant {
 // considered instead (per the issue brief) but it also surfaces every column of a table that only
 // has a table-wide grant — which is Supabase's default anon/authenticated grant shape relying on
 // RLS — so querying it directly would flood every project with false positives. attacl is only
-// populated by an actual column-level grant, which is what "sits outside the table-RLS model".
-export function checkColumnGrantsToClientRoles(grants: ColumnGrant[]): Finding[] {
+// populated by an actual column-level grant. Those grants remain subject to row policies.
+export function checkColumnGrantsToClientRoles(grants: ColumnGrant[], authorization: readonly TableAuthorization[] = []): Finding[] {
   return grants.map((g) =>
     mechanicalFinding({
-      id: `SB-COLUMN-GRANT-${g.schema}-${g.tableName}-${g.columnName}-${g.role}`,
-      title: `Column-level grant on ${g.schema}.${g.tableName}.${g.columnName} to ${g.role} sits outside RLS`,
-      severity: "Medium",
+      id: `SB-COLUMN-GRANT-${[g.schema, g.tableName, g.columnName, g.role, g.privilegeType].map(catalogIdPart).join("-")}`,
+      title: `Column-level ${g.privilegeType} grant on ${g.schema}.${g.tableName}.${g.columnName} to ${g.role}`,
+      severity: "Info",
       category: "Supabase config",
-      taxonomy: "Column-level grant to client role outside RLS model",
+      taxonomy: "Column-level privilege inventory",
       location: `${g.schema}.${g.tableName}.${g.columnName}`,
-      evidence: `${g.privilegeType} on column ${g.schema}.${g.tableName}.${g.columnName} is granted directly to role "${g.role}".`,
-      impact: "Column-level GRANTs are enforced independently of row-level security — this exposes the column on every row the role's table-level privilege reaches, regardless of RLS policy intent.",
+      evidence: `${g.privilegeType} on column ${g.schema}.${g.tableName}.${g.columnName} is granted to role "${g.role}" directly or through PUBLIC/inheritance. ${authorization.find((a) => a.schema === g.schema && a.name === g.tableName)?.detail ?? "Effective row-policy and role context was not established for this inventory row."}`,
+      impact: "A column grant permits the named operation on that column; it does not bypass enabled RLS. Ordinary roles remain limited by applicable policies, including deny-by-default when no permissive policy applies.",
       fix: "Confirm the column grant is deliberate; otherwise REVOKE it and rely on RLS policies (or a view) to control column-level exposure.",
       precisionTier: "review",
     }),
   );
 }
 
-const SIGNATURE_CHECK_HINT = /(verifyWebhookSignature|constructEvent|x-webhook-signature|hmac|createHmac|timingSafeEqual)/i;
-
-export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding[] {
+export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[], projectSources: readonly SourceInput[] = []): Finding[] {
   return fns
-    .filter((f) => /webhook/i.test(f.name) && !SIGNATURE_CHECK_HINT.test(f.content))
-    .map((f) =>
+    .filter((f) => /webhook/i.test(f.name))
+    .map((f) => ({ f, imported: assessWebhookVerification(f, projectSources) }))
+    .filter(({ imported }) => !imported.verifiedBeforeEffect)
+    .map(({ f, imported }) =>
       mechanicalFinding({
         id: `SB-EDGE-WEBHOOK-${f.name}`,
-        title: `Webhook handler "${f.name}" has no signature-verification hint`,
+        title: `Webhook handler "${f.name}" has no proved signature-verification guard`,
         severity: "High",
         category: "Supabase config",
         taxonomy: "Unsigned/unverified webhook handler",
         location: `edge function: ${f.name}`,
-        evidence: `No HMAC/signature-check pattern found in ${f.name}, whose name implies it's a webhook receiver.`,
-        impact: "An unsigned webhook endpoint accepts forged events from anyone who finds the URL.",
+        evidence: `Signature verification was not proved in ${f.name}; ${imported.provenance}. The call remains a review candidate because the request-to-verifier data flow and verification-before-effect order were not proved.`,
+        impact: "Without a verified signature guard, forged webhook events can reach application effects.",
         fix: "Verify the provider's webhook signature (HMAC) before trusting the payload.",
         precisionTier: "review",
       }),

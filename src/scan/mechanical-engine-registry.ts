@@ -134,6 +134,9 @@ const NON_PRODUCER_REGISTRY_CALLS = new Set([
   "src/scan/mechanical-registry-assurance.ts#producerAssurance",
   "src/scan/mechanical-registry-contract.ts#assertProducerTaxonomyOwnership",
   "src/scan/framework-detect.ts#detectOrm",
+  // Shared receipt infrastructure: four dependency producers use this to bind selected
+  // candidates to stable examined-unit identities. It emits no finding and has no single owner.
+  "src/sbom.ts#licenseCandidateIdentity",
   "src/sbom.ts#licenseScope",
 ]);
 
@@ -163,6 +166,9 @@ const EXTERNAL_MECHANICAL_PRODUCER_OWNERS: Readonly<Record<string, ExternalMecha
 ].map((exportName) => [`src/scan/supabase-config.ts#${exportName}`, {
   bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
 }]).concat([
+  ["src/scan/supabase-authorization.ts#loadEffectiveAuthorization", {
+    bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
+  }],
   ["src/scan/supabase-drift.ts#checkMigrationDrift", {
   bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
   }],

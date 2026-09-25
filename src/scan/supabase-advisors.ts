@@ -1,6 +1,5 @@
-// Supabase Advisor security lints — the highest-trust mechanical source in the toolchain:
-// Advisors run Splinter (Supabase's open-source Postgres linter) against the live schema, so
-// results are ground-truth and near-zero-FP (docs/design/mechanical-toolchain.md §6).
+// Supabase Advisor catalog lints. Preserve the observed fact while separating
+// configuration inventory from conclusions that require effective authorization.
 //
 // Response shape confirmed against a live `get_advisors(type: "security")` call (Supabase
 // Management API `GET /v1/projects/{ref}/advisors/security` — verified against the published
@@ -39,21 +38,28 @@ export interface AdvisorsResponse {
 }
 
 // Severity for the lints the issue calls out by name, curated from the product's blast-radius
-// judgment rather than Supabase's own ERROR/WARN/INFO level (e.g. Supabase reports
-// rls_disabled_in_public as an error-level lint, but for a multi-tenant audit it's Critical).
+// judgment rather than Supabase's own ERROR/WARN/INFO level. RLS and EXECUTE
+// configuration inventory is handled separately from demonstrated exposure.
 const CURATED_SEVERITY: Partial<Record<string, Severity>> = {
-  rls_disabled_in_public: "Critical",
-  auth_users_exposed: "Critical",
-  security_definer_view: "High",
-  sensitive_columns_exposed: "High",
-  rls_references_user_metadata: "High",
-  anon_security_definer_function_executable: "High",
-  authenticated_security_definer_function_executable: "Medium",
   function_search_path_mutable: "Medium",
-  rls_enabled_no_policy: "Medium",
 };
 
 const LEVEL_SEVERITY: Record<AdvisorLint["level"], Severity> = { ERROR: "High", WARN: "Medium", INFO: "Low" };
+
+// These lints observe one part of authorization. Keep the upstream observation, but
+// let the combined catalog assessment establish supported direct table-read paths.
+const AUTHORIZATION_REVIEW: Partial<Record<string, string>> = {
+  policy_exists_rls_disabled: "Inactive policies do not establish current schema/table/column grants or a reachable client path.",
+  rls_policy_always_true: "An unconditional permissive policy can still be constrained by applicable restrictive policies, command applicability and effective grants. This lint alone does not prove unrestricted access.",
+  rls_references_user_metadata: "A reference to editable metadata requires expression and caller review; its presence alone does not establish authorization dependence or a reachable row path.",
+  sensitive_columns_exposed: "Column-name patterns do not establish sensitive contents. Effective schema usage, grants, RLS and API reachability are assessed separately.",
+  security_definer_view: "View predicates, effective owner privileges and underlying RLS context remain unproved by the definer setting alone.",
+  auth_users_exposed: "A view dependency and SELECT grant require schema, view predicate and effective owner review before asserting auth-user data exposure.",
+  materialized_view_in_api: "A materialized-view grant and advertised schema require effective caller and contents review before asserting data exposure.",
+  foreign_table_in_api: "Foreign-table access also depends on effective caller privileges, user mappings and remote authorization; this context remains unproved.",
+  insecure_queue_exposed_in_api: "Queue table grants and API schema configuration do not establish the queue function's caller restrictions or effective execution context.",
+  public_bucket_allows_listing: "A broad permissive storage policy remains subject to applicable restrictive policies, grants and the storage caller context; listing access is not proved by this lint alone.",
+};
 
 function entityLocation(lint: AdvisorLint): string {
   const { schema, name } = lint.metadata ?? {};
@@ -85,6 +91,32 @@ export function parseAdvisorFindings(response: AdvisorsResponse, authMethods?: A
     const location = entityLocation(lint);
     const detail = lint.detail ?? lint.description ?? lint.title;
     const evidence = lint.facing ? `${detail} (${lint.facing.toLowerCase()}-facing)` : detail;
+    if (lint.name === "rls_enabled_no_policy" || lint.name === "rls_disabled_in_public") {
+      const enabled = lint.name === "rls_enabled_no_policy";
+      return mechanicalFinding({
+        id, location, title: `${lint.title} — authorization inventory`, severity: "Info", category: "Supabase advisor", taxonomy: lint.name,
+        evidence: `${evidence} ${enabled ? "Enabled RLS with no applicable permissive policy denies normal row access for non-owner, non-superuser, non-BYPASSRLS roles." : "Disabled RLS alone does not establish a current grant or reachable client path."}`,
+        impact: "This is RLS configuration inventory. Current schema/table/column grants, effective roles, ownership and definer context determine access; the effective-authorization rows assess those facts separately.",
+        fix: "Review the effective-authorization findings; preserve intentional deny-by-default tables and narrow any unintended current access.", precisionTier: "review",
+      });
+    }
+    if (["anon_security_definer_function_executable", "authenticated_security_definer_function_executable"].includes(lint.name)) {
+      return mechanicalFinding({
+        id, location, title: `${lint.title} — caller authorization needs review`, severity: "Info", category: "Supabase advisor", taxonomy: lint.name,
+        evidence: `${evidence} EXECUTE permission is catalog evidence, not proof that caller restrictions are absent or effective.`,
+        impact: "Review the function's effective owner, grants and body. A definer can use a different RLS context from its caller; caller restrictions remain unproved by this lint.",
+        fix: "Review and test allowed and disallowed callers against the definer body and owner context.", precisionTier: "review",
+      });
+    }
+    const authorizationReview = AUTHORIZATION_REVIEW[lint.name];
+    if (authorizationReview) {
+      return mechanicalFinding({
+        id, location, title: `Authorization review for ${location} (${lint.name})`, severity: "Info", category: "Supabase advisor", taxonomy: lint.name,
+        evidence: `Advisor observation, not an effective-access verdict: ${evidence} Assessment boundary: ${authorizationReview}`,
+        impact: "This catalog observation remains review evidence. The effective-authorization findings distinguish supported direct reads from denied or unproved access; this row provides no exposure or isolation clearance.",
+        fix: "Review this observation with the combined role/grant/RLS assessment and test the relevant caller path.", precisionTier: "review",
+      });
+    }
     if (lint.categories?.includes("PERFORMANCE")) {
       const profile = profileFor({ name: lint.name, title: lint.title, level: lint.level, detail, description: lint.description, remediation: lint.remediation, metadata: lint.metadata, cache_key: lint.cache_key });
       // taxonomy stays lint.name (not profile.taxonomy) — same convention as the SECURITY branch

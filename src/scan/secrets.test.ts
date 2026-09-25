@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDirectorySafe } from "../fs-walk.js";
@@ -202,6 +202,120 @@ describe("parseGitleaksFindings", () => {
     const markers = [capturedRule("supabase/seed.sql", "supabase-demo-key-marker"), capturedRule(".github/workflows/saml-test.yml", "harvey-test-idp-marker")];
     expect(parseGitleaksFindings(markers, "source")).toHaveLength(0);
   });
+
+  it("keeps generated P-256 test keys visible but removes the false Critical credential claim (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-generated-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      writeFileSync(path, readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult = { RuleID: "private-key", Description: "Private Key", File: path, StartLine: 9, Match: readFileSync(path, "utf8").split("`")[1] };
+      const [finding] = parseGitleaksFindings([raw], "source");
+      expect(finding?.severity).toBe("Low");
+      expect(finding?.precisionTier).toBe("review");
+      expect(finding?.evidence).toContain("generateKey(ECDSA/P-256) -> exportKey(pkcs8");
+      expect(finding?.evidence).toContain("test paths alone never suppress a credential");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("broken twin: replacing runtime generation with a committed PEM stays Critical (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-committed-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      writeFileSync(path, readFileSync(new URL("./__fixtures__/source-precision/committed-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult = { RuleID: "private-key", Description: "Private Key", File: path, StartLine: 2, Match: "-----BEGIN PRIVATE KEY-----" };
+      const [finding] = parseGitleaksFindings([raw], "source");
+      expect(finding?.severity).toBe("Critical");
+      expect(finding?.precisionTier).toBe("high");
+      expect(finding?.evidence).not.toContain("Down-ranked from Critical with source-bound provenance");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves raw/disposition conservation when generated and committed keys coexist (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-key-conservation-"));
+    try {
+      const generated = join(dir, "generated.test.ts");
+      const committed = join(dir, "committed.test.ts");
+      writeFileSync(generated, readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8"));
+      writeFileSync(committed, readFileSync(new URL("./__fixtures__/source-precision/committed-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult[] = [
+        { RuleID: "private-key", File: generated, StartLine: 9, Match: readFileSync(generated, "utf8").split("`")[1] },
+        { RuleID: "private-key", File: committed, StartLine: 2, Match: "-----BEGIN PRIVATE KEY-----" },
+      ];
+      const findings = parseGitleaksFindings(raw, "source");
+      expect(findings).toHaveLength(raw.length);
+      expect(findings.map((finding) => finding.severity).sort()).toEqual(["Critical", "Low"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    ["unrelated generated key", (text: string) => text.replace("const keyPair = await", "const unusedKeyPair = await").replace("  const pkcs8", "  const keyPair = loadProductionKeyPair();\n  const pkcs8")],
+    ["mutated generated binding", (text: string) => text.replace("  const pkcs8", "  keyPair.privateKey = loadProductionKey();\n  const pkcs8")],
+    ["unproved encoder", (text: string) => text.replace("  let binary = '';", "  return loadProductionPem();\n  let binary = '';")],
+    ["static contribution", (text: string) => text.replace("${base64UrlFromBytes", "AAAA${base64UrlFromBytes")],
+    ["shadowed crypto", (text: string) => text.replace('  const keyPair', '  const crypto = untrustedCrypto;\n  const keyPair')],
+  ])("does not certify %s as an ephemeral key (#2130)", (_label, transform) => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-unproved-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      const text = transform(readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8"));
+      writeFileSync(path, text);
+      const matched = text.split("`")[1]!;
+      const raw: GitleaksResult = { RuleID: "private-key", File: path, StartLine: text.slice(0, text.indexOf("-----BEGIN")).split("\n").length, Match: matched };
+      const [finding] = parseGitleaksFindings([raw], "source");
+      expect(finding?.severity).not.toBe("Low");
+      expect(finding?.precisionTier).toBe("review");
+      expect(finding?.evidence).toContain("provenance was not proved");
+      expect(finding?.fix).not.toContain("No rotation");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("binds each exact credential when committed and generated PEMs share a test function (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-mixed-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      const committed = readFileSync(new URL("./__fixtures__/source-precision/committed-private-key.test.ts.txt", import.meta.url), "utf8").split("`")[1]!;
+      const generated = readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8");
+      const text = generated.replace("  const keyPair", "  const committedPem = `" + committed + "`;\n  const keyPair");
+      writeFileSync(path, text);
+      const rows = [committed, generated.split("`")[1]!].map((Match) => ({ RuleID: "private-key", File: path, Match, StartLine: text.slice(0, text.indexOf(Match)).split("\n").length }));
+      const findings = parseGitleaksFindings(rows, "source");
+      expect(findings).toHaveLength(rows.length);
+      expect(findings.map((finding) => finding.severity)).toEqual(["Critical", "Low"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("resolves the actual byte encoder and real Gitleaks span without trusting column offsets (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-imported-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      const fixture = readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8");
+      const start = fixture.indexOf('it("signs');
+      writeFileSync(join(dir, "encoder.ts"), "export " + fixture.slice(0, start));
+      const text = 'import { base64UrlFromBytes } from "./encoder";\n' + fixture.slice(start);
+      writeFileSync(path, text);
+      const [finding] = parseGitleaksFindings([{ RuleID: "private-key", File: path, Match: text.split("`")[1], StartLine: 5, StartColumn: 17 }], "source");
+      expect(finding?.severity).toBe("Low");
+      expect(finding?.evidence).toContain("exact matched PEM interpolation");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("cannot explain a historical private key using the working-tree fixture (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-history-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      const text = readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8");
+      writeFileSync(path, text);
+      const [finding] = parseGitleaksFindings([{ RuleID: "private-key", File: path, StartLine: 9, Match: text.split("`")[1], Commit: "fixture-old-revision" }], "git-history");
+      expect(finding?.severity).not.toBe("Low");
+      expect(finding?.fix).not.toContain("No rotation");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
 });
 
 // #1078: the line-level allowlist deleted a real secret that merely shared a line with a public

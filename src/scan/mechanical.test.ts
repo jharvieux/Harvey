@@ -51,7 +51,7 @@ const { discoverMechanicalCorpusOwnership, runMechanicalScan, runMechanicalScanD
 const { MechanicalScanContext } = await import("./mechanical-context.js");
 const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
-const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
+const { executeMechanicalPhase, mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 const { buildSemgrepCommandSemanticReceipt } = await import("./semgrep-family-cache.js");
 const { buildCoverageMatrix } = await import("./calibration.js");
 const { b2DepsEntries } = await import("./calibration/b2-deps.entries.js");
@@ -115,7 +115,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   // detection exercised by the gate rather than silent.
   it("still classifies licenses under skipNetworkChecks, with only the registry fallback pinned off", async () => {
     await runMechanicalScan({ dir, skipNetworkChecks: true });
-    expect(checkLicenseCompliance).toHaveBeenCalledWith(expect.objectContaining({ source: "package.json" }), { skipRegistry: true });
+    expect(checkLicenseCompliance).toHaveBeenCalledWith(expect.objectContaining({ source: "package.json" }), expect.objectContaining({ skipRegistry: true, emitAssessment: true }));
   });
 
   it("still runs the live npm-registry checks by default", async () => {
@@ -127,7 +127,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
     // in scope rather than staying silent.
     expect(checkLicenseCompliance).toHaveBeenCalledWith(
       expect.objectContaining({ candidates: [{ name: "react", version: "18.2.0", direct: true }], completeness: "incomplete" }),
-      { skipRegistry: undefined },
+      expect.objectContaining({ skipRegistry: undefined, emitAssessment: true }),
     );
   });
 
@@ -353,6 +353,57 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
       rmSync(container, { recursive: true, force: true });
     }
   });
+
+  it("gives same-name local packages path-bound identities in every metadata-backed receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-mechanical-local-identities-"));
+    try {
+      for (const path of ["packages/first", "packages/second", "packages/consumer"]) mkdirSync(join(root, path), { recursive: true });
+      const pkg = { name: "root", private: true, workspaces: ["packages/*"], dependencies: { "@local/shared": "file:packages/first" } };
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(root, "packages/first/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "MIT" }));
+      writeFileSync(join(root, "packages/second/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "Apache-2.0" }));
+      writeFileSync(join(root, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/shared": "file:../second" } }));
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline fixture" }, skipNetworkChecks: true }, "supply");
+        for (const detector of ["curated-dependency-cves", "resolved-install-scripts", "dependency-license", "supply-chain-scope"]) {
+          const record = result.records.find((candidate) => candidate.detector === detector)!;
+          const local = record.examinedUnitIdentities.filter((unit) => unit.kind === "resolved-dependency" && unit.identity.startsWith("@local/shared@local:"));
+          expect(local.map((unit) => unit.identity).sort(), detector).toEqual([
+            "@local/shared@local:packages/first/package.json",
+            "@local/shared@local:packages/second/package.json",
+          ]);
+          expect(new Set(record.examinedUnitIdentities.map((unit) => `${unit.kind}\0${unit.identity}`)).size, detector).toBe(record.examinedUnitIdentities.length);
+        }
+      } finally { context.dispose(); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["unresolved local paths", { "@local/shared": "file:packages/first" }, { "@local/shared": "file:../second" }],
+    ["different npm alias targets", { alias: "npm:react@^18.0.0" }, { alias: "npm:preact@^10.0.0" }],
+  ])("keeps %s unique through all strict dependency receipts", async (_label, rootDependencies, memberDependencies) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-mechanical-unresolved-identities-"));
+    try {
+      mkdirSync(join(root, "packages/consumer"), { recursive: true });
+      const pkg = { name: "root", private: true, workspaces: ["packages/*"], dependencies: rootDependencies };
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(root, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: memberDependencies }));
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline fixture" }, skipNetworkChecks: true }, "supply");
+        for (const detector of ["curated-dependency-cves", "resolved-install-scripts", "dependency-license", "supply-chain-scope"]) {
+          const record = result.records.find((candidate) => candidate.detector === detector)!;
+          expect(new Set(record.examinedUnitIdentities.map((unit) => `${unit.kind}\0${unit.identity}`)).size, detector).toBe(record.examinedUnitIdentities.length);
+        }
+        await expect(executeMechanicalPhase("dependency-advisory", undefined, () => ({
+          findings: result.findings,
+          producers: result.records,
+          scope: { unitsExamined: 2, description: "two unresolved dependency declarations" },
+        }))).resolves.toBeDefined();
+      } finally { context.dispose(); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 describe("npm lockfile range edges (#1774)", () => {
@@ -376,7 +427,7 @@ describe("npm lockfile range edges (#1774)", () => {
   it.each([
     ["npm v2", "package-lock.json", JSON.stringify({ lockfileVersion: 2, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 2, read", "1 admitted third-party range edges"],
     ["npm v1", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0" } } } }), "package-lock version 1, unsupported", "1 present/unread unit(s)"],
-    ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, present-but-unread", "1 importer/root specifier"],
+    ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, partial", "1 admitted third-party range edges"],
     ["Yarn classic", "yarn.lock", 'child@^2.0.0:\n  version "2.0.0"\n', "yarn version classic v1, present-but-unread", "1 selector range(s)"],
     ["Yarn Berry", "yarn.lock", '__metadata:\n  version: 8\n\n"child@npm:^2.0.0":\n  version: 2.0.0\n', "yarn version Berry 8, present-but-unread", "1 selector range(s)"],
     ["shrinkwrap", "npm-shrinkwrap.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "npm-shrinkwrap version 3, present-but-unread", "1 present/unread unit(s)"],

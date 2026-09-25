@@ -6,6 +6,36 @@ import { checkNonRegistryDependencies } from "./scan/supply-chain.js";
 const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
 
 describe("validateFindings", () => {
+  it("validates complete producer-to-scope assignments and their version bindings", () => {
+    const token = JSON.stringify(["scanner", "1"]);
+    const auditContext = { engagementId: "test", kind: "client-audit", target: { id: "target", revision: "one" }, producerVersions: { [token]: "1" }, schemaVersion: "1", assessedScope: ["scope"], scopeComplete: true, producerAssignments: { scope: [token] } };
+    expect(validateFindings({ ...example, auditContext }).errors).toEqual([]);
+    for (const assignments of [{}, { other: [token] }, { scope: [] }, { scope: ["invalid"] }, { scope: [JSON.stringify(["scanner", "2"])] }]) {
+      expect(validateFindings({ ...example, auditContext: { ...auditContext, producerAssignments: assignments } }).errors).toContainEqual(expect.stringContaining("producerAssignments"));
+    }
+  });
+
+  it("requires measured identities and limitations for partial fresh audit context", () => {
+    const auditContext = {
+      engagementId: "fresh:test", kind: "client-audit", target: { id: "fixture", revision: "content:test" },
+      producerVersions: { engine: "measured" }, schemaVersion: "finding-dispositions/1", assessedScope: ["M7 source"], scopeComplete: false,
+      limitations: ["Only the M7 source tier was assessed."],
+      provenance: {
+        schema: 1, kind: "fresh-execution", target: { contentSha256: "a".repeat(64), complete: true, stable: true },
+        engine: { contentSha256: "b".repeat(64), complete: true, stable: true }, configurationSha256: "c".repeat(64),
+        inputBindings: [], moduleObservations: [{ module: "M7", instance: ".", status: "examined", unitsExamined: 1, scope: "source files" }],
+        commandReceiptSha256: [], producerIdentityComplete: false,
+      },
+    };
+    expect(validateFindings({ ...example, auditContext }).errors).toEqual([]);
+    for (const context of [
+      { ...auditContext, scopeComplete: true }, { ...auditContext, limitations: [] },
+      { ...auditContext, provenance: { ...auditContext.provenance, target: { ...auditContext.provenance.target, contentSha256: "HEAD" } } },
+      { ...auditContext, provenance: { ...auditContext.provenance, commandReceiptSha256: ["guessed"] } },
+      { ...auditContext, provenance: { ...auditContext.provenance, moduleObservations: [{ ...auditContext.provenance.moduleObservations[0], unitsExamined: 0 }] } },
+    ]) expect(validateFindings({ ...example, auditContext: context }).errors.some((error) => error.startsWith("auditContext."))).toBe(true);
+  });
+
   it("accepts the shipped example report (the renderer's reference input)", () => {
     const result = validateFindings(example);
     expect(result.errors).toEqual([]);
@@ -37,6 +67,25 @@ describe("validateFindings", () => {
 });
 
 describe("validateFindings — mechanical scan fields", () => {
+  it("validates complete dependency metadata outcomes and rejects inconsistent receipts", () => {
+    const dependencyMetadataEvidence = {
+      schemaVersion: 1 as const, population: 1, processed: 1, cacheHits: 0, registryRequests: 0, complete: true,
+      outcomes: [{ coordinate: "workspace-pkg", status: "local-manifest" as const, provenance: "packages/pkg/package.json#license/scripts", license: "MIT", hasInstallScript: false, installScriptAssessment: "absent" as const }],
+    };
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence }] }).errors).toEqual([]);
+    for (const broken of [
+      { ...dependencyMetadataEvidence, schemaVersion: 2 },
+      { ...dependencyMetadataEvidence, processed: 0 },
+      { ...dependencyMetadataEvidence, population: 2, complete: true },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], status: "guessed" }] },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], installScriptAssessment: "maybe" }] },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], hasInstallScript: true, installScriptAssessment: "absent" }] },
+    ]) expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: broken }] }).errors.join("\n")).toContain("dependencyMetadataEvidence");
+    const malformed = { ...dependencyMetadataEvidence, complete: false, outcomes: [{ coordinate: "registry-pkg@1.0.0", status: "malformed-metadata" as const, provenance: "https://registry.npmjs.org/registry-pkg/1.0.0", installScriptAssessment: "unsupported" as const, detail: "scripts.install must be a string" }] };
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: malformed }] }).errors).toEqual([]);
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: { ...malformed, complete: true } }] }).errors.join("\n")).toContain("incompatible with complete receipt");
+  });
+
   it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {
     for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz",
       "repository https://example.invalid", '"https://example.invalid"', "https://safe.invalid/path/https://example.invalid/repo", "https://safe.invalid/repo#https://example.invalid/repo",

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { SourceInput } from "../detectors/common.js";
 import { describe, expect, it } from "vitest";
 import {
   AUTH_CONFIG_FIELDS,
@@ -24,7 +25,8 @@ describe("checkPublicBucketsWithNoPolicies", () => {
   it("flags a public bucket with zero policies", () => {
     const findings = checkPublicBucketsWithNoPolicies([{ id: "b1", name: "avatars", public: true }], {});
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.precisionTier).toBe("high");
+    expect(findings[0]?.precisionTier).toBe("review");
+    expect(findings[0]?.impact).toContain("establishes no write/delete access");
   });
 
   it("does not flag a public bucket that has policies", () => {
@@ -40,7 +42,8 @@ describe("checkAutoExposedTables", () => {
   it("flags a public-schema table with RLS disabled", () => {
     const findings = checkAutoExposedTables([{ schema: "public", name: "orders", rlsEnabled: false }]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.severity).toBe("Info");
+    expect(findings[0]?.impact).toContain("does not establish current client access");
   });
 
   it("does not flag a public table with RLS enabled", () => {
@@ -289,7 +292,7 @@ describe("checkRealtimePublicationRls", () => {
   it("flags a published table with RLS disabled", () => {
     const findings = checkRealtimePublicationRls([{ schema: "public", name: "orders", rlsEnabled: false }]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({ severity: "High", taxonomy: "Realtime publication broadcasts an unprotected table", location: "public.orders" });
+    expect(findings[0]).toMatchObject({ severity: "Info", taxonomy: "Realtime publication broadcasts an unprotected table", location: "public.orders" });
   });
 
   it("does not flag a published table with RLS enabled", () => {
@@ -318,6 +321,7 @@ describe("checkDefaultPrivilegesToClientRoles", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
       taxonomy: "Default privileges grant future objects to client role",
+      severity: "Info",
       precisionTier: "review",
       location: "schema public: default privileges for anon",
     });
@@ -335,7 +339,8 @@ describe("checkColumnGrantsToClientRoles", () => {
     ]);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
-      taxonomy: "Column-level grant to client role outside RLS model",
+      taxonomy: "Column-level privilege inventory",
+      severity: "Info",
       location: "public.profiles.ssn",
       precisionTier: "review",
     });
@@ -461,12 +466,113 @@ describe("checkUnsignedWebhookHandlers", () => {
     expect(findings).toHaveLength(1);
   });
 
-  it("does not flag a webhook function that verifies a signature", () => {
+  it("keeps a merely named inline verifier without data-flow proof for review", () => {
     const findings = checkUnsignedWebhookHandlers([{ name: "stripe-webhook", content: `stripe.webhooks.constructEvent(body, sig, secret);` }]);
-    expect(findings).toEqual([]);
+    expect(findings).toHaveLength(1);
   });
 
   it("does not flag a non-webhook function even with no signature check", () => {
     expect(checkUnsignedWebhookHandlers([{ name: "resize-image", content: `export default async () => {}` }])).toEqual([]);
+  });
+
+  const webhookFixture = (variant: string, names: string[]): SourceInput[] => names.map((name) => ({
+    path: `supabase/functions/stripe-webhook/${name}.ts`,
+    text: readFileSync(new URL(`./__fixtures__/source-precision/${variant}/${name}.ts.txt`, import.meta.url), "utf8"),
+  }));
+
+  const handlerFor = (sources: SourceInput[]) => ({
+    name: "stripe-webhook",
+    path: sources[0]!.path,
+    content: sources[0]!.text,
+  });
+
+  it("clears an imported verifier only when raw body, signature and secret resolve to verification before mutation (#2130)", () => {
+    const sources = webhookFixture("webhook-valid", ["handler", "shared", "implementation"]);
+    sources.push({
+      path: "supabase/functions/deno.json",
+      text: JSON.stringify({ imports: { "@fixture/shared/stripe": "./stripe-webhook/implementation.ts" } }),
+    });
+    expect(checkUnsignedWebhookHandlers([handlerFor(sources)], sources)).toEqual([]);
+  });
+
+  it.each([
+    ["verification removed", "webhook-no-verification"],
+    ["verification moved after the effect", "webhook-after-effect"],
+  ])("broken twin: %s restores the review candidate (#2130)", (_label, variant) => {
+    const sources = webhookFixture(variant, ["handler", "implementation"]);
+    const findings = checkUnsignedWebhookHandlers([handlerFor(sources)], sources);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("does not provably guard and precede");
+    expect(findings[0]!.precisionTier).toBe("review");
+  });
+
+  it.each([
+    ["wrong verifier inputs", "implementation", (text: string) => text.replace("verifyStripeSignature(params.rawBody, params.signatureHeader, params.secret)", 'verifyStripeSignature("other-body", "other-signature", "other-secret")')],
+    ["conditional verification", "implementation", (text: string) => text.replace("  const valid =", "  if (Math.random() > 0.5) {\n  const valid =").replace('  await params.grantEntitlement', '  }\n  await params.grantEntitlement')],
+    ["handler effect before helper", "handler", (text: string) => text.replace("  return processWebhook", '  await database.entitlements.upsert({ userId: "unverified" });\n  return processWebhook')],
+    ["missing secret rejection", "handler", (text: string) => text.replace('  if (!secret) throw new Error("Missing webhook secret");', '')],
+    ["shadowed environment reader", "handler", (text: string) => 'import { Deno } from "./untrusted.js";\n' + text],
+    ["wrong request body", "handler", (text: string) => text.replace("await req.text()", '"unrelated-body"')],
+    ["wrong request header", "handler", (text: string) => text.replace('req.headers.get("Stripe-Signature")', '"unrelated-signature"')],
+    ["request-controlled secret", "handler", (text: string) => text.replace('Deno.env.get("STRIPE_WEBHOOK_SECRET")', 'req.headers.get("Secret")')],
+    ["misnamed raw-body property", "handler", (text: string) => text.replace("    rawBody,", '    rawBody: "unrelated-body",')],
+    ["spread override", "handler", (text: string) => text.replace("    rawBody,", '    rawBody, ...other,')],
+    ["fake crypto body", "implementation", (text: string) => text.replace("  return timingSafeEqual(expected, v1)", "  return true")],
+    ["comparison bypass", "implementation", (text: string) => text.replace("  return diff === 0", "  return true")],
+    ["wrong HMAC body", "implementation", (text: string) => text.replace('`${timestamp}.${rawBody}`', '`${timestamp}.unrelated`')],
+    ["wrong HMAC secret", "implementation", (text: string) => text.replace("new TextEncoder().encode(secret)", 'new TextEncoder().encode("unrelated")')],
+    ["catching failed verification", "implementation", (text: string) => text.replace("  const valid =", "  try {\n  const valid =").replace('  await params.grantEntitlement', '  } catch {}\n  await params.grantEntitlement')],
+    ["finally effect on rejection", "implementation", (text: string) => text.replace("  const valid =", "  try {\n  const valid =").replace('  await params.grantEntitlement', '  } finally { await params.grantEntitlement("unverified"); }\n  await params.grantEntitlement')],
+    ["unrelated verified decoy", "handler", (text: string) => text.replace("export async function handle", "async function decoy") + '\nexport async function handle(req) { return database.entitlements.upsert(await req.json()); }'],
+    ["second unverified exported entry", "handler", (text: string) => text + '\nexport default async (req) => database.entitlements.upsert(await req.json());'],
+  ])("retains %s as an explicit unresolved provenance candidate (#2130)", (_label, changed, transform) => {
+    const sources = webhookFixture("webhook-valid", ["handler", "implementation"]);
+    sources[0]!.text = sources[0]!.text.replace("./shared.js", "./implementation.js");
+    const source = sources.find((item) => item.path.endsWith(`/${changed}.ts`))!;
+    source.text = transform(source.text);
+    const findings = checkUnsignedWebhookHandlers([handlerFor(sources)], sources);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.precisionTier).toBe("review");
+    expect(findings[0]!.evidence).toContain("verification");
+  });
+
+  it("never accepts a declared verifier by its name (#2130)", () => {
+    const sources = webhookFixture("webhook-valid", ["handler", "implementation"]);
+    sources[0]!.text = sources[0]!.text.replace("./shared.js", "./implementation.js");
+    sources[1]!.text = 'declare function verifyStripeSignature(...args: unknown[]): Promise<boolean>;\n' + sources[1]!.text.slice(sources[1]!.text.indexOf("export async function processWebhook"));
+    expect(checkUnsignedWebhookHandlers([handlerFor(sources)], sources)).toHaveLength(1);
+  });
+
+  it("accepts the complete evidenced helper with an omitted optional clock argument (#2130)", () => {
+    const sources = webhookFixture("webhook-valid", ["handler", "implementation"]);
+    sources[0]!.text = sources[0]!.text.replace("./shared.js", "./implementation.js");
+    sources[1]!.text = sources[1]!.text.replace("params.signatureHeader, params.secret)", "params.signatureHeader, params.secret, undefined, params.nowMs)");
+    expect(checkUnsignedWebhookHandlers([handlerFor(sources)], sources)).toEqual([]);
+  });
+
+  it("does not clear on an unrelated verifier import that the handler never calls (#2130)", () => {
+    const sources = webhookFixture("webhook-unrelated-import", ["handler", "verification"]);
+    const findings = checkUnsignedWebhookHandlers([handlerFor(sources)], sources);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("Imported verification provenance was not proved");
+  });
+
+  it("retains an unresolved imported call as an explicit candidate with call provenance (#2130)", () => {
+    const handler: SourceInput = {
+      path: "supabase/functions/stripe-webhook/index.ts",
+      text: `
+        import { processWebhook } from "@missing/shared";
+        export async function handle(req: Request) {
+          const rawBody = await req.text();
+          const signatureHeader = req.headers.get("Stripe-Signature");
+          const secret = getSecret();
+          return processWebhook({ rawBody, signatureHeader, secret, grantEntitlement });
+        }
+      `,
+    };
+    const findings = checkUnsignedWebhookHandlers([{ name: "stripe-webhook", path: handler.path, content: handler.text }], [handler]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("could not be resolved");
+    expect(findings[0]!.evidence).toContain("rawBody, signatureHeader, secret");
   });
 });

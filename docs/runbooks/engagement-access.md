@@ -217,3 +217,5 @@ Thanks for working with us.
 
 — Harvey
 ```
+
+The [generated capability prerequisite contract](engagement-prerequisites.md) provides the exact catalog, protection and registry requirements consumed by the website matrix and M10 report. Its owning source is `src/engagement-requirements.ts`; regenerate with `node --import tsx tools/render-engagement-requirements.mjs > docs/runbooks/engagement-prerequisites.md`.

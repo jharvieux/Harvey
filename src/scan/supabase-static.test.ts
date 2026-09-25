@@ -1251,9 +1251,23 @@ describe("M1-SQL-SCOPE-00 — SQL the static pass did not read is counted, not s
     expect(row?.title).toContain("2 SQL file(s)");
     expect(row?.evidence).toContain("db/schema.sql");
     expect(row?.evidence).toContain("supabase/seed.sql");
+    expect(row?.evidence).toContain("1 schema snapshot(s)");
+    expect(row?.evidence).toContain("1 seed/fixture/dump file(s)");
     // The two surfaces that WERE read must not be listed as skipped, or the row cries wolf on
     // every scan and stops being read.
     expect(row?.evidence).not.toContain("supabase/migrations/0001.sql");
+  });
+
+  it("distinguishes nested migrations, retains parse failures, and does not claim deeper checks ran", () => {
+    const dir = plant({
+      "apps/web/supabase/migrations/001.sql": "create policy broken on public.docs using (tenant_id = x",
+      "queries/report.sql": "select 1;",
+    });
+    const [row] = checkUnreadSqlSurfaces(dir);
+    expect(row?.evidence).toContain("1 nested Supabase migration(s)");
+    expect(row?.evidence).toContain("1 unrelated SQL file(s)");
+    expect(row?.evidence).toContain("retained 1 parse failure(s)");
+    expect(row?.evidence).toContain("does not claim the full RLS");
   });
 
   it("stays silent when every .sql in the tree was read, so the row means something", () => {
@@ -1268,4 +1282,17 @@ describe("M1-SQL-SCOPE-00 — SQL the static pass did not read is counted, not s
     const dir = plant({ "src/index.ts": "export const x = 1;" });
     expect(checkUnreadSqlSurfaces(dir)).toEqual([]);
   });
+});
+
+it("retains the true-policy review after same-file policy-name reuse", () => {
+  const root = mkdtempSync(join(tmpdir(), "harvey-policy-reuse-"));
+  const parts = ["create table public.a(id uuid); create policy p on public.a using (true);", "alter policy p on public.a rename to q;", "create policy p on public.a using (false);"];
+  try {
+    for (const name of ["same", "split"]) mkdirSync(join(root, name, "supabase/migrations"), { recursive: true });
+    writeFileSync(join(root, "same/supabase/migrations/001.sql"), parts.join("\n"));
+    parts.forEach((sql, i) => writeFileSync(join(root, `split/supabase/migrations/00${i}.sql`), sql));
+    const together = checkMigrationPolicySemantics(join(root, "same")); const split = checkMigrationPolicySemantics(join(root, "split"));
+    expect(together.map(row => row.id)).toEqual(split.map(row => row.id));
+    expect(together.some(row => row.id === "SB-RLS-USING-TRUE-UNASSESSED" && row.evidence.includes("a (q)"))).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

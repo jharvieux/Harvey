@@ -1,6 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  webpack(config) {
+    // Root scanner modules use Node ESM's emitted `.js` specifiers while their checked-in
+    // sources are TypeScript. Keep the real JavaScript extension as the fallback so the same
+    // imports work both before and after TypeScript emission.
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      ".js": [".ts", ".js"],
+      ".jsx": [".tsx", ".jsx"],
+      ".mjs": [".mts", ".mjs"],
+      ".cjs": [".cts", ".cjs"],
+    };
+    return config;
+  },
   async redirects() {
     return [
       // /intake served the #32 client-intake questionnaire out of intake-site/, which was orphaned

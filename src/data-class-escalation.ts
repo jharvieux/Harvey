@@ -21,6 +21,8 @@ import type { Finding, Severity } from "./findings.js";
 // The shape tools/pii-classify.mjs's buildDataMap emits (and writes to --data-map-out), keyed by
 // table name. Only the fields this join reads are declared.
 export interface ClassifiedTable {
+  schema?: string;
+  table?: string;
   columns: { column: string; infotype: string; category: string; confidence: string }[];
   infotypes: string[];
   categories: string[];
@@ -55,7 +57,8 @@ export function isDataClassMap(value: unknown): value is DataClassMap {
 function referencesTable(f: Finding, table: string): boolean {
   if (f.location === table) return true;
   const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_.])[A-Za-z_][A-Za-z0-9_]*\\.${escaped}(?![A-Za-z0-9_])`).test(`${f.location} ${f.title}`);
+  const reference = table.includes(".") ? escaped : `[A-Za-z_][A-Za-z0-9_]*\\.${escaped}`;
+  return new RegExp(`(^|[^A-Za-z0-9_.])${reference}(?![A-Za-z0-9_])`).test(`${f.location} ${f.title}`);
 }
 
 // M10's own classification findings ARE the data map projected into findings — their severity is

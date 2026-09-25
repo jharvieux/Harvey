@@ -363,8 +363,12 @@ pnpm exec tsx src/cli/run-audit.ts <target-dir> \
   plus the derived coverage ledger, in the shape `report-template/` and `pnpm validate:findings`
   consume. Omit `--meta` and the file still writes, but with a placeholder meta and a loud warning
   — client/health/headline/scope are human judgement, not derivable.
-- `--baseline <prior-findings.json>` (repeat engagements only) classifies each current finding
-  resolved/persistent/new against the client's last audit.
+- `--baseline <prior-findings.json>` compares complete findings documents, including with
+  `--assemble`. A source-change comparison requires distinct client engagements, changed target
+  revisions, identical producer/schema versions and complete matching assessed scope. Unknown
+  provenance, same-run checkpoints, unchanged source and tool/scope changes retain unmatched
+  observations as unresolved. Read the comparison reason and prior/current/comparable/unresolved
+  denominators beside the counts before describing progress.
 - Re-run **after** every operator pass artifact is banked — a stale re-derivation just re-reports
   the same `partial`s.
 
@@ -373,6 +377,28 @@ Validate before it ships:
 ```bash
 pnpm validate:findings engagement-findings.json
 ```
+
+### Finding review and comparison provenance (#2127, #2136)
+
+An optional finding `assessment` records disposition, evidence kind, review status, source
+scope and a reason. Confirmed findings require current source/runtime evidence plus a named
+reviewer and evidence references; false-positive decisions require review. Superseded findings
+require historical scope and a replacement artifact with a reason. These are attributable
+operator records, not independent authentication of a review. Scanner confidence alone does
+not confirm an M1 finding. Legacy M1 observations remain pending review, M10 classification
+remains inventory, and current M2–M9 health findings retain their severity and priority.
+
+`auditContext` records engagement identity/kind, target identity/revision, producer versions,
+schema version and assessed scope/completeness. Assembly derives target, producer and assessed-scope fields from verified
+receipts. Engagement identity and kind use retained metadata. Optional `identityMigrations` bind
+one unique prior content key to one unique current content key with `reviewedBy` and `reason`.
+Ambiguous mappings stay unresolved. Display IDs and line-number churn alone do not establish
+new or resolved findings; SARIF fingerprints use the version-2 semantic/occurrence identities.
+
+The delivered JSON/SARIF and rendered report keep review, inventory and historical populations
+separate from current actions. Raw occurrence accounting and reasons for non-delivery travel
+with the document, including duplicate occurrences; the baseline comparison preserves the
+current population. A successful coverage ledger alone is not proof of that delivery.
 
 ### 7b. Retain a fresh run and assemble its exports offline (#2126, #2128)
 
@@ -459,3 +485,13 @@ Older items closed and reflected above rather than listed as a gap: #502 (M3→M
 per-workspace + timeout), #506 (monorepo target enumeration), #507 (M3 vitals plugin-location
 discovery), #509 (report completeness derived from the coverage ledger), #513 (M8 Stryker config
 scaffolding + gated install).
+
+### M10 catalog and protection inputs
+
+M10 uses an explicit authorized product-schema allowlist. `--schemas public,private` or `PII_PRODUCT_SCHEMAS=public,private` selects catalog names/types to classify; omitted configuration explicitly selects public and reports other discovered schemas as unexamined. No production row sampling is requested or enabled by these options.
+
+The deployed API schema list is separate. Supply `--exposed-schemas public,private` or `PII_EXPOSED_SCHEMAS` from effective deployment configuration. Without an explicit list, M10 reads the connection's `pgrst.db_schemas` setting when available. Both sources carry a provenance label; external PostgREST reload/configuration state requires separate review. Schema exposure, column grants and readable rows are separate observations.
+
+Optional source-reference evidence uses `--source-root <checkout> --encryption-boundaries <manifest.json>`. The manifest is an array of non-secret references: `[{"schema":"private","table":"patient","column":"ssn","path":"src/encrypt.ts","sha256":"<64 lowercase hex characters>","line":12}]`. Files must resolve within the authorized checkout and match both the supplied digest and line bounds. This establishes reference integrity only; complete encryption behavior, write/read coverage, decrypting views/RPCs and key-management evidence remain explicit review requirements.
+
+The [shared prerequisite contract](engagement-prerequisites.md) is generated from the same records used in M10 reports and the existing website access matrix. Regenerate it with `node --import tsx tools/render-engagement-requirements.mjs > docs/runbooks/engagement-prerequisites.md`.

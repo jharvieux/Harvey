@@ -9,12 +9,15 @@ export interface ClassifyResult {
 }
 
 export interface ColumnInfo {
+  table_schema?: string;
   table_name: string;
   column_name: string;
   data_type?: string;
 }
 
 export interface TableDataMapEntry {
+  schema?: string;
+  table?: string;
   columns: ({ column: string } & ClassifyResult)[];
   infotypes: string[];
   categories: string[];
@@ -37,9 +40,6 @@ export function classifyMigrationSql(sql: string): {
 };
 export function classifyPrismaSchema(schema: string): { columns: ColumnInfo[]; dataMap: Record<string, TableDataMapEntry> };
 export function gatherProtectionFacts(
-  sql: (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>,
-): Promise<{
-  facts: { exposedSchemas: string[]; autoExposedTables: string[] };
-  encrypted: Set<string>;
-  detail: string;
-}>;
+  sql: { unsafe: (query: string, parameters?: string[]) => Promise<Record<string, unknown>[]> },
+  options?: import("../src/pii-protection-review-catalog.js").ProtectionCatalogOptions,
+): ReturnType<typeof import("../src/pii-protection-review-catalog.js").loadProtectionCatalog>;

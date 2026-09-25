@@ -72,6 +72,17 @@ describe("escalateFindingsByDataClass", () => {
     expect(out?.severity).toBe("Critical");
   });
 
+  it("joins schema-qualified live maps without borrowing a same-name sibling schema", () => {
+    const qualified = { "private.patients": dataMap.patients! };
+    const rows = escalateFindingsByDataClass([
+      finding({ title: "Review private.patients access" }),
+      finding({ location: "public.patients" }),
+      finding({ location: "private.patients.policy" }),
+    ], qualified);
+    expect(rows.map((r) => r.severity)).toEqual(["Critical", "Medium", "Critical"]);
+    expect(rows[1]!.dataClass).toBeUndefined();
+  });
+
   it("never lowers a severity the detecting module set higher", () => {
     const f = finding({ severity: "Critical", location: "public.counters" });
     const [out] = escalateFindingsByDataClass([f], dataMap);

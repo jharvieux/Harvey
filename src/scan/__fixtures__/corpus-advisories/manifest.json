@@ -11,10 +11,10 @@
     },
     "subscription-payments": {
       "file": "subscription-payments.osv.json.gz",
-      "sha256": "cf40a26aabf543dd6c9356fa89ae28ff2a16eac6aece334f8b85c8272d52f565",
+      "sha256": "9fa0255f00a5f96d420c606d1597aae4970922320ba5a4efefcffa8669cef21b",
       "targetCommit": "bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
-      "capturedAt": "2026-09-19T01:30:14.150Z",
-      "expiresAt": "2026-09-26T01:30:14.150Z",
+      "capturedAt": "2026-09-25T15:51:19.749Z",
+      "expiresAt": "2026-10-02T15:51:19.749Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "boxyhq": {
