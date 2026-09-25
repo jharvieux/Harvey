@@ -35,6 +35,9 @@ export interface StrykerMutant {
   location: { start: { line: number; column: number }; end: { line: number; column: number } };
   coveredBy?: string[];
   killedBy?: string[];
+  /** Number of tests the runner completed while this mutant was active. Stryker 9.6.1 emits
+   * this for executed mutants. A `Survived` result is not test evidence unless this is positive. */
+  testsCompleted?: number;
   // #1100: MEASURED against a real `npx stryker run` capture (targets/calibration/test-quality,
   // Stryker 9.6.1) — upstream's mutation-testing-report-schema.json describes it as "loaded once
   // during initialization" (a module-level mutant Stryker can only run once for the whole suite,
@@ -78,6 +81,120 @@ export interface StrykerReport {
   config?: Record<string, unknown>;
   // #1100: keyed by test file path — see StrykerTestFile above.
   testFiles?: Record<string, StrykerTestFile>;
+}
+
+export interface NativeMutationComparison {
+  command: string[];
+  selectedTests: string[];
+  exitCode: number | null;
+  signal: string | null;
+  completedTests: number;
+  suiteErrors: string[];
+  stdoutSha256: string;
+  stderrSha256: string;
+}
+
+export interface MutationRunnerValidityIssue {
+  file: string;
+  mutantId: string;
+  reportedStatus: "Survived";
+  effectiveStatus: "RuntimeError";
+  testsCompleted: number | null;
+  suiteErrors: string[];
+  reason: string;
+  nativeComparison?: NativeMutationComparison;
+}
+
+export interface MutationRunnerValidity {
+  schemaVersion: 1;
+  status: "valid" | "uncheckable";
+  completedTestEvidence: {
+    killed: number;
+    survived: number;
+    zeroCompletedSurvivors: number;
+    missingCompletedCountSurvivors: number;
+  };
+  issues: MutationRunnerValidityIssue[];
+}
+
+/**
+ * Stryker 9.6.1's Vitest adapter can return `Complete` after a suite-load failure collected no
+ * tests. Core then records a static mutant as `Survived` with `testsCompleted: 0`. Keep the raw
+ * report untouched for provenance, but score a cloned effective report where a survivor without
+ * positive completed-test evidence is an explicit RuntimeError (uncheckable), never test quality.
+ */
+export function validateMutationRunnerReport(
+  report: StrykerReport,
+  nativeComparisons: ReadonlyMap<string, NativeMutationComparison> = new Map(),
+): { report: StrykerReport; validity: MutationRunnerValidity } {
+  const effective = structuredClone(report);
+  const issues: MutationRunnerValidityIssue[] = [];
+  let killed = 0;
+  let survived = 0;
+  let zeroCompletedSurvivors = 0;
+  let missingCompletedCountSurvivors = 0;
+
+  for (const [file, fileReport] of Object.entries(effective.files)) {
+    for (const mutant of fileReport.mutants) {
+      if (mutant.status === "Killed") killed++;
+      if (mutant.status !== "Survived") continue;
+      const completed = mutant.testsCompleted;
+      if (Number.isSafeInteger(completed) && Number(completed) > 0) {
+        survived++;
+        continue;
+      }
+      if (completed === 0) zeroCompletedSurvivors++;
+      else missingCompletedCountSurvivors++;
+      const nativeComparison = nativeComparisons.get(`${file}\0${mutant.id}`);
+      const suiteErrors = nativeComparison?.suiteErrors ?? [];
+      const count = completed === undefined ? "no completed-test count" : `${completed} completed tests`;
+      const comparison = nativeComparison
+        ? ` Native ${nativeComparison.command[0]} exited ${nativeComparison.exitCode ?? nativeComparison.signal ?? "without status"} after ${nativeComparison.completedTests} completed tests${suiteErrors.length ? `: ${suiteErrors.join(" | ")}` : "."}`
+        : " No native comparison was bound to this replayed report.";
+      const reason = `Runner reported Survived with ${count}; the result is uncheckable because survival requires at least one completed test.${comparison}`;
+      mutant.status = "RuntimeError";
+      mutant.statusReason = reason;
+      issues.push({
+        file,
+        mutantId: mutant.id,
+        reportedStatus: "Survived",
+        effectiveStatus: "RuntimeError",
+        testsCompleted: completed ?? null,
+        suiteErrors,
+        reason,
+        ...(nativeComparison ? { nativeComparison } : {}),
+      });
+    }
+  }
+
+  return {
+    report: effective,
+    validity: {
+      schemaVersion: 1,
+      status: issues.length ? "uncheckable" : "valid",
+      completedTestEvidence: { killed, survived, zeroCompletedSurvivors, missingCompletedCountSurvivors },
+      issues,
+    },
+  };
+}
+
+/** Apply one Stryker report replacement to the exact one-based source range it names. */
+export function applyReportedMutation(source: string, mutant: StrykerMutant): string {
+  if (mutant.replacement === undefined) throw new Error(`mutant ${mutant.id} has no replacement`);
+  const lines = source.split("\n");
+  const { start, end } = mutant.location;
+  if (start.line < 1 || end.line < start.line || !lines[start.line - 1] || !lines[end.line - 1]) {
+    throw new Error(`mutant ${mutant.id} has an out-of-range source location`);
+  }
+  const before = lines.slice(0, start.line - 1).join("\n") + (start.line > 1 ? "\n" : "");
+  const startLine = lines[start.line - 1]!;
+  const endLine = lines[end.line - 1]!;
+  const selected = start.line === end.line
+    ? startLine.slice(start.column - 1, end.column - 1)
+    : [startLine.slice(start.column - 1), ...lines.slice(start.line, end.line - 1), endLine.slice(0, end.column - 1)].join("\n");
+  if (!selected.length) throw new Error(`mutant ${mutant.id} names an empty source range`);
+  const after = endLine.slice(end.column - 1) + (end.line < lines.length ? `\n${lines.slice(end.line).join("\n")}` : "");
+  return `${before}${startLine.slice(0, start.column - 1)}${mutant.replacement}${after}`;
 }
 
 interface StrykerPhaseDurations {

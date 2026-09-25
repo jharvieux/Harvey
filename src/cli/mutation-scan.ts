@@ -116,8 +116,10 @@ import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
 import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
+import { redactSecrets } from "../secret-redact.js";
 import {
   coveredScopeLine,
+  applyReportedMutation,
   detectDryRunFailure,
   detectNoTestSuite,
   detectRootWorkspaceTestSuite,
@@ -150,6 +152,7 @@ import {
   unverifiableScopeModuleRecord,
   vacuousTestFindings,
   verifyMutationScope,
+  validateMutationRunnerReport,
   withOffTreeScratch,
   withTs7TsconfigBypass,
   workspaceTestSuiteFinding,
@@ -157,6 +160,7 @@ import {
   type AncestorTestSignals,
   type DetectedEnvVar,
   type IstanbulCoverageSummary,
+  type NativeMutationComparison,
   type PackageJsonForTestDetection,
   type StrykerReport,
 } from "../mutation-scan.js";
@@ -1121,6 +1125,82 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
   }
 }
 
+function sha256Text(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function safeNativeDiagnostic(value: string): string {
+  return redactSecrets(value).slice(0, 4_096);
+}
+
+/** Re-run a suspect zero-completed survivor through native Vitest in a disposable copy. This is
+ * a comparison oracle, not a reclassification as Killed: a suite-load error completed no tests,
+ * so the effective report remains explicit RuntimeError/uncheckable. */
+function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["files"][string]["mutants"][number], report: StrykerReport): NativeMutationComparison | undefined {
+  if (report.config?.testRunner !== "vitest") return undefined;
+  const sourcePath = resolve(targetDir, file);
+  const rel = relative(targetDir, sourcePath);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !existsSync(sourcePath)) return undefined;
+
+  const runDir = mkdtempSync(join(realpathSync(tmpdir()), "harvey-native-mutant-"));
+  const resultPath = join(mkdtempSync(join(realpathSync(tmpdir()), "harvey-native-mutant-result-")), "vitest.json");
+  const selectedTests = (() => {
+    const ids = new Set(mutant.coveredBy ?? []);
+    const entries = Object.entries(report.testFiles ?? {});
+    const selected = ids.size
+      ? entries.filter(([, definition]) => definition.tests.some((test) => ids.has(test.id))).map(([path]) => path)
+      : entries.map(([path]) => path);
+    return [...new Set(selected)].sort();
+  })();
+  const vitestConfig = (report.config?.vitest && typeof report.config.vitest === "object")
+    ? (report.config.vitest as { configFile?: unknown }).configFile
+    : undefined;
+  const args = ["run", ...(typeof vitestConfig === "string" ? ["--config", vitestConfig] : []), ...selectedTests, "--reporter=json", `--outputFile=${resultPath}`];
+  const localBin = join(targetDir, "node_modules", ".bin", "vitest");
+  const bin = existsSync(localBin) ? localBin : "vitest";
+  let exitCode: number | null = 0;
+  let signal: string | null = null;
+  let stdout = "";
+  let stderr = "";
+  try {
+    copySource(targetDir, runDir);
+    if (existsSync(join(targetDir, "node_modules"))) mirrorSourceDependencies(targetDir, runDir);
+    const staged = join(runDir, rel);
+    writeFileSync(staged, applyReportedMutation(readFileSync(staged, "utf8"), mutant));
+    stdout = execFileSync(bin, args, { cwd: runDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  } catch (error) {
+    const failure = error as { status?: number; signal?: string; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+    exitCode = typeof failure.status === "number" ? failure.status : null;
+    signal = failure.signal ?? null;
+    stdout = typeof failure.stdout === "string" ? failure.stdout : failure.stdout?.toString("utf8") ?? "";
+    stderr = typeof failure.stderr === "string" ? failure.stderr : failure.stderr?.toString("utf8") ?? failure.message ?? "";
+  }
+  let completedTests = 0;
+  const suiteErrors: string[] = [];
+  if (existsSync(resultPath)) {
+    try {
+      const result = JSON.parse(readFileSync(resultPath, "utf8")) as {
+        numPassedTests?: number; numFailedTests?: number;
+        testResults?: { message?: string; assertionResults?: { status?: string; failureMessages?: string[] }[] }[];
+      };
+      completedTests = Number(result.numPassedTests ?? 0) + Number(result.numFailedTests ?? 0);
+      for (const testFile of result.testResults ?? []) {
+        if (testFile.message?.trim()) suiteErrors.push(safeNativeDiagnostic(testFile.message.trim()));
+        for (const assertion of testFile.assertionResults ?? []) for (const message of assertion.failureMessages ?? []) if (message.trim()) suiteErrors.push(safeNativeDiagnostic(message.trim()));
+      }
+    } catch (error) {
+      suiteErrors.push(safeNativeDiagnostic(`native Vitest result could not be parsed: ${(error as Error).message}`));
+    }
+  }
+  if (!suiteErrors.length && exitCode !== 0) {
+    const diagnostic = `${stdout}\n${stderr}`.split("\n").map((line) => line.trim()).find((line) => /(?:Error|Failed Suites|failed to load)/i.test(line));
+    suiteErrors.push(safeNativeDiagnostic(diagnostic ?? "native Vitest exited before completing a test and emitted no structured suite error"));
+  }
+  rmSync(runDir, { recursive: true, force: true });
+  rmSync(dirname(resultPath), { recursive: true, force: true });
+  return { command: ["vitest", ...args], selectedTests, exitCode, signal, completedTests, suiteErrors: [...new Set(suiteErrors)], stdoutSha256: sha256Text(stdout), stderrSha256: sha256Text(stderr) };
+}
+
 const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
 let effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
 
@@ -1263,7 +1343,20 @@ if (!existsSync(resolvedReportPath)) {
   );
 }
 
-const report = JSON.parse(readFileSync(resolvedReportPath, "utf8")) as StrykerReport;
+const rawReport = JSON.parse(readFileSync(resolvedReportPath, "utf8")) as StrykerReport;
+const nativeComparisons = new Map<string, NativeMutationComparison>();
+// A replay proves only what its bound report contains. A live run can additionally reproduce a
+// suspect mutant with the native runner against an isolated copy of the same target and selection.
+if (!reportPath) {
+  for (const [file, fileReport] of Object.entries(rawReport.files)) {
+    for (const mutant of fileReport.mutants) {
+      if (mutant.status !== "Survived" || (Number.isSafeInteger(mutant.testsCompleted) && Number(mutant.testsCompleted) > 0)) continue;
+      const comparison = compareMutantWithNativeVitest(file, mutant, rawReport);
+      if (comparison) nativeComparisons.set(`${file}\0${mutant.id}`, comparison);
+    }
+  }
+}
+const { report, validity: runnerValidity } = validateMutationRunnerReport(rawReport, nativeComparisons);
 const hotspotFiles = hotspotsPath
   ? readFileSync(hotspotsPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
   : [];
@@ -1387,7 +1480,11 @@ const output = {
   // retained anywhere in the repo... Retaining one would make these verifiable"). Every future
   // fixture/regression capture can now be pulled straight from a real --out artifact instead of
   // reconstructed by hand.
-  rawReport: report,
+  runnerValidity,
+  // The untouched upstream report remains the provenance record. Summary/findings above use the
+  // effective validated report so a zero-completed survivor cannot influence the score.
+  rawReport,
+  effectiveReport: report,
 };
 if (scope.scoped) console.error(`⚠ M8 coverage: partial (scoped mutation run, #504) — this score is a subset measurement, not the module's result.`);
 else if (!scope.verified) console.error(`⚠ M8 coverage: partial (mutate scope unverifiable, #1309) — this score cannot be confirmed to cover the target's full configured mutate scope.`);

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  applyReportedMutation,
   coveredScopeLine,
   detectDryRunFailure,
   detectNoTestSuite,
@@ -40,6 +41,7 @@ import {
   vacuousTestFiles,
   vacuousTestFindings,
   verifyMutationScope,
+  validateMutationRunnerReport,
   withOffTreeScratch,
   withTs7TsconfigBypass,
   workspaceTestSuiteFinding,
@@ -49,6 +51,53 @@ import {
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
+
+describe("completed-test mutation validity (#2089)", () => {
+  const reportWith = (mutants: StrykerMutant[]): StrykerReport => ({
+    schemaVersion: "1.0",
+    framework: { name: "StrykerJS", version: "9.6.1" },
+    files: { "src/subject.ts": { mutants } },
+  });
+  const arithmetic = (id: string, status: StrykerMutant["status"], testsCompleted?: number): StrykerMutant => ({
+    id,
+    mutatorName: "ArithmeticOperator",
+    status,
+    replacement: "1 - 1",
+    ...(testsCompleted === undefined ? {} : { testsCompleted }),
+    location: { start: { line: 1, column: 25 }, end: { line: 1, column: 30 } },
+  });
+
+  it("keeps completed survivors measured while making zero/missing-completion survivors explicitly uncheckable", () => {
+    const input = reportWith([
+      arithmetic("killed", "Killed", 1),
+      arithmetic("real-survivor", "Survived", 1),
+      arithmetic("zero", "Survived", 0),
+      arithmetic("missing", "Survived"),
+      arithmetic("uncovered", "NoCoverage"),
+    ]);
+    const comparison = {
+      command: ["vitest", "run", "src/subject.test.ts"], selectedTests: ["src/subject.test.ts"],
+      exitCode: 1, signal: null, completedTests: 0, suiteErrors: ["dimension metadata failed to load"],
+      stdoutSha256: "a".repeat(64), stderrSha256: "b".repeat(64),
+    };
+    const result = validateMutationRunnerReport(input, new Map([["src/subject.ts\0zero", comparison]]));
+    expect(input.files["src/subject.ts"]!.mutants.map((m) => m.status)).toEqual(["Killed", "Survived", "Survived", "Survived", "NoCoverage"]);
+    expect(result.report.files["src/subject.ts"]!.mutants.map((m) => m.status)).toEqual(["Killed", "Survived", "RuntimeError", "RuntimeError", "NoCoverage"]);
+    expect(result.validity.completedTestEvidence).toEqual({ killed: 1, survived: 1, zeroCompletedSurvivors: 1, missingCompletedCountSurvivors: 1 });
+    expect(result.validity.issues[0]).toMatchObject({ mutantId: "zero", testsCompleted: 0, suiteErrors: ["dimension metadata failed to load"] });
+  });
+
+  it("NEGATIVE CONTROL: restoring positive completed-test evidence makes the same survivor measured again", () => {
+    const result = validateMutationRunnerReport(reportWith([arithmetic("same", "Survived", 1)]));
+    expect(result.validity).toMatchObject({ status: "valid", issues: [], completedTestEvidence: { survived: 1, zeroCompletedSurvivors: 0 } });
+    expect(result.report.files["src/subject.ts"]!.mutants[0]!.status).toBe("Survived");
+  });
+
+  it("applies a valid runtime replacement at Stryker's one-based source coordinates", () => {
+    const source = "const DIMENSION_COUNT = 1 + 1;\nexport const ready = true;\n";
+    expect(applyReportedMutation(source, arithmetic("static", "Survived", 0))).toBe("const DIMENSION_COUNT = 1 - 1;\nexport const ready = true;\n");
+  });
+});
 
 describe("strykerPhaseDurations (#1874)", () => {
   it("separates the unmutated baseline from real mutation time using Stryker's own markers", () => {
