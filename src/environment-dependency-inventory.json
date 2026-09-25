@@ -48,7 +48,7 @@
     "authoritativeRecords": 2243,
     "authoritativeUnresolved": 1523,
     "authoritativeVenues": 108,
-    "candidateVenues": 2570,
+    "candidateVenues": 2571,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 243,
-        "candidateRows": 839,
+        "candidateRows": 840,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1082,
-        "unresolved": 1076,
-        "whollyUnbound": 1077
+        "rows": 1083,
+        "unresolved": 1077,
+        "whollyUnbound": 1078
       },
       {
         "accepted": 0,
@@ -92,15 +92,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 31,
-        "candidateRows": 770,
+        "candidateRows": 771,
         "dependencyClass": "database",
         "dynamic": 8,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 1,
-        "rows": 801,
-        "unresolved": 793,
-        "whollyUnbound": 800
+        "rows": 802,
+        "unresolved": 794,
+        "whollyUnbound": 801
       },
       {
         "accepted": 0,
@@ -170,15 +170,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 196,
-        "candidateRows": 62,
+        "candidateRows": 63,
         "dependencyClass": "source-revision",
         "dynamic": 4,
         "emptyReason": null,
         "pinned": 186,
         "recorded": 9,
-        "rows": 258,
-        "unresolved": 63,
-        "whollyUnbound": 63
+        "rows": 259,
+        "unresolved": 64,
+        "whollyUnbound": 64
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2681,
+        "candidateRows": 2682,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3797,
-        "unresolved": 3797,
-        "whollyUnbound": 3797
+        "rows": 3798,
+        "unresolved": 3798,
+        "whollyUnbound": 3798
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7362,
+    "noAssertions": 7366,
     "opaqueVenues": 3,
-    "residualRows": 2681,
-    "rows": 8513,
+    "residualRows": 2682,
+    "rows": 8517,
     "schemaAssertions": 10,
-    "venues": 2681,
-    "vocabularyCandidates": 3589
+    "venues": 2682,
+    "vocabularyCandidates": 3592
   },
   "reconciliations": [
     {
@@ -16406,26 +16406,26 @@
         },
         {
           "evidence": {
-            "anchor": "REASON@306",
-            "line": 306,
+            "anchor": "REASON@334",
+            "line": 334,
             "path": "src/migration-sql-parse.ts"
           },
-          "key": "src/migration-sql-parse.ts:306",
+          "key": "src/migration-sql-parse.ts:334",
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
-            "src/migration-sql-parse.ts#REASON@306:package-manager:empirical-falsifier"
+            "src/migration-sql-parse.ts#REASON@334:package-manager:empirical-falsifier"
           ]
         },
         {
           "evidence": {
-            "anchor": "REASON@83",
-            "line": 83,
+            "anchor": "REASON@94",
+            "line": 94,
             "path": "src/migration-sql-parse.ts"
           },
-          "key": "src/migration-sql-parse.ts:83",
+          "key": "src/migration-sql-parse.ts:94",
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
-            "src/migration-sql-parse.ts#REASON@83:package-manager:empirical-falsifier"
+            "src/migration-sql-parse.ts#REASON@94:package-manager:empirical-falsifier"
           ]
         },
         {
@@ -17424,6 +17424,43 @@
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
       "id": ".agents/skills/run-audit/SKILL.md#content-hint:package-manager:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": ".agents/skills/run-audit/SKILL.md"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "source-revision",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 27,
+        "path": ".agents/skills/run-audit/SKILL.md"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": ".agents/skills/run-audit/SKILL.md#content-hint:source-revision:unresolved-reference",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -168817,8 +168854,8 @@
       "dependencyClass": "package-manager",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
-        "anchor": "REASON@306",
-        "line": 306,
+        "anchor": "REASON@334",
+        "line": 334,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -168831,7 +168868,7 @@
         "observedAt": "2026-08-11",
         "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
       },
-      "id": "src/migration-sql-parse.ts#REASON@306:package-manager:empirical-falsifier",
+      "id": "src/migration-sql-parse.ts#REASON@334:package-manager:empirical-falsifier",
       "identitySource": null,
       "links": [
         "src/cli/validate-reasons.ts",
@@ -168873,8 +168910,8 @@
       "dependencyClass": "package-manager",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
-        "anchor": "REASON@83",
-        "line": 83,
+        "anchor": "REASON@94",
+        "line": 94,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -168887,7 +168924,7 @@
         "observedAt": "2026-08-11",
         "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
       },
-      "id": "src/migration-sql-parse.ts#REASON@83:package-manager:empirical-falsifier",
+      "id": "src/migration-sql-parse.ts#REASON@94:package-manager:empirical-falsifier",
       "identitySource": null,
       "links": [
         "src/cli/validate-reasons.ts",
@@ -168955,7 +168992,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 86,
+        "line": 97,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -310535,11 +310572,122 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "database",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 10,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#content-hint:database:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "clock",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 233,
+        "line": 239,
         "path": "src/scan/supabase-drift.test.ts"
       },
       "freshness": {
@@ -310687,7 +310835,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 321,
+        "line": 327,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -310761,7 +310909,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 316,
+        "line": 322,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -311797,7 +311945,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 418,
+        "line": 454,
         "path": "src/scan/supabase.ts"
       },
       "freshness": {
@@ -364321,8 +364469,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "8bc6b19ce4e5e474a244817c184279dcd0b5ca5f",
-    "commitPayload": "dHJlZSA2M2I5MDI4NjgzOGE0ODcyYzY2M2RhODMwYWRiOTQyMmQwNTNhYWQ1CnBhcmVudCBlYzlmMGUwNDQ1NGQ4NGU2MzU5MjUyYTk2ZDIwZThiMTgwMjk0YTA5CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0NjkzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0NjkzIC0wNTAwCgpQcmVzZXJ2ZSBWaXRhbHMgaGlzdG9yeSBvdXRzaWRlIGNsaWVudCBjaGVja291dCAoIzIxMzUpCg==",
+    "commit": "65da7b835592d06a086aaa4a54b110a019af2671",
+    "commitPayload": "dHJlZSBmNWZmZmQ1OWE1YTM2ZWY3NTQzNzI3MTNmODU0N2I0Y2M0MjJkMzQ2CnBhcmVudCA3OTgxY2JlNjgxYTViZGQxOTVhNzNlOTk5N2MyYjBhZjE5YjFkODRmCnBhcmVudCA3MTBkYjJiMTZiNTZmOGNlZDM3ODVhM2M2YTk2ZDFjYWIxMGQ1OTM2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NDY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NDY0IC0wNTAwCgpJbnRlZ3JhdGUgc2NoZW1hIGFuZCBkb2N1bWVudCBWaXRhbHMgaGlzdG9yeSAjMjEzNQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364331,13 +364479,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "0252767691fc297b2168e888dc71fadc370da9c0",
+        "gitOid": "47cb362cf80a055b22b69898c6ea873ba43b7d86",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "afaf401a7978a3a0ea45fa2e691cde535e97791a705803bb72cf842ffec350c8",
-    "tree": "63b90286838a4872c663da830adb9422d053aad5"
+    "populationSha256": "4313de89a101a1cc69499db76d2649709193077e3639a707995f6397c0635a50",
+    "tree": "f5fffd59a5a36ef754372713f8547b4cc422d346"
   },
   "venues": [
     {
@@ -364356,11 +364504,11 @@
       "sha256": "960ac8a8ddb517813c8dbf2ae4ead76b953c5857764f8db143d712dd695d5e33"
     },
     {
-      "bytes": 9780,
+      "bytes": 10364,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "59e4a5ab39c8b3e6c1ee198e6130f6b438839f9a",
+      "gitOid": "c182d55c2dd0013de98a54a6be5d5142f4360da1",
       "id": ".agents/skills/run-audit/SKILL.md",
       "kind": "document",
       "literalCount": 0,
@@ -364368,7 +364516,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": ".agents/skills/run-audit/SKILL.md",
       "reason": "Structured-looking text did not decode as YAML; its complete bytes remain an unresolved candidate.",
-      "sha256": "c5a564dc0c3969d3e9f93c6da4166d97c79dcae7ab7dc0908be49e17d9f3ec59"
+      "sha256": "46d2f43956eb6d207739c268e06fe7100e3a98aaf2ec03467f663aef8187271c"
     },
     {
       "bytes": 4944,
@@ -372231,19 +372379,19 @@
       "sha256": "e6638f1110701c8691ec69bae2d1082c8cbd28d624aec64e12e66b77a305db95"
     },
     {
-      "bytes": 6140,
+      "bytes": 6490,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "db5d407f99707949cffd01ea8d28f308196be940",
+      "gitOid": "3a06f88518807cf4bf3177047ef8759559b8ab89",
       "id": "src/cli/scan.ts",
       "kind": "source",
-      "literalCount": 51,
-      "literalSha256": "0af98d729f34bfb31af569a846f2f5b35c97d9dd635cadbf07e789b61bdf7c8f",
+      "literalCount": 56,
+      "literalSha256": "45776bc7f232a319bb9e1e11621ee3dc69fa45d86e159fc745d654ea6f0b34cf",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "d150b892d168681c8b87fd65554db55b065083c8612cbc02d868f4b6d00c9944"
+      "sha256": "c9f729f693c6e9e3a815c751260df80d9e6c6d20e088e1c7498df7d47fc473dd"
     },
     {
       "bytes": 7674,
@@ -384411,34 +384559,34 @@
       "sha256": "5a20ac9698e514098c591695047444c00ba63bdf08d807d33463675e23b19512"
     },
     {
-      "bytes": 26761,
+      "bytes": 28448,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "c4c00ff4596ca4f18fd5d9e57123329a6930b5bd",
+      "gitOid": "eb53178cfcf0602c78bb476c3901d5380fb46224",
       "id": "src/migration-sql-parse.test.ts",
       "kind": "source",
-      "literalCount": 365,
-      "literalSha256": "6b9b91af90c248f56eeb63a734a6f68eba1dfe0676f8435f5855b4da7ab08ba8",
+      "literalCount": 394,
+      "literalSha256": "8a58248387eb4966c92ba4effdab54febedf94a553e01b645f1061b8c3891e04",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/migration-sql-parse.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "02d013ca5d471091b9ecf19c11136eed93b5a37cec29245c3bcf27572e61305b"
+      "sha256": "a67053d980f396d873282fc693055d7ebd677d8a808e21d5cf4cdd405f48dac1"
     },
     {
-      "bytes": 40377,
+      "bytes": 41880,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "a986c9cf8e38b07ee2744f3a6996e16166090987",
+      "gitOid": "b2d22458d7db383d7079610308bb3c2581f25e59",
       "id": "src/migration-sql-parse.ts",
       "kind": "source",
-      "literalCount": 275,
-      "literalSha256": "0f595f47d5bd3f7edd7496a20270e3ee35c0eabf404c10ed6a18b87943692c5d",
+      "literalCount": 305,
+      "literalSha256": "0592cf9095415e4c57ec6a61a4208a6a38f6b571e56d7d728187f019050d0934",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/migration-sql-parse.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cb1b5200395d936130ef3174ae1bc4b1648502cd8159b3fae0c93d7b8a727db9"
+      "sha256": "bf2d8ba1ce58f847a6599935f5aacb524d4e9dfed3d4d27d12924762a80d1380"
     },
     {
       "bytes": 70487,
@@ -391116,34 +391264,49 @@
       "sha256": "50248f56fa2550413094becc00d2d847d96d886355981438bc136eb7fa19d351"
     },
     {
-      "bytes": 15118,
+      "bytes": 13969,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "862a7064b61aff361cbda77a4fd787ae3cd4c113",
+      "gitOid": "e0ee58b3edbf30d8c5357b676f56d7e4621e0534",
+      "id": "src/scan/supabase-drift-scope.test.ts",
+      "kind": "source",
+      "literalCount": 236,
+      "literalSha256": "639a740b3fcb9077be21a46da89df16703f2932d5c46eb31a8f948a86f753468",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/supabase-drift-scope.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "6d4c444cd07861a2f0351157dd4128fba05bdc6645aebbc08424312b27e0d503"
+    },
+    {
+      "bytes": 15724,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "b90a2e1fd11e2514691accd6434b95a9039d5ed4",
       "id": "src/scan/supabase-drift.test.ts",
       "kind": "source",
-      "literalCount": 204,
-      "literalSha256": "d9e233dcd474654924f5a32eb9525af953083a0afd06edc7cfbe0e75ee91ab44",
+      "literalCount": 212,
+      "literalSha256": "c0b4031aff422d34123f635329c36913f40e926015efe3aaab1abf1b0163fe8a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "766be0904b21863f7092dc8523bfb62cbb33ffd0dac4824314112dfa8c4ad26b"
+      "sha256": "b326788ba9474b4493ba974fbd6de78d246883802211bc44cae59a32ddf2d4fb"
     },
     {
-      "bytes": 22559,
+      "bytes": 24189,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f03351161b6fb7be9b947773662ad455b7e4b294",
+      "gitOid": "ba5f315e48579d8a7bb951a983bffaf16578f0d9",
       "id": "src/scan/supabase-drift.ts",
       "kind": "source",
-      "literalCount": 101,
-      "literalSha256": "6cbd7c0ee53a08e58b73a1e06c74a9e9c3e39a718d4e8cfdf065f74f135c0df3",
+      "literalCount": 97,
+      "literalSha256": "32a539ab47292d6a4099b02ee6618be01c0f509ea66800477bb95cd900aaf196",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3fdd3531ed3f10f255e4ae18c451cf2d6ac0b8bfda5aa4b35202860c4ea7e235"
+      "sha256": "1861370cd315efd1bbdbc624733b97ec322791e38cb6964a7d8451036d30a03c"
     },
     {
       "bytes": 14315,
@@ -391221,19 +391384,19 @@
       "sha256": "ead5cf1d47f4d8f34588ecf63266460ac339ec0da52cd26377ce656ccb47994c"
     },
     {
-      "bytes": 36318,
+      "bytes": 39011,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "e6c64cc9921a1266609fd7a5feae009acde594f0",
+      "gitOid": "ebfb6c2b725622e581a6bae13bbe60cca7942bb8",
       "id": "src/scan/supabase.ts",
       "kind": "source",
-      "literalCount": 147,
-      "literalSha256": "4efcca36bcacc82c3d30386b6f62779ab59d2a75e063f7dbe9ab76c4fdfa9804",
+      "literalCount": 165,
+      "literalSha256": "9e2a7da095482a42830c86a3db7553d5ea61618c79686b1c86f32f42743b45e9",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "46a4268d5db5bc98b102ea5ab2f291c3cae30e4af5a3f85e4bc86c4bf208940c"
+      "sha256": "a18cbec4c9fe256fea0c65848b175d6cc686f1d284e3aac34362500087f8cae4"
     },
     {
       "bytes": 33344,
@@ -391461,11 +391624,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 326423,
+      "bytes": 326691,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "2523356b21026fa8efe72dfe972f8f7d72036e10",
+      "gitOid": "e8db145d20d7a30e794f1bc9007a3796382a25c7",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -391473,7 +391636,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "6908bfd48b0a66b64804bc47880f109d9c85bb025139fcfaad0a0cab4d0d97a8"
+      "sha256": "f2b10db3f1b84e1b48a7218157665a15312d21bd81a975126aa2c2da78ad2342"
     },
     {
       "bytes": 10289,
