@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ function copyFixture(): string {
   const dir = mkdtempSync(join(tmpdir(), "harvey-runner-validity-"));
   dirs.push(dir);
   cpSync(FIXTURE, dir, { recursive: true });
+  for (const file of ["vitest.config.ts", "src/subject.ts", "src/subject.test.ts"]) renameSync(join(dir, `${file}.txt`), join(dir, file));
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   return dir;
 }

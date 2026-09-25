@@ -64,7 +64,7 @@ export interface CommandExecutionReceipt {
   readonly sha256: string;
 }
 
-export interface CommandExecutionReceiptInput {
+interface CommandExecutionReceiptInput {
   readonly invocationId: string;
   readonly attempt?: number;
   readonly command: { readonly executable: string; readonly argv: readonly string[]; readonly cwd: string };
@@ -179,7 +179,7 @@ function sanitizeReceiptValue(value: unknown, secretValues: readonly string[]): 
 }
 
 /** Redact credential-bearing options and exact caller-provided secret values before persistence. */
-export function sanitizeCommandArgv(argv: readonly string[], secretValues: readonly string[] = []): string[] {
+function sanitizeCommandArgv(argv: readonly string[], secretValues: readonly string[] = []): string[] {
   const secrets = secretValues.filter(Boolean).sort((left, right) => right.length - left.length);
   let redactNext = false;
   return argv.map((raw) => {

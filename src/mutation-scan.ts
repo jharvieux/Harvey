@@ -129,7 +129,7 @@ export function mutationRunnerValidityReason(artifact: unknown): string | undefi
   return `Mutation runner results are uncheckable for ${validity.issues.length} mutant(s): ${reasons.join(" ")} [MEASURED from completed-test evidence; falsifier: repair suite loading and rerun the affected mutants with positive completed-test counts].`;
 }
 
-export interface MutationStability {
+interface MutationStability {
   schemaVersion: 1;
   status: "not-assessed" | "stable" | "unstable";
   reason: string;
