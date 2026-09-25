@@ -311,11 +311,7 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
   if (legacy && receipt.outcome.observedExitCode !== undefined) throw new Error("schema-2 command receipt cannot contain an observed exit code");
   if (!legacy && receipt.outcome.observedExitCode !== undefined && !["timed-out", "output-limit-exceeded"].includes(receipt.outcome.state)) throw new Error(`${receipt.outcome.state} command receipt cannot claim an observed interrupted exit code`);
   if (!legacy && receipt.outcome.observedExitCode !== undefined && receipt.outcome.signal !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim both an observed exit code and a signal`);
-  if (legacy) {
-    if (receipt.outcome.state === "exited" && (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null)) throw new Error("exited command receipt needs a numeric exit and no signal");
-    if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");
-    if (["policy-denied", "spawn-failed", "timed-out", "cancelled", "unknown-exit"].includes(receipt.outcome.state) && receipt.outcome.exitCode !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim an exit code`);
-  } else switch (receipt.outcome.state) {
+  switch (receipt.outcome.state) {
     case "exited":
       if (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null) throw new Error("exited command receipt needs a numeric exit and no signal");
       if (receipt.outcome.errorCode !== undefined) throw new Error("exited command receipt cannot claim an error code");
@@ -334,6 +330,7 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
       break;
     case "spawn-failed":
       if (receipt.outcome.exitCode !== null) throw new Error("spawn-failed command receipt cannot claim an exit code");
+      if (legacy && ["ETIMEDOUT", "ENOBUFS"].includes(receipt.outcome.errorCode ?? "")) break;
       if (receipt.outcome.signal !== null) throw new Error("spawn-failed command receipt cannot claim a signal from a process that never started");
       if (!receipt.outcome.errorCode || ["ETIMEDOUT", "ENOBUFS"].includes(receipt.outcome.errorCode)) throw new Error("spawn-failed command receipt needs a pre-start error code");
       break;
