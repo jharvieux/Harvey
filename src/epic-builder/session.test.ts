@@ -1,4 +1,5 @@
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { readNamesSafe } from "../fs-walk.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -233,11 +234,11 @@ describe("story fan-out + consistency pass", () => {
     ];
 
     for (const testCase of cases) {
-      expect(readdirSync(join(dir, "stories")), testCase.name).toEqual([]);
+      expect(readNamesSafe(join(dir, "stories")), testCase.name).toEqual([]);
       await expect(fanOutStories(dir, session, testCase.model, templates, testCase.confirm ?? (async (entries) => entries)), testCase.name)
         .rejects.toThrow();
-      expect(readdirSync(join(dir, "stories")), testCase.name).toEqual([]);
-      expect(readdirSync(join(dir, "briefs")), testCase.name).toEqual([]);
+      expect(readNamesSafe(join(dir, "stories")), testCase.name).toEqual([]);
+      expect(readNamesSafe(join(dir, "briefs")), testCase.name).toEqual([]);
       expect(session.state, testCase.name).toBe("stories-fan-out");
       expect(loadSession(dir).state, testCase.name).toBe("stories-fan-out");
     }
@@ -274,6 +275,7 @@ describe("frontmatter failures through the session consumer", () => {
     await draftEpic(dir, session, model, templates);
     const malformed = [
       "# missing\n",
+      "---\nstatus: in-review\npublished:\n  ref: one\n    url: changed\n---\n# body\n",
       "---\ntitle malformed\n---\n# body\n",
       "---\ntitle: one\ntitle: two\nstatus: in-review\n---\n# body\n",
     ];
@@ -284,5 +286,26 @@ describe("frontmatter failures through the session consumer", () => {
       expect(session.state).toBe("epic-review");
       expect(loadSession(dir).state).toBe("epic-review");
     }
+  });
+});
+
+describe("generated story metadata through durable session fan-out (#2081)", () => {
+  it.each(['Two\nlines', 'Bad\nstatus: accepted', 'Title with "quotes"', 'C:\\notes\\file', 'true', '1.25'])("retains the exact title %s through write and consistency reads", async (title) => {
+    await runClarify(dir, session, model, async () => "defaults");
+    await draftEpic(dir, session, model, templates);
+    acceptEpic(dir, session);
+    const generated = modelWith({ async storyManifest() {
+      return [{ title: "First", scope: "first", sizing: "M" }, { title, scope: "second", sizing: "M" }];
+    } });
+    await fanOutStories(dir, session, generated, templates, async (entries) => entries);
+    const persisted = loadSession(dir);
+    expect(persisted.state).toBe("stories-review");
+    expect(persisted.stories).toHaveLength(2);
+    expect(readNamesSafe(join(dir, "stories")).sort()).toEqual(persisted.stories.map((story) => story.file.slice("stories/".length)).sort());
+    expect(readNamesSafe(join(dir, "briefs"))).toHaveLength(2);
+    const draft = readDraft(dir, persisted.stories[1]!.file);
+    expect(draft.data.title).toBe(title);
+    expect(draft.data.status).toBe("draft");
+    expect(draft.body).toContain(title);
   });
 });

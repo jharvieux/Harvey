@@ -1,8 +1,8 @@
 // Minimal Markdown + YAML-frontmatter reader/writer for draft files (design §4.2). This is NOT a
 // general YAML parser — it handles exactly the shapes the builder writes into its own drafts:
 // scalar strings/numbers/booleans, an inline string array (`dependsOn: [a, b]`), and a single
-// level of nesting for the `published:` block. Anything else in the frontmatter round-trips as a
-// raw scalar string, which is enough because the builder owns this frontmatter.
+// level of nesting for the `published:` block. Builder drafts reject unsupported structure;
+// quoted scalars use JSON escapes so generated strings round-trip without introducing fields.
 
 export type FrontmatterValue = string | number | boolean | string[] | Record<string, string>;
 export type FrontmatterData = Record<string, FrontmatterValue>;
@@ -49,6 +49,7 @@ function parseBlock(lines: string[], strict: boolean): FrontmatterData {
     if (key === "") throw new Error(`malformed frontmatter line: ${line}`);
 
     if (indented) {
+      if (strict && !/^ {2}\S/.test(line)) throw new Error(`unsupported nested frontmatter indentation: ${key}`);
       if (!nestKey) {
         if (strict) throw new Error(`unexpected nested frontmatter field: ${key}`);
         continue;
@@ -81,7 +82,21 @@ function parseScalar(raw: string, strict: boolean): FrontmatterValue {
     }
     const inner = raw.slice(1, -1).trim();
     if (inner === "") return [];
-    return inner.split(",").map((s) => parseString(s.trim(), strict));
+    const values: string[] = [];
+    let start = 0;
+    let quote = "";
+    for (let i = 0; i < inner.length; i++) {
+      const char = inner[i]!;
+      if (quote === '"' && char === "\\") { i++; continue; }
+      if (quote === "'" && char === "'" && inner[i + 1] === "'") { i++; continue; }
+      if (quote) { if (char === quote) quote = ""; continue; }
+      if (char === '"' || char === "'") quote = char;
+      else if (char === ",") { values.push(inner.slice(start, i).trim()); start = i + 1; }
+      else if (strict && (char === "[" || char === "]" || char === "{" || char === "}")) throw new Error(`malformed frontmatter array: ${raw}`);
+    }
+    values.push(inner.slice(start).trim());
+    if (strict && (quote || values.some((value) => value === ""))) throw new Error(`malformed frontmatter array: ${raw}`);
+    return values.map((value) => parseString(value, strict));
   }
   if (raw === "true") return true;
   if (raw === "false") return false;
@@ -90,15 +105,18 @@ function parseScalar(raw: string, strict: boolean): FrontmatterValue {
 }
 
 function parseString(s: string, strict: boolean): string {
-  const doubleQuoted = s.startsWith('"') || s.endsWith('"');
-  const singleQuoted = s.startsWith("'") || s.endsWith("'");
-  if (strict && ((doubleQuoted && !(s.startsWith('"') && s.endsWith('"')))
-      || (singleQuoted && !(s.startsWith("'") && s.endsWith("'"))))) {
-    throw new Error(`unterminated frontmatter string: ${s}`);
+  if (s.startsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(s);
+      if (typeof parsed === "string") return parsed;
+    } catch { /* A quoted scalar must be complete and have valid escapes. */ }
+    if (strict) throw new Error(`unterminated or malformed frontmatter string: ${s}`);
   }
-  if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
-    return s.slice(1, -1);
+  if (s.startsWith("'")) {
+    if (/^'(?:[^']|'')*'$/.test(s)) return s.slice(1, -1).replaceAll("''", "'");
+    if (strict) throw new Error(`unterminated or malformed frontmatter string: ${s}`);
   }
+  if (strict && (s.endsWith('"') || s.endsWith("'"))) throw new Error(`unterminated frontmatter string: ${s}`);
   return s;
 }
 
@@ -121,7 +139,6 @@ export function serializeFrontmatter(data: FrontmatterData, body: string): strin
 }
 
 function quoteIfNeeded(value: string): string {
-  if (value === "") return '""';
-  if (/^[A-Za-z0-9][A-Za-z0-9 ._/-]*$/.test(value) && !/^\d+$/.test(value)) return value;
-  return `"${value.replace(/"/g, '\\"')}"`;
+  if (/^[A-Za-z0-9][A-Za-z0-9 ._/-]*$/.test(value) && !/^(?:true|false|-?\d+(?:\.\d+)?)$/.test(value)) return value;
+  return JSON.stringify(value);
 }

@@ -59,3 +59,24 @@ describe("frontmatter", () => {
     expect(parsed.data.ref).toBe("owner/repo#1");
   });
 });
+
+describe("frontmatter scalar round trips and supported nesting (#2081)", () => {
+  it("preserves escaped and typed-looking strings, including array elements", () => {
+    const strings = ['Two\nlines', 'Bad\nstatus: accepted', 'Title with "quotes"', 'C:\\notes\\file', 'true', 'false', '1.25', 'a,b', 'a]b', "owner's note", '', '\tindented'];
+    for (const value of strings) {
+      const data: FrontmatterData = { title: value, dependsOn: [value, 'sibling'], published: { ref: value } };
+      expect(parseFrontmatter(serializeFrontmatter(data, "body"), { required: true })).toEqual({ data, body: "body" });
+    }
+  });
+
+  it.each([
+    'published:\n  ref: one\n    url: changed',
+    'published:\n    ref: one',
+    'published:\n\tref: one',
+    'dependsOn: [a,,b]',
+    'dependsOn: [[a],b]',
+    'title: "unterminated',
+  ])("rejects unsupported structure without flattening it: %s", (source) => {
+    expect(() => parseFrontmatter(`---\n${source}\n---\nbody`, { required: true })).toThrow(/frontmatter/);
+  });
+});
