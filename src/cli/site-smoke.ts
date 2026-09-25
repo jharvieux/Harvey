@@ -19,8 +19,7 @@
 // the handler is required to reject before it sends anything.
 
 import "./sync-stdio.js";
-import { readFileSync } from "node:fs";
-import { evaluateSmoke, smokeFailed, type RouteProbe, type SmokeInput } from "../site-smoke.js";
+import { evaluateSmoke, probeRedirects, smokeFailed, type RedirectDeclaration, type RouteProbe, type SmokeInput } from "../site-smoke.js";
 
 const DEFAULT_BASE = "https://harvey-qa.com";
 const SITEMAP_SOURCE = new URL("../../site/app/sitemap.ts", import.meta.url).pathname;
@@ -52,9 +51,11 @@ async function declaredPaths(): Promise<string[]> {
  * own declaration IS the contract, so restating the list here would let one be added in one place
  * and go unchecked in the other.
  */
-function declaredRedirects(): string[] {
-  const config = readFileSync(NEXT_CONFIG_SOURCE, "utf8");
-  return [...config.matchAll(/source:\s*"([^"]+)"/g)].map((m) => m[1] ?? "");
+async function declaredRedirects(): Promise<RedirectDeclaration[]> {
+  const { default: config } = await import(NEXT_CONFIG_SOURCE) as { default: { redirects?: () => Promise<RedirectDeclaration[]> } };
+  const redirects = await config.redirects?.() ?? [];
+  if (!Array.isArray(redirects) || redirects.some(row => typeof row?.source !== "string" || typeof row.destination !== "string" || !row.source || !row.destination)) throw new Error("Site redirect declarations require both source and destination");
+  return redirects;
 }
 
 async function servedPaths(base: string): Promise<string[]> {
@@ -104,7 +105,7 @@ async function main(): Promise<void> {
   const [served, routes, redirects, readiness, validation] = await Promise.all([
     servedPaths(base),
     probeRoutes(base, declared),
-    probeRoutes(base, declaredRedirects()),
+    declaredRedirects().then(redirects => probeRedirects(base, redirects)),
     probeReadiness(base),
     probeValidation(base),
   ]);

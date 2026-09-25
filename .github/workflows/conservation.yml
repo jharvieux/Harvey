@@ -109,7 +109,9 @@ jobs:
     permissions:
       contents: read
       issues: write
-    timeout-minutes: 20
+    # The positive and seeded controls consumed 19m09 in run 36103820460;
+    # the same job still needs to complete every schema-drift check (#2188).
+    timeout-minutes: 30
     # The receipt both validate-conservation.ts and .github/actions/gate-liveness read. A literal
     # path, not ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block.
     env:
