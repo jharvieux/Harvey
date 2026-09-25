@@ -273,7 +273,7 @@ describe("SARIF independent export contract (#2100)", () => {
       const value = toSarif([
         finding(),
         finding({ id: "F-02", location: "src/other.ts:3" }),
-        finding({ id: "F-03", taxonomy: "perf_n_plus_one", severity: "Perf", location: "main DB (multiple tables)", impact: undefined, fix: undefined }),
+        finding({ id: "F-03", taxonomy: "perf_n_plus_one", severity: "Perf", location: "main DB (multiple tables)" }),
       ], { coverage: [RAN[0]!, { module: "M2", name: "Local pen-test", status: "requires-live-run", reason: "no local stack" }] });
       writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
       const serialized = JSON.parse(readFileSync(file, "utf8"));
@@ -284,6 +284,8 @@ describe("SARIF independent export contract (#2100)", () => {
         "secret_service_role_client", "secret_service_role_client", "perf_n_plus_one",
       ]);
       expect(serialized.runs[0].results[2].locations).toBeUndefined();
+      expect(serialized.runs[0].results[2].properties.precisionTier).toBeUndefined();
+      expect(serialized.runs[0].results[2].properties.reachability).toBeUndefined();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
