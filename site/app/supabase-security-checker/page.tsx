@@ -191,7 +191,16 @@ export default function Checker() {
         setStatus("error");
         return;
       }
-      const spec = (await root.json()) as { definitions?: Record<string, unknown>; paths?: Record<string, unknown> };
+      const discovery: unknown = await root.json();
+      const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+      if (!record(discovery) || (!record(discovery.definitions) && !record(discovery.paths))
+        || (discovery.definitions !== undefined && !record(discovery.definitions))
+        || (discovery.paths !== undefined && !record(discovery.paths))) {
+        setErr("The REST endpoint returned an invalid API description. Table and RPC access could not be assessed.");
+        setStatus("error");
+        return;
+      }
+      const spec = discovery as { definitions?: Record<string, unknown>; paths?: Record<string, unknown> };
       defs = spec.definitions ?? {};
       tableNames = Object.keys(spec.definitions ?? {});
       const paths = spec.paths ? Object.keys(spec.paths) : [];
@@ -596,7 +605,7 @@ export default function Checker() {
                     </div>
                   </>
                 ) : (
-                  <p className="sub">No RPC functions are exposed to the anon key.</p>
+                  <p className="sub">No RPC functions were advertised by this API description. Function execution was not assessed.</p>
                 )}
 
                 <div className="notice" style={{ marginTop: 22 }}>
