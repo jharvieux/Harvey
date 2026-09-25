@@ -66,6 +66,9 @@ export interface PassArtifact extends RecordedPass {
 // A pass older than this describes a prior state of the target, so it cannot prove the module ran
 // for THIS audit. 30 days spans a normal engagement cycle; tighten per engagement if needed.
 export const MAX_PASS_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// Clocks can drift slightly across the machine producing a pass and the one consuming it. Five
+// minutes tolerates ordinary NTP skew without letting a far-future timestamp stay fresh forever.
+export const MAX_PASS_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 // The conventional filename a pass writes under the engagement's artifacts dir.
 const passArtifactName = (module: AuditModule): string => `${module}.pass.json`;
@@ -109,6 +112,9 @@ export function findFreshPass(ctx: PassArtifactSource, module: AuditModule): Pas
   }
   const now = ctx.now ?? Date.now();
   const ageDays = Math.round((now - ts) / (24 * 60 * 60 * 1000));
+  if (ts - now > MAX_PASS_FUTURE_SKEW_MS) {
+    return { fresh: false, reason: `pass artifact for ${module} is future-dated (generated ${raw.generatedAt}, more than the ${MAX_PASS_FUTURE_SKEW_MS / 60_000}-minute clock-skew tolerance); correct the producer clock and re-run the pass` };
+  }
   if (now - ts > MAX_PASS_AGE_MS) {
     return { fresh: false, reason: `pass artifact for ${module} is stale (generated ${raw.generatedAt}, ${ageDays} days ago — past the ${Math.round(MAX_PASS_AGE_MS / (24 * 60 * 60 * 1000))}-day freshness window); re-run the pass` };
   }
@@ -121,13 +127,23 @@ export function findFreshPass(ctx: PassArtifactSource, module: AuditModule): Pas
 export function passSlotCensus(artifact: PassArtifact, now: number): { fresh: RecordedPass[]; stale: RecordedPass[] } {
   const { priorPasses, ...newest } = artifact;
   const all = [newest, ...(priorPasses ?? [])];
+  const fresh = (pass: RecordedPass): boolean => {
+    const timestamp = Date.parse(pass.generatedAt);
+    return !Number.isNaN(timestamp) && now - timestamp <= MAX_PASS_AGE_MS && timestamp - now <= MAX_PASS_FUTURE_SKEW_MS;
+  };
   return {
-    fresh: all.filter((p) => now - Date.parse(p.generatedAt) <= MAX_PASS_AGE_MS),
-    stale: all.filter((p) => !(now - Date.parse(p.generatedAt) <= MAX_PASS_AGE_MS)),
+    fresh: all.filter(fresh),
+    stale: all.filter((pass) => !fresh(pass)),
   };
 }
 
 export const passLabel = (pass: RecordedPass): string => `${pass.pass} pass (${pass.generatedAt}${pass.summary ? `: ${pass.summary}` : ""})`;
+export const rejectedPassLabel = (pass: RecordedPass, now: number): string => {
+  const timestamp = Date.parse(pass.generatedAt);
+  if (Number.isNaN(timestamp)) return `${passLabel(pass)} [invalid timestamp]`;
+  if (timestamp - now > MAX_PASS_FUTURE_SKEW_MS) return `${passLabel(pass)} [future-dated beyond ${MAX_PASS_FUTURE_SKEW_MS / 60_000}-minute tolerance]`;
+  return `${passLabel(pass)} [stale beyond ${MAX_PASS_AGE_MS / (24 * 60 * 60 * 1000)}-day window]`;
+};
 
 // The `ran` outcome a probe returns when a fresh pass artifact proves the out-of-orchestrator work
 // happened. Carries the findings of EVERY fresh pass in the slot (#1522 — before the slot
@@ -135,7 +151,7 @@ export const passLabel = (pass: RecordedPass): string => `${pass.pass} pass (${p
 // stale tier it holds rather than passing over it.
 export function ranFromPass(artifact: PassArtifact, mechanicalDetail: string, now = Date.now()): { status: "ran"; detail: string; findings?: Finding[] } {
   const { fresh, stale } = passSlotCensus(artifact, now);
-  const staleNote = stale.length ? ` [also recorded, but stale and therefore NOT collected: ${stale.map(passLabel).join(", ")}]` : "";
+  const staleNote = stale.length ? ` [also recorded, but stale and therefore NOT collected: ${stale.map((pass) => rejectedPassLabel(pass, now)).join(", ")}]` : "";
   const detail = `${mechanicalDetail} + ${fresh.map(passLabel).join(" + ")}${staleNote}`;
   const findings = fresh.flatMap((p) => p.findings ?? []);
   return findings.length ? { status: "ran", detail, findings } : { status: "ran", detail };

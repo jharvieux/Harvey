@@ -531,6 +531,76 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
     expect(r.limitations.join("\n")).toMatch(/DB "apps\/rag": coverage=full/);
   });
 
+  it("continues after a project harness exception, cleans each acquired resource once, and does not emit failed-project evidence", () => {
+    const stops: string[] = [];
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => ({
+        runner: project.label === "apps/main"
+          ? runner({ standUpDb: () => { throw new Error("runner exploded before migration verdict"); } })
+          : runner(),
+        stop: () => stops.push(project.label),
+      }),
+    });
+    expect(stops).toEqual(["apps/main", "apps/rag"]);
+    expect(r.limitations.join("\n")).toMatch(/DB "apps\/main":.*harness exception: runner exploded/);
+    expect(r.limitations.join("\n")).toMatch(/DB "apps\/rag": coverage=full/);
+    expect(probeFindings(r.findings).map((finding) => finding.id)).toEqual(["M2-IDOR-1-apps-rag"]);
+  });
+
+  it("preserves primary and cleanup diagnostics while continuing unrelated projects", () => {
+    const stops = new Map<string, number>();
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => ({
+        runner: project.label === "apps/main"
+          ? runner({ pentest: () => { throw new Error("pentest harness exception"); } })
+          : runner(),
+        stop: () => {
+          stops.set(project.label, (stops.get(project.label) ?? 0) + 1);
+          if (project.label === "apps/main") throw new Error("stop could not reap stack");
+        },
+      }),
+    });
+    expect(Object.fromEntries(stops)).toEqual({ "apps/main": 1, "apps/rag": 1 });
+    expect(r.limitations.join("\n")).toContain("harness exception: pentest harness exception");
+    expect(r.limitations.join("\n")).toContain("cleanup exception: stop could not reap stack");
+    expect(probeFindings(r.findings).map((finding) => finding.id)).toEqual(["M2-IDOR-1-apps-rag"]);
+  });
+
+  it("binds producer receipt finding IDs to the delivered project-scoped IDs", () => {
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => {
+        const receipt = createProducerExecutionReceipt({
+          executionId: `execution:${project.label}`,
+          producerId: "m2:rest-explore",
+          implementationId: "src/pentest/engine.ts#runExplore",
+          module: "M2",
+          tier: "dynamic",
+          findingFamilyIds: ["M2-IDOR-*"],
+          findingIds: [FINDING.id],
+          edges: [{ kind: "callback", from: `producer:${project.label}`, to: `finding:${FINDING.id}` }],
+        });
+        return { runner: runner({ pentest: () => ({ ok: true, findings: [FINDING], output: "", producerExecutionReceipts: [receipt] }) }), stop: () => undefined };
+      },
+    });
+    const delivered = new Set(probeFindings(r.findings).map((finding) => finding.id));
+    const receipted = new Set(r.producerExecutionReceipts?.flatMap((receipt) => receipt.findingIds));
+    expect(receipted).toEqual(delivered);
+    expect([...receipted]).toEqual(["M2-IDOR-1-apps-main", "M2-IDOR-1-apps-rag"]);
+  });
+
+  it("cleans all projects before an artifact-stage exception escapes", () => {
+    const stops: string[] = [];
+    expect(() => runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => ({ runner: runner(), stop: () => stops.push(project.label) }),
+      writeArtifact: () => { throw new Error("artifact disk full"); },
+    })).toThrow(/artifact disk full/);
+    expect(stops).toEqual(["apps/main", "apps/rag"]);
+  });
+
   it("an honest per-DB partial: one DB can't stand up, the other still probes and emits", () => {
     const r = runMultiProjectDynamicValidation({
       targetDir: repo, layout: mono, artifactsDir: dir, now,
@@ -572,6 +642,72 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
     const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
     expect(written.summary).toMatch(/dynamic validation \(full coverage\)/);
     rmSync(single, { recursive: true, force: true });
+  });
+
+  it("single-project failure preserves the runner error when cleanup also fails and writes no new artifact", () => {
+    const single = mkdtempSync(join(tmpdir(), "harvey-single-fail-"));
+    const artifacts = mkdtempSync(join(tmpdir(), "harvey-single-fail-artifacts-"));
+    const mig = join(single, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001.sql"), "create table docs (id uuid primary key, tenant_id uuid not null);");
+    const stalePath = join(artifacts, "M2.pass.json");
+    const stale = { module: "M2", target: single, pass: "dynamic", generatedAt: "2020-01-01T00:00:00.000Z", findings: [] };
+    writeFileSync(stalePath, `${JSON.stringify(stale)}\n`);
+    let stops = 0;
+    let caught: unknown;
+    try {
+      runMultiProjectDynamicValidation({
+        targetDir: single, layout: layout({ migrationDirs: [mig] }), artifactsDir: artifacts, now,
+        makeProject: () => ({
+          runner: runner({ pentest: () => { throw new Error("primary runner failure"); } }),
+          stop: () => { stops += 1; throw new Error("secondary cleanup failure"); },
+        }),
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect(String((caught as Error).message)).toContain("primary runner failure");
+    expect(String((caught as Error).message)).toContain("secondary cleanup failure");
+    expect(stops).toBe(1);
+    expect(JSON.parse(readFileSync(stalePath, "utf8")).generatedAt).toBe("2020-01-01T00:00:00.000Z");
+    const lookup = findFreshPass({ targetDir: single, artifactsDir: artifacts, exists: existsSync, readArtifact: (path) => JSON.parse(readFileSync(path, "utf8")), now: Date.parse(now()) }, "M2");
+    expect(lookup.fresh).toBe(false);
+    rmSync(single, { recursive: true, force: true });
+    rmSync(artifacts, { recursive: true, force: true });
+  });
+
+  it("single-project cleanup finishes exactly once before an artifact-stage failure", () => {
+    const single = mkdtempSync(join(tmpdir(), "harvey-single-artifact-fail-"));
+    const artifacts = mkdtempSync(join(tmpdir(), "harvey-single-artifact-fail-out-"));
+    const mig = join(single, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001.sql"), "create table docs (id uuid primary key, tenant_id uuid not null);");
+    let stops = 0;
+    expect(() => runMultiProjectDynamicValidation({
+      targetDir: single, layout: layout({ migrationDirs: [mig] }), artifactsDir: artifacts, now,
+      makeProject: () => ({ runner: runner(), stop: () => { stops += 1; } }),
+      writeArtifact: () => { throw new Error("artifact serialization failed"); },
+    })).toThrow(/artifact serialization failed/);
+    expect(stops).toBe(1);
+    expect(existsSync(join(artifacts, "M2.pass.json"))).toBe(false);
+    rmSync(single, { recursive: true, force: true });
+    rmSync(artifacts, { recursive: true, force: true });
+  });
+
+  it("does not accept a single-project pass when cleanup itself fails", () => {
+    const single = mkdtempSync(join(tmpdir(), "harvey-single-stop-fail-"));
+    const artifacts = mkdtempSync(join(tmpdir(), "harvey-single-stop-fail-out-"));
+    const mig = join(single, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001.sql"), "create table docs (id uuid primary key, tenant_id uuid not null);");
+    expect(() => runMultiProjectDynamicValidation({
+      targetDir: single, layout: layout({ migrationDirs: [mig] }), artifactsDir: artifacts, now,
+      makeProject: () => ({ runner: runner(), stop: () => { throw new Error("stop failed after successful probe"); } }),
+    })).toThrow(/cleanup failed.*stop failed after successful probe/);
+    expect(existsSync(join(artifacts, "M2.pass.json"))).toBe(false);
+    rmSync(single, { recursive: true, force: true });
+    rmSync(artifacts, { recursive: true, force: true });
   });
 });
 
