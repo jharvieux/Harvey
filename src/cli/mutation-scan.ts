@@ -1680,11 +1680,8 @@ const output = {
   mutationStability,
   ...(comparisonRun ? { comparisonRun } : {}),
   executionReceipt,
-  // REASON: A zero-completed survivor is uncheckable and excluded from the mutation score.
-  // KIND: empirical
-  // PROVENANCE: MEASURED 2026-09-25 — validateMutationRunnerReport reclassifies zero-completed survivors as RuntimeError while retaining the original report.
-  // FALSIFIER: pnpm exec vitest run src/mutation-scan.test.ts -t zero
-  // TOUCHES: src/cli/mutation-scan.ts, src/mutation-scan.ts
+  // Preserve the original runner result beside effectiveReport so the zero-completed
+  // survivor reclassification and score denominator remain independently inspectable.
   rawReport: rootScopedComparison?.report ?? rawReport,
   ...(rootScopedComparison ? { appScopedReport: rawReport } : {}),
   effectiveReport: report,

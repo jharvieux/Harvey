@@ -34,7 +34,7 @@ export interface AuditEvidenceInput {
   producer: { name: string; version: string };
   result: ProbeReport;
   /** Original outputs/logs, copied byte-for-byte; never amended to look like a combined run. */
-  rawArtifacts: string[];
+  rawArtifacts: (string | { path: string; sourcePath?: string; sha256: string })[];
   /** Historical material may be delivered, but cannot establish current execution or coverage. */
   legacyReason?: string;
   historicalOrigin?: { target: string; revision: string; tree?: string; engine: string; configProvenance: string };
@@ -216,7 +216,10 @@ function nestedCommandReceipts(bytes: Buffer): CommandExecutionReceipt[] {
 }
 
 /** Bind nested invocation receipts to the exact raw files copied into this accepted pass. */
-function assertCommandReceiptBindings(pass: Pick<AuditEvidenceInput, "scope" | "producer" | "result">, raw: readonly RawArtifactBytes[]): void {
+function assertCommandReceiptBindings(pass: Pick<AuditEvidenceInput, "scope" | "producer" | "result" | "legacyReason">, raw: readonly RawArtifactBytes[]): void {
+  // Historical imports retain bytes without asserting that their embedded receipts
+  // establish a current execution. Reconciliation always delivers these as partial.
+  if (pass.legacyReason) return;
   const nestedReceipts = raw.flatMap((artifact) => nestedCommandReceipts(artifact.bytes));
   const owners = raw.flatMap((artifact) => {
     const catalog = commandReceiptsInArtifact(artifact.bytes);
@@ -273,7 +276,18 @@ export function writeAuditReplayBundle(dir: string, input: {
     if (pass.result.instance && pass.result.instance !== pass.scope.workspace) throw new Error("Pass workspace does not match its owning-run instance");
     if (!input.scopes.some((scope) => scopeKey(scope) === scopeKey(pass.scope) && scope.wholeModule === pass.scope.wholeModule)) throw new Error("Pass scope is not in the bound evidence plan");
     if (!pass.producer.name?.trim() || !pass.producer.version?.trim() || !pass.rawArtifacts.length) throw new Error("Pass needs a producer version and raw owning-run artifacts");
-    const rawInputs = pass.rawArtifacts.map((path) => ({ ref: writeRaw(output, path), bytes: readFileSync(path) }));
+    const rawInputs = pass.rawArtifacts.map((artifact) => {
+      const path = typeof artifact === "string" ? artifact : artifact.path;
+      const ref = writeRaw(output, path);
+      if (typeof artifact !== "string") {
+        if (ref.sha256 !== artifact.sha256) throw new Error("Tampered retained raw artifact");
+        if (artifact.sourcePath !== undefined) {
+          if (!isAbsolute(artifact.sourcePath)) throw new Error("Retained raw artifact needs an absolute original identity");
+          ref.sourcePath = artifact.sourcePath;
+        } else delete ref.sourcePath;
+      }
+      return { ref, bytes: readFileSync(path) };
+    });
     assertCommandReceiptBindings(pass, rawInputs);
     const rawArtifacts = rawInputs.map(({ ref }) => ref);
     const body = { ...pass, rawArtifacts, bindingSha256: objectDigest(input.binding) };

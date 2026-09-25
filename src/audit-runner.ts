@@ -174,7 +174,7 @@ export interface RunContext {
     // REASON: Synchronous execution cannot process abort callbacks; cancellation is checked before start only.
     // KIND: empirical
     // PROVENANCE: MEASURED 2026-09-25 — the actual child completes before queued AbortController callbacks run.
-    // FALSIFIER: pnpm exec vitest run src/probe-exec.test.ts -t synchronous
+    // FALSIFIER: test -f src/probe-exec.ts && test -d node_modules/tsx || exit 127; node --import tsx --input-type=module -e 'try { const {probeExec}=await import("./src/probe-exec.ts"); const c=new AbortController(); setTimeout(()=>c.abort(),1); const r=await probeExec(process.execPath,["-e","setTimeout(()=>process.exit(7),100)"],{signal:c.signal}); process.exit(r.receipt?.outcome.state==="cancelled"?0:1); } catch { process.exit(127); }'
     // TOUCHES: src/probe-exec.ts, src/audit-runner.ts
     signal?: AbortSignal;
     receipt?: {

@@ -2,8 +2,9 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { guardMutationDigest, guardMutationReviewRequirements, normalizeGuardMutationCensus, type GuardMutationBaseline, type GuardMutationReceipt } from "../guard-mutation-baseline.js";
 import type { StrykerMutant } from "../mutation-scan.js";
@@ -207,7 +208,26 @@ function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report
     mkdirSync(dirname(join(dir, destination)), { recursive: true });
     copyFileSync(join(ROOT, file), join(dir, destination));
   };
-  for (const file of ["package.json", "pnpm-lock.yaml", "vitest.config.ts", "stryker.guards.config.json", "src/cli/guard-mutation-census.ts", "src/cli/args.ts", "src/cli/sync-stdio.ts", "src/guard-mutation-census.ts", "src/guard-mutation-baseline.ts", "src/guard-mutation-shards.ts", "src/guard-mutation-process.ts", "src/guard-mutation-bundle.ts", "src/mutation-scan.ts"]) copy(file);
+  for (const file of ["package.json", "pnpm-lock.yaml", "vitest.config.ts", "stryker.guards.config.json"]) copy(file);
+  // Follow the shipping entry point's local import closure so a new runtime dependency
+  // cannot turn every orchestration control into a module-resolution failure.
+  const copied = new Set<string>();
+  const packages = new Set(["tsx", "typescript", "vitest", "@stryker-mutator/core", "@stryker-mutator/vitest-runner"]);
+  const copyClosure = (file: string): void => {
+    if (copied.has(file)) return;
+    copied.add(file); copy(file);
+    for (const imported of ts.preProcessFile(ts.transpileModule(readFileSync(join(ROOT, file), "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext } }).outputText, true, true).importedFiles) {
+      if (!imported.fileName.startsWith(".")) {
+        if (!imported.fileName.startsWith("node:")) packages.add(imported.fileName.split("/").slice(0, imported.fileName.startsWith("@") ? 2 : 1).join("/"));
+        continue;
+      }
+      const path = resolve(ROOT, dirname(file), imported.fileName.replace(/\.js$/, ".ts"));
+      const child = relative(ROOT, path);
+      if (child.startsWith("..")) throw new Error(`Fixture import escapes project: ${file} -> ${child}`);
+      copyClosure(child);
+    }
+  };
+  copyClosure("src/cli/guard-mutation-census.ts");
   copy("src/__fixtures__/guard-mutation/baseline.json", "guard-mutation-baseline.json");
   const fixtureReport = JSON.parse(readFileSync(join(FIXTURES, "measured.json"), "utf8")) as Report & { framework: { version: string } };
   const measuredExclusion = JSON.parse(readFileSync(join(FIXTURES, "exclusion-measurable.json"), "utf8")) as Report;
@@ -221,7 +241,7 @@ function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report
   writeFileSync(join(dir, ".gitignore"), "node_modules/\nreports/\n");
   // These are dedicated test-owned command seams. Installed/shared dependencies stay read-only;
   // the real Stryker execution is separately captured in the committed baseline's provenance.
-  for (const name of ["tsx", "typescript", "vitest", "@stryker-mutator/core", "@stryker-mutator/vitest-runner"]) {
+  for (const name of packages) {
     const path = join(dir, "node_modules", name); mkdirSync(dirname(path), { recursive: true });
     symlinkSync(join(ROOT, "node_modules", name), path);
   }
