@@ -77,6 +77,25 @@ describe("dry-run PR relevance", () => {
     expect(result.output).toContain("relevant=true\n");
   });
 
+  it("regenerates for filesystem metadata and existence dependencies outside the modeled reads", () => {
+    for (const api of ["statSync", "lstatSync"]) {
+      const result = runShippingFilter(`import { ${api} as inspect } from "node:fs"; console.log(inspect("docs/input.md").size);`, "docs/input.md", true);
+      expect(result.before?.trim()).toBe("7");
+      expect(result.after?.trim()).toBe("6");
+      expect(result.output, api).toContain("relevant=true\n");
+    }
+    for (const source of [
+      'import { existsSync as present } from "node:fs"; console.log(present("docs/new.md"));',
+      'import * as fs from "node:fs"; console.log(fs.existsSync("docs/new.md"));',
+      'import * as fs from "node:fs"; console.log(fs["existsSync"]("docs/new.md"));',
+    ]) {
+      const result = runShippingFilter(source, "docs/new.md", true);
+      expect(result.before?.trim()).toBe("false");
+      expect(result.after?.trim()).toBe("true");
+      expect(result.output).toContain("relevant=true\n");
+    }
+  });
+
   it("executes the shipping selector for known producer and unknown-path changes", () => {
     expect(runShippingFilter('import "../producer.ts";', "src/producer.ts").output).toContain("relevant=true\n");
     expect(runShippingFilter("export {};", "unclassified.bin").output).toContain("relevant=true\n");

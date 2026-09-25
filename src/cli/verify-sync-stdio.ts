@@ -1,8 +1,9 @@
 import "./sync-stdio.js";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { readEntriesLstatSafe } from "../fs-walk.js";
 
 export const SYNC_STDIO_IMPORT = "./sync-stdio.js";
 
@@ -80,8 +81,8 @@ export function unguardedExitingCliFiles(files: readonly string[], libraries: Re
 }
 
 export function cliTypeScriptFiles(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts"))
+  return readEntriesLstatSafe(directory)
+    .filter((entry) => entry.isFile && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts"))
     .map((entry) => join(directory, entry.name))
     .sort();
 }

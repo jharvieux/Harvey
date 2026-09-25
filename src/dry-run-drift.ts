@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 import ts from "typescript";
 import { DETERMINISTIC_DRY_RUN_FILES, validateDryRunFamily } from "./dry-run-artifacts.js";
+import { isDirectorySafe } from "./fs-walk.js";
 
 const ENTRYPOINTS = ["src/cli/dry-run.ts"] as const;
 
@@ -40,7 +41,7 @@ function registerUrlInput(repoRoot: string, importer: string, specifier: string,
   const absolute = resolve(repoRoot, dirname(importer), specifier);
   const path = repoPath(repoRoot, absolute).replace(/\/$/, "");
   if (existsSync(absolute) && crossesLink(repoRoot, absolute)) closure.unresolved.push(`${importer} -> linked input: ${specifier}`);
-  if (specifier.endsWith("/") || (existsSync(absolute) && statSync(absolute).isDirectory())) closure.trees.add(path);
+  if (specifier.endsWith("/") || isDirectorySafe(absolute)) closure.trees.add(path);
   else if (existsSync(absolute)) closure.files.add(path);
   else closure.unresolved.push(`${importer} -> ${specifier}`);
 }
@@ -91,7 +92,7 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
       if (bindings && ts.isNamedImports(bindings)) {
         for (const binding of bindings.elements) {
           const api = (binding.propertyName ?? binding.name).text;
-          if (FILE_READS.has(api) || PROCESS_CALLS.has(api)) inputBindings.set(binding.name.text, api);
+          inputBindings.set(binding.name.text, api);
         }
       }
     }
@@ -104,7 +105,7 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
         unresolved(node, `missing input: ${value}`);
       } else {
         if (crossesLink(repoRoot, absoluteInput)) unresolved(node, `linked input: ${value}`);
-        if (statSync(absoluteInput).isDirectory()) closure.trees.add(path);
+        if (isDirectorySafe(absoluteInput)) closure.trees.add(path);
         else closure.files.add(path);
         if (executable && SOURCE_EXTENSION.test(path)) pending.push(path);
       }
@@ -126,7 +127,9 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
         if (ts.isIdentifier(callee)) api = inputBindings.get(callee.text);
         else if (ts.isPropertyAccessExpression(callee)) {
           api = callee.name.text;
-          if (ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text) && !FILE_READS.has(api) && !PROCESS_CALLS.has(api)) api = undefined;
+          if (ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text) && !FILE_READS.has(api) && !PROCESS_CALLS.has(api)) {
+            unresolved(node, `unmodeled input operation: ${api}`);
+          }
         } else if (ts.isElementAccessExpression(callee) && ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text)) {
           api = literal(callee.argumentExpression);
           if (api === undefined) unresolved(node, "computed input operation");
@@ -144,6 +147,9 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
           for (const candidate of candidates) {
             if (candidate && SOURCE_EXTENSION.test(candidate)) localInput(node, candidate, true);
           }
+        } else if (api && ((ts.isIdentifier(callee) && inputBindings.has(callee.text))
+          || (ts.isElementAccessExpression(callee) && ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text)))) {
+          unresolved(node, `unmodeled input operation: ${api}`);
         }
       }
       if (ts.isIdentifier(node) && inputBindings.has(node.text) && !ts.isImportSpecifier(node.parent)
@@ -216,8 +222,7 @@ export function classifyDryRunChanges(repoRoot: string, changedPaths: readonly s
   if (normalized.length > 0 && normalized.every(isProvedUnrelatedDocs) && closure.unresolved.length === 0) {
     return { relevant: false, reason: "proved-unrelated-docs", matches: normalized, dependencyCount: closure.files.size, unresolved: [] };
   }
-  // An unclassified path or an unresolved edge is uncertainty, never evidence that output cannot
-  // change. Regeneration is the safe result and makes new dependency shapes fail closed.
+  // Regenerate when an unclassified path or unresolved edge leaves the effect on output uncertain.
   return { relevant: true, reason: "unknown", matches: normalized, dependencyCount: closure.files.size, unresolved: closure.unresolved };
 }
 
