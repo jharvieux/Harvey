@@ -1,6 +1,10 @@
 // M8 mutation scan — runs StrykerJS against a target repo and shapes its JSON reporter
 // output into the summary shape docs/m8-test-quality.md documents (mutation score overall +
 // per module, ranked surviving-mutant list).
+// Declared monorepos first reconcile a versioned workspace plan and run each selected package
+// on an isolated copy. --plan retains the unexecuted plan; --mutation-selection reads a JSON
+// array of repository-relative source paths and retains the complete unselected population.
+// The single-workspace execution and recovery path described below also serves those children.
 //
 // StrykerJS is an EXTERNAL CLI TOOL, not an npm dependency of this repo. The wrapper prefers the
 // target's own node_modules/.bin/stryker, falling back to PATH; it throws if neither exists.
@@ -107,6 +111,9 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { planMutationWorkspaces } from "../mutation-workspace.js";
+import { allocateMutationWorkspaceStorage, runMutationWorkspaces } from "../mutation-workspace-runner.js";
 import { readEntriesSafe, statSafe } from "../fs-walk.js";
 import { productSourceInventoryForTarget, readStaticConfigObject } from "../source-inventory.js";
 import type { SourceInput } from "../detectors/common.js";
@@ -718,6 +725,47 @@ function collectWorkspaceSignals(dir: string): { path: string; pkg?: PackageJson
 // env-fragile suite fails its dry run and M8 voids. Applies to stub-check, ordinary Stryker runs,
 // and the root-scoped run below — computed here (ahead of the no-test-suite check) because the
 // root-scoped attempt needs it before that check has finished.
+if (!reportPath && !stubCheck && !detectOnly && !args.includes("--single-workspace")) {
+  const selectionPath = arg("--mutation-selection");
+  registerProtectedInput(selectionPath);
+  const selection: unknown = selectionPath ? JSON.parse(readFileSync(resolve(selectionPath), "utf8")) : undefined;
+  if (selection !== undefined && (!Array.isArray(selection) || selection.some(path => typeof path !== "string"))) throw new Error("--mutation-selection must name a JSON array of repository-relative production paths");
+  const plan = planMutationWorkspaces(targetDir, { selection: selection as string[] | undefined });
+  if (plan.workspaces.length > 1 || args.includes("--workspaces") || args.includes("--plan")) {
+    if (configPath) {
+      const override = readStaticConfigObject(resolve(configPath));
+      const mutate = Array.isArray(override.value?.mutate) && override.value.mutate.every(value => typeof value === "string") ? override.value.mutate as string[] : undefined;
+      const selected = verifyMutationScope([], mutate, plan.files.map(file => file.path));
+      const paths = new Set(selected.files?.map(file => file.path) ?? []);
+      if (!override.value || !selected.files) plan.gaps.push(`Explicit mutation configuration cannot be reconciled: ${override.error ?? selected.note}`);
+      for (const workspace of plan.workspaces) {
+        workspace.selectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => paths.has(path) && (!Array.isArray(selection) || selection.includes(path)));
+        workspace.unselectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => !workspace.selectedSources.includes(path));
+        if (override.value) {
+          workspace.configuration = override.value;
+          workspace.invocationDirectory = ".";
+          workspace.configurationDirectory = ".";
+          if (typeof override.value.testRunner === "string") workspace.runner = override.value.testRunner;
+          const runner = override.value[workspace.runner] as { configFile?: unknown } | undefined;
+          if (typeof runner?.configFile === "string") workspace.runnerConfig = runner.configFile;
+        }
+      }
+    }
+    for (const workspace of plan.workspaces) for (const config of workspace.strykerConfigurations) registerProtectedInput(join(targetDir, config.path));
+    const pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), [...protectedInputPaths]);
+    const storage = allocateMutationWorkspaceStorage(join(scratchRoot(), "workspaces-"));
+    const forwarded = [...(concurrency ? ["--concurrency", concurrency] : []), ...(incremental ? ["--incremental"] : []), ...(install ? ["--install"] : [])];
+    const output = runMutationWorkspaces(plan, { storage, cliPath: fileURLToPath(import.meta.url), flags: forwarded, planOnly: args.includes("--plan") });
+    assertTreePristine(pristine, "#1285");
+    output.targetTreeUntouched = { pristine: true, scratchDir: storage, note: `${args.includes("--plan") ? "Plan-only; no workspace commands executed." : "Invoked workspace commands used disposable source copies."} Original source, configurations and existing reports passed the complete target snapshot assertion.` };
+    const json = JSON.stringify(output, null, 2) + "\n";
+    if (outPath) writeResultFile(outPath, json); else console.log(json);
+    if (scopeOutPath) writeResultFile(scopeOutPath, JSON.stringify(output.workspaceCoverage, null, 2) + "\n");
+    console.error(`M8 workspace plan and original command receipts retained at ${storage}`);
+    process.exit(0);
+  }
+}
+
 const detectedEnv: DetectedEnvVar[] = detectTestEnv(collectEnvSourceFiles(targetDir));
 const suiteEnv = { ...process.env, ...Object.fromEntries(detectedEnv.map((e) => [e.key, e.value])) };
 if (detectedEnv.length) {
@@ -1194,7 +1242,14 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   // Prefer the target's own install over PATH — clients that ship Stryker have it in
   // node_modules/.bin, not globally.
   const localBin = join(cwd, "node_modules", ".bin", "stryker");
-  const strykerBin = existsSync(localBin) ? localBin : "stryker";
+  let strykerBin = existsSync(localBin) ? localBin : "stryker";
+  if (strykerBin === "stryker" && args.includes("--single-workspace")) {
+    try {
+      const manifest = createRequire(join(cwd, "package.json")).resolve("@stryker-mutator/core/package.json");
+      const installed = join(dirname(manifest), "bin", "stryker.js");
+      if (existsSync(installed)) strykerBin = installed;
+    } catch { /* The ordinary missing-binary receipt remains the fallback. */ }
+  }
   const startedAt = new Date().toISOString();
   const configuration = { path: cfgPath ?? null, contents: cfgPath && existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : null };
   const selectionConfig = cfgPath?.endsWith(".json") && configuration.contents ? JSON.parse(configuration.contents) as Record<string, unknown> : { contents: configuration.contents };
@@ -1729,7 +1784,9 @@ console.error(`M8 mutate scope (#504): ${scope.note}`);
 // package.json follow wherever the runnable suite actually lives — the target for an ordinary
 // run, the workspace root for a successful #655 root-scoped run.
 const lineCoverageStarted = performance.now();
-const lineCoverage = runLineCoverage(readPackageJsonAt(coverageCwd), coverageCwd);
+const lineCoverage: LineCoverageResult = args.includes("--single-workspace")
+  ? { status: "partial", reason: "Workspace mutation executed native related tests; unrelated whole-suite line coverage was not requested" }
+  : runLineCoverage(readPackageJsonAt(coverageCwd), coverageCwd);
 const lineCoverageMs = performance.now() - lineCoverageStarted;
 if (strykerPhases) {
   console.error(

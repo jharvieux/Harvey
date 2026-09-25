@@ -764,6 +764,25 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.reason).toMatch(/263 file/);
   });
 
+  it("M8 delivers a failed workspace beside a measured sibling with the partial reason rendered", async () => {
+    const finding: Finding = { id: "M8-WORKSPACE-rag", status: "Open", category: "Test quality", title: "RAG related-test discovery failed", severity: "Info", confidence: "N/A", taxonomy: "M8 — Workspace mutation coverage", location: "apps/rag/package.json", evidence: "Zero related tests; all 47 configured production sources remain unassessed", impact: "RAG has no measured mutation score", fix: "Repair related-test discovery and rerun RAG", value: 0, ease: 0, safety: 5 };
+    const artifact = { summary: { overall: { totalMutants: 5, mutationScore: 80 } }, findings: [finding], moduleRecord: { status: "partial", note: "Main measured; RAG discovery-failed: zero related tests" } };
+    const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial" });
+    expect(result.findings).toContainEqual(finding);
+    const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
+    const directory = mkdtempSync(join(tmpdir(), "mutation-workspace-delivery-"));
+    try {
+      const htmlPath = join(directory, "report.html");
+      await renderReport(document, { htmlPath });
+      const html = readFileSync(htmlPath, "utf8");
+      expect(html).toContain("47 configured production sources remain unassessed");
+      expect(html).toContain("RAG discovery-failed: zero related tests");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+    expect(conservationLedger(result.findings, document.findings).unaccounted).toBe(0);
+  });
+
   // #1309: the branch #504's own tests skipped — verifyMutationScope returning `verified: false`
   // (a non-JSON Stryker config, or an unsupported glob: neither a proven full run nor a proven
   // subset) used to carry NO moduleRecord at all (scopedRunModuleRecord only fires on `scoped:
