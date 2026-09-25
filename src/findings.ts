@@ -47,6 +47,8 @@ export interface AuditContext {
   kind: "client-audit" | "same-run-checkpoint";
   target: { id: string; revision: string };
   producerVersions: Record<string, string>;
+  /** Exact assessed scope to canonical [producer name, version] identities. */
+  producerAssignments?: Record<string, string[]>;
   schemaVersion: string;
   assessedScope: string[];
   scopeComplete: boolean;
@@ -640,6 +642,23 @@ function validateAuditContext(value: unknown, at: string, errors: string[]): voi
   if (!isRecord(value.target) || !nonempty(value.target.id) || !nonempty(value.target.revision)) errors.push(`${at}.target: requires identity and revision`);
   if (!isRecord(value.producerVersions) || !Object.keys(value.producerVersions).length || Object.values(value.producerVersions).some((x) => !nonempty(x))) errors.push(`${at}.producerVersions: requires versioned producers`);
   if (!Array.isArray(value.assessedScope) || !value.assessedScope.length || value.assessedScope.some((x) => !nonempty(x))) errors.push(`${at}.assessedScope: requires explicit scope units`);
+  if (value.producerAssignments !== undefined) {
+    const assignments = value.producerAssignments;
+    const scopes = Array.isArray(value.assessedScope) ? value.assessedScope : [];
+    const validProducer = (token: unknown): boolean => {
+      if (typeof token !== "string") return false;
+      try {
+        const pair: unknown = JSON.parse(token);
+        return Array.isArray(pair) && pair.length === 2 && pair.every(nonempty)
+          && isRecord(value.producerVersions) && (value.producerVersions[token] === pair[1] || value.producerVersions[String(pair[0])] === pair[1]);
+      } catch { return false; }
+    };
+    if (!isRecord(assignments) || Object.keys(assignments).some((scope) => !scopes.includes(scope))
+      || scopes.some((scope) => !Object.hasOwn(assignments, String(scope)))
+      || Object.values(assignments).some((tokens) => !Array.isArray(tokens) || !tokens.length || tokens.some((token) => !validProducer(token)))) {
+      errors.push(`${at}.producerAssignments: requires versioned producer identities for every assessed scope`);
+    }
+  }
   if (typeof value.scopeComplete !== "boolean") errors.push(`${at}.scopeComplete: expected boolean`);
   if (value.limitations !== undefined && (!Array.isArray(value.limitations) || value.limitations.some((reason) => !nonempty(reason)))) errors.push(`${at}.limitations: expected nonempty reasons`);
   if (value.provenance !== undefined) {

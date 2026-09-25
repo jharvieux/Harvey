@@ -75,28 +75,29 @@ afterAll(async () => {
 describe("run-audit assembly capability boundary", () => {
   it("distinguishes receipt scope expansion from actual producer changes in every export", async () => {
     const initial = JSON.parse(readFileSync(join(root, "findings.json"), "utf8")) as FindingsDocument;
-    type Mode = "same" | "expanded" | "reversed" | "new-version" | "two-versions" | "partial";
+    type Mode = "same" | "expanded" | "reversed" | "new-version" | "two-versions" | "swapped" | "two-reversed" | "partial";
     async function capture(name: string, mode: Mode, prior?: string) {
       const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module) => ({
         scope: { module, workspace: ".", tier: "source", surface: "module", wholeModule: true },
-        generatedAt: new Date().toISOString(), producer: { name: module, version: mode === "new-version" && module === "M7" ? "2" : "1" },
+        generatedAt: new Date().toISOString(), producer: { name: module, version: (mode === "new-version" || mode === "swapped") && module === "M7" ? "2" : "1" },
         rawArtifacts: [join(root, "raw.json")],
         result: { kind: "examined", unitsExamined: 1, scope: "owned files", detail: "Bound source scope",
           findings: [structuredClone(initial.findings.find((finding) => finding.id === `${module}-CLI`)!)],
           ...(module === "M10" ? { dataMap: {} } : {}),
         },
       }));
-      if (mode === "expanded" || mode === "reversed" || mode === "two-versions") {
+      if (mode === "expanded" || mode === "reversed" || mode === "two-versions" || mode === "swapped" || mode === "two-reversed") {
         const additional = structuredClone(passes[6]!);
         additional.scope.workspace = "another-workspace";
-        if (mode === "two-versions") additional.producer.version = "2";
+        if (mode === "two-versions" || mode === "two-reversed") additional.producer.version = "2";
+        if (mode === "swapped") additional.producer.version = "1";
         if ("kind" in additional.result && additional.result.kind === "examined") {
           additional.result.findings[0]!.id = "M7-ANOTHER";
           additional.result.findings[0]!.location = "another-workspace/sample.ts:1";
         }
         passes.push(additional);
       }
-      if (mode === "reversed") passes.reverse();
+      if (mode === "reversed" || mode === "two-reversed") passes.reverse();
       if (mode === "partial") passes[7]!.result = {
         kind: "not-assessed", reason: "Native mutation evidence unavailable", provenance: "TRIED",
         falsifier: "Run the native mutation producer", findings: [],
@@ -137,6 +138,19 @@ describe("run-audit assembly capability boundary", () => {
       expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "2"])]).toBe("2");
       if (mode === "two-versions") expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "1"])]).toBe("1");
     }
+    const two = await capture("assignment-prior", "two-versions");
+    const swapped = await capture("assignment-swapped", "swapped", two.path);
+    expect(swapped.document.auditContext?.producerVersions).toEqual(two.document.auditContext?.producerVersions);
+    expect(swapped.document.auditContext?.assessedScope).toEqual(two.document.auditContext?.assessedScope);
+    expect(swapped.document.baseline?.comparison?.kind).toBe("tool-change");
+    const twoReversed = await capture("assignment-reversed", "two-reversed", two.path);
+    expect(twoReversed.document.baseline?.comparison?.kind).toBe("same-source");
+    expect(twoReversed.document.auditContext?.producerAssignments).toEqual(two.document.auditContext?.producerAssignments);
+    const legacy = structuredClone(two.document);
+    delete legacy.auditContext!.producerAssignments;
+    const legacyPath = join(root, "assignment-unknown.json");
+    writeFileSync(legacyPath, JSON.stringify(legacy));
+    expect((await capture("assignment-unknown-current", "two-versions", legacyPath)).document.baseline?.comparison?.kind).toBe("incompatible");
     const partial = await capture("scope-partial", "partial", prior.path);
     expect(partial.document.baseline?.comparison?.kind).toBe("scope-change");
     expect(partial.document.auditContext?.scopeComplete).toBe(false);

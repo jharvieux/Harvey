@@ -176,9 +176,42 @@ function comparisonContext(options: FindingIdentityOptions): Pick<BaselineDiff["
   if (a.target.id !== b.target.id) return answer("incompatible", "Baseline and current evidence name different targets.");
   if ([a, b].some((context) => context.provenance && (!context.provenance.target.complete || !context.provenance.target.stable || !context.provenance.engine.complete || !context.provenance.engine.stable))) return answer("incompatible", "Source or engine observation was incomplete or changed during execution; one comparable revision is unproved.");
   if (a.engagementId === b.engagementId || a.kind === "same-run-checkpoint" || b.kind === "same-run-checkpoint") return answer("same-run-checkpoint", "This comparison includes a checkpoint from the same engagement, not a prior client audit. It measures capture changes, not client remediation.");
+  if (a.producerAssignments && b.producerAssignments) {
+    const priorAssignments = a.producerAssignments, currentAssignments = b.producerAssignments;
+    const changed = Object.keys(priorAssignments).some((scope) => Object.hasOwn(currentAssignments, scope)
+      && JSON.stringify([...new Set(priorAssignments[scope])].sort()) !== JSON.stringify([...new Set(currentAssignments[scope])].sort()));
+    if (changed) return answer("tool-change", "Producer versions assigned to an existing assessed scope changed. New and absent observations are not attributed to source regressions or remediation.");
+  } else {
+    const ambiguous = (context: AuditContext): boolean => {
+      const versions = new Map<string, Set<string>>();
+      for (const key of Object.keys(context.producerVersions)) {
+        let pair: unknown;
+        try { pair = JSON.parse(key); } catch { continue; }
+        if (!Array.isArray(pair) || pair.length !== 2 || pair.some((value) => typeof value !== "string")) continue;
+        const values = versions.get(pair[0] as string) ?? new Set<string>();
+        values.add(pair[1] as string); versions.set(pair[0] as string, values);
+      }
+      return [...versions.values()].some((values) => values.size > 1);
+    };
+    if (!!a.producerAssignments !== !!b.producerAssignments || ambiguous(a) || ambiguous(b)) return answer("incompatible", "Producer-to-scope version assignments are unavailable for one or both audits. Global producer versions cannot establish which version examined each scope.");
+  }
   const producerKey = (c: AuditContext): string => JSON.stringify(Object.entries(c.producerVersions).sort(([a], [b]) => a.localeCompare(b)));
+  const versionSets = (context: AuditContext): Map<string, Set<string>> => {
+    const versions = new Map<string, Set<string>>();
+    for (const [key, version] of Object.entries(context.producerVersions)) {
+      let pair: unknown;
+      try { pair = JSON.parse(key); } catch { continue; }
+      if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string" || pair[1] !== version) continue;
+      const values = versions.get(pair[0]) ?? new Set<string>();
+      values.add(version); versions.set(pair[0], values);
+    }
+    return versions;
+  };
+  const priorVersions = versionSets(a), currentVersions = versionSets(b);
+  const changedProducerVersion = [...priorVersions].some(([name, versions]) => currentVersions.has(name)
+    && JSON.stringify([...versions].sort()) !== JSON.stringify([...currentVersions.get(name)!].sort()));
   const changedVersion = Object.keys(a.producerVersions).some((key) => key in b.producerVersions && a.producerVersions[key] !== b.producerVersions[key]);
-  if (a.schemaVersion !== b.schemaVersion || changedVersion) return answer("tool-change", "Producer, rule or schema versions changed. New and absent observations are not attributed to source regressions or remediation.");
+  if (a.schemaVersion !== b.schemaVersion || changedVersion || changedProducerVersion) return answer("tool-change", "Producer, rule or schema versions changed. New and absent observations are not attributed to source regressions or remediation.");
   if (!a.scopeComplete || !b.scopeComplete || JSON.stringify([...new Set(a.assessedScope)].sort()) !== JSON.stringify([...new Set(b.assessedScope)].sort())) return answer("scope-change", "Assessed scope changed or is incomplete. Expanded and missing observations do not establish new or resolved defects.");
   if (producerKey(a) !== producerKey(b)) return answer("tool-change", "The producer population changed within the declared scope. New and absent observations are not attributed to source changes.");
   if (a.provenance?.configurationSha256 !== b.provenance?.configurationSha256 || JSON.stringify(a.provenance?.inputBindings) !== JSON.stringify(b.provenance?.inputBindings)) return answer("scope-change", "Effective configuration or consumed external inputs changed or lack comparable bindings; source-only attribution is unproved.");
@@ -193,6 +226,7 @@ export function semanticFindingIdentity(f: Finding, options: FindingIdentityOpti
 
 export function diffAgainstBaseline(baseline: Finding[], current: Finding[], options: FindingIdentityOptions = {}): BaselineDiff {
   const compatibility = comparisonContext(options);
+  if (options.priorContext && options.currentContext && !options.priorContext.producerAssignments && !options.currentContext.producerAssignments) compatibility.limitations.push("Legacy audit contexts do not bind producer versions to individual assessed scopes; that assignment was not verified.");
   const matched = new Set<number>();
   const indexKeys = (keys: string[]): Map<string, number[]> => {
     const index = new Map<string, number[]>();

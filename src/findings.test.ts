@@ -6,6 +6,15 @@ import { checkNonRegistryDependencies } from "./scan/supply-chain.js";
 const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
 
 describe("validateFindings", () => {
+  it("validates complete producer-to-scope assignments and their version bindings", () => {
+    const token = JSON.stringify(["scanner", "1"]);
+    const auditContext = { engagementId: "test", kind: "client-audit", target: { id: "target", revision: "one" }, producerVersions: { [token]: "1" }, schemaVersion: "1", assessedScope: ["scope"], scopeComplete: true, producerAssignments: { scope: [token] } };
+    expect(validateFindings({ ...example, auditContext }).errors).toEqual([]);
+    for (const assignments of [{}, { other: [token] }, { scope: [] }, { scope: ["invalid"] }, { scope: [JSON.stringify(["scanner", "2"])] }]) {
+      expect(validateFindings({ ...example, auditContext: { ...auditContext, producerAssignments: assignments } }).errors).toContainEqual(expect.stringContaining("producerAssignments"));
+    }
+  });
+
   it("requires measured identities and limitations for partial fresh audit context", () => {
     const auditContext = {
       engagementId: "fresh:test", kind: "client-audit", target: { id: "fixture", revision: "content:test" },

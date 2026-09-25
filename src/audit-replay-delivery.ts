@@ -44,6 +44,13 @@ export async function deliverAuditReplay(options: {
   if (options.sbomOut && !replay.sbom) throw new Error("Requested SBOM is missing from the retained evidence; retain its original inventory before assembly");
   enrichFindingsCwe(result.findings);
   const retainedContext = replay.meta?.auditContext;
+  const assignments = new Map<string, Set<string>>();
+  for (const receipt of evidence.current) {
+    const scope = JSON.stringify([receipt.scope.module, receipt.scope.workspace, receipt.scope.tier, receipt.scope.surface]);
+    const producers = assignments.get(scope) ?? new Set<string>();
+    producers.add(JSON.stringify([receipt.producer.name, receipt.producer.version]));
+    assignments.set(scope, producers);
+  }
   const freshContext = verifiedFreshContext(retainedContext, evidence, options.bundle);
   const unverifiedFresh = retainedContext?.provenance?.kind === "fresh-execution" && !freshContext;
   const auditContext: AuditContext = freshContext ?? {
@@ -54,6 +61,7 @@ export async function deliverAuditReplay(options: {
     // Scope belongs in assessedScope. Repeating a producer in another workspace
     // must not masquerade as a tool change; distinct versions still remain bound.
     producerVersions: { ...Object.fromEntries(evidence.current.map((receipt) => [JSON.stringify([receipt.producer.name, receipt.producer.version]), receipt.producer.version] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), engine: evidence.binding.engine.sha256, configuration: evidence.binding.configSha256 },
+    producerAssignments: Object.fromEntries([...assignments].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([scope, producers]) => [scope, [...producers].sort()])),
     assessedScope: evidence.current.map((receipt) => JSON.stringify([receipt.scope.module, receipt.scope.workspace, receipt.scope.tier, receipt.scope.surface])).sort(),
     scopeComplete: !unverifiedFresh && evidence.missing.length === 0 && evidence.current.every((receipt) => !receipt.legacyReason) && result.recorded.every((row) => row.status === "ran"),
     ...(unverifiedFresh ? { limitations: ["The retained fresh engagement context is not bound to every verified owning-run artifact; original engagement identity remains unproved."] } : {}),

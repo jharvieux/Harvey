@@ -18,6 +18,15 @@ const diffAgainstBaseline: typeof rawDiff = (a, b, options = {}) => rawDiff(a, b
 const statuses = (findings: Finding[]) => findings.map((f) => f.baselineStatus);
 
 describe("finding identity (#457)", () => {
+  it("discloses legacy scope assignments and rejects ambiguous multiversion mappings", () => {
+    const ordinary = diffAgainstBaseline([], []);
+    expect(ordinary.comparison.limitations.join(" ")).toContain("assignment was not verified");
+    const versions = { [JSON.stringify(["scanner", "1"])]: "1", [JSON.stringify(["scanner", "2"])]: "2" };
+    const ambiguous = rawDiff([], [], { priorContext: { ...context("prior"), producerVersions: versions }, currentContext: { ...context("current"), producerVersions: versions } });
+    expect(ambiguous.comparison.kind).toBe("incompatible");
+    expect(ambiguous.comparison.limitations.join(" ")).toContain("which version examined each scope");
+  });
+
   it("is stable under line-number churn — a moved-but-same finding is persistent", () => {
     const prior = [finding({ id: "F-01", location: "lib/rls.ts:42" })];
     // Same rule + file, code shifted down 45 lines. The ONLY difference is the raw line.
