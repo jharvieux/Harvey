@@ -155959,7 +155959,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 132,
+        "line": 137,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -156033,7 +156033,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 132,
+        "line": 137,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -156070,7 +156070,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 145,
+        "line": 149,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -156107,7 +156107,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 28,
+        "line": 33,
         "path": "src/dry-run-drift.test.ts"
       },
       "freshness": {
@@ -367223,8 +367223,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "bb4237d5c8484e440f4275de2e1874afc5b2435d",
-    "commitPayload": "dHJlZSAxYWYyZTg1NzQ1YTBkZThhMjg1ODQyZGYxMTgxYjVjMjBlMzY1NjYxCnBhcmVudCAxMDUxM2RmNTM4YjVhZGZhNWYwZDcyOWNiNmZhOWFkMjAzMDIzMWI0CnBhcmVudCBlMTZhZTFhZmVmNWRmMTU2Y2E5OGU1MzE5YzAxNDU4NWNiNTRiMGRmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQwNTM5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQwNTM5IC0wNTAwCgpNZXJnZSBjb21taXQgJ2UxNmFlMWFmZWY1ZGYxNTZjYTk4ZTUzMTljMDE0NTg1Y2I1NGIwZGYnIGludG8gZmVhdHVyZS9zd2VlcC0yMTQyLXJlc2lkdWFsLXNjb3BlCgojIENvbmZsaWN0czoKIwlzcmMvZW52aXJvbm1lbnQtZGVwZW5kZW5jeS1pbnZlbnRvcnkuanNvbgojCXNyYy9zZWNyZXQtc3Bhd24tcG9saWN5Lmpzb24K",
+    "commit": "802a4f8a6062a9f3316f8fcdd977a10706375da2",
+    "commitPayload": "dHJlZSBjMmYwYzQ2ZWRmZTcyOWUxOWQwZDQ0NzE2YmYzZGRlNmE5NjU0ZjYwCnBhcmVudCA4MWM3Yjg3MmJlMTNjODc3Y2Q4ZGE4OTM5ZDYwYjAxZjUyMDhlODc2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQwNjYyIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQwNjYyIC0wNTAwCgpLZWVwIHJlc2lkdWFsIGdhdGUgY2hpbGQgY29udHJvbHMgeWllbGRpbmcgYW5kIGJvdW5kZWQgKCMyMTQyKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -367233,13 +367233,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "4ae7c7ed077699fe803aeca0a7db3dea059f8903",
+        "gitOid": "9fc1d08a42cc247b0de5aaa22877766faff8ae6e",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "5ed732260bdc3d5ab8f7c754e621ac78dd73743021b93e2a649d21250b7dc0e2",
-    "tree": "1af2e85745a0de8a285842df1181b5c20e365661"
+    "populationSha256": "18ef82c91b7b46a74b6f37bdfe5f8473457f07d1ce90ee42ec3d71922166210d",
+    "tree": "c2f0c46edfe729e19d0d44716bf3dde6a9654f60"
   },
   "venues": [
     {
@@ -385708,19 +385708,19 @@
       "sha256": "a568d73359f7297b5189f742fd1ae2f3ae68a450974dff536ca8caa432cb2dee"
     },
     {
-      "bytes": 11157,
+      "bytes": 11552,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6e4d6e1b8a1b1c84fac5137a6982ccb3ee459a37",
+      "gitOid": "09752c7763bac5e5c0ae784fc9f3847c079fc45b",
       "id": "src/dry-run-drift.test.ts",
       "kind": "source",
-      "literalCount": 208,
-      "literalSha256": "1c1cfc48e2de6667150e4458dfe3314fb6263a33190ffe8f4ccab2764daa435b",
+      "literalCount": 214,
+      "literalSha256": "5d6a217e120873c0f1279935591c5638ecc2e8d0d0e46c020b49426cee9ed60a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/dry-run-drift.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cc5f6f3b7ffa39fef5661cda7f3518d7fb5048737704fd8d42b9833f23ec8a83"
+      "sha256": "bb73fb1743b6ecfa1f08d1e8b1275493d0e3659aa7dbc177a9beb8f8cffc7001"
     },
     {
       "bytes": 14905,
