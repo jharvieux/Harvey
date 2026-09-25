@@ -7,7 +7,9 @@
 // registry lookup is a smaller ask than code egress, but still noted as a scope decision).
 
 import { createHash } from "node:crypto";
-import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyRangeEvidence, type Finding } from "../findings.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyMetadataEvidence, type DependencyMetadataOutcomeStatus, type DependencyRangeEvidence, type Finding } from "../findings.js";
 import { dependencyRangeEdge, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 import { inventoryOsvInputs, type OsvAssessment, type OsvInputInventory } from "./dependencies.js";
@@ -98,13 +100,9 @@ const NPM_REGISTRY = "https://registry.npmjs.org";
 // ship when a lookup is deliberately skipped — a skipped tier is still an unassessed tier.
 const NAME_SAMPLE = 20;
 
-// #1213: a registry lookup costs one live request per package, and the license candidate set is now
-// the whole resolved tree — for a pnpm target, whose lockfile format records no `license` at all,
-// that is EVERY package. Unbounded, a large monorepo would issue thousands of requests. Bounded,
-// some packages go unclassified — which is fine only because the cap is DISCLOSED by name in
-// SUP-LICENSE-00 / SUP-SLOPSQUAT-00, and because candidates are ordered declared-first so the
-// budget is never starved by the transitive tail. #1231 applies the same bound to checkSlopsquat,
-// whose input widened from the root manifest to every workspace member's.
+// #1213: slopsquat existence checks retain a hard live-request cap. License metadata instead uses
+// bounded concurrent batches plus a persistent per-coordinate cache, so populations larger than
+// 300 complete and interrupted work resumes without silently dropping the transitive tail.
 const REGISTRY_LOOKUP_CAP = 300;
 
 const REGISTRY_FIX = `Re-run the scan from a machine with direct access to ${NPM_REGISTRY} (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.`;
@@ -208,6 +206,7 @@ export function supplyChainScopeFinding(s: {
   workspaceInternalNames: readonly string[];
   osvRan?: boolean;
   osvAssessment?: OsvAssessment;
+  dependencyMetadataEvidence?: DependencyMetadataEvidence;
 }): Finding {
   const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
   const manifestOnly = [
@@ -221,6 +220,10 @@ export function supplyChainScopeFinding(s: {
       `Excluded copies/constraints: root ${scope.excluded.root}, workspace ${scope.excluded.workspace}, link ${scope.excluded.link}, peer ${scope.excluded.peer}. ${scope.detail}`).join(" ");
   if (s.license.source === "package-lock.json") {
     treeWide.push("SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351)");
+  } else if (s.dependencyMetadataEvidence) {
+    const assessments = { present: 0, absent: 0, unsupported: 0 };
+    for (const outcome of s.dependencyMetadataEvidence.outcomes) assessments[outcome.installScriptAssessment]++;
+    manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP: ${s.license.source} itself does not record a per-package install-script flag, while registry/local metadata separately assessed ${s.dependencyMetadataEvidence.processed} of ${s.dependencyMetadataEvidence.population} packages (present ${assessments.present}, absent ${assessments.absent}, unsupported ${assessments.unsupported}); exact package/version and provenance rows are in SUP-METADATA-00`);
   } else {
     manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP, not computable against ${s.license.source}: neither pnpm-lock.yaml nor yarn.lock records a per-package install-script flag in the form Harvey parses (MEASURED 2026-07-30 against this repo's own pnpm-lock.yaml — falsifier: \`grep -c hasInstallScript <the lockfile>\` returning >0 on a real pnpm/yarn project)`);
   }
@@ -243,7 +246,7 @@ export function supplyChainScopeFinding(s: {
       `Resolved tree: ${s.treeNames} package name${s.treeNames === 1 ? "" : "s"} from ${s.license.source}. ` +
       `Read the whole resolved tree: ${treeWide.join("; ")}. ` +
       `Limited to the declared manifests: ${manifestOnly.join("; ")}.` +
-      ` SUP-UNPINNED and SUP-NON-REGISTRY examine ${s.manifestDeclarations === undefined ? "root/workspace manifest" : s.manifestDeclarations + " manifest"} declarations plus admitted npm v2/v3 dependency/devDependency/optionalDependency edges. ${rangeDescription} ` +
+      ` SUP-UNPINNED and SUP-NON-REGISTRY examine ${s.manifestDeclarations === undefined ? "root/workspace manifest" : s.manifestDeclarations + " manifest"} declarations plus admitted npm v2/v3 transitive edges and validated pnpm importer declarations. ${rangeDescription} ` +
       "Falsifier for an unread-format limit: a parser/registry replay of the named file that emits validated owner-path declaration edges and reports zero unread/unsupported units. Peer ranges are intentionally excluded compatibility constraints; the peer-only control in src/scan/mechanical.test.ts guards that boundary." +
       (s.workspaceInternalNames.length > 0
         ? ` Excluded from the registry-backed name checks (SUP-SLOPSQUAT-*, SUP-TYPO-*, SUP-IOC-*): ${s.workspaceInternalNames.length} workspace-internal package name(s) — ${s.workspaceInternalNames.join(", ")} — which resolve from inside this repo and are not published, so a registry lookup cannot say anything about them. Their CONTENTS are still scanned as first-party source; only the registry existence/name questions are skipped.`
@@ -251,7 +254,7 @@ export function supplyChainScopeFinding(s: {
     impact:
       "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     fix:
-      "Keep root/workspace manifests authoritative and enforce a committed lockfile with frozen installs. npm v2/v3 declaration ranges are assessed; unread, unsupported or malformed range sources above need a validated format-specific parser/consumer before their absence of findings can count as coverage. For third-party declarations, update or override the owning dependency rather than editing generated lock metadata. Declare every workspace member so its manifest is included.",
+      "Keep root/workspace manifests authoritative and enforce a committed lockfile with frozen installs. npm v2/v3 transitive declaration ranges and validated pnpm importer declarations are assessed; unread, unsupported or malformed range sources above need a validated format-specific parser/consumer before their absence of findings can count as coverage. For third-party declarations, update or override the owning dependency rather than editing generated lock metadata. Declare every workspace member so its manifest is included.",
   });
 }
 
@@ -629,8 +632,11 @@ export function classifyLicense(raw: string | undefined): LicenseClass {
 // denormalized snapshot of the LATEST publish, not necessarily the version actually installed;
 // `versions[<v>]` carries each release's own metadata. (#1099)
 interface NpmPackageMeta {
+  name?: string;
+  version?: string;
   license?: string | { type?: string };
   licenses?: { type?: string }[];
+  scripts?: Record<string, unknown>;
 }
 interface NpmPackument extends NpmPackageMeta {
   versions?: Record<string, NpmPackageMeta>;
@@ -646,27 +652,64 @@ function extractLicenseFrom(meta: NpmPackageMeta): string | undefined {
   return undefined;
 }
 
-// #1099: prefer the INSTALLED version's own license (`versions[<v>]`) when the caller knows which
-// version resolved — the top-level `license` is the latest publish's, which can differ from (and,
-// for a package whose license changed between releases, actively mislead about) the version a
-// project actually depends on. Falls back to the top-level snapshot when no version is known or
-// the packument has no per-version entry for it (some registries/mirrors omit `versions`).
-function extractLicenseId(pkg: NpmPackument, version?: string): string | undefined {
-  const versioned = version !== undefined ? pkg.versions?.[version] : undefined;
-  return (versioned && extractLicenseFrom(versioned)) ?? extractLicenseFrom(pkg);
+function registryMetadataAdmissionError(value: unknown, expectedName: string, expectedVersion?: string): string | undefined {
+  if (!isRegistryMetadata(value)) return "metadata root must be an object";
+  if (value.name !== undefined && (typeof value.name !== "string" || value.name !== expectedName)) {
+    return `name must be ${JSON.stringify(expectedName)} when present; received ${JSON.stringify(value.name)}`;
+  }
+  if (value.version !== undefined && (typeof value.version !== "string" || (expectedVersion !== undefined && value.version !== expectedVersion))) {
+    return expectedVersion === undefined
+      ? `version must be a string when present; received ${JSON.stringify(value.version)}`
+      : `version must be ${JSON.stringify(expectedVersion)} when present; received ${JSON.stringify(value.version)}`;
+  }
+  if (value.license !== undefined && !(typeof value.license === "string" || (isRegistryMetadata(value.license) && typeof value.license.type === "string"))) {
+    return "license must be a string or an object with a string type";
+  }
+  if (value.licenses !== undefined) {
+    if (!Array.isArray(value.licenses)) return "licenses must be an array when present";
+    const invalid = value.licenses.findIndex((entry) => !isRegistryMetadata(entry) || typeof entry.type !== "string");
+    if (invalid >= 0) return `licenses[${invalid}] must be an object with a string type`;
+  }
+  if (value.scripts !== undefined) {
+    if (!isRegistryMetadata(value.scripts)) return "scripts must be an object when present";
+    const invalid = Object.entries(value.scripts).find(([, command]) => typeof command !== "string");
+    if (invalid) return `scripts.${invalid[0]} must be a string`;
+  }
+  return undefined;
+}
+
+function normalizeMetadataCandidates(candidates: readonly LicenseCandidate[]): LicenseCandidate[] {
+  const normalized: LicenseCandidate[] = [];
+  const localIndexes = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (!candidate.localMetadata) {
+      normalized.push(candidate);
+      continue;
+    }
+    const identity = `${candidate.name}\u0000${candidate.localMetadata.manifest}`;
+    const existingIndex = localIndexes.get(identity);
+    if (existingIndex === undefined) {
+      localIndexes.set(identity, normalized.length);
+      normalized.push(candidate);
+      continue;
+    }
+    const existing = normalized[existingIndex]!;
+    if (candidate.direct && !existing.direct) normalized[existingIndex] = { ...existing, direct: true };
+  }
+  return normalized;
 }
 
 // License lookup over the RESOLVED DEPENDENCY TREE (src/sbom.ts's `licenseScope`, the same parse
 // the SBOM uses). package-lock.json records `license` on essentially every entry (MEASURED
 // 2026-07-27 on targets/calibration: 390 of 396), so for that format the classification is entirely
 // offline and the registry is queried only for the remainder; pnpm-lock.yaml and yarn.lock record
-// none, so for those every candidate needs the network fallback and the cap above binds.
+// none, so for those every candidate needs the bounded, resumable registry fallback.
 //
 // The network path keeps its old trust boundary, same as checkSlopsquat above: a name-only request
 // (no code egress). It asks for the INSTALLED version's own manifest (`/<name>/<version>`) when the
 // tree resolved one — the version's license, not the latest publish's (#1099), and a few KB instead
-// of a whole packument — falling back to the packument when the version is unknown or that route
-// answers non-OK. A network failure or non-OK status leaves that package's license indeterminate —
+// of a whole packument — falling back to an exact `versions[<v>]` packument entry when that route
+// answers non-OK. A network failure, missing exact entry, or non-OK status leaves that package's license indeterminate —
 // which is not the same as "no license", and since #1067 is not the same as silence either: the
 // indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned finding is
 // "high" for a copyleft match (the SPDX id itself is deterministic, self-declared registry data)
@@ -676,46 +719,73 @@ function extractLicenseId(pkg: NpmPackument, version?: string): string | undefin
 // a security verdict.
 export async function checkLicenseCompliance(
   scope: LicenseScope,
-  opts: { fetchImpl?: typeof fetch; skipRegistry?: boolean } = {},
+  opts: { fetchImpl?: typeof fetch; skipRegistry?: boolean; cacheDir?: string; batchSize?: number; emitAssessment?: boolean } = {},
 ): Promise<Finding[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const findings: Finding[] = [];
   const indeterminate: string[] = [];
-  const reasons = new Set<string>();
-  let lookups = 0;
-  const ordered = [...scope.candidates].sort((a, b) => Number(b.direct) - Number(a.direct));
-  for (const candidate of ordered) {
+  const outcomes: DependencyMetadataEvidence["outcomes"] = [];
+  const reasons = new Map<DependencyMetadataOutcomeStatus, string>();
+  let registryRequests = 0;
+  let cacheHits = 0;
+  const cacheDir = opts.cacheDir;
+  const ordered = normalizeMetadataCandidates(scope.candidates).sort((a, b) => Number(b.direct) - Number(a.direct));
+  const baseCoordinate = (candidate: LicenseCandidate): string => candidate.version ? `${candidate.name}@${candidate.version}` : candidate.name;
+  const coordinateCounts = new Map<string, number>();
+  for (const candidate of ordered) coordinateCounts.set(baseCoordinate(candidate), (coordinateCounts.get(baseCoordinate(candidate)) ?? 0) + 1);
+  const coordinateOf = (candidate: LicenseCandidate): string => {
+    const base = baseCoordinate(candidate);
+    return candidate.localMetadata && (coordinateCounts.get(base) ?? 0) > 1 ? `${base}@local:${candidate.localMetadata.manifest}` : base;
+  };
+  type Resolved = { candidate: LicenseCandidate; licenseId?: string; source: string; outcome: DependencyMetadataEvidence["outcomes"][number]; installScript?: boolean };
+  const resolveCandidate = async (candidate: LicenseCandidate): Promise<Resolved> => {
     const { name, version } = candidate;
-    const coordinate = version ? `${name}@${version}` : name;
+    const coordinate = coordinateOf(candidate);
     if (candidate.unresolvedAlias) {
       const { declared, targetName, range, ownerPath } = candidate.unresolvedAlias;
-      indeterminate.push(`${name} (declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}${ownerPath ? `; owner ${ownerPath}` : ""}; declaration-to-installation resolution unproved)`);
-      reasons.add("the selected dependency inventory did not prove that the declared npm alias target and range resolve to a matching installed package/version; a registry response for the alias key cannot establish that identity");
+      const detail = `Declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}${ownerPath ? `; owner ${ownerPath}` : ""}; declaration-to-installation resolution unproved.`;
+      return { candidate, source: "the selected dependency inventory", outcome: { coordinate, status: "unresolved-identity", provenance: candidate.unresolvedAlias.ownerPath ?? scope.source, installScriptAssessment: "unsupported", detail } };
+    }
+    if (candidate.localMetadata) {
+      const local = candidate.localMetadata;
+      const status = local.license === undefined ? (local.private ? "private-unpublished" : "missing-local-license") : "local-manifest";
+      return { candidate, licenseId: local.license, source: `local manifest ${local.manifest}`, installScript: local.hasInstallScript,
+        outcome: { coordinate, status, provenance: `${local.manifest}#${local.license === undefined ? "license" : "license/scripts"}`,
+          ...(local.license ? { license: local.license } : {}), hasInstallScript: local.hasInstallScript, installScriptAssessment: local.hasInstallScript ? "present" : "absent",
+          ...(local.license === undefined ? { detail: local.private ? "Private workspace package has no local license declaration; registry lookup was intentionally not attempted." : "Workspace package has no local license declaration." } : {}) } };
+    }
+    if (candidate.license !== undefined) return { candidate, licenseId: candidate.license, source: "the lockfile", installScript: candidate.hasInstallScript,
+      outcome: { coordinate, status: "lockfile", provenance: scope.source, license: candidate.license, ...(candidate.hasInstallScript !== undefined ? { hasInstallScript: candidate.hasInstallScript } : {}), installScriptAssessment: candidate.hasInstallScript === undefined ? "unsupported" : candidate.hasInstallScript ? "present" : "absent" } };
+    if (opts.skipRegistry) return { candidate, source: "the scan's registry policy", outcome: { coordinate, status: "network-denied", provenance: "registry lookup skipped", installScriptAssessment: "unsupported", detail: REGISTRY_SKIPPED_REASON } };
+    const meta = await fetchLicenseMeta(fetchImpl, cacheDir, name, version);
+    registryRequests += meta.requests;
+    if (meta.status === "cache") cacheHits++;
+    if ("error" in meta) return { candidate, source: "the npm registry", outcome: { coordinate, status: meta.status, provenance: meta.provenance, installScriptAssessment: "unsupported", detail: meta.error } };
+    const licenseId = extractLicenseFrom(meta.body);
+    const installScript = hasInstallLifecycleScript(meta.body);
+    return { candidate, licenseId, source: meta.status === "cache" ? "the dependency-metadata cache" : "the npm registry", installScript,
+      outcome: { coordinate, status: meta.status, provenance: meta.provenance, ...(licenseId ? { license: licenseId } : {}), ...(installScript !== undefined ? { hasInstallScript: installScript } : {}), installScriptAssessment: installScript === undefined ? "unsupported" : installScript ? "present" : "absent" } };
+  };
+  const resolved: Resolved[] = [];
+  const batchSize = Math.max(1, Math.min(64, opts.batchSize ?? 24));
+  for (let offset = 0; offset < ordered.length; offset += batchSize) resolved.push(...await Promise.all(ordered.slice(offset, offset + batchSize).map(resolveCandidate)));
+  for (const item of resolved) {
+    const { candidate, licenseId, source, outcome } = item;
+    const coordinate = coordinateOf(candidate);
+    outcomes.push(outcome);
+    if (["unresolved-identity", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata"].includes(outcome.status)) {
+      indeterminate.push(outcome.detail ? `${coordinate} (${outcome.detail})` : coordinate);
+      reasons.set(outcome.status, outcome.detail ?? outcome.status);
       continue;
     }
-    let licenseId = candidate.license;
-    let source = "the lockfile";
-    if (licenseId === undefined) {
-      if (opts.skipRegistry) {
-        indeterminate.push(coordinate);
-        reasons.add(REGISTRY_SKIPPED_REASON);
-        continue;
-      }
-      if (lookups >= REGISTRY_LOOKUP_CAP) {
-        indeterminate.push(coordinate);
-        reasons.add(`the per-run registry-lookup cap of ${REGISTRY_LOOKUP_CAP} packages was reached (declared dependencies are looked up first)`);
-        continue;
-      }
-      lookups++;
-      const meta = await fetchLicenseMeta(fetchImpl, name, version);
-      if ("error" in meta) {
-        indeterminate.push(coordinate);
-        reasons.add(meta.error);
-        continue;
-      }
-      licenseId = extractLicenseId(meta.body, version);
-      source = "the npm registry";
-    }
+    if (item.installScript === true && candidate.hasInstallScript !== true) findings.push(mechanicalFinding({
+      id: `SUP-INSTALL-SCRIPT-METADATA-${coordinate}`,
+      title: `Dependency "${coordinate}" declares an install-time lifecycle script`, severity: "Medium", category: "Supply chain",
+      taxonomy: "Install lifecycle script (dependency)", location: outcome.provenance,
+      evidence: `${source} records a preinstall, install, or postinstall script for "${coordinate}".`,
+      impact: "Install-time scripts execute during dependency installation with build credentials and filesystem access.",
+      fix: `Audit "${coordinate}"'s published install scripts; use --ignore-scripts in CI and allowlist only packages whose build requires one.`, precisionTier: "review",
+    }));
     const cls = classifyLicense(licenseId);
     if (cls === "permissive") continue;
     const reach = candidate.direct ? "declared in a manifest" : "reached only through the resolved dependency tree";
@@ -732,7 +802,7 @@ export async function checkLicenseCompliance(
             ? `${source} reports license "${licenseId}" for "${coordinate}" (${reach}), which does not resolve to a recognized SPDX identifier.`
             : `${source} has no license field for "${coordinate}" (${reach}).`,
           impact: "A dependency with no confirmed license (missing, ambiguous, or npm's UNLICENSED marker) carries no confirmed grant to use, modify, or redistribute it — a legal exposure in a distributed/commercial product, distinct from a security bug.",
-          fix: `Confirm "${name}"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.`,
+          fix: `Confirm "${candidate.name}"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.`,
           precisionTier: "review",
         }),
       );
@@ -748,36 +818,111 @@ export async function checkLicenseCompliance(
         location: `package.json (${coordinate})`,
         evidence: `${source} reports "${coordinate}" under "${licenseId}" (SPDX), a strong-copyleft license. This package is ${reach}.`,
         impact: "Strong-copyleft licenses (GPL/AGPL/LGPL and similar) impose reciprocal source-disclosure obligations that typically conflict with a closed/proprietary distribution — this needs a legal review before shipping, not just a code fix.",
-        fix: `Confirm the actual distribution/linking model with counsel, or replace "${name}" with a permissively-licensed alternative.`,
+        fix: `Confirm the actual distribution/linking model with counsel, or replace "${candidate.name}" with a permissively-licensed alternative.`,
         precisionTier: "high",
       }),
     );
   }
+  outcomes.sort((a, b) => a.coordinate.localeCompare(b.coordinate) || a.status.localeCompare(b.status));
+  const evidence: DependencyMetadataEvidence = { schemaVersion: 1, population: ordered.length, processed: outcomes.length, cacheHits, registryRequests,
+    complete: outcomes.length === ordered.length && outcomes.every((outcome) => !["unresolved-identity", "registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata"].includes(outcome.status)), outcomes };
+  if (opts.emitAssessment) findings.unshift(metadataAssessmentFinding(evidence));
   if (indeterminate.length > 0 || scope.completeness !== "complete") {
-    const reason = indeterminate.length > 0 ? `The dependency license lookup could not reach a verdict: ${[...reasons].join("; ")}.` : "";
-    findings.push(licenseCoverageFinding(indeterminate, reason, scope));
+    const reason = indeterminate.length > 0 ? `The dependency license lookup could not reach a verdict: ${[...reasons.entries()].map(([status, detail]) => `${status}: ${detail}`).join("; ")}.` : "";
+    const coverage = licenseCoverageFinding(indeterminate, reason, scope);
+    coverage.dependencyMetadataEvidence = evidence;
+    coverage.fix = causeSpecificMetadataFixes(outcomes, coverage.fix);
+    findings.push(coverage);
   }
   return findings;
 }
 
+function hasInstallLifecycleScript(meta: NpmPackageMeta | undefined): boolean | undefined {
+  if (!meta || meta.scripts === undefined) return undefined;
+  return ["preinstall", "install", "postinstall"].some((name) => typeof meta.scripts?.[name] === "string");
+}
+
+function metadataAssessmentFinding(evidence: DependencyMetadataEvidence): Finding {
+  const counts = new Map<DependencyMetadataOutcomeStatus, number>();
+  for (const outcome of evidence.outcomes) counts.set(outcome.status, (counts.get(outcome.status) ?? 0) + 1);
+  const summary = [...counts.entries()].map(([status, count]) => `${status} ${count}`).join(", ");
+  return { ...coverageFinding({ id: "SUP-METADATA-00", title: `Dependency metadata: ${evidence.processed} of ${evidence.population} packages recorded`,
+    taxonomy: "Coverage — dependency metadata assessment", evidence: `Recorded ${evidence.processed} of ${evidence.population} per-package metadata outcomes. Sources: ${summary || "empty population"}. Cache hits: ${evidence.cacheHits}; registry requests: ${evidence.registryRequests}. Exact package/version, status, install-script assessment, and provenance are rendered below.`,
+    impact: "License and install-script conclusions are traceable to local manifests, lockfiles, registry responses, or an explicit cause-specific gap.",
+    fix: causeSpecificMetadataFixes(evidence.outcomes, "No metadata remediation is required when all package outcomes are locally or remotely assessed.") }), dependencyMetadataEvidence: evidence };
+}
+
+function causeSpecificMetadataFixes(outcomes: DependencyMetadataEvidence["outcomes"], fallback: string): string {
+  const statuses = new Set(outcomes.map((outcome) => outcome.status));
+  const fixes = [
+    statuses.has("missing-local-license") ? "Add a license field or local license file to the workspace package manifest." : undefined,
+    statuses.has("private-unpublished") ? "Provide the private workspace package's license in its local manifest; Harvey will not substitute public-registry metadata for it." : undefined,
+    statuses.has("registry-access-denied") ? "The fixed public npm registry endpoint denied access. Confirm the coordinate is public or provide local manifest metadata; private/custom registry authentication is not supported by this scanner." : undefined,
+    statuses.has("registry-not-found") ? "Verify the package/version coordinate and registry mapping; if it is unpublished, provide its manifest metadata locally." : undefined,
+    statuses.has("network-denied") ? REGISTRY_FIX : undefined,
+    statuses.has("malformed-metadata") ? "Verify that the selected registry or cache entry matches the requested package/version and contains valid license and scripts fields; no conclusions were drawn from the malformed metadata." : undefined,
+    statuses.has("unresolved-identity") ? "Use a supported lockfile that proves each alias target and selected version." : undefined,
+  ].filter((value): value is string => value !== undefined);
+  return fixes.length > 0 ? fixes.join(" ") : fallback;
+}
+
 // `/<name>/<version>` returns that release's own manifest — the license of the version actually
 // installed, in a few KB rather than a whole packument. Not every registry mirror serves it, so a
-// non-OK answer falls back to the packument rather than being recorded as a coverage gap.
-async function fetchLicenseMeta(fetchImpl: typeof fetch, name: string, version?: string): Promise<{ body: NpmPackument } | { error: string }> {
+// non-OK answer falls back to the packument only when it contains the requested version entry.
+async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | undefined, name: string, version?: string): Promise<
+  | { body: NpmPackageMeta; status: "cache" | "registry"; provenance: string; requests: number }
+  | { error: string; status: "registry-not-found" | "registry-access-denied" | "network-denied" | "malformed-metadata"; provenance: string; requests: number }
+> {
+  const coordinate = version ? `${name}@${version}` : name;
   const base = `${NPM_REGISTRY}/${encodeURIComponent(name)}`;
   const urls = version ? [`${base}/${encodeURIComponent(version)}`, base] : [base];
+  const cachePath = cacheDir ? join(cacheDir, `${createHash("sha256").update(coordinate).digest("hex")}.json`) : undefined;
+  if (cachePath) try {
+    const cached = JSON.parse(await readFile(cachePath, "utf8")) as { schemaVersion?: unknown; coordinate?: unknown; observedAt?: unknown; sourceUrl?: unknown; body?: unknown };
+    const observedAt = typeof cached.observedAt === "string" ? Date.parse(cached.observedAt) : Number.NaN;
+    const fresh = Number.isFinite(observedAt) && observedAt <= Date.now() + 5 * 60_000 && Date.now() - observedAt <= 24 * 60 * 60_000;
+    if (cached.schemaVersion === 2 && cached.coordinate === coordinate && typeof cached.sourceUrl === "string" && urls.includes(cached.sourceUrl) && fresh && registryMetadataAdmissionError(cached.body, name, version) === undefined) {
+      return { body: cached.body as NpmPackageMeta, status: "cache", provenance: `${cachePath} (fetched from ${cached.sourceUrl} at ${cached.observedAt})`, requests: 0 };
+    }
+  } catch { /* missing or corrupt cache entries are refetched */ }
   let lastStatus = 0;
+  let requests = 0;
   for (const url of urls) {
     let res: Response;
     try {
+      requests++;
       res = await fetchImpl(url);
     } catch (err) {
-      return { error: `registry unreachable (${err instanceof Error ? err.message : String(err)})` };
+      return { error: `registry unreachable (${err instanceof Error ? err.message : String(err)})`, status: "network-denied", provenance: url, requests };
     }
-    if (res.ok) return { body: (await res.json()) as NpmPackument };
+    if (res.ok) {
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch (error) {
+        return { error: `registry returned malformed JSON (${error instanceof Error ? error.message : String(error)})`, status: "network-denied", provenance: url, requests };
+      }
+      if (!isRegistryMetadata(body)) return { error: "registry returned malformed package metadata", status: "network-denied", provenance: url, requests };
+      const selected = version !== undefined && url === base ? body.versions?.[version] : body;
+      if (!isRegistryMetadata(selected)) {
+        return { error: `registry metadata does not contain requested version ${JSON.stringify(version)}`, status: "registry-not-found", provenance: url, requests };
+      }
+      const admissionError = registryMetadataAdmissionError(selected, name, version);
+      if (admissionError) return { error: `registry returned malformed package metadata (${admissionError})`, status: "malformed-metadata", provenance: url, requests };
+      if (cacheDir && cachePath) {
+        await mkdir(cacheDir, { recursive: true });
+        await writeFile(cachePath, `${JSON.stringify({ schemaVersion: 2, coordinate, observedAt: new Date().toISOString(), sourceUrl: url, body: selected })}\n`, { mode: 0o600 });
+      }
+      return { body: selected, status: "registry", provenance: url, requests };
+    }
     lastStatus = res.status;
+    if (lastStatus === 401 || lastStatus === 403) return { error: `registry access denied (HTTP ${lastStatus})`, status: "registry-access-denied", provenance: url, requests };
   }
-  return { error: `registry returned HTTP ${lastStatus}` };
+  return { error: `registry returned HTTP ${lastStatus}`, status: lastStatus === 404 ? "registry-not-found" : "network-denied", provenance: urls.at(-1)!, requests };
+}
+
+function isRegistryMetadata(value: unknown): value is NpmPackument {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function checkLockfilePresence(projectDir: string, label = projectDir, inventory: OsvInputInventory = inventoryOsvInputs(projectDir)): Finding[] {

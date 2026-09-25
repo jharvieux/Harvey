@@ -22,8 +22,9 @@
 // exploitabilityVerified: true on that finding so it grades correctly.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { collectDependencies, parsePackageLock, parsePnpmLock, parseYarnLock } from "../sbom.js";
@@ -661,6 +662,11 @@ export interface OsvInputInventory {
     resolvedPackages?: string[];
     unresolvedPackages?: string[];
     workspacePackages?: string[];
+    providerNormalization?: {
+      kind: "pnpm-v6-scoped-peer-metadata";
+      normalizedEntries: number;
+      normalizedSha256: string;
+    };
   }[];
   sha256: string;
 }
@@ -690,6 +696,55 @@ interface OsvScanRun {
 const inputHash = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const packageIdentity = (name: string, version: string): string => `npm:${name}@${version}`;
 const osvFalsifier = "Re-run osv-scanner with --all-packages for every selected lockfile and reconcile its source paths and package identities with this inventory; assess each disclosed input before claiming full coverage.";
+
+interface NormalizedPnpmInput {
+  text: string;
+  normalizedEntries: number;
+  normalizedSha256: string;
+}
+
+// osv-scanner 2.3.8 embeds scalibr's pre-v9 pnpm parser at 9293bfa4f86f. That parser splits a
+// package key on every slash before it removes peer context. A v6 key such as
+// `/plain@1.0.0(@types/react@18.0.0)` therefore mistakes `react@18.0.0)` for the package version
+// and drops the package. The parser already gives explicit entry metadata precedence, so add only
+// the exact name/version the lock key itself encodes to a disposable provider copy. Package keys,
+// peer contexts, dev/optional flags, and the client input bytes remain unchanged.
+function normalizePnpmV6ForOsv(text: string): NormalizedPnpmInput {
+  const version = /^lockfileVersion:\s*['"]?([\d.]+)['"]?\s*$/m.exec(text)?.[1];
+  if (!version || Number(version) < 6 || Number(version) >= 9) {
+    return { text, normalizedEntries: 0, normalizedSha256: inputHash(text) };
+  }
+  const lines = text.split("\n");
+  let inPackages = false;
+  let normalizedEntries = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line === "packages:") { inPackages = true; continue; }
+    if (inPackages && /^\S/.test(line)) { inPackages = false; continue; }
+    if (!inPackages || !/^\s{2}\S.*:\s*$/.test(line)) continue;
+    const key = /^\s{2}'?\/?(@?[^'@\s]+(?:\/[^'@\s]+)?)[@/]([0-9][^'\s:(]*)'?(?:\([^)]*\))*'?:\s*$/.exec(line);
+    const peerContext = line.slice(line.indexOf("(") + 1);
+    if (!key?.[1] || !key[2] || !line.includes("(") || !peerContext.includes("/")) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^\s{0,2}\S/.test(lines[end]!)) end++;
+    const block = lines.slice(index + 1, end);
+    const existingName = block.find((entry) => /^\s{4}name:\s*/.test(entry));
+    const existingVersion = block.find((entry) => /^\s{4}version:\s*/.test(entry));
+    if (existingName || existingVersion) {
+      const quotedName = JSON.stringify(key[1]);
+      const quotedVersion = JSON.stringify(key[2]);
+      if (existingName !== `    name: ${quotedName}` || existingVersion !== `    version: ${quotedVersion}`) {
+        throw new Error(`pnpm v6 peer-context entry ${key[1]}@${key[2]} carries conflicting explicit provider metadata`);
+      }
+      continue;
+    }
+    lines.splice(index + 1, 0, `    name: ${JSON.stringify(key[1])}`, `    version: ${JSON.stringify(key[2])}`);
+    normalizedEntries++;
+    index += 2;
+  }
+  const normalized = lines.join("\n");
+  return { text: normalized, normalizedEntries, normalizedSha256: inputHash(normalized) };
+}
 
 /** Inventory the already prepared target. Selection preserves OSV's precedence per directory. */
 export function inventoryOsvInputs(dir: string, paths: readonly string[] = readRecursiveSafe(dir)): OsvInputInventory {
@@ -745,7 +800,11 @@ export function inventoryOsvInputs(dir: string, paths: readonly string[] = readR
         }
         resolvedPackages = [...new Set(resolvedPackages)].sort();
       } catch { /* The selected input retains its failed invocation and reason. */ }
-      return { ...base, disposition: "selected", resolvedPackages, unresolvedPackages: [...new Set(unresolvedPackages)].sort(), workspacePackages: [...new Set(workspacePackages)].sort(), reason: "Selected supported lockfile for this dependency root." };
+      const normalization = basename(path) === "pnpm-lock.yaml" ? normalizePnpmV6ForOsv(text) : undefined;
+      const providerNormalization = normalization?.normalizedEntries
+        ? { kind: "pnpm-v6-scoped-peer-metadata" as const, normalizedEntries: normalization.normalizedEntries, normalizedSha256: normalization.normalizedSha256 }
+        : undefined;
+      return { ...base, disposition: "selected", resolvedPackages, unresolvedPackages: [...new Set(unresolvedPackages)].sort(), workspacePackages: [...new Set(workspacePackages)].sort(), ...(providerNormalization ? { providerNormalization } : {}), reason: "Selected supported lockfile for this dependency root." };
     }
     if (basename(path) === "pnpm-workspace.yaml") return { ...base, disposition: own ? "covered" : "not-applicable", ...(own ? { selectedBy: own } : {}), reason: `Supporting pnpm workspace metadata; not passed to OSV --lockfile and contributes zero resolved examined units. ${own ? `Resolved packages and workspace importers are assessed through ${own}.` : "No selected supported lockfile belongs to this metadata root."}` };
     if (basename(path) !== "package.json") return { ...base, disposition: "unsupported", reason: "Not assessed: this input format is outside Harvey's pnpm/package-lock/yarn OSV invocation policy." };
@@ -822,7 +881,10 @@ function assessmentFor(inventory: OsvInputInventory, result: OsvScanResult, fail
     schema: 1, inventory, status, invocations,
     reason: `${assessed.length} of ${invocations.length} selected lockfile(s) assessed; ${assessed.reduce((sum, input) => sum + input.examinedPackages.length, 0)} exact third-party source/package identities returned by osv-scanner --all-packages.` +
       (details.length ? ` ${details.join(" ")}` : invocations.length === 0 ? " No applicable Node lockfile population was discovered; osv-scanner was not invoked." : ""),
-    provenance: `MEASURED prepared-target input inventory SHA-256 ${inventory.sha256}; provider --all-packages output bound to each selected source and input digest.`,
+    provenance: `MEASURED prepared-target input inventory SHA-256 ${inventory.sha256}; provider --all-packages output bound to each selected source and input digest.` +
+      (inventory.inputs.some((input) => input.providerNormalization)
+        ? ` Disposable pnpm v6 provider normalization supplied explicit key-derived name/version metadata for ${inventory.inputs.reduce((sum, input) => sum + (input.providerNormalization?.normalizedEntries ?? 0), 0)} scoped-peer entr${inventory.inputs.reduce((sum, input) => sum + (input.providerNormalization?.normalizedEntries ?? 0), 0) === 1 ? "y" : "ies"}; original lock bytes and identities were preserved.`
+        : ""),
     falsifier: osvFalsifier,
   };
 }
@@ -874,22 +936,41 @@ export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)):
         continue;
       }
       let out: string;
+      let providerInput = join(dir, input.path);
+      let providerRoot: string | undefined;
+      if (input.providerNormalization) {
+        const normalized = normalizePnpmV6ForOsv(text);
+        if (normalized.normalizedEntries !== input.providerNormalization.normalizedEntries || normalized.normalizedSha256 !== input.providerNormalization.normalizedSha256) throw new Error("pnpm provider normalization differs from the inventoried receipt");
+        providerRoot = mkdtempSync(join(tmpdir(), "harvey-osv-pnpm-"));
+        providerInput = join(providerRoot, "pnpm-lock.yaml");
+        writeFileSync(providerInput, normalized.text);
+      }
       try {
-        out = execFileSync("osv-scanner", ["--format", "json", "--all-packages", "--lockfile", join(dir, input.path)], { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
-      } catch (err) {
-        const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
-        if (e.code === "ENOENT") throw new Error("osv-scanner not found on PATH");
-        if (e.signal || e.status !== 1) {
-          const how = e.code === "ENOBUFS" ? `report exceeded the 64 MiB stdout cap, killed by signal ${e.signal ?? "unknown"}` : e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`;
-          throw new Error(`osv-scanner run did not complete (${how})`);
+        try {
+          out = execFileSync("osv-scanner", ["--format", "json", "--all-packages", "--lockfile", providerInput], { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
+        } catch (err) {
+          const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
+          if (e.code === "ENOENT") throw new Error("osv-scanner not found on PATH");
+          if (e.signal || e.status !== 1) {
+            const how = e.code === "ENOBUFS" ? `report exceeded the 64 MiB stdout cap, killed by signal ${e.signal ?? "unknown"}` : e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`;
+            throw new Error(`osv-scanner run did not complete (${how})`);
+          }
+          if (typeof e.stdout !== "string" || !e.stdout.trim()) throw new Error("osv-scanner exited 1 (vulnerabilities found) but printed no report");
+          out = e.stdout;
         }
-        if (typeof e.stdout !== "string" || !e.stdout.trim()) throw new Error("osv-scanner exited 1 (vulnerabilities found) but printed no report");
-        out = e.stdout;
+      } finally {
+        if (providerRoot) rmSync(providerRoot, { recursive: true, force: true });
       }
       let raw: unknown;
       try { raw = JSON.parse(out); } catch { throw new Error("osv-scanner printed something other than its JSON report — treated as an incomplete run, never as a clean scan"); }
       validateOsvResult(raw);
-      const normalized: OsvScanResult = { ...raw, results: raw.results?.map((row) => ({ ...row, source: { ...row.source, path: isAbsolute(row.source!.path!) ? relative(dir, row.source!.path!) : row.source!.path! } })) };
+      const normalized: OsvScanResult = { ...raw, results: raw.results?.map((row) => {
+        const sourcePath = row.source!.path!;
+        const rebound = input.providerNormalization && (sourcePath === providerInput || sourcePath === basename(providerInput))
+          ? input.path
+          : isAbsolute(sourcePath) ? relative(dir, sourcePath) : sourcePath;
+        return { ...row, source: { ...row.source, path: rebound } };
+      }) };
       if ((normalized.results ?? []).some((row) => row.source?.path !== input.path)) throw new Error("OSV returned a source other than the selected input");
       const actual = new Set(examinedPackages(normalized, input.path, input.workspacePackages));
       const unexpected = [...actual].filter((identity) => !input.resolvedPackages?.includes(identity));

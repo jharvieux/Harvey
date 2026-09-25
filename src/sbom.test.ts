@@ -1,10 +1,24 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Ajv } from "ajv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 import { checkLicenseCompliance } from "./scan/supply-chain.js";
 import { buildHtml } from "../report-template/render.mjs";
+
+const schemaRoot = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__", "schemas");
+const schemaDocument = (path: string): object => JSON.parse(readFileSync(join(schemaRoot, path), "utf8")) as object;
+const cycloneDxAjv = new Ajv({ allErrors: true, strict: false, unicodeRegExp: false, validateFormats: false });
+cycloneDxAjv.addSchema(schemaDocument("cyclonedx-1.5/spdx.schema.json"));
+cycloneDxAjv.addSchema(schemaDocument("cyclonedx-1.5/jsf-0.82.schema.json"));
+const cycloneDx15 = cycloneDxAjv.compile(schemaDocument("cyclonedx-1.5/bom-1.5.schema.json"));
+const validateCycloneDx15 = (value: unknown): { valid: boolean; errors: unknown[] } => {
+  const valid = cycloneDx15(value);
+  return { valid, errors: valid ? [] : [...(cycloneDx15.errors ?? [])] };
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
@@ -169,9 +183,16 @@ describe("declared lockfile range edges (#1774)", () => {
     const key = version === "5.4" ? "/parent/1.0.0" : version === "6.0" ? "/parent@1.0.0" : "parent@1.0.0";
     const parsed = parsePnpmLock(`lockfileVersion: '${version}'\n${declarations}packages:\n  '${key}':\n    dependencies:\n      child: 2.0.1\n    peerDependencies:\n      react: ^18.0.0\n`);
     expect(parsed.components).toEqual([{ name: "parent", version: "1.0.0" }]);
-    expect(parsed.ranges).toMatchObject({ sourceVersion: version, status: "present-but-unread", edges: [], unread: 1, unsupported: 1, excluded: { peer: 1 } });
-    expect(parsed.ranges.detail).toContain("1 importer/root specifier value(s) are present but unread");
+    expect(parsed.ranges).toMatchObject({ sourceVersion: version, status: "partial", unread: 1, unsupported: 1, excluded: { peer: 1 } });
+    expect(parsed.ranges.edges).toEqual([expect.objectContaining({ ownerPath: "package.json", name: "child", range: "^2.0.0", section: "dependencies", direct: true })]);
+    expect(parsed.ranges.detail).toContain("1 importer/root specifier value(s) were validated");
     expect(parsed.ranges.detail).toContain("1 package/snapshot dependency reference(s)");
+  });
+
+  it("counts orphan pnpm v5 specifiers as present but unread", () => {
+    const parsed = parsePnpmLock("lockfileVersion: '5.4'\nspecifiers:\n  orphan: ^1.0.0\n");
+    expect(parsed.ranges).toMatchObject({ sourceVersion: "5.4", status: "partial", examined: 1, unread: 1, edges: [] });
+    expect(parsed.ranges.detail).toContain("1 orphan importer/root specifier value(s)");
   });
 
   it.each([
@@ -193,7 +214,7 @@ describe("declared lockfile range edges (#1774)", () => {
     ["peer map", { snapshots: { "parent@1.0.0": { peerDependencies: "malformed" } } }],
   ])("counts a malformed pnpm %s as an unread boundary, never a guessed edge", (_label, fields) => {
     const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields }));
-    expect(ranges).toMatchObject({ status: "present-but-unread", edges: [], examined: 1, unread: 1, unsupported: 1, excluded: { peer: 0 } });
+    expect(ranges).toMatchObject({ status: "partial", edges: [], examined: 1, unread: 1, excluded: { peer: 0 } });
     expect(ranges.detail).toContain("0 importer/root specifier value(s)");
     expect(ranges.detail).toContain("1 malformed map boundary");
     expect(ranges.detail).toContain("not guessed dependency edges");
@@ -208,8 +229,9 @@ describe("declared lockfile range edges (#1774)", () => {
       ".": { dependencies: { child: { specifier: "^1.0.0", version: "1.0.1" }, untrusted: { specifier: { raw: "unread" } } } },
       "apps/web": { dependencies: "malformed" },
     } }));
-    expect(ranges).toMatchObject({ examined: 3, unread: 3, edges: [] });
-    expect(ranges.detail).toContain("2 importer/root specifier value(s)");
+    expect(ranges).toMatchObject({ examined: 3, unread: 2 });
+    expect(ranges.edges).toEqual([expect.objectContaining({ ownerPath: "package.json", name: "child", range: "^1.0.0" })]);
+    expect(ranges.detail).toContain("1 importer/root specifier value(s)");
     expect(ranges.detail).toContain("1 malformed map boundary");
   });
 
@@ -280,13 +302,15 @@ describe("CycloneDX document", () => {
   // lockfile Harvey parses. The SRI hash is base64; CycloneDX wants hex, and a digest emitted in
   // the wrong encoding fails verification more confusingly than an absent one.
   it("emits CycloneDX licenses and hashes, converting SRI base64 to hex", () => {
+    const bytes = Buffer.from("valid sha512 fixture", "utf8");
+    const digest = createHash("sha512").update(bytes).digest();
     writeFileSync(
       join(dir, "package-lock.json"),
-      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: "sha512-3q2+7w==" } } }),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: `sha512-${digest.toString("base64")}` } } }),
     );
     const c = bomOf(dir).components[0];
     expect(c.licenses).toEqual([{ license: { id: "MIT" } }]);
-    expect(c.hashes).toEqual([{ alg: "SHA-512", content: Buffer.from("3q2+7w==", "base64").toString("hex") }]);
+    expect(c.hashes).toEqual([{ alg: "SHA-512", content: digest.toString("hex") }]);
   });
 
   it("uses CycloneDX `expression` for a compound license — an expression in the id field fails schema validation", () => {
@@ -332,6 +356,102 @@ describe("licenseScope (#1213)", () => {
     dir = mkdtempSync(join(tmpdir(), "sbom-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("binds a referenced private workspace package to its local manifest before registry metadata", async () => {
+    mkdirSync(join(dir, "packages/private"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "workspace:*" } }));
+    writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", private: true, scripts: { postinstall: "node build.js" } }));
+    const candidate = licenseScope(dir).candidates.find((value) => value.name === "@local/private")!;
+    expect(candidate.localMetadata).toEqual({ manifest: "packages/private/package.json", private: true, hasInstallScript: true });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "MIT" }))) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({ coordinate: "@local/private", status: "private-unpublished", provenance: "packages/private/package.json#license", installScriptAssessment: "present" }));
+  });
+
+  it.each(["workspace:*", "link:packages/private", "portal:packages/private", "file:packages/private"])(
+    "binds a %s declaration to the exact owned workspace manifest",
+    (specifier) => {
+      mkdirSync(join(dir, "packages/private"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": specifier } }));
+      writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", private: true, license: "MIT" }));
+
+      expect(licenseScope(dir).candidates).toContainEqual({
+        name: "@local/private",
+        direct: true,
+        localMetadata: { manifest: "packages/private/package.json", private: true, license: "MIT", hasInstallScript: false },
+      });
+    },
+  );
+
+  it("binds an npm package-lock link to the exact owned workspace manifest even when the declaration is semver", () => {
+    mkdirSync(join(dir, "packages/private"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "*" } }));
+    writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", version: "1.0.0", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "": { name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "*" } },
+      "packages/private": { name: "@local/private", version: "1.0.0" },
+      "node_modules/@local/private": { resolved: "packages/private", link: true },
+    } }));
+
+    expect(licenseScope(dir).candidates).toEqual([{
+      name: "@local/private",
+      direct: true,
+      localMetadata: { manifest: "packages/private/package.json", private: true, license: "MIT", hasInstallScript: false },
+    }]);
+  });
+
+  it("deduplicates repeated declarations of the same proved local manifest", () => {
+    mkdirSync(join(dir, "packages/private"), { recursive: true });
+    mkdirSync(join(dir, "packages/consumer"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "workspace:*" } }));
+    writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/private": "workspace:*" } }));
+
+    expect(licenseScope(dir).candidates.filter((candidate) => candidate.localMetadata?.manifest === "packages/private/package.json")).toEqual([{
+      name: "@local/private",
+      direct: true,
+      localMetadata: { manifest: "packages/private/package.json", private: true, license: "MIT", hasInstallScript: false },
+    }]);
+  });
+
+  it("preserves distinct proved local manifests that intentionally share a package name", () => {
+    for (const path of ["packages/first", "packages/second", "packages/consumer"]) mkdirSync(join(dir, path), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/shared": "file:packages/first" } }));
+    writeFileSync(join(dir, "packages/first/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "packages/second/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "GPL-3.0", scripts: { install: "node install.js" } }));
+    writeFileSync(join(dir, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/shared": "file:../second" } }));
+
+    expect(licenseScope(dir).candidates.filter((candidate) => candidate.name === "@local/shared").map((candidate) => candidate.localMetadata?.manifest).sort()).toEqual([
+      "packages/first/package.json",
+      "packages/second/package.json",
+    ]);
+  });
+
+  it("does not bind or query a same-name workspace manifest when a local path points elsewhere", async () => {
+    mkdirSync(join(dir, "packages/collision"), { recursive: true });
+    mkdirSync(join(dir, "packages/other"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { collision: "file:packages/other" } }));
+    writeFileSync(join(dir, "packages/collision/package.json"), JSON.stringify({ name: "collision", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "packages/other/package.json"), JSON.stringify({ name: "other", private: true, license: "Apache-2.0" }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }))) as unknown as typeof fetch;
+
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({
+      coordinate: "collision",
+      status: "unresolved-identity",
+      provenance: "package.json",
+    }));
+  });
+
+  it("does not substitute workspace metadata for an unrelated registry package with the same name", () => {
+    mkdirSync(join(dir, "packages/collision"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"] }));
+    writeFileSync(join(dir, "packages/collision/package.json"), JSON.stringify({ name: "collision", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/collision": { name: "collision", version: "1.0.0", license: "GPL-3.0" } } }));
+    expect(licenseScope(dir).candidates).toContainEqual({ name: "collision", version: "1.0.0", license: "GPL-3.0", direct: false });
+  });
 
   it("carries the whole tree, marking which packages a manifest actually declared", () => {
     writeFileSync(
@@ -834,7 +954,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it.each(["MIT", "GPL-3.0"])("discloses a Yarn alias selector without using its key as a registry coordinate under %s", async (license) => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n  resolved "https://registry.npmjs.org/@actual/pkg/-/pkg-2.0.0.tgz"\n');
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(fetchImpl.mock.calls).toHaveLength(1);
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
@@ -878,7 +998,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it("uses Berry's canonical resolution for an npm alias", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '__metadata:\n  version: 8\n"alias@npm:@actual/pkg@^2.0.0":\n  version: 2.0.0\n  resolution: "@actual/pkg@npm:2.0.0"\n');
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license: "GPL-3.0" }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0"]);
@@ -933,7 +1053,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it("keeps pnpm's canonical package key while disclosing unproved alias reach", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages:\n  '@actual/pkg@2.0.0':\n    resolution: {integrity: sha512-x==}\n");
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ name: String(url), license: "GPL-3.0" }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0", "SUP-LICENSE-00"]);
@@ -1012,5 +1132,155 @@ describe("completeness is always stated", () => {
     const src = collectDependencies(dir);
     expect(src.completeness).toBe("unknown");
     expect(src.note).toContain("not a dependency-free project");
+  });
+});
+
+describe("CycloneDX independent export contract (#2059, #2078)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- this deliberately consumes serialized, untrusted CycloneDX before schema validation.
+  const serializedBom = (dir: string): any => JSON.parse(JSON.stringify(buildSbom(dir, {
+    targetName: "contract-fixture",
+    timestamp: "2026-09-25T00:00:00.000Z",
+  }).bom));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const propertyValues = (bom: any, name: string): string[] => bom.metadata.properties
+    .filter((property: { name: string }) => property.name === name)
+    .map((property: { value: string }) => property.value);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const unresolved = (bom: any): string[] => propertyValues(bom, "harvey:unresolved-alias");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const referenceErrors = (bom: any): string[] => {
+    const refs = new Set<string>([
+      bom.metadata?.component?.["bom-ref"],
+      ...(bom.components ?? []).map((component: { "bom-ref"?: string }) => component["bom-ref"]),
+    ].filter((value): value is string => typeof value === "string"));
+    return (bom.compositions ?? []).flatMap((composition: { dependencies?: string[] }, index: number) =>
+      (composition.dependencies ?? []).filter((ref) => !refs.has(ref)).map((ref) => `compositions[${index}] -> ${ref}`));
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- independent consumer accepts malformed documents for negative controls.
+  const identityErrors = (bom: any): string[] => [
+    ...(bom.$schema === "http://cyclonedx.org/schema/bom-1.5.schema.json" ? [] : ["unexpected schema identity"]),
+    ...(bom.bomFormat === "CycloneDX" ? [] : ["unexpected BOM format"]),
+    ...(bom.specVersion === "1.5" ? [] : ["unexpected CycloneDX version"]),
+  ];
+
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "harvey-sbom-contract-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it.each([
+    ["UNLICENSED", { license: { name: "UNLICENSED" } }],
+    ["Proprietary", { license: { name: "Proprietary" } }],
+    ["LicenseRef-Internal", { expression: "LicenseRef-Internal" }],
+    ["DocumentRef-Internal:LicenseRef-Custom", { expression: "DocumentRef-Internal:LicenseRef-Custom" }],
+    ["GPL-2.0-only WITH Classpath-exception-2.0", { expression: "GPL-2.0-only WITH Classpath-exception-2.0" }],
+    ["MIT WITH Not-An-Exception", { license: { name: "MIT WITH Not-An-Exception" } }],
+    ["SEE LICENSE IN LICENSE.txt", { license: { name: "SEE LICENSE IN LICENSE.txt" } }],
+    ["MIT OR", { license: { name: "MIT OR" } }],
+    ["MadeUp AND MIT", { license: { name: "MadeUp AND MIT" } }],
+    ["MIT", { license: { id: "MIT" } }],
+    ["(MIT OR Apache-2.0)", { expression: "(MIT OR Apache-2.0)" }],
+    ["MIT AND (Apache-2.0 OR BSD-3-Clause)", { expression: "MIT AND (Apache-2.0 OR BSD-3-Clause)" }],
+  ])("preserves license label %s in the schema-admitted field", (license, expected) => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/a": { version: "1.0.0", license },
+      "node_modules/sibling": { version: "2.0.0", license: "ISC" },
+    } }));
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    expect(bom.components.find((component: { name: string }) => component.name === "a").licenses).toEqual([expected]);
+    expect(bom.components.find((component: { name: string }) => component.name === "sibling").licenses).toEqual([{ license: { id: "ISC" } }]);
+    expect(propertyValues(bom, "harvey:license-coverage")).toEqual(["2/2 components carry a license from package-lock.json"]);
+  });
+
+  it.each([
+    ["npm v3 root", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+        "node_modules/alias": { version: "2.0.0" },
+      } }));
+    }],
+    ["npm v1 descriptor", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 1, dependencies: {
+        alias: { version: "npm:@actual/pkg@2.0.0" },
+      } }));
+    }],
+    ["npm v3 lock-only transitive", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": { version: "1.0.0", dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+        "node_modules/parent/node_modules/alias": { version: "2.0.0" },
+      } }));
+    }],
+    ["Yarn lock-only selector", () => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" } }));
+      writeFileSync(join(dir, "yarn.lock"), 'parent@1.0.0:\n  version "1.0.0"\n\n"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n');
+    }],
+  ] as const)("does not publish an unrelated purl for an unresolved %s alias", (_label, arrange) => {
+    arrange();
+    const { bom, warning } = buildSbom(dir, { targetName: "alias-contract", timestamp: "2026-09-25T00:00:00.000Z" });
+    const serialized = JSON.parse(JSON.stringify(bom));
+    expect(serialized.components.some((component: { name: string }) => component.name === "alias")).toBe(false);
+    expect(JSON.stringify(serialized)).not.toContain("pkg:npm/alias@");
+    expect(unresolved(serialized).join("\n")).toContain("@actual/pkg");
+    expect(unresolved(serialized).join("\n")).toContain("unproved");
+    expect(serialized.compositions[0].aggregate).toBe("incomplete");
+    expect(warning).toContain("@actual/pkg");
+    expect(validateCycloneDx15(serialized)).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it.each([
+    ["ordinary npm package", { dependencies: { ordinary: "1.0.0" } }, { "": { dependencies: { ordinary: "1.0.0" } }, "node_modules/ordinary": { version: "1.0.0" } }, "ordinary"],
+    ["proved npm alias", { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, { "": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }, "node_modules/alias": { name: "@actual/pkg", version: "2.0.0" } }, "@actual/pkg"],
+  ] as const)("preserves the canonical identity for a %s", (_label, manifest, packages, expected) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify(manifest));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages }));
+    const bom = serializedBom(dir);
+    expect(bom.components.map((component: { name: string }) => component.name)).toEqual([expected]);
+    expect(bom.components[0].purl).toContain(expected.replace(/^@/, "%40"));
+    expect(unresolved(bom)).toEqual([]);
+    expect(bom.compositions[0].aggregate).toBe("complete");
+  });
+
+  it("validates a serialized full BOM with the pinned official 1.5 schema and independently checks its digest", () => {
+    const bytes = Buffer.from("independent digest fixture", "utf8");
+    const digest = createHash("sha256").update(bytes).digest();
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/hashed": { version: "1.0.0", license: "MIT", integrity: `sha256-${digest.toString("base64")}` },
+    } }));
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    const hash = bom.components[0].hashes[0];
+    expect(hash).toEqual({ alg: "SHA-256", content: createHash("sha256").update(bytes).digest("hex") });
+    expect(hash.content).toMatch(/^[a-f0-9]{64}$/);
+    expect(referenceErrors(bom)).toEqual([]);
+  });
+
+  it.each(["sha512-3q2+7w==", "sha256-not-base64!!", "sha384-"])("omits malformed or wrong-length integrity %s and reports zero hash coverage", (integrity) => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/bad-hash": { version: "1.0.0", integrity },
+    } }));
+    const bom = serializedBom(dir);
+    expect(bom.components[0].hashes).toBeUndefined();
+    expect(propertyValues(bom, "harvey:hash-coverage")).toEqual(["0/1 components carry a valid integrity hash from package-lock.json"]);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("validates an empty BOM and rejects schema and reference corruption through independent consumers", () => {
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    expect(identityErrors(bom)).toEqual([]);
+    expect(referenceErrors(bom)).toEqual([]);
+    const badVersion = structuredClone(bom);
+    badVersion.specVersion = "9.9";
+    expect(identityErrors(badVersion)).toContain("unexpected CycloneDX version");
+    const badFormat = structuredClone(bom);
+    badFormat.bomFormat = "not-CycloneDX";
+    expect(validateCycloneDx15(badFormat).valid).toBe(false);
+    const badReference = structuredClone(bom);
+    badReference.compositions[0].dependencies = ["missing-component"];
+    expect(referenceErrors(badReference)).toEqual(["compositions[0] -> missing-component"]);
   });
 });

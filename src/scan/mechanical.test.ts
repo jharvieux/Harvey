@@ -115,7 +115,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   // detection exercised by the gate rather than silent.
   it("still classifies licenses under skipNetworkChecks, with only the registry fallback pinned off", async () => {
     await runMechanicalScan({ dir, skipNetworkChecks: true });
-    expect(checkLicenseCompliance).toHaveBeenCalledWith(expect.objectContaining({ source: "package.json" }), { skipRegistry: true });
+    expect(checkLicenseCompliance).toHaveBeenCalledWith(expect.objectContaining({ source: "package.json" }), expect.objectContaining({ skipRegistry: true, emitAssessment: true }));
   });
 
   it("still runs the live npm-registry checks by default", async () => {
@@ -127,7 +127,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
     // in scope rather than staying silent.
     expect(checkLicenseCompliance).toHaveBeenCalledWith(
       expect.objectContaining({ candidates: [{ name: "react", version: "18.2.0", direct: true }], completeness: "incomplete" }),
-      { skipRegistry: undefined },
+      expect.objectContaining({ skipRegistry: undefined, emitAssessment: true }),
     );
   });
 
@@ -376,7 +376,7 @@ describe("npm lockfile range edges (#1774)", () => {
   it.each([
     ["npm v2", "package-lock.json", JSON.stringify({ lockfileVersion: 2, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 2, read", "1 admitted third-party range edges"],
     ["npm v1", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0" } } } }), "package-lock version 1, unsupported", "1 present/unread unit(s)"],
-    ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, present-but-unread", "1 importer/root specifier"],
+    ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, partial", "1 admitted third-party range edges"],
     ["Yarn classic", "yarn.lock", 'child@^2.0.0:\n  version "2.0.0"\n', "yarn version classic v1, present-but-unread", "1 selector range(s)"],
     ["Yarn Berry", "yarn.lock", '__metadata:\n  version: 8\n\n"child@npm:^2.0.0":\n  version: 2.0.0\n', "yarn version Berry 8, present-but-unread", "1 selector range(s)"],
     ["shrinkwrap", "npm-shrinkwrap.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "npm-shrinkwrap version 3, present-but-unread", "1 present/unread unit(s)"],

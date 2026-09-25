@@ -6,7 +6,7 @@
 // export (#910); this proves it's also applied at quick-scan's own render/output boundary, for
 // --out/console, --findings-out, and --json alike, not just SARIF.
 
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,6 +30,34 @@ function calibrationFindings(): Promise<string> {
     return readFileSync(findingsOutPath, "utf8");
   })();
 }
+
+describe("quick-scan SBOM shipping export (#2059)", () => {
+  it("delivers unresolved alias identity and incompleteness through --sbom-out", async () => {
+    const target = mkdtempSync(join(tmpdir(), "harvey-quick-sbom-alias-"));
+    dirs.push(target);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "": { dependencies: { alias: "npm:@actual/pkg@^2.0.0" } },
+      "node_modules/alias": { version: "2.0.0" },
+    } }));
+    const sbomOut = join(target, "inventory.cdx.json");
+    const previousPath = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      await run([CLI, "--dir", target, "--sbom-out", sbomOut, "--out", join(target, "report.txt")]);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+    const bom = JSON.parse(readFileSync(sbomOut, "utf8")) as {
+      components: Array<{ name: string; purl?: string }>;
+      compositions: Array<{ aggregate: string }>;
+      metadata: { properties: Array<{ name: string; value: string }> };
+    };
+    expect(bom.components.some((component) => component.name === "alias" || component.purl?.startsWith("pkg:npm/alias@"))).toBe(false);
+    expect(bom.compositions[0]?.aggregate).toBe("incomplete");
+    expect(bom.metadata.properties.find((property) => property.name === "harvey:unresolved-alias")?.value).toContain("@actual/pkg");
+  }, 120000);
+});
 
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
   // Drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child process,

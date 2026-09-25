@@ -3,7 +3,7 @@
 // shape MEASURED on 2026-07-31 against osv-scanner 2.3.8 (see runOsvScanner's comment in
 // dependencies.ts), not an invented one. Same harness shape as semgrep-crash.test.ts.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,6 +275,66 @@ describe("OSV input inventory and effective examination (#2033)", () => {
     const hidden = structuredClone(run.assessment);
     hidden.invocations[0]!.unassessedPackages = [];
     expect(() => validateOsvAssessment(hidden, run.result, inventoryOsvInputs(target))).toThrow("does not reconcile");
+  });
+
+  it("normalizes pnpm v6 scoped-peer keys for the pinned provider without changing identities, dev/optional flags, or the client lock", () => {
+    const target = root();
+    const original = [
+      "lockfileVersion: '6.0'",
+      "packages:",
+      "  /@scope/scoped@1.0.0(@types/react@18.3.3):",
+      "    resolution: {integrity: sha512-scoped}",
+      "    dev: true",
+      "  /plain@2.0.0(@types/react@18.3.3):",
+      "    resolution: {integrity: sha512-plain}",
+      "    optional: true",
+      "  /unscoped-peer@3.0.0(react@18.3.1):",
+      "    resolution: {integrity: sha512-unscoped-peer}",
+      "  /clean@4.0.0:",
+      "    resolution: {integrity: sha512-clean}",
+      "",
+    ].join("\n");
+    write(target, "pnpm-lock.yaml", original);
+    const originalDigest = createHash("sha256").update(original).digest("hex");
+    osvBehavior = (args) => {
+      const providerPath = args.at(-1)!;
+      expect(providerPath).not.toBe(join(target, "pnpm-lock.yaml"));
+      const prepared = readFileSync(providerPath, "utf8");
+      expect(prepared).toContain('    name: "@scope/scoped"\n    version: "1.0.0"');
+      expect(prepared).toContain('    name: "plain"\n    version: "2.0.0"');
+      expect(prepared).not.toContain('    name: "unscoped-peer"');
+      expect(prepared).toContain("    dev: true");
+      expect(prepared).toContain("    optional: true");
+      return JSON.stringify({ results: [{ source: { path: providerPath }, packages: [
+        ["@scope/scoped", "1.0.0"], ["plain", "2.0.0"], ["unscoped-peer", "3.0.0"], ["clean", "4.0.0"],
+      ].map(([name, version]) => ({ package: { name, version, ecosystem: "npm" } })) }] });
+    };
+    const run = runOsvScanner(target);
+    expect(run.failure).toBeUndefined();
+    expect(run.assessment).toMatchObject({ status: "assessed", invocations: [{
+      status: "assessed",
+      examinedPackages: ["npm:@scope/scoped@1.0.0", "npm:clean@4.0.0", "npm:plain@2.0.0", "npm:unscoped-peer@3.0.0"],
+      unassessedPackages: [],
+    }] });
+    expect(run.assessment.inventory.inputs.find((input) => input.path === "pnpm-lock.yaml")?.providerNormalization).toMatchObject({
+      kind: "pnpm-v6-scoped-peer-metadata", normalizedEntries: 2,
+    });
+    expect(run.assessment.provenance).toContain("2 scoped-peer entries");
+    expect(createHash("sha256").update(readFileSync(join(target, "pnpm-lock.yaml"))).digest("hex")).toBe(originalDigest);
+  });
+
+  it("keeps normalized pnpm v6 packages partial when the provider still omits one", () => {
+    const target = root();
+    write(target, "pnpm-lock.yaml", "lockfileVersion: '6.0'\npackages:\n  /plain@2.0.0(@types/react@18.3.3):\n    resolution: {integrity: sha512-plain}\n  /clean@4.0.0:\n    resolution: {integrity: sha512-clean}\n");
+    osvBehavior = (args) => JSON.stringify({ results: [{ source: { path: args.at(-1) }, packages: [
+      { package: { name: "clean", version: "4.0.0", ecosystem: "npm" } },
+    ] }] });
+    const run = runOsvScanner(target);
+    expect(run.failure).toBeUndefined();
+    expect(run.assessment.invocations[0]).toMatchObject({
+      status: "partial", examinedPackages: ["npm:clean@4.0.0"], unassessedPackages: ["npm:plain@2.0.0"],
+    });
+    expect(osvUnavailableFinding(run.assessment).evidence).toContain("npm:plain@2.0.0");
   });
 
   it("keeps a successful sibling when a selected root fails", () => {
