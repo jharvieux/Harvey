@@ -86,11 +86,11 @@ const RULES = [
   [/(photo_url|headshot|mugshot|profile_pic(ture)?|avatar_url|face_image|signature_image)/, "PHOTO", "PII", "medium"],
   // --- PCI-DSS cardholder / sensitive authentication data ---
   // CVV/CVC is "sensitive authentication data" — PCI-DSS forbids storing it post-authorization
-  // at all, so a hit here is a compliance violation by itself (see INFOTYPE_POINT_OVERRIDES).
+  // at all; a name match identifies a review priority, not evidence of stored values or a violation.
   [/(^|_)(cvv|cvc|card_verification|card_security_code)(_|$)/, "CVV", "PCI", "high"],
   // #376: PIN/PIN-block and full track/magstripe data are the other two members of PCI-DSS's
   // "sensitive authentication data, never store post-authorization" category CVV belongs to —
-  // a hit is a compliance violation by itself (INFOTYPE_POINT_OVERRIDES scores each Critical
+  // a name hit retains high potential-sensitivity priority (INFOTYPE_POINT_OVERRIDES scores each Critical
   // alone). Deliberately NO bare `pin` alternative: it collides with `pinned`/`is_pinned`
   // feature-flag naming and India's postal "PIN code", so only compound card/ATM names match.
   [/(^|_)(pin_block|pin_verification|atm_pin|card_pin)(_|$)/, "PIN", "PCI", "high"],
@@ -309,7 +309,7 @@ export function classifyColumn(column, sqlType, tableName) {
 // Severity-weighting: lets a caller (an exposure finding in another module) weight severity by
 // WHAT was exposed, not just THAT something was exposed. Category base points, scaled by match
 // confidence, summed per distinct infotype on a table. CVV is overridden — PCI-DSS forbids
-// storing it post-auth at all, so its presence alone should read Critical.
+// storing it post-auth. Critical here is potential sensitivity, not a verified exposure or violation.
 const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6, SECRET: 6 };
 const CONFIDENCE_WEIGHT = { high: 1, medium: 0.6, low: 0.3 };
 // #376: PIN and track data share CVV's override — all three are PCI-DSS "sensitive
@@ -565,14 +565,14 @@ export function dataMapToFindings(dataMap, { tier }) {
     const freeTextFlags = reviewFlags.filter((c) => c.infotype === "FREE_TEXT_REVIEW");
     const neverStore = t.infotypes.filter((x) => PCI_NEVER_STORE.has(x));
     const compliance = [
-      t.phi && "PHI — HIPAA applicability",
-      t.pci && "PCI-DSS cardholder/sensitive-authentication data",
-      t.secret && "stored credentials/secrets readable by any query path that reaches the table",
+      t.phi && "potential PHI — confirm HIPAA applicability",
+      t.pci && "potential cardholder/sensitive-authentication data — confirm PCI-DSS applicability",
+      t.secret && "potential credentials/secrets — contents, encryption and effective read access are unverified",
     ].filter(Boolean);
     return {
       id: `M10-${String(i + 1).padStart(2, "0")}`,
       title: asserted.length
-        ? `Table \`${table}\` holds ${t.categories.join("/")} data (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
+        ? `Table \`${table}\` has candidate ${t.categories.join("/")} columns (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
         : freeTextFlags.length && !jsonFlags.length
           ? `Table \`${table}\` has free-text column(s) to review for unstructured PII/PHI`
           : jsonFlags.length && !freeTextFlags.length
@@ -595,23 +595,25 @@ export function dataMapToFindings(dataMap, { tier }) {
         freeTextFlags.length
           ? `Review for unstructured PII/PHI (flagged, not asserted — #850): ${freeTextFlags.map((c) => c.column).join(", ")} — free-text column(s) whose values a name-only scan can't see; inspect for names/SSNs/health details.`
           : "",
-        `Severity score ${t.severityScore} → ${t.severity}.`,
+        `Potential-sensitivity score ${t.severityScore} → ${t.severity}; this priority does not establish stored sensitive values, readable plaintext, an exposure or a compliance violation.`,
       ]
         .filter(Boolean)
         .join(" "),
       impact: [
-        `Any over-broad read path (RLS gap, leaked service key, injectable query) on \`${table}\` exposes ${t.categories.join("/")} data.`,
+        asserted.length
+          ? `If the candidate columns contain sensitive values and an unauthorized principal can read them, an over-broad read path on \`${table}\` could expose ${t.categories.join("/")} data. Neither contents nor effective access was verified by this classification.`
+          : "Container and free-text names identify a content-review gap; sensitive contents and exposure have not been established.",
         compliance.length ? `Compliance surface: ${compliance.join("; ")}.` : "",
         neverStore.length
-          ? `Stores PCI sensitive authentication data (${neverStore.join(", ")}) — PCI-DSS forbids storing it post-authorization at all, so its presence is a violation independent of exposure.`
+          ? `Candidate sensitive-authentication fields (${neverStore.join(", ")}) require review of actual contents, authorization lifecycle and applicable retention requirements. Column names alone do not establish post-authorization storage or a PCI-DSS violation.`
           : "",
       ]
         .filter(Boolean)
         .join(" "),
       fix: [
-        "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
-        neverStore.length ? "Remove the sensitive-authentication-data column(s) — they may not be stored post-authorization under PCI-DSS." : "",
-        t.secret ? "Move stored credentials to a secret manager or encrypt them with keys the DB role cannot read." : "",
+        "Confirm the candidate classification and data need, then verify the table's effective RLS/grants and protection controls for the owning tenant/user.",
+        neverStore.length ? "Confirm whether these columns contain sensitive authentication data and retain it after authorization; if prohibited retention is established, remove that retained data and prevent its collection or retention." : "",
+        t.secret ? "Review whether the candidate fields contain credentials, encrypted values or references; if readable credentials are confirmed, evaluate secret management and encryption with separated key access." : "",
         jsonFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
         freeTextFlags.length ? "Review the flagged free-text column(s) for unstructured PII/PHI; a content-classification pass or structured fields make regulated data visible and protectable." : "",
       ]

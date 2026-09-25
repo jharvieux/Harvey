@@ -721,20 +721,38 @@ describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
     expect(findings.every((f) => f.mechanical === true && f.precisionTier === "review")).toBe(true);
   });
 
+  it.each(["schema", "live"] as const)("preserves uncertainty for bytea secrets and review-only containers on %s", (tier) => {
+    const rows = dataMapToFindings(buildDataMap([
+      { table_name: "credentials", column_name: "api_key", data_type: "bytea" },
+      { table_name: "notes", column_name: "body", data_type: "text" },
+      { table_name: "payloads", column_name: "metadata", data_type: "jsonb" },
+    ]), { tier });
+    const secret = rows.find((row) => row.location === "credentials");
+    expect(secret?.title).toContain("candidate SECRET columns");
+    expect(secret?.impact).toContain("contents, encryption and effective read access are unverified");
+    expect(secret?.impact).not.toContain("readable by any");
+    for (const row of rows.filter((row) => row.reviewFlagOnly)) {
+      expect(row.impact).toContain("sensitive contents and exposure have not been established");
+      expect(row.impact).not.toContain("exposes PII");
+    }
+    expect(rows.filter((row) => row.reviewFlagOnly)).toHaveLength(2);
+  });
+
   it("orders findings by table severity, worst first, with deterministic ids", () => {
     expect(findings[0]?.location).toBe("payments");
     expect(findings.map((f) => f.id)).toEqual(["M10-01", "M10-02", "M10-03"]);
   });
 
-  it("names the PCI never-store violation — a stored CVV is a violation independent of exposure", () => {
+  it("keeps a schema-only CVV candidate conditional on contents and retention evidence", () => {
     const payments = findings.find((f) => f.location === "payments");
-    expect(payments?.impact).toMatch(/forbids storing it post-authorization/);
-    expect(payments?.fix).toMatch(/may not be stored post-authorization/);
+    expect(payments?.impact).toMatch(/Column names alone do not establish post-authorization storage/);
+    expect(payments?.impact).not.toMatch(/Stores PCI|presence is a violation/);
+    expect(payments?.fix).toMatch(/if prohibited retention is established/);
   });
 
   it("keeps #377 review flags distinct from asserted columns — flagged in evidence, never claimed in the title", () => {
     const users = findings.find((f) => f.location === "users");
-    expect(users?.title).toMatch(/holds PII data \(EMAIL\)/); // profile (jsonb) not asserted in the title
+    expect(users?.title).toMatch(/has candidate PII columns \(EMAIL\)/); // profile (jsonb) not asserted in the title
     expect(users?.evidence).toMatch(/Review for nested PII \(flagged, not asserted/);
     // A table with ONLY review flags never claims to hold PII — it asks for review.
     const prefs = findings.find((f) => f.location === "prefs");
@@ -776,7 +794,7 @@ describe("dataMapToFindings — free-text review flags (#850)", () => {
     ]);
     const findings = dataMapToFindings(map, { tier: "schema" });
     const tickets = findings.find((f) => f.location === "tickets");
-    expect(tickets?.title).toMatch(/holds PII data \(EMAIL\)/); // notes (free-text) not asserted in the title
+    expect(tickets?.title).toMatch(/has candidate PII columns \(EMAIL\)/); // notes (free-text) not asserted in the title
     expect(tickets?.evidence).toMatch(/Review for unstructured PII\/PHI \(flagged, not asserted/);
     expect(tickets?.reviewFlagColumns).toEqual(["notes"]);
     // a table with ONLY a free-text flag asks for review, never claims a holding
