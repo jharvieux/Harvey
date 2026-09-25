@@ -6,6 +6,7 @@ import { probeExec } from "./probe-exec.js";
 import {
   assertCommandExecutionReceipt,
   commandReceiptSucceeded,
+  createCommandExecutionReceipt,
   verifyCommandExecutionReceiptArtifacts,
 } from "./producer-execution-receipt.js";
 
@@ -54,6 +55,55 @@ describe("probeExec command execution receipts", () => {
     expect(cancelled.ok).toBe(false);
     expect(cancelled.receipt?.outcome.state).toBe("cancelled");
     expect(cancelled.receipt?.cancellationPolicy).toBe("pre-start-only");
+  });
+
+  it("records a real output-limit interruption as truncated execution, not a spawn failure", () => {
+    const secret = "overflow-secret";
+    const interrupted = probeExec(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))", secret],
+      receiptOptions({ invocationId: "output-limit", secretValues: [secret] }),
+    );
+
+    expect(interrupted.ok).toBe(false);
+    expect(interrupted.receipt?.outcome).toMatchObject({
+      state: "output-limit-exceeded",
+      exitCode: null,
+      errorCode: "ENOBUFS",
+    });
+    expect(interrupted.receipt?.outcome.signal).toBeTruthy();
+    expect(interrupted.receipt?.stdout).toMatchObject({
+      completeness: "truncated",
+      sha256Scope: "captured-bytes",
+    });
+    expect(interrupted.receipt?.stdout.bytes).toBeGreaterThan(0);
+    expect(interrupted.receipt?.stderr).toMatchObject({
+      completeness: "unknown",
+      sha256Scope: "captured-bytes",
+    });
+    expect(commandReceiptSucceeded(interrupted.receipt!)).toBe(false);
+    expect(JSON.stringify(interrupted.receipt)).not.toContain(secret);
+  });
+
+  it("rejects contradictory command outcomes while accepting a coherent timeout", () => {
+    const receipt = (outcome: Parameters<typeof createCommandExecutionReceipt>[0]["outcome"]) => () => createCommandExecutionReceipt({
+      invocationId: "outcome-control",
+      command: { executable: process.execPath, argv: [], cwd: root },
+      target: { identity: "fixture-target", value: { revision: "abc123" } },
+      toolchain: [{ name: "node", version: process.version }],
+      configuration: { identity: "fixture-config", value: { mode: "test" } },
+      startedAt: "2026-09-25T00:00:00.000Z",
+      finishedAt: "2026-09-25T00:00:01.000Z",
+      outcome,
+    });
+
+    expect(receipt({ state: "timed-out", exitCode: 0, signal: null, errorCode: "ETIMEDOUT" })).toThrow(/timed-out.*exit code/i);
+    expect(receipt({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOENT" })).toThrow(/spawn-failed.*signal/i);
+    expect(receipt({ state: "exited", exitCode: 0, signal: null, errorCode: "EIO" })).toThrow(/exited.*error/i);
+
+    const timeout = receipt({ state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" })();
+    expect(timeout.outcome.state).toBe("timed-out");
+    expect(commandReceiptSucceeded(timeout)).toBe(false);
   });
 
   it("discloses synchronous cancellation limits and preserves the real completed exit", async () => {

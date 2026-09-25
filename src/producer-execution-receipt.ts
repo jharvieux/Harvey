@@ -7,11 +7,13 @@ import type { SemgrepExecutionPlanReceipt } from "./scan/semgrep-family-cache.js
 import { assertSuccessfulSemgrepExecutionReceipt } from "./scan/semgrep-family-cache.js";
 
 export const PRODUCER_EXECUTION_RECEIPT_SCHEMA = 3 as const;
-export const COMMAND_EXECUTION_RECEIPT_SCHEMA = 2 as const;
+export const LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA = 2 as const;
+export const COMMAND_EXECUTION_RECEIPT_SCHEMA = 3 as const;
 
 export type CommandTerminalState =
   | "policy-denied"
   | "spawn-failed"
+  | "output-limit-exceeded"
   | "exited"
   | "signaled"
   | "timed-out"
@@ -33,7 +35,7 @@ interface CommandArtifactFailure {
 }
 
 export interface CommandExecutionReceipt {
-  readonly schema: typeof COMMAND_EXECUTION_RECEIPT_SCHEMA;
+  readonly schema: typeof LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA | typeof COMMAND_EXECUTION_RECEIPT_SCHEMA;
   readonly invocationId: string;
   readonly attempt: number;
   readonly command: { readonly executable: string; readonly argv: readonly string[]; readonly cwd: string };
@@ -50,8 +52,15 @@ export interface CommandExecutionReceipt {
   };
   readonly timeoutPolicy: { readonly timeoutMs: number | null; readonly killSignal: string };
   readonly cancellationPolicy: "pre-start-only" | "unsupported";
-  readonly stdout: { readonly bytes: number; readonly sha256: string };
-  readonly stderr: { readonly bytes: number; readonly sha256: string };
+  readonly stdout: {
+    readonly bytes: number;
+    readonly sha256: string;
+    /** Absent only on legacy schema-2 receipts. */
+    readonly completeness?: "complete" | "truncated" | "unknown";
+    /** Every digest covers exactly the retained bytes, including partial captures. */
+    readonly sha256Scope?: "captured-bytes";
+  };
+  readonly stderr: CommandExecutionReceipt["stdout"];
   readonly artifacts: readonly CommandArtifactReceipt[];
   /** Output failures do not overwrite the actual child exit or signal. */
   readonly artifactFailures: readonly CommandArtifactFailure[];
@@ -79,6 +88,10 @@ interface CommandExecutionReceiptInput {
   readonly comparisonIdentity?: CommandExecutionReceipt["comparisonIdentity"];
   readonly stdout?: string | Buffer;
   readonly stderr?: string | Buffer;
+  readonly outputCompleteness?: {
+    readonly stdout: "complete" | "truncated" | "unknown";
+    readonly stderr: "complete" | "truncated" | "unknown";
+  };
   readonly artifacts?: readonly { readonly role: CommandArtifactReceipt["role"]; readonly path: string }[];
   readonly measurements?: CommandExecutionReceipt["measurements"];
   /** Exact values are replaced everywhere in argv before anything is retained or hashed. */
@@ -204,9 +217,17 @@ function sanitizeCommandArgv(argv: readonly string[], secretValues: readonly str
   });
 }
 
-function streamReceipt(value: string | Buffer | undefined): { bytes: number; sha256: string } {
+function streamReceipt(
+  value: string | Buffer | undefined,
+  completeness: "complete" | "truncated" | "unknown",
+): CommandExecutionReceipt["stdout"] {
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value ?? "", "utf8");
-  return { bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+  return {
+    bytes: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    completeness,
+    sha256Scope: "captured-bytes",
+  };
 }
 
 function commandReceiptWithoutDigest(receipt: CommandExecutionReceipt): Omit<CommandExecutionReceipt, "sha256"> {
@@ -252,8 +273,8 @@ export function createCommandExecutionReceipt(input: CommandExecutionReceiptInpu
       killSignal: input.timeoutPolicy?.killSignal ?? "SIGTERM",
     },
     cancellationPolicy: input.cancellationPolicy ?? "unsupported",
-    stdout: streamReceipt(input.stdout),
-    stderr: streamReceipt(input.stderr),
+    stdout: streamReceipt(input.stdout, input.outputCompleteness?.stdout ?? "complete"),
+    stderr: streamReceipt(input.stderr, input.outputCompleteness?.stderr ?? "complete"),
     artifacts,
     artifactFailures: artifactFailures.sort((left, right) => byBytes(`${left.role}\0${left.path}`, `${right.role}\0${right.path}`)),
     ...(input.comparisonIdentity ? { comparisonIdentity: input.comparisonIdentity } : {}),
@@ -266,7 +287,8 @@ export function createCommandExecutionReceipt(input: CommandExecutionReceiptInpu
 
 export function assertCommandExecutionReceipt(value: unknown): asserts value is CommandExecutionReceipt {
   const receipt = value as CommandExecutionReceipt;
-  if (!receipt || receipt.schema !== COMMAND_EXECUTION_RECEIPT_SCHEMA) throw new Error("command execution receipt uses an unsupported schema");
+  if (!receipt || ![LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA, COMMAND_EXECUTION_RECEIPT_SCHEMA].includes(receipt.schema)) throw new Error("command execution receipt uses an unsupported schema");
+  const legacy = receipt.schema === LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA;
   if (!receipt.invocationId?.trim() || !Number.isInteger(receipt.attempt) || receipt.attempt < 1) throw new Error("command execution receipt has an invalid invocation identity");
   if (!receipt.command?.executable?.trim() || !receipt.command.cwd?.trim() || !Array.isArray(receipt.command.argv)) throw new Error("command execution receipt has an invalid command");
   if (receipt.command.argv.some((arg) => typeof arg !== "string")) throw new Error("command execution receipt argv is malformed");
@@ -276,13 +298,58 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
   const started = Date.parse(receipt.startedAt);
   const finished = Date.parse(receipt.finishedAt);
   if (Number.isNaN(started) || Number.isNaN(finished) || finished < started) throw new Error("command execution receipt has invalid execution times");
-  if (!["policy-denied", "spawn-failed", "exited", "signaled", "timed-out", "cancelled", "unknown-exit"].includes(receipt.outcome?.state)) throw new Error("command execution receipt has an unknown terminal state");
-  if (receipt.outcome.state === "exited" && (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null)) throw new Error("exited command receipt needs a numeric exit and no signal");
-  if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");
-  if (["policy-denied", "spawn-failed", "cancelled", "unknown-exit"].includes(receipt.outcome.state) && receipt.outcome.exitCode !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim an exit code`);
+  const states: readonly CommandTerminalState[] = legacy
+    ? ["policy-denied", "spawn-failed", "exited", "signaled", "timed-out", "cancelled", "unknown-exit"]
+    : ["policy-denied", "spawn-failed", "output-limit-exceeded", "exited", "signaled", "timed-out", "cancelled", "unknown-exit"];
+  if (!states.includes(receipt.outcome?.state)) throw new Error("command execution receipt has an unknown terminal state");
+  if (receipt.outcome.exitCode !== null && !Number.isInteger(receipt.outcome.exitCode)) throw new Error("command execution receipt exit code is malformed");
+  if (receipt.outcome.signal !== null && (typeof receipt.outcome.signal !== "string" || !receipt.outcome.signal.trim())) throw new Error("command execution receipt signal is malformed");
+  if (receipt.outcome.errorCode !== undefined && (typeof receipt.outcome.errorCode !== "string" || !receipt.outcome.errorCode.trim())) throw new Error("command execution receipt error code is malformed");
+  if (legacy) {
+    if (receipt.outcome.state === "exited" && (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null)) throw new Error("exited command receipt needs a numeric exit and no signal");
+    if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");
+    if (["policy-denied", "spawn-failed", "timed-out", "cancelled", "unknown-exit"].includes(receipt.outcome.state) && receipt.outcome.exitCode !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim an exit code`);
+  } else switch (receipt.outcome.state) {
+    case "exited":
+      if (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null) throw new Error("exited command receipt needs a numeric exit and no signal");
+      if (receipt.outcome.errorCode !== undefined) throw new Error("exited command receipt cannot claim an error code");
+      break;
+    case "signaled":
+      if (receipt.outcome.exitCode !== null || !receipt.outcome.signal) throw new Error("signaled command receipt needs a signal and no exit code");
+      if (receipt.outcome.errorCode !== undefined) throw new Error("signaled command receipt cannot claim an error code");
+      break;
+    case "timed-out":
+      if (receipt.outcome.exitCode !== null) throw new Error("timed-out command receipt cannot claim an exit code");
+      if (receipt.outcome.errorCode !== "ETIMEDOUT") throw new Error("timed-out command receipt needs an ETIMEDOUT error code");
+      break;
+    case "output-limit-exceeded":
+      if (receipt.outcome.exitCode !== null) throw new Error("output-limit-exceeded command receipt cannot claim an exit code");
+      if (receipt.outcome.errorCode !== "ENOBUFS") throw new Error("output-limit-exceeded command receipt needs an ENOBUFS error code");
+      break;
+    case "spawn-failed":
+      if (receipt.outcome.exitCode !== null) throw new Error("spawn-failed command receipt cannot claim an exit code");
+      if (receipt.outcome.signal !== null) throw new Error("spawn-failed command receipt cannot claim a signal from a process that never started");
+      if (!receipt.outcome.errorCode || ["ETIMEDOUT", "ENOBUFS"].includes(receipt.outcome.errorCode)) throw new Error("spawn-failed command receipt needs a pre-start error code");
+      break;
+    case "policy-denied":
+      if (receipt.outcome.exitCode !== null || receipt.outcome.signal !== null || receipt.outcome.errorCode !== "POLICY_DENIED") throw new Error("policy-denied command receipt has contradictory outcome fields");
+      break;
+    case "cancelled":
+      if (receipt.outcome.exitCode !== null || receipt.outcome.signal !== null || receipt.outcome.errorCode !== "ABORT_ERR") throw new Error("cancelled command receipt has contradictory outcome fields");
+      break;
+    case "unknown-exit":
+      if (receipt.outcome.exitCode !== null || receipt.outcome.signal !== null || receipt.outcome.errorCode !== undefined) throw new Error("unknown-exit command receipt has contradictory outcome fields");
+      break;
+  }
   if (!receipt.timeoutPolicy || (receipt.timeoutPolicy.timeoutMs !== null && (!Number.isInteger(receipt.timeoutPolicy.timeoutMs) || receipt.timeoutPolicy.timeoutMs < 1)) || !receipt.timeoutPolicy.killSignal?.trim()) throw new Error("command execution receipt has an invalid timeout policy");
   if (!["pre-start-only", "unsupported"].includes(receipt.cancellationPolicy)) throw new Error("command execution receipt has an invalid cancellation policy");
-  for (const stream of [receipt.stdout, receipt.stderr]) if (!Number.isInteger(stream?.bytes) || stream.bytes < 0 || !/^[a-f0-9]{64}$/.test(stream.sha256)) throw new Error("command execution receipt has an invalid output digest");
+  for (const stream of [receipt.stdout, receipt.stderr]) {
+    if (!Number.isInteger(stream?.bytes) || stream.bytes < 0 || !/^[a-f0-9]{64}$/.test(stream.sha256)) throw new Error("command execution receipt has an invalid output digest");
+    const hasCompleteness = stream.completeness !== undefined || stream.sha256Scope !== undefined;
+    if (hasCompleteness && (!["complete", "truncated", "unknown"].includes(stream.completeness ?? "") || stream.sha256Scope !== "captured-bytes")) throw new Error("command execution receipt has invalid output completeness metadata");
+    if (!legacy && !hasCompleteness) throw new Error("schema-3 command execution receipt is missing output completeness metadata");
+  }
+  if (receipt.outcome.state === "output-limit-exceeded" && receipt.stdout.completeness === "complete" && receipt.stderr.completeness === "complete") throw new Error("output-limit-exceeded command receipt cannot claim complete output");
   if (!Array.isArray(receipt.artifacts)) throw new Error("command execution receipt artifacts are missing");
   for (const artifact of receipt.artifacts) if (!artifact.path?.trim() || !["report", "stdout", "stderr", "raw-output", "other"].includes(artifact.role) || !Number.isInteger(artifact.bytes) || artifact.bytes < 0 || !/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error("command execution receipt has an invalid artifact digest");
   if (!Array.isArray(receipt.artifactFailures)) throw new Error("command execution receipt artifact failures are missing");

@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
+  assertCommandExecutionReceipt,
   assertProducerExecutionReceipt,
+  createCommandExecutionReceipt,
   createProducerExecutionReceipt,
   extendProducerExecutionReceipt,
+  LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA,
   receiptHasRoute,
   semgrepProducerExecutionReceipts,
 } from "./producer-execution-receipt.js";
+
+const canonical = (value: unknown): unknown => Array.isArray(value)
+  ? value.map(canonical)
+  : value && typeof value === "object"
+    ? Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+      .map(([key, item]) => [key, canonical(item)]))
+    : value;
+
+const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 
 const runtime = () => createProducerExecutionReceipt({
   executionId: "run-1:dynamic.bola",
@@ -59,5 +72,33 @@ describe("ProducerExecutionReceipt", () => {
     expect(semgrepProducerExecutionReceipts(receipt)).toMatchObject([{ producerId: "semgrep:local:fixture-rule", findingFamilyIds: ["fixture-rule"] }]);
     expect(() => semgrepProducerExecutionReceipts({ ...receipt, ownershipSha256: "0".repeat(64) })).toThrow(/ownership digest/);
     expect(() => semgrepProducerExecutionReceipts({ ...receipt, status: "failed" })).toThrow(/successful Semgrep/);
+  });
+});
+
+describe("CommandExecutionReceipt", () => {
+  it("keeps historical overflow schema-2 receipts readable while schema 3 states hash scope", () => {
+    const current = createCommandExecutionReceipt({
+      invocationId: "legacy-control",
+      command: { executable: process.execPath, argv: [], cwd: process.cwd() },
+      target: { identity: "fixture", value: "fixture" },
+      toolchain: [{ name: "node", version: process.version }],
+      configuration: { identity: "fixture", value: "fixture" },
+      startedAt: "2026-09-25T00:00:00.000Z",
+      finishedAt: "2026-09-25T00:00:01.000Z",
+      outcome: { state: "exited", exitCode: 0, signal: null },
+    });
+    expect(current.schema).toBe(3);
+    expect(current.stdout).toMatchObject({ completeness: "complete", sha256Scope: "captured-bytes" });
+
+    const legacyBody = structuredClone(current) as unknown as Record<string, unknown>;
+    delete legacyBody.sha256;
+    legacyBody.schema = LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA;
+    legacyBody.outcome = { state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOBUFS" };
+    delete (legacyBody.stdout as Record<string, unknown>).completeness;
+    delete (legacyBody.stdout as Record<string, unknown>).sha256Scope;
+    delete (legacyBody.stderr as Record<string, unknown>).completeness;
+    delete (legacyBody.stderr as Record<string, unknown>).sha256Scope;
+    const legacy = { ...legacyBody, sha256: digest(legacyBody) };
+    expect(() => assertCommandExecutionReceipt(legacy)).not.toThrow();
   });
 });
