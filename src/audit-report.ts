@@ -11,7 +11,7 @@
 
 import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./audit-coverage.js";
 import { type DataClassMap, dataClassJoinNotAssessed, escalateFindingsByDataClass } from "./data-class-escalation.js";
-import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
+import type { AuditContext, CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 import { populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
 import { conservationLedger } from "./conservation-ledger.js";
@@ -60,7 +60,7 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 // #1045: M8's §3b test-quality table travels with the document the same way the ledger does — the
 // mutation tier's per-module measurement is a client-facing deliverable section, and an assembler
 // that dropped it left the scanner computing numbers with nowhere to go.
-export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap, testQuality?: TestQuality): FindingsDocument {
+export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap, testQuality?: TestQuality, auditContext?: AuditContext): FindingsDocument {
   const deduped = prepareFindings(dedupeFindings(findings));
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
   const weighted = dataMap
@@ -69,7 +69,10 @@ export function assembleEngagementDocument(recorded: ModuleCoverage[], env: Enga
       ? enriched
       : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
   const prepared = prepareFindings(weighted);
-  return { meta, coverage: coverageLedger(recorded, env), findings: prepared, populations: populationSummary(prepared), conservation: conservationLedger(findings, prepared), ...(meta.identityMigrations ? { identityMigrations: meta.identityMigrations } : {}), ...(testQuality ? { testQuality } : {}) };
+  // Operator metadata supplies presentation, while only the execution owner supplies context.
+  const presentation = { ...meta };
+  delete presentation.auditContext;
+  return { meta: { ...presentation, ...(auditContext ? { auditContext } : {}) }, ...(auditContext ? { auditContext } : {}), coverage: coverageLedger(recorded, env), findings: prepared, populations: populationSummary(prepared), conservation: conservationLedger(findings, prepared), ...(meta.identityMigrations ? { identityMigrations: meta.identityMigrations } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 // The M10 rows' own words for why nothing was classified — quoted into M10-ESCALATION-00 so the

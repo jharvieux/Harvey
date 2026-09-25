@@ -59,6 +59,7 @@ export interface AuditContext {
     configurationSha256: string;
     inputBindings: { role: string; identity: string; sha256: string; complete: boolean }[];
     moduleObservations: { module: string; instance: string; status: "examined" | "not-assessed" | "legacy"; unitsExamined: number; scope: string; reason?: string }[];
+    observedScopesSha256?: string;
     commandReceiptSha256: string[];
     producerIdentityComplete: boolean;
     retainedBindingSha256?: string;
@@ -654,6 +655,7 @@ function validateAuditContext(value: unknown, at: string, errors: string[]): voi
     if (!Array.isArray(p.inputBindings) || p.inputBindings.some((input) => !isRecord(input) || !nonempty(input.role) || !nonempty(input.identity) || !sha(input.sha256) || typeof input.complete !== "boolean")) errors.push(`${at}.provenance.inputBindings: invalid input binding`);
     if (!Array.isArray(p.moduleObservations) || p.moduleObservations.some((row) => !isRecord(row) || !/^M(?:[1-9]|10)$/.test(String(row.module)) || !nonempty(row.instance) || !["examined", "not-assessed", "legacy"].includes(String(row.status)) || !Number.isInteger(row.unitsExamined) || Number(row.unitsExamined) < 0 || (row.status === "examined" && Number(row.unitsExamined) === 0) || !nonempty(row.scope) || (row.reason !== undefined && !nonempty(row.reason)))) errors.push(`${at}.provenance.moduleObservations: invalid measured scope`);
     if (!Array.isArray(p.commandReceiptSha256) || p.commandReceiptSha256.some((digest) => !sha(digest))) errors.push(`${at}.provenance.commandReceiptSha256: expected receipt digests`);
+    if (p.observedScopesSha256 !== undefined && !sha(p.observedScopesSha256)) errors.push(`${at}.provenance.observedScopesSha256: expected SHA-256`);
     if (typeof p.producerIdentityComplete !== "boolean") errors.push(`${at}.provenance.producerIdentityComplete: expected boolean`);
     if (p.retainedBindingSha256 !== undefined && !sha(p.retainedBindingSha256)) errors.push(`${at}.provenance.retainedBindingSha256: expected SHA-256`);
     const complete = isRecord(p.target) && p.target.complete && p.target.stable && isRecord(p.engine) && p.engine.complete && p.engine.stable && p.producerIdentityComplete

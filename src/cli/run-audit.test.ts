@@ -36,7 +36,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "run-audit.ts");
 
 let scratch: string;
-let sarifOnly: { runs: { results: unknown[] }[] };
+let sarifOnly: { runs: { results: unknown[]; properties: { harveyAuditContext?: FindingsDocument["auditContext"] } }[] };
 let engagement: FindingsDocument;
 
 // A two-workspace monorepo with one M7-detectable `<img>` INSIDE an enumerated app and one OUTSIDE
@@ -52,6 +52,7 @@ function buildMonorepo(root: string): void {
   writeFileSync(join(root, "apps", "api", "package.json"), '{"name":"api"}\n');
   writeFileSync(join(root, "apps", "scratch", "package.json"), '{"name":"scratch"}\n');
   writeFileSync(join(root, "apps", "web", "app", "page.tsx"), 'export default function Page() {\n  return <img src="/hero.png" alt="hero" />;\n}\n');
+  writeFileSync(join(root, "apps", "web", "schema.sql"), "CREATE TABLE public.people (\n  id uuid PRIMARY KEY,\n  email text\n);\n");
   writeFileSync(join(root, "shared", "Widget.tsx"), 'export function Widget() {\n  return <img src="/w.png" alt="w" />;\n}\n');
 }
 
@@ -172,7 +173,7 @@ describe("run-audit CLI export capture", () => {
   }, CASE_TIMEOUT_MS);
 
   beforeAll(async () => {
-    await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
+    await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json"), "--retain-artifacts", join(scratch, "fresh-bundle")]);
     engagement = JSON.parse(readFileSync(join(scratch, "engagement.json"), "utf8")) as FindingsDocument;
   }, CASE_TIMEOUT_MS);
 
@@ -204,7 +205,10 @@ describe("run-audit CLI export capture", () => {
     // Fresh-run documents from before receipt-bound retention are intentionally unbound. Keep
     // accepting them as historical input, but never turn their unmatched rows into remediation.
     const unboundBaselinePath = join(scratch, "unbound-baseline.json");
-    writeFileSync(unboundBaselinePath, JSON.stringify(engagement));
+    const unbound = structuredClone(engagement);
+    delete unbound.auditContext;
+    delete unbound.meta.auditContext;
+    writeFileSync(unboundBaselinePath, JSON.stringify(unbound));
     await run([
       join(scratch, "target"), "--findings-out", join(scratch, "unbound-comparison.json"),
       "--baseline", unboundBaselinePath,
@@ -216,7 +220,7 @@ describe("run-audit CLI export capture", () => {
     expect(unboundComparison.baseline?.comparison?.limitations.join(" ")).toContain("Missing engagement");
     expect(new Set(unboundComparison.findings.map((finding) => finding.baselineStatus))).toEqual(new Set(["incompatible"]));
 
-    // A fresh scan does not invent the strict producer/scope provenance required by #2136.
+    // Retained assembly independently derives producer/scope provenance from bound receipts.
     // Exercise the shipping assembly path, which derives that provenance from bound receipts,
     // and make only one prior location absolute so omitting target root breaks this exact match.
     const bundle = join(scratch, "baseline-bundle");
@@ -274,6 +278,42 @@ describe("run-audit CLI export capture", () => {
     const incompatible = JSON.parse(readFileSync(join(scratch, "incompatible-baseline-engagement.json"), "utf8")) as FindingsDocument;
     expect(incompatible.baseline?.comparison?.kind).toBe("incompatible");
     expect(incompatible.baseline?.counts).toMatchObject({ resolved: 0, new: 0, persistent: 0 });
+  }, CASE_TIMEOUT_MS);
+
+  it("binds fresh exports and later comparisons while preserving the verified retained engagement identity", async () => {
+    expect(engagement.auditContext?.kind).toBe("client-audit");
+    expect(engagement.auditContext?.target.revision).toMatch(/^content:[a-f0-9]{64}$/);
+    expect(engagement.auditContext?.provenance?.moduleObservations).toContainEqual(expect.objectContaining({ module: "M7", status: "examined", unitsExamined: expect.any(Number) }));
+    expect(engagement.auditContext?.scopeComplete).toBe(false);
+    expect(sarifOnly.runs[0]?.properties.harveyAuditContext?.target).toEqual(engagement.auditContext?.target);
+    expect(sarifOnly.runs[0]?.properties.harveyAuditContext?.engagementId).not.toBe(engagement.auditContext?.engagementId);
+    const meta = join(scratch, "forged-context-meta.json");
+    writeFileSync(meta, JSON.stringify({ ...m1470Meta, auditContext: { ...engagement.auditContext, engagementId: "operator-forged", scopeComplete: true } }));
+    const later = join(scratch, "fresh-later.json");
+    await run([join(scratch, "target"), "--findings-out", later, "--baseline", join(scratch, "engagement.json"), "--meta", meta]);
+    const current = JSON.parse(readFileSync(later, "utf8")) as FindingsDocument;
+    expect(current.auditContext?.engagementId).not.toBe("operator-forged");
+    expect(current.auditContext?.engagementId).not.toBe(engagement.auditContext?.engagementId);
+    expect(current.auditContext?.target).toEqual(engagement.auditContext?.target);
+    expect(current.baseline?.comparison?.kind).toBe("scope-change");
+    expect(current.baseline?.comparison?.limitations.join(" ")).toContain("nested scanner");
+    expect(current.baseline?.counts.new).toBe(0);
+    expect(current.baseline?.counts.resolved).toBe(0);
+    expect(current.baseline?.counts.persistent).toBeGreaterThan(0);
+    const replay = join(scratch, "fresh-replay.json");
+    await run([join(scratch, "target"), "--assemble", join(scratch, "fresh-bundle"), "--findings-out", replay, "--meta", meta, "--baseline", join(scratch, "engagement.json")]);
+    const assembled = JSON.parse(readFileSync(replay, "utf8")) as FindingsDocument;
+    expect(assembled.auditContext).toEqual(engagement.auditContext);
+    expect(assembled.baseline?.comparison?.kind).toBe("same-run-checkpoint");
+    expect(assembled.conservation?.ok).toBe(true);
+    const evidence = assembled as FindingsDocument & { auditEvidence: { current: { rawArtifacts: { path: string; sourcePath?: string }[] }[] } };
+    const raw = evidence.auditEvidence.current.flatMap((receipt) => receipt.rawArtifacts);
+    expect(raw.some((artifact) => /M10-datamap.*invocation-/.test(artifact.sourcePath ?? ""))).toBe(true);
+    const m4 = raw.find((artifact) => artifact.sourcePath?.endsWith("M4-owning-run.json"))!;
+    const owner = JSON.parse(readFileSync(join(scratch, "fresh-bundle", m4.path), "utf8")) as { commandExecutionReceipts: { artifacts: { path: string }[] }[] };
+    const paths = owner.commandExecutionReceipts.flatMap((receipt) => receipt.artifacts.map((artifact) => artifact.path));
+    expect(paths.length).toBeGreaterThan(1);
+    expect(new Set(paths).size).toBe(paths.length);
   }, CASE_TIMEOUT_MS);
 
   it("emits readiness from the same app inventory without changing M1-M10 execution", async () => {

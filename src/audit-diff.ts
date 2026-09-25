@@ -169,14 +169,21 @@ function contextComplete(c: AuditContext | undefined): c is AuditContext {
 function comparisonContext(options: FindingIdentityOptions): Pick<BaselineDiff["comparison"], "kind" | "limitations"> {
   const a = options.priorContext;
   const b = options.currentContext;
-  if (!contextComplete(a) || !contextComplete(b)) return { kind: "incompatible", limitations: ["Missing engagement, target revision, producer/schema versions or assessed-scope provenance. Unmatched identities remain unresolved; absence is not remediation."] };
-  if (a.target.id !== b.target.id) return { kind: "incompatible", limitations: ["Baseline and current evidence name different targets."] };
-  if (a.engagementId === b.engagementId || a.kind === "same-run-checkpoint" || b.kind === "same-run-checkpoint") return { kind: "same-run-checkpoint", limitations: ["This comparison includes a checkpoint from the same engagement, not a prior client audit. It measures capture changes, not client remediation."] };
+  const answer = (kind: BaselineDiff["comparison"]["kind"], reason: string): Pick<BaselineDiff["comparison"], "kind" | "limitations"> => ({
+    kind, limitations: [...new Set([reason, ...(a?.limitations ?? []).map((item) => `Prior audit: ${item}`), ...(b?.limitations ?? []).map((item) => `Current audit: ${item}`)])],
+  });
+  if (!contextComplete(a) || !contextComplete(b)) return answer("incompatible", "Missing engagement, target revision, producer/schema versions or assessed-scope provenance. Unmatched identities remain unresolved; absence is not remediation.");
+  if (a.target.id !== b.target.id) return answer("incompatible", "Baseline and current evidence name different targets.");
+  if ([a, b].some((context) => context.provenance && (!context.provenance.target.complete || !context.provenance.target.stable || !context.provenance.engine.complete || !context.provenance.engine.stable))) return answer("incompatible", "Source or engine observation was incomplete or changed during execution; one comparable revision is unproved.");
+  if (a.engagementId === b.engagementId || a.kind === "same-run-checkpoint" || b.kind === "same-run-checkpoint") return answer("same-run-checkpoint", "This comparison includes a checkpoint from the same engagement, not a prior client audit. It measures capture changes, not client remediation.");
   const producerKey = (c: AuditContext): string => JSON.stringify(Object.entries(c.producerVersions).sort(([a], [b]) => a.localeCompare(b)));
-  if (a.schemaVersion !== b.schemaVersion || producerKey(a) !== producerKey(b)) return { kind: "tool-change", limitations: ["Producer, rule or schema versions changed. New and absent observations are not attributed to source regressions or remediation."] };
-  if (!a.scopeComplete || !b.scopeComplete || JSON.stringify([...new Set(a.assessedScope)].sort()) !== JSON.stringify([...new Set(b.assessedScope)].sort())) return { kind: "scope-change", limitations: ["Assessed scope changed or is incomplete. Expanded and missing observations do not establish new or resolved defects."] };
-  if (a.target.revision === b.target.revision) return { kind: "same-source", limitations: ["The target revision is unchanged. Unmatched observations require identity or capture review; no source regression/remediation is claimed."] };
-  return { kind: "source-change", limitations: ["Counts cover only reviewed defects and current health findings within identical, complete assessed scope and producer/schema versions. Ambiguous identities and pending reviews remain unresolved."] };
+  const changedVersion = Object.keys(a.producerVersions).some((key) => key in b.producerVersions && a.producerVersions[key] !== b.producerVersions[key]);
+  if (a.schemaVersion !== b.schemaVersion || changedVersion) return answer("tool-change", "Producer, rule or schema versions changed. New and absent observations are not attributed to source regressions or remediation.");
+  if (!a.scopeComplete || !b.scopeComplete || JSON.stringify([...new Set(a.assessedScope)].sort()) !== JSON.stringify([...new Set(b.assessedScope)].sort())) return answer("scope-change", "Assessed scope changed or is incomplete. Expanded and missing observations do not establish new or resolved defects.");
+  if (producerKey(a) !== producerKey(b)) return answer("tool-change", "The producer population changed within the declared scope. New and absent observations are not attributed to source changes.");
+  if (a.provenance?.configurationSha256 !== b.provenance?.configurationSha256 || JSON.stringify(a.provenance?.inputBindings) !== JSON.stringify(b.provenance?.inputBindings)) return answer("scope-change", "Effective configuration or consumed external inputs changed or lack comparable bindings; source-only attribution is unproved.");
+  if (a.target.revision === b.target.revision) return answer("same-source", "The target revision is unchanged. Unmatched observations require identity or capture review; no source regression/remediation is claimed.");
+  return answer("source-change", "Counts cover only reviewed defects and current health findings within identical, complete assessed scope and producer/schema versions. Ambiguous identities and pending reviews remain unresolved.");
 }
 
 export function semanticFindingIdentity(f: Finding, options: FindingIdentityOptions = {}): string {

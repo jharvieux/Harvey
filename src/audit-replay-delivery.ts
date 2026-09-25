@@ -10,6 +10,22 @@ import { validateFindings, type AuditContext, type FindingsDocument, type Report
 import { toSarif } from "./sarif.js";
 import { renderReport } from "../report-template/render.mjs";
 import { statSafe } from "./fs-walk.js";
+import { auditContextDigest } from "./audit-context.js";
+
+function verifiedFreshContext(context: AuditContext | undefined, evidence: AuditEvidenceReconciliation, bundle: string): AuditContext | undefined {
+  if (context?.provenance?.kind !== "fresh-execution" || context.provenance.retainedBindingSha256 !== auditContextDigest(evidence.binding)) return undefined;
+  const scopes = evidence.current.map((receipt) => [receipt.scope.module, receipt.scope.workspace]);
+  if (auditContextDigest(scopes.sort()) !== context.provenance.observedScopesSha256) return undefined;
+  for (const receipt of evidence.current) {
+    const owners = receipt.rawArtifacts.filter((artifact) => artifact.sourcePath?.endsWith(`/${receipt.scope.module}-owning-run.json`));
+    if (owners.length !== 1) return undefined;
+    try {
+      const owner = JSON.parse(readFileSync(join(bundle, owners[0]!.path), "utf8")) as { freshExecution?: { engagementId?: string; bindingSha256?: string; auditContext?: AuditContext } };
+      if (owner.freshExecution?.engagementId !== context.engagementId || owner.freshExecution.bindingSha256 !== context.provenance.retainedBindingSha256 || auditContextDigest(owner.freshExecution.auditContext) !== auditContextDigest(context)) return undefined;
+    } catch { return undefined; }
+  }
+  return context;
+}
 
 export async function deliverAuditReplay(options: {
   target: string; bundle: string; findingsOut?: string; coverageOut?: string; sarifOut?: string;
@@ -28,16 +44,19 @@ export async function deliverAuditReplay(options: {
   if (options.sbomOut && !replay.sbom) throw new Error("Requested SBOM is missing from the retained evidence; retain its original inventory before assembly");
   enrichFindingsCwe(result.findings);
   const retainedContext = replay.meta?.auditContext;
-  const auditContext: AuditContext = {
-    engagementId: retainedContext?.engagementId ?? `retained:${realpathSync(options.bundle)}`,
-    kind: retainedContext?.kind ?? "same-run-checkpoint",
+  const freshContext = verifiedFreshContext(retainedContext, evidence, options.bundle);
+  const unverifiedFresh = retainedContext?.provenance?.kind === "fresh-execution" && !freshContext;
+  const auditContext: AuditContext = freshContext ?? {
+    engagementId: !unverifiedFresh && retainedContext?.engagementId || `retained:${realpathSync(options.bundle)}`,
+    kind: !unverifiedFresh && retainedContext?.kind || "same-run-checkpoint",
     target: { id: evidence.binding.target.path, revision: `${evidence.binding.target.revision}:${evidence.binding.target.sha256}` },
     schemaVersion: "finding-dispositions/1",
     // Scope belongs in assessedScope. Repeating a producer in another workspace
     // must not masquerade as a tool change; distinct versions still remain bound.
     producerVersions: { ...Object.fromEntries(evidence.current.map((receipt) => [JSON.stringify([receipt.producer.name, receipt.producer.version]), receipt.producer.version] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), engine: evidence.binding.engine.sha256, configuration: evidence.binding.configSha256 },
     assessedScope: evidence.current.map((receipt) => JSON.stringify([receipt.scope.module, receipt.scope.workspace, receipt.scope.tier, receipt.scope.surface])).sort(),
-    scopeComplete: evidence.missing.length === 0 && evidence.current.every((receipt) => !receipt.legacyReason) && result.recorded.every((row) => row.status === "ran"),
+    scopeComplete: !unverifiedFresh && evidence.missing.length === 0 && evidence.current.every((receipt) => !receipt.legacyReason) && result.recorded.every((row) => row.status === "ran"),
+    ...(unverifiedFresh ? { limitations: ["The retained fresh engagement context is not bound to every verified owning-run artifact; original engagement identity remains unproved."] } : {}),
   };
   let doc: FindingsDocument & { auditEvidence: AuditEvidenceReconciliation; conservation: ReturnType<typeof conservationLedger> } = {
     ...assembleEngagementDocument(result.recorded, env, result.findings, meta, result.hotspots, result.dataMap, result.testQuality),

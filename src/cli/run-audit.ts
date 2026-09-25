@@ -88,8 +88,9 @@ import "./sync-stdio.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
+import { beginFreshAuditContext, auditContextDigest } from "../audit-context.js";
 import { discoverReadinessPlan, serializeReadinessPlanV1 } from "../audit-readiness.js";
 import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
@@ -103,14 +104,14 @@ import { deliverAuditReplay } from "../audit-replay-delivery.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { probeExec } from "../probe-exec.js";
-import type { CommandExecutionReceipt } from "../producer-execution-receipt.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
 import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
-import { readEntriesLstatSafe, statSafe } from "../fs-walk.js";
+import { statSafe } from "../fs-walk.js";
 import { discoverWorkspaceInventory } from "../workspaces.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -237,14 +238,45 @@ const env: EngagementEnv = {
 // module CLIs for their --out artifacts.
 const captureDir = findingsOut || sarifOut || retainDir ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
 const replayBinding = retainDir ? createAuditReplayBinding(targetDir, { env, schemaHint: schemaHint ?? null, schemaHints, apps: appList, supabaseRefs: supabaseRefsArg, allowTargetInstall: args.includes("--allow-target-install"), runtime: { node: process.version, platform: process.platform, arch: process.arch }, environmentSha256: createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b)))).digest("hex") }) : undefined;
+const freshCapture = captureDir ? beginFreshAuditContext({
+  target: targetDir,
+  configuration: { ...env, schemaHint: schemaHint ? auditContextDigest(resolve(schemaHint)) : null, schemaHints: Object.fromEntries(Object.entries(schemaHints).map(([name, path]) => [name, auditContextDigest(resolve(path))])), apps: appList.map((app) => ({ name: app.name, path: auditContextDigest(app.path) })), supabaseRefs: supabaseRefsArg.map((ref) => auditContextDigest(ref)), allowTargetInstall: args.includes("--allow-target-install"), runtime: { node: process.version, platform: process.platform, arch: process.arch } },
+  inputs: [...(schemaHint ? [{ role: "schema", path: schemaHint }] : []), ...Object.entries(schemaHints).map(([name, path]) => ({ role: `schema:${name}`, path })), ...(artifactsDir ? [{ role: "historical pass artifacts", path: artifactsDir, historical: true }] : [])],
+  retainedBinding: replayBinding,
+}) : undefined;
 const retainedPasses: AuditEvidenceInput[] = [];
 let commandReceipts: CommandExecutionReceipt[] = [];
+const capturedPaths = new Map<string, string>();
+let retainedInvocation = 0;
+const capturedPath = (path: string): string => capturedPaths.get(resolve(path)) ?? path;
+const outputFlags = ["--out", "--findings-out", "--sarif-out", "--sbom-out", "--data-map-out"];
+
+function invocationOutputPaths(argv: readonly string[], cwd = process.cwd()): string[] {
+  const actual = [...argv];
+  if (!retainDir) return actual;
+  const invocation = ++retainedInvocation;
+  for (let i = 0; i < actual.length; i += 1) {
+    const [flag, inline] = actual[i]!.split(/=(.*)/s);
+    if (!outputFlags.includes(flag!)) continue;
+    const value = inline ?? actual[i + 1];
+    if (!value) continue;
+    const requested = resolve(cwd, value);
+    if (dirname(requested) !== captureDir) continue;
+    // Per-app fan-out may reuse a logical report path. Each actual invocation owns immutable bytes.
+    const extension = extname(requested);
+    const path = `${requested.slice(0, requested.length - extension.length)}.invocation-${invocation}${extension}`;
+    capturedPaths.set(requested, path);
+    if (inline !== undefined) actual[i] = `${flag}=${path}`;
+    else actual[++i] = path;
+  }
+  return actual;
+}
 
 const commandArtifacts = (argv: readonly string[], cwd = process.cwd()): { role: "report"; path: string }[] => {
   const artifacts: { role: "report"; path: string }[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const [flag, inline] = argv[i]!.split(/=(.*)/s);
-    if (["--out", "--findings-out", "--sarif-out", "--sbom-out"].includes(flag!)) {
+    if (outputFlags.includes(flag!)) {
       const path = inline ?? argv[i + 1];
       if (path) artifacts.push({ role: "report", path: resolve(cwd, path) });
     }
@@ -252,37 +284,73 @@ const commandArtifacts = (argv: readonly string[], cwd = process.cwd()): { role:
   return artifacts;
 };
 
+function retainedCommandArtifacts(receipts: readonly CommandExecutionReceipt[]): string[] {
+  const paths = new Map<string, string>();
+  const invocations = new Set<string>();
+  const visitReceipt = (receipt: CommandExecutionReceipt): void => {
+    assertCommandExecutionReceipt(receipt);
+    if (invocations.has(receipt.invocationId)) throw new Error(`Retained evidence repeats command invocation ${receipt.invocationId}`);
+    invocations.add(receipt.invocationId);
+    for (const artifact of receipt.artifacts) {
+      const prior = paths.get(artifact.path);
+      if (prior && prior !== artifact.sha256) throw new Error(`Retained report changed between invocations: ${artifact.path}`);
+      if (prior) continue;
+      const bytes = readFileSync(artifact.path);
+      if (bytes.byteLength !== artifact.bytes || createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error(`Retained report no longer matches its producing invocation: ${artifact.path}`);
+      paths.set(artifact.path, artifact.sha256);
+      let value: unknown;
+      try { value = JSON.parse(bytes.toString("utf8")); } catch { continue; }
+      visitJson(value);
+    }
+  };
+  const visitJson = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(visitJson); return; }
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "executionReceipt" || (key === "receipt" && item && typeof item === "object" && "invocationId" in item)) {
+        assertCommandExecutionReceipt(item);
+        visitReceipt(item);
+      } else if (key !== "commandExecutionReceipts") visitJson(item);
+    }
+  };
+  receipts.forEach(visitReceipt);
+  return [...paths.keys()];
+}
+
 const ctx: RunContext = {
   targetDir,
   env,
   exec: (command, argv, options) => {
-    const result = probeExec(command, argv, {
+    const actualArgv = invocationOutputPaths(argv, options?.cwd);
+    const result = probeExec(command, actualArgv, {
       ...options,
       receipt: {
         ...options?.receipt,
         target: { identity: "audit-target", value: { path: targetDir, revision: replayBinding?.target.revision ?? null, treeSha256: replayBinding?.target.sha256 ?? null } },
         toolchain: [{ name: command, version: replayBinding?.engine.sha256 ?? process.version }],
-        configuration: { identity: "audit-command-effective-input", value: { argv, env, options: options?.env ? Object.keys(options.env).sort() : [] } },
-        artifacts: [...(options?.receipt?.artifacts ?? []), ...commandArtifacts(argv, options?.cwd)],
+        configuration: { identity: "audit-command-effective-input", value: { argv: actualArgv, env, options: options?.env ? Object.keys(options.env).sort() : [] } },
+        artifacts: [...(options?.receipt?.artifacts ?? []).map((artifact) => ({ ...artifact, path: capturedPath(artifact.path) })), ...commandArtifacts(actualArgv, options?.cwd)],
       },
     });
+    freshCapture?.observeCommand(command, result.receipt, options?.env ? { ...process.env, ...options.env } : process.env);
     if (retainDir) {
       if (!result.receipt) throw new Error(`command ${command} completed without a versioned execution receipt`);
       commandReceipts.push(result.receipt);
     }
     return result;
   },
-  exists: existsSync,
+  exists: (path) => existsSync(capturedPath(path)),
   captureDir,
   readFindings: (p) => {
-    if (!existsSync(p)) return [];
-    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    const path = capturedPath(p);
+    if (!existsSync(path)) return [];
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(parsed)) throw new Error(`captured findings at ${p} is not a Finding[] array`);
     return parsed as Finding[];
   },
   // #420: the object-artifact reader — no array assertion, so M3/M8's { ... } --out shapes parse
   // instead of throwing. Missing file → undefined (the CLI declined to write one).
-  readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
+  readArtifact: (p) => (existsSync(capturedPath(p)) ? JSON.parse(readFileSync(capturedPath(p), "utf8")) : undefined),
   // #416: where the out-of-orchestrator passes leave <module>.pass.json, and the clock the probes
   // judge freshness against. Undefined artifactsDir ⇒ those probes stay honestly not-run.
   artifactsDir: artifactsDir ? resolve(artifactsDir) : undefined,
@@ -296,12 +364,14 @@ const ctx: RunContext = {
   discoverSchemaFiles,
   supabaseDbUrls,
   isGitRepoRoot,
-  ...(retainDir ? { retainModuleResult: ((module, reports) => {
+  ...(freshCapture ? { retainModuleResult: ((module, reports) => {
+    freshCapture.observeModule(module, reports);
+    if (!retainDir) return;
     const raw = join(captureDir!, `${module}-owning-run.json`);
     const commandExecution = commandReceipts.length > 0 ? { kind: "command" } : { kind: "in-process", reason: "This module completed without invoking a child command." };
-    writeFileSync(raw, `${JSON.stringify({ module, reports, commandExecution, commandExecutionReceipts: commandReceipts }, null, 2)}\n`);
+    writeFileSync(raw, `${JSON.stringify({ module, reports, commandExecution, commandExecutionReceipts: commandReceipts, freshExecution: { engagementId: freshCapture.engagementId, bindingSha256: freshCapture.retainedBindingSha256 } }, null, 2)}\n`);
+    const artifacts = [raw, ...retainedCommandArtifacts(commandReceipts)];
     commandReceipts = [];
-    const artifacts = [raw, ...readEntriesLstatSafe(captureDir!).filter(({ name }) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map(({ path }) => path)];
     for (const result of reports) retainedPasses.push({ scope: { module, workspace: result.instance ?? ".", tier: "orchestrated", surface: "module", wholeModule: true }, generatedAt: new Date().toISOString(), producer: { name: `audit-runner:${module}`, version: replayBinding!.engine.sha256 }, result, rawArtifacts: artifacts });
   }) satisfies NonNullable<RunContext["retainModuleResult"]> } : {}),
 };
@@ -330,7 +400,16 @@ if (freshness.behind.length > 0) {
 }
 console.log("");
 
-const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions, producerExecutionReceipts } = runAudit(AUDIT_RUNNERS, ctx);
+const auditContext = freshCapture?.finish(producerExecutionReceipts);
+if (retainDir && auditContext) {
+  for (const module of AUDIT_MODULES) {
+    const path = join(captureDir!, `${module}-owning-run.json`);
+    if (!existsSync(path)) continue;
+    const owningRun = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, `${JSON.stringify({ ...owningRun, freshExecution: { engagementId: auditContext.engagementId, bindingSha256: freshCapture!.retainedBindingSha256, auditContext } }, null, 2)}\n`);
+  }
+}
 // #1470: a duplicate finding id used to stop BOTH exports at schema validation, after the coverage
 // ledger and the conservation ledger had both printed PASS — so a 589-finding engagement produced
 // no deliverable and every status read green. The ids are disambiguated now; the collision is still
@@ -367,7 +446,7 @@ let exportDocument: FindingsDocument | undefined;
 
 if (findingsOut || sarifOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality, auditContext);
 
   // #1096 invariant (1): every finding the probes produced is delivered, or the pipeline says why.
   // Asserted here, on the real engagement path, because that is where a loss reaches a client — the
@@ -471,7 +550,8 @@ if (retainDir && replayBinding) {
   if (JSON.stringify(after.target) !== JSON.stringify(replayBinding.target)) { console.error("RETENTION FAIL — target changed during execution; do not reuse these passes"); process.exit(1); }
   const retainedSbom = sbomOut ?? join(captureDir!, "sbom.json");
   if (!sbomOut) writeFileSync(retainedSbom, `${JSON.stringify(buildSbom(targetDir, { targetName: basename(targetDir) }).bom, null, 2)}\n`);
-  const path = writeAuditReplayBundle(resolve(retainDir), { binding: replayBinding, scopes: retainedPasses.map((pass) => pass.scope), passes: retainedPasses, sbomPath: retainedSbom, meta: metaPath ? JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta : placeholderMeta(targetDir) });
+  const retainedMeta = metaPath ? JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta : placeholderMeta(targetDir);
+  const path = writeAuditReplayBundle(resolve(retainDir), { binding: replayBinding, scopes: retainedPasses.map((pass) => pass.scope), passes: retainedPasses, sbomPath: retainedSbom, meta: { ...retainedMeta, auditContext } });
   console.log(`Bound module evidence retained → ${path}`);
 }
 
