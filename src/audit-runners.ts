@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass, rejectedPassLabel } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
@@ -395,7 +395,7 @@ const recordedPassNote = (artifact: PassArtifact, now: number): [string, Finding
   const findings = fresh.flatMap((p) => p.findings ?? []);
   const one = fresh.length === 1;
   return [
-    `${one ? "A recorded" : "Recorded"} ${fresh.map(passLabel).join(", ")} contributed ${findings.length} finding(s) to this row; ${one ? "it covers" : "they cover"} one tier of this module, so ${one ? "it is" : "they are"} not by ${one ? "itself" : "themselves"} evidence the module ran in full (#1042)${stale.length ? `. Also recorded but STALE, and therefore not collected: ${stale.map(passLabel).join(", ")}` : ""}`,
+    `${one ? "A recorded" : "Recorded"} ${fresh.map(passLabel).join(", ")} contributed ${findings.length} finding(s) to this row; ${one ? "it covers" : "they cover"} one tier of this module, so ${one ? "it is" : "they are"} not by ${one ? "itself" : "themselves"} evidence the module ran in full (#1042)${stale.length ? `. Also recorded but REJECTED, and therefore not collected: ${stale.map((pass) => rejectedPassLabel(pass, now)).join(", ")}` : ""}`,
     findings,
   ];
 };
