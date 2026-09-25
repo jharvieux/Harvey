@@ -941,6 +941,7 @@ export function licenseScope(dir: string): LicenseScope {
         // npm's optionalDependencies override the same key in dependencies.
         if (section === "dependencies" && Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
         if (typeof specifier === "string" && specifier.startsWith("npm:")) {
+          const declarationKey = `alias\u0000${manifest.label}\u0000${name}\u0000${specifier}`;
           const target = npmAliasTarget(specifier);
           const installation = npmTree ? visibleInstallation(installations, manifest.label, name) : undefined;
           const origin = installation && deps.licenseOrigins.find((entry) => entry.path === installation.path);
@@ -948,7 +949,7 @@ export function licenseScope(dir: string): LicenseScope {
             directResolved.add(`${installation.name}\u0000${installation.version}`);
           } else {
             // Success in another manifest never erases this declaration's unresolved coverage.
-            unresolved.set(`alias\u0000${name}\u0000${specifier}`, aliasCandidate(name, specifier, true));
+            unresolved.set(declarationKey, aliasCandidate(name, specifier, true, manifest.label === "package.json" ? undefined : manifest.label));
           }
           if (installation && !origin?.explicitName) uncertainAliasPaths.add(installation.path);
           if (!npmTree && target) {
@@ -956,7 +957,7 @@ export function licenseScope(dir: string): LicenseScope {
               entry.component.name === target.name && aliasVersionMatches(entry.component.version, target.range));
             if (resolved) {
               directResolved.add(`${resolved.component.name}\u0000${resolved.component.version}`);
-              unresolved.delete(`alias\u0000${name}\u0000${specifier}`);
+              unresolved.delete(declarationKey);
             }
           }
         } else {

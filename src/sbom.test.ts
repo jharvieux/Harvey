@@ -23,8 +23,8 @@ const validateCycloneDx15 = (value: unknown): { valid: boolean; errors: unknown[
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
 const inventory = ({ components, unmatched }: ReturnType<typeof parsePackageLock>) => ({ components, unmatched });
-const unresolvedAlias = (name: string, targetName: string, range: string) => ({
-  name, direct: true, unresolvedAlias: { declared: `npm:${targetName}@${range}`, targetName, range },
+const unresolvedAlias = (name: string, targetName: string, range: string, ownerPath?: string) => ({
+  name, direct: true, unresolvedAlias: { declared: `npm:${targetName}@${range}`, targetName, range, ...(ownerPath ? { ownerPath } : {}) },
 });
 
 describe("lockfile parsing", () => {
@@ -770,7 +770,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     const scope = licenseScope(dir);
     expect(scope.candidates).toEqual([
       { name: "real-b", version: "2.0.0", license: "MIT", direct: true },
-      unresolvedAlias("alias", target, range),
+      unresolvedAlias("alias", target, range, "packages/a/package.json"),
     ]);
     const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
@@ -790,7 +790,7 @@ describe("npm alias provenance (#2046 B2)", () => {
     }, { "packages/a": { dependencies: { alias: "npm:real@^1.0.0" } } });
     const scope = licenseScope(dir);
     expect(scope.candidates).toContainEqual({ name: "real", version: "1.0.0", license: "MIT", direct: false });
-    expect(scope.candidates).toContainEqual(unresolvedAlias("alias", "real", "^1.0.0"));
+    expect(scope.candidates).toContainEqual(unresolvedAlias("alias", "real", "^1.0.0", "packages/a/package.json"));
     const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
     expect(findings.map((finding) => finding.id)).toContain("SUP-LICENSE-00");
     for (const finding of findings.filter((finding) => finding.id.startsWith("SUP-LICENSE-COPYLEFT"))) {
@@ -829,8 +829,8 @@ describe("npm alias provenance (#2046 B2)", () => {
     const scope = licenseScope(dir);
     expect(scope.candidates).toEqual([
       { name: "ordinary", version: "1.0.0", license: "MIT", direct: false },
-      unresolvedAlias("alias", "real-a", "1.0.0"),
-      unresolvedAlias("alias", "real-b", "2.0.0"),
+      unresolvedAlias("alias", "real-a", "1.0.0", "packages/a/package.json"),
+      unresolvedAlias("alias", "real-b", "2.0.0", "packages/b/package.json"),
     ]);
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 })) as unknown as typeof fetch;
     const findings = await checkLicenseCompliance(scope, { fetchImpl });
@@ -838,6 +838,23 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
     expect(findings[0]?.evidence).toContain("npm:real-a@1.0.0");
     expect(findings[0]?.evidence).toContain("npm:real-b@2.0.0");
+    const outcomes = (await checkLicenseCompliance(scope, { skipRegistry: true, emitAssessment: true }))
+      .find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes ?? [];
+    expect(outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ coordinate: 'alias@unresolved:["packages/a/package.json","npm:real-a@1.0.0"]', provenance: "packages/a/package.json" }),
+      expect.objectContaining({ coordinate: 'alias@unresolved:["packages/b/package.json","npm:real-b@2.0.0"]', provenance: "packages/b/package.json" }),
+    ]));
+  });
+
+  it("preserves identical unresolved alias declarations from separate workspace manifests", () => {
+    write({ workspaces: ["packages/*"] }, {}, {
+      "packages/a": { dependencies: { alias: "npm:react@^18.0.0" } },
+      "packages/b": { dependencies: { alias: "npm:react@^18.0.0" } },
+    });
+    expect(licenseScope(dir).candidates).toEqual([
+      unresolvedAlias("alias", "react", "^18.0.0", "packages/a/package.json"),
+      unresolvedAlias("alias", "react", "^18.0.0", "packages/b/package.json"),
+    ]);
   });
 
   it.each(["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"])("reconciles a versionless scoped npm alias declared in %s", async (section) => {
