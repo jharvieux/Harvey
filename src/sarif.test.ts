@@ -31,6 +31,7 @@ function finding(over: Partial<Finding> = {}): Finding {
     impact: "bypasses all RLS",
     fix: "move the key server-side",
     value: 5, ease: 4, safety: 5,
+    assessment: { disposition: "confirmed", evidenceKind: "runtime", reviewStatus: "reviewed", sourceScope: "current", reason: "Independent fixture reproduction", review: { reviewer: "fixture-reviewer", evidence: ["fixture/reproduction"] } },
     ...over,
   };
 }
@@ -41,6 +42,27 @@ const RAN: CoverageRow[] = [{ module: "M1", name: "Multi-tenant security", statu
 const run = (log: object): any => (log as any).runs[0];
 
 describe("result mapping", () => {
+  it("exports pending, inventory, false-positive and superseded populations without asserting defects", () => {
+    const inventory = finding({ assessment: undefined, category: "Data classification", taxonomy: "M10 — Data classification" });
+    const pending = finding({ id: "pending", assessment: undefined });
+    const rejected = finding({ id: "rejected", assessment: { ...finding().assessment!, disposition: "false-positive" } });
+    const historical = finding({ id: "historical", assessment: { ...finding().assessment!, disposition: "superseded", sourceScope: "historical", evidenceKind: "historical", supersededBy: { artifact: "current.json", reason: "New complete measurement" } } });
+    const health = finding({ id: "M4", assessment: undefined, category: "Maintainability", taxonomy: "M4 — Duplication" });
+    const r = run(toSarif([pending, inventory, rejected, historical, health], { coverage: RAN }));
+    expect(r.results.map((x: { kind: string; level: string }) => [x.kind, x.level])).toEqual([["review", "none"], ["informational", "none"], ["informational", "none"], ["informational", "none"], ["fail", "error"]]);
+    expect(r.results.map((x: { properties: { severity: string } }) => x.properties.severity)).toEqual(Array(5).fill("Critical"));
+    expect(r.properties.harveyPopulations.counts).toMatchObject({ confirmed: 0, actionable: 1, inventory: 1, "pending-review": 1, superseded: 1, "false-positive": 1 });
+    expect(r.results[2].properties.assessment.review.reviewer).toBe("fixture-reviewer");
+    expect(r.results[3].properties.assessment.supersededBy.artifact).toBe("current.json");
+  });
+  it("distinguishes same-rule same-location evidence and preserves duplicate occurrences after rekey/reorder", () => {
+    const a = finding({ id: "collision", evidence: "A" });
+    const b = finding({ id: "collision", evidence: "B" });
+    const rows = [a, b, { ...a, id: "duplicate" }];
+    const exportKeys = (rows: Finding[]) => run(toSarif(rows, { coverage: RAN })).results.map((x: { partialFingerprints: Record<string, string> }) => x.partialFingerprints["harveyOccurrence/v2"]).sort();
+    expect(new Set(exportKeys(rows)).size).toBe(3);
+    expect(exportKeys(rows)).toEqual(exportKeys(rows.reverse().map((f, i) => ({ ...f, id: `new-${i}` }))));
+  });
   it("uses the taxonomy as the rule id and severity as the level", () => {
     const r = run(toSarif([finding(), finding({ severity: "Medium", taxonomy: "perf_n_plus_one" })], { coverage: RAN }));
     expect(r.results.map((x: { ruleId: string; level: string }) => [x.ruleId, x.level])).toEqual([

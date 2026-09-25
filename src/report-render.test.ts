@@ -23,6 +23,7 @@ const reportFinding = (id: string, severity: Finding["severity"]): Finding => ({
   id, title: `${severity} finding`, severity, confidence: "Confirmed", category: "Security",
   taxonomy: `test-${severity}`, location: `${id}.ts:1`, status: "Open", evidence: "evidence",
   impact: "impact", fix: "fix", value: 3, ease: 3, safety: 3,
+  assessment: { disposition: "confirmed", evidenceKind: "runtime", reviewStatus: "reviewed", sourceScope: "current", reason: "Fixture independent reproduction", review: { reviewer: "fixture-reviewer", evidence: ["fixture/reproduction"] } },
 });
 
 const emptySeverityCases: Record<string, number>[] = [{}, { Critical: 0, High: 0 }];

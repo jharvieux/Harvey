@@ -7,6 +7,7 @@ export interface RollupShape {
   taxonomy: string;
   severity: string;
   category: string;
+  assessment?: { disposition: string };
 }
 
 export interface RollupSingle<F> {
@@ -19,6 +20,7 @@ export interface RollupGroup<F> {
   taxonomy: string;
   severity: string;
   category: string;
+  disposition: string;
   count: number;
   representatives: F[];
   withheld: F[];

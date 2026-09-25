@@ -27,6 +27,7 @@
 // arithmetic is `baselineLedger` below, asserted across applyBaseline on the same discipline (#1146).
 // Stated rather than assumed: see docs/design/conservation-of-findings.md.
 
+import { contentIdentity } from "../report-template/dispositions.mjs";
 import type { AuditModule } from "./audit-coverage.js";
 import type { Finding } from "./findings.js";
 
@@ -56,6 +57,8 @@ type Disposition = "delivered" | "deduped" | "suppressed" | "capped" | "not-appl
 // conservation test; if that rollup is ever moved into assembly it declares its withheld rows here.
 export interface DeclaredDrop {
   id: string;
+  /** Required when one producer ID names multiple different observations. */
+  contentKey?: string;
   disposition: "suppressed" | "capped" | "not-applicable";
   reason: string;
   /** The pipeline code that performed the drop — so a nonzero column names who filled it. */
@@ -64,6 +67,8 @@ export interface DeclaredDrop {
 
 interface LedgerRow {
   id: string;
+  contentKey?: string;
+  count?: number;
   disposition: Disposition;
   /** Why this finding is not delivered. Empty ONLY for `delivered`; `unaccounted` means nobody said. */
   reason: string;
@@ -96,6 +101,29 @@ interface ConservationLedger {
 
 const bodyKey = (f: Finding): string => JSON.stringify(f);
 
+function occurrenceMatcher(findings: Finding[]): { consumed: Set<number>; take: (finding: Finding) => number } {
+  const consumed = new Set<number>();
+  const byContent = new Map<string, number[]>();
+  const byCapture = new Map<string, number[]>();
+  findings.forEach((f, i) => {
+    const content = contentIdentity(f);
+    for (const [index, key] of [[byContent, content], [byCapture, `${content}:${f.origin?.producerId ?? f.id}`]] as const) {
+      const indices = index.get(key) ?? []; indices.push(i); index.set(key, indices);
+    }
+  });
+  const takeIndex = (indices: number[] | undefined): number => {
+    while (indices?.length && consumed.has(indices[indices.length - 1]!)) indices.pop();
+    return indices?.pop() ?? -1;
+  };
+  return { consumed, take: (f) => {
+    const content = contentIdentity(f);
+    let i = takeIndex(byCapture.get(`${content}:${f.origin?.producerId ?? f.id}`));
+    if (i < 0) i = takeIndex(byContent.get(content));
+    if (i >= 0) consumed.add(i);
+    return i;
+  } };
+}
+
 // Attribution for a finding id, from runAudit's per-probe map. Ids can be produced by two probes
 // (the shared-CLI captures), so this is a list, and it is empty when the caller has no map.
 const attribute = (byModule: Partial<Record<AuditModule, Finding[]>>): Map<string, AuditModule[]> => {
@@ -115,88 +143,54 @@ const attribute = (byModule: Partial<Record<AuditModule, Finding[]>>): Map<strin
  */
 export function conservationLedger(produced: Finding[], delivered: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}, declared: DeclaredDrop[] = []): ConservationLedger {
   const owners = attribute(byModule);
-  const declaredById = new Map<string, DeclaredDrop>();
-  for (const d of declared) declaredById.set(d.id, d);
-  const deliveredById = new Map<string, number>();
-  for (const f of delivered) deliveredById.set(f.id, (deliveredById.get(f.id) ?? 0) + 1);
-
-  // Byte-identical repeats of the same id are the shared-CLI double capture the assembler collapses
-  // (quality-scan under M4+M5, detect-static under M6/M7/M8/M9). Counting DISTINCT BODIES per id is
-  // how many rows could survive dedupe; anything beyond that was a duplicate.
-  const bodiesById = new Map<string, Set<string>>();
-  const countById = new Map<string, number>();
+  const unique = new Map<string, { finding: Finding; copies: number }>();
   for (const f of produced) {
-    countById.set(f.id, (countById.get(f.id) ?? 0) + 1);
-    const bodies = bodiesById.get(f.id) ?? new Set<string>();
-    bodies.add(bodyKey(f));
-    bodiesById.set(f.id, bodies);
+    const key = bodyKey(f);
+    const entry = unique.get(key);
+    if (entry) entry.copies++;
+    else unique.set(key, { finding: f, copies: 1 });
   }
-
   const rows: LedgerRow[] = [];
-  const overDelivered: string[] = [];
-  const lostById = new Map<string, number>();
+  const { consumed, take } = occurrenceMatcher(delivered);
+  const distinctById = new Map<string, number>();
+  for (const { finding } of unique.values()) distinctById.set(finding.id, (distinctById.get(finding.id) ?? 0) + 1);
+  const credited = new Set<DeclaredDrop>();
   let deliveredFromProduced = 0;
   let deduped = 0;
   let suppressed = 0;
   let capped = 0;
   let notApplicable = 0;
   let unaccounted = 0;
-
-  for (const [id, count] of countById) {
-    const distinct = bodiesById.get(id)!.size;
-    const modules = owners.get(id) ?? [];
-    const duplicates = count - distinct;
-    if (duplicates > 0) {
-      deduped += duplicates;
-      rows.push({ id, disposition: "deduped", reason: `${duplicates} byte-identical duplicate capture(s) of this finding collapsed at assembly (one CLI captured by more than one probe)`, modules });
+  for (const { finding: f, copies } of unique.values()) {
+    const contentKey = contentIdentity(f);
+    const modules = owners.get(f.id) ?? [];
+    if (copies > 1) {
+      deduped += copies - 1;
+      rows.push({ id: f.id, contentKey, count: copies - 1, modules, disposition: "deduped", reason: `${copies - 1} byte-identical duplicate capture(s) collapsed; content ${contentKey}` });
     }
-    const arrived = deliveredById.get(id) ?? 0;
-    deliveredFromProduced += Math.min(arrived, distinct);
-    // More copies of an id in the deliverable than the probes produced distinct bodies for: assembly
-    // multiplied a row. Counted as a gain, not glossed over — a report is wrong in both directions.
-    if (arrived > distinct) overDelivered.push(id);
-    const lost = distinct - Math.min(arrived, distinct);
-    if (lost > 0) {
-      lostById.set(id, lost);
-      // A transform that declared this drop owns it — the loss lands in the named column with the
-      // stated reason. Otherwise nobody said why, and that is the #1040 failure.
-      const drop = declaredById.get(id);
-      if (drop) {
-        if (drop.disposition === "suppressed") suppressed += lost;
-        else if (drop.disposition === "capped") capped += lost;
-        else notApplicable += lost;
-        rows.push({ id, disposition: drop.disposition, reason: `${drop.reason} — dropped by ${drop.by}`, modules });
-      } else {
-        unaccounted += lost;
-        rows.push({ id, disposition: "unaccounted", reason: "", modules });
-      }
+    const index = take(f);
+    if (index >= 0) { deliveredFromProduced++; continue; }
+    const sameId = distinctById.get(f.id);
+    const drops = declared.filter((d) => !credited.has(d) && d.id === f.id && (d.contentKey === contentKey || (!d.contentKey && sameId === 1)) && d.reason.trim() && d.by.trim());
+    if (drops.length === 1) {
+      const drop = drops[0]!;
+      credited.add(drop);
+      if (drop.disposition === "suppressed") suppressed++;
+      else if (drop.disposition === "capped") capped++;
+      else notApplicable++;
+      rows.push({ id: f.id, contentKey, modules, disposition: drop.disposition, reason: `${drop.reason} — dropped by ${drop.by}` });
+    } else {
+      unaccounted++;
+      rows.push({ id: f.id, contentKey, modules, disposition: "unaccounted", reason: "" });
     }
   }
-
-  // A declared drop whose finding did NOT actually go missing — it still ships, or no probe produced
-  // it — is a bookkeeping lie: it would credit a column against nothing and let the arithmetic close
-  // on a fiction. Fail loud rather than trust the declaration.
-  const misdeclaredDispositions = declared.filter((d) => (lostById.get(d.id) ?? 0) === 0).map((d) => d.id);
-
+  const misdeclaredDispositions = declared.filter((d) => !credited.has(d)).map((d) => d.id);
+  const gains = delivered.filter((_f, i) => !consumed.has(i));
   const synthesizerIds = new Set(SYNTHESIZERS.map((s) => s.id));
-  const gains = delivered.filter((f) => !countById.has(f.id));
-  const undeclaredGains = [...gains.filter((f) => !synthesizerIds.has(f.id)).map((f) => f.id), ...overDelivered];
-
-  return {
-    produced: produced.length,
-    delivered: delivered.length,
-    deliveredFromProduced,
-    deduped,
-    suppressed,
-    capped,
-    notApplicable,
-    unaccounted,
-    synthesized: delivered.length - deliveredFromProduced,
-    undeclaredGains,
-    misdeclaredDispositions,
-    rows,
-    ok: unaccounted === 0 && undeclaredGains.length === 0 && misdeclaredDispositions.length === 0,
-  };
+  const undeclaredGains = gains.filter((f) => !synthesizerIds.has(f.id) || produced.some((p) => p.id === f.id)).map((f) => f.id);
+  return { produced: produced.length, delivered: delivered.length, deliveredFromProduced, deduped, suppressed, capped, notApplicable, unaccounted,
+    synthesized: gains.length, undeclaredGains, misdeclaredDispositions, rows,
+    ok: unaccounted === 0 && undeclaredGains.length === 0 && misdeclaredDispositions.length === 0 };
 }
 
 export function formatLedger(ledger: ConservationLedger): string {
@@ -242,8 +236,8 @@ export function formatLedger(ledger: ConservationLedger): string {
 // resolved rows it surfaces come from the PRIOR engagement and live in doc.baseline, not
 // doc.findings. So the honest invariant today is removed == 0 AND gained == 0: any finding that
 // entered and did not exit was silently deleted by a baseline-application bug (the NEW finding the
-// task guards), and any row that exited without entering was invented. Matching is by finding id,
-// which applyBaseline preserves (it spreads `{ ...current, baselineStatus }`). If a future baseline
+// task guards), and any row that exited without entering was invented. Matching binds content and
+// occurrence multiplicity, excluding baseline annotations. If a future baseline
 // design legitimately withholds accepted/persistent findings, it must ACCOUNT each removal — declare
 // it, don't drop it — exactly as the disposition columns above require.
 interface BaselineLedger {
@@ -259,25 +253,13 @@ interface BaselineLedger {
 
 export function baselineLedger(before: Finding[], after: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}): BaselineLedger {
   const owners = attribute(byModule);
-  const enteredById = new Map<string, number>();
-  for (const f of before) enteredById.set(f.id, (enteredById.get(f.id) ?? 0) + 1);
-  const exitedById = new Map<string, number>();
-  for (const f of after) exitedById.set(f.id, (exitedById.get(f.id) ?? 0) + 1);
-
-  let retained = 0;
+  const { consumed, take } = occurrenceMatcher(after);
   const removed: { id: string; modules: AuditModule[] }[] = [];
-  for (const [id, n] of enteredById) {
-    const out = exitedById.get(id) ?? 0;
-    retained += Math.min(n, out);
-    for (let i = out; i < n; i++) removed.push({ id, modules: owners.get(id) ?? [] });
+  for (const f of before) {
+    if (take(f) < 0) removed.push({ id: f.id, modules: owners.get(f.id) ?? [] });
   }
-  const gained: string[] = [];
-  for (const [id, out] of exitedById) {
-    const inn = enteredById.get(id) ?? 0;
-    for (let i = inn; i < out; i++) gained.push(id);
-  }
-
-  return { entered: before.length, exited: after.length, retained, removed, gained, ok: removed.length === 0 && gained.length === 0 };
+  const gained = after.filter((_f, i) => !consumed.has(i)).map((f) => f.id);
+  return { entered: before.length, exited: after.length, retained: consumed.size, removed, gained, ok: removed.length === 0 && gained.length === 0 };
 }
 
 export function formatBaselineLedger(ledger: BaselineLedger): string {
