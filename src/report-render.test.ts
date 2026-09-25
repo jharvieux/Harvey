@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { buildHtml, completenessBanner, coverageSection, healthGauge, limitationsSection, severityDonut } from "../report-template/render.mjs";
 import type { CoverageRow, Finding, ReportMeta } from "./findings.js";
+import { applyVerifyResults } from "./pentest/verify.js";
 
 const meta = (over: Partial<ReportMeta> = {}): ReportMeta => ({
   client: "Acme", subtitle: "Q3 audit", date: "2026-07-25", commit: "abc1234", auditor: "Harvey",
@@ -26,6 +27,19 @@ const reportFinding = (id: string, severity: Finding["severity"]): Finding => ({
 });
 
 const emptySeverityCases: Record<string, number>[] = [{}, { Critical: 0, High: 0 }];
+
+describe("replay annotation delivery (#2115)", () => {
+  it.each(["proven", "unproven"] as const)("renders the %s annotation with escaped route notes", (verdict) => {
+    const evidence = 'Victim route /failed returned 503; /empty had no IDs; source <img src=x onerror=alert(1)> & owned collection.';
+    const doc = applyVerifyResults({ meta: meta(), findings: [reportFinding("IDOR-OBJECT", "High")] }, [
+      { findingId: "IDOR-OBJECT", verdict, severity: "High", repro: null, evidence },
+    ]);
+    const html = buildHtml(doc);
+    expect(html).toContain('<b>Note</b> M2 verify: Victim route /failed returned 503; /empty had no IDs; source &lt;img src=x onerror=alert(1)&gt; &amp; owned collection.');
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain(verdict === "proven" ? "Proven (dynamic)" : "Unproven (dynamic)");
+  });
+});
 
 describe("healthGauge", () => {
   it("shows the numeric score and colors green at/above 7", () => {

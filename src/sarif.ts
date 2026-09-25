@@ -205,7 +205,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
       level: LEVEL[f.severity],
       // The location string is repeated in the message so a finding whose location cannot be a
       // file region still says where it is, rather than reading as an unlocated repo-wide alert.
-      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}` },
+      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}${f.note ? `\n\nNote: ${f.note}` : ""}` },
       ...(parsed
         ? {
             locations: [{
@@ -226,6 +226,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         severity: f.severity,
         confidence: f.confidence,
         location: f.location,
+        ...(f.note ? { note: f.note } : {}),
         ...(f.precisionTier ? { precisionTier: f.precisionTier } : {}),
         ...(f.baselineStatus ? { baselineStatus: f.baselineStatus } : {}),
         ...(f.exploitabilityVerified ? { exploitabilityVerified: true } : {}),

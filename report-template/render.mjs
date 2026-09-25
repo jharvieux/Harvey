@@ -159,6 +159,7 @@ function findingCard(f) {
     ${cweOwaspLine(f)}
     ${f.dataClass ? `<div class="kv"><b>Data class</b> ${esc(f.dataClass.reason)}</div>` : ""}
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
+    ${f.note ? `<div class="kv"><b>Note</b> ${esc(f.note)}</div>` : ""}
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
     ${suggestedFixBlock(f)}

@@ -44,6 +44,17 @@ describe("result mapping", () => {
     expect(r.tool.driver.rules).toHaveLength(1);
   });
 
+  it("preserves each replay note on its own result even when the rule is shared", () => {
+    const notes = ["M2 verify: proven; /failed returned 503; victim IDs from /owned", "M2 verify: unproven; /empty had no IDs; victim IDs from /other"];
+    const result = run(toSarif(notes.map((note, index) => finding({ id: `IDOR-${index}`, note })), { coverage: RAN }));
+    expect(result.tool.driver.rules).toHaveLength(1);
+    expect(result.results).toHaveLength(2);
+    for (const [index, note] of notes.entries()) {
+      expect(result.results[index].message.text).toContain(`Note: ${note}`);
+      expect(result.results[index].properties.note).toBe(note);
+    }
+  });
+
   it("fingerprints on the same identity audit-diff uses, so a line shift stays one alert", () => {
     const a = run(toSarif([finding({ location: "src/lib/client.ts:12" })], { coverage: RAN }));
     const b = run(toSarif([finding({ location: "src/lib/client.ts:97" })], { coverage: RAN }));
