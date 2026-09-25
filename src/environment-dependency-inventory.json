@@ -364580,8 +364580,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "f4a43646ae436c11ea71a06764a12d1bea59b768",
-    "commitPayload": "dHJlZSA2YWRmMTlkMDZkMDFiMzhkNDIwODRmMGRjYzI4ZGRmNjRiOTE1YjlhCnBhcmVudCAzOWMxYjlhYjU4ZmFmN2JkYjBjMGViODFjYTg3M2RmOWU4ZGNkNTNiCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIwMTk5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIwMTk5IC0wNTAwCgpQcmVzZXJ2ZSBzdGFnZWQgZGVsZXRpb25zIGluIFZpdGFscyBzbmFwc2hvdHMgKCMyMTM1KQo=",
+    "commit": "a6c22cc453dbc2f29acac3e14a4c5c5b78f8e3f1",
+    "commitPayload": "dHJlZSBmNmY0ZDFiZDVjZjVlZDg5M2QyNTA0NjdhZDUxMjExOGEwMWE5MzM2CnBhcmVudCBiZDJhZmQ0NjJhMWMxZWRmMjQ2YzVkNWY1ODg1NzU4OWJhNDA3Y2QwCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxNTE4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxNTE4IC0wNTAwCgpBdm9pZCByZWZyZXNoaW5nIHRoZSBjbGllbnQgaW5kZXggZHVyaW5nIFZpdGFscyBjYXB0dXJlICgjMjEzNSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364590,13 +364590,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "5d437177a2c21e06c1f7f00d7fc428d21a27389b",
+        "gitOid": "26475736fbc22b7f830134d05fef7c4a04e923f7",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "2afb14cdb0a9e1a7c196559e99dfcd26f78ffc9c886a8b0edfd8700116af89e6",
-    "tree": "6adf19d06d01b38d42084f0dcc28ddf64b915b9a"
+    "populationSha256": "5fabc357ae9136a906313474480d21c859eb77759cc38b40e9212b90505594a5",
+    "tree": "f6f4d1bd5cf5ed893d250467ad512118a01a9336"
   },
   "venues": [
     {
@@ -391739,7 +391739,7 @@
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "4de7dbbe3368333afd19c1c2ce8f8e933744b2ea",
+      "gitOid": "8b1625419576809278c36f9af8bc46a859adb466",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -391747,7 +391747,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "997f1f502d0eec261241ad438d74fc5e981c3e92e0750b6c2dda70c30915a60d"
+      "sha256": "9292dc26aa8aaa772ccf1501eab5e83dbf45dfe04a2b53a4f07328853ff91749"
     },
     {
       "bytes": 10289,
@@ -392455,34 +392455,34 @@
       "sha256": "53be56696e99e8826cabd09af631aba643838d73a093e7c859ee5b89941926c7"
     },
     {
-      "bytes": 4754,
+      "bytes": 5099,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "cedb2c43d95c15cc129c7a905ec8c27b392cc01a",
+      "gitOid": "ddbaf3bb95e487cd5f48a98b33062279a952f11b",
       "id": "src/vitals-history.test.ts",
       "kind": "source",
-      "literalCount": 129,
-      "literalSha256": "7e143625f476dd9d94fb0bdad6035eac989fa2164951671eddfc0c5843a6baa6",
+      "literalCount": 136,
+      "literalSha256": "553c4ca9a2b804ba9382abddfa0a8d71764b96a495bfb3315266cdf96f251f14",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/vitals-history.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "6d07ce670b63b9ee467e71fe29b1fffacd3c2b9128714923da6f20223f842037"
+      "sha256": "a56737f0acb3edf8bbfb23d7ccb0d4e4d64f0191d6d688eddd103c147526f136"
     },
     {
-      "bytes": 16488,
+      "bytes": 16585,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "d7a733b341a878117e7685ce38499a90344508ae",
+      "gitOid": "1ec7fd7b96d0dc13d6f1593b7bcfefb9b0280f39",
       "id": "src/vitals-history.ts",
       "kind": "source",
       "literalCount": 233,
-      "literalSha256": "f9c2619f0d59a9475d613cb62d61e62a49ca794407676e049aac47e11f342f4d",
+      "literalSha256": "754d764e97db7f471aaf6b7b1ec20ad97fe111aeca778b7f50c6a5d13edc32b4",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/vitals-history.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cbdd2f8187e9f23bfec2a544dda68e11327b95255602efc988db1b4eaafce9f1"
+      "sha256": "1aaa4e613ccd6ba9c307160fab534989008450f76c914d226df769301af4478e"
     },
     {
       "bytes": 7469,
