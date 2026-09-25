@@ -155700,7 +155700,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 556,
+        "line": 574,
         "path": "src/dynamic-validate.ts"
       },
       "freshness": {
@@ -364892,8 +364892,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "a2b628a79470866073b1834be71643bfa8d59f41",
-    "commitPayload": "dHJlZSAzY2NkNjY5ZDhmYzI3ZGFhYTNmM2NjY2UzZDhhZGZhYmRkYzFmOWFlCnBhcmVudCA2OTU3MDEwYjhhMmYxZmI0NzJlYWVhNDQ3YTFjNmU2NDg0OWZkZWJhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyMDk3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyMDk3IC0wNTAwCgpBc3NlcnQgbGVnYWN5IHJlY2VpcHQgaWRlbnRpdHkgYmVmb3JlIHJlcGFja2FnaW5nICgjMjEzOSkK",
+    "commit": "20265d802d52cfe1221bf42dc3c1e50af3af1ece",
+    "commitPayload": "dHJlZSA2MTA1NzE2ZWM4YjM1ZGYxZGY5NGNmMjViYjZhYjczNzQ3MGFlNWNiCnBhcmVudCAzNGQ3OTNmMGNmY2IzZmI2OTU0MDVmYWJiNzY4ZmZhMTAwYzIwYzBhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyOTI3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyOTI3IC0wNTAwCgpQcmVzZXJ2ZSB0aGUgY2xlYW51cCBtZXRob2QgcmVjZWl2ZXIgKCMyMDgwKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364902,13 +364902,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "1a0cc1e055733b6aa1155edec8f64cc82694febd",
+        "gitOid": "8354004e58bc20c3995bcb12dec6d9b435e676b4",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "53a8d4d244479882eab32f840262cf3501cddddc3d5659ebbc6377f641da4ea3",
-    "tree": "3ccd669d8fc27daaa3f3ccce3d8adfabddc1f9ae"
+    "populationSha256": "a76338e14233cab30ae700e45dc71711732a7beed48ba1ec6c2ca6d5165061e5",
+    "tree": "6105716ec8b35df1df94cf25bb6ab737470ae5cb"
   },
   "venues": [
     {
@@ -383302,11 +383302,11 @@
       "sha256": "bee19d890beb6d36edaa938c11c111ebe6cf8d1610975140f670d9c275f7ce6d"
     },
     {
-      "bytes": 43046,
+      "bytes": 43052,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "58a3f5b279790d18643d43d480a75f2e152c20a3",
+      "gitOid": "db358a8bb250aa4e3513fe21257469e57dcd6518",
       "id": "src/dynamic-validate.ts",
       "kind": "source",
       "literalCount": 215,
@@ -383314,7 +383314,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/dynamic-validate.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "d42226a45c80fe5ae813a73bf48868eda7456542b5c547d0d71f39a5cfebb8f1"
+      "sha256": "f60ed926f17824140289e547adfbc28eeb3d8ebc3b4751e9cefa3a8a011659ce"
     },
     {
       "bytes": 9602,
