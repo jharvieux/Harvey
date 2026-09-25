@@ -103,6 +103,10 @@ describe("CommandExecutionReceipt", () => {
       const body = { ...structuredClone(legacyBody), outcome };
       return { ...body, sha256: digest(body) };
     };
+    const succeeded = (receipt: unknown): boolean => {
+      assertCommandExecutionReceipt(receipt);
+      return commandReceiptSucceeded(receipt);
+    };
     const legacy = signedLegacy({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOBUFS" });
     expect(() => assertCommandExecutionReceipt(legacy)).not.toThrow();
 
@@ -120,8 +124,8 @@ describe("CommandExecutionReceipt", () => {
       { state: "unknown-exit", exitCode: null, signal: null },
     ];
     for (const outcome of valid) expect(() => assertCommandExecutionReceipt(signedLegacy(outcome))).not.toThrow();
-    expect(commandReceiptSucceeded(signedLegacy(valid[0]!))).toBe(true);
-    for (const outcome of valid.slice(1)) expect(commandReceiptSucceeded(signedLegacy(outcome))).toBe(false);
+    expect(succeeded(signedLegacy(valid[0]!))).toBe(true);
+    for (const outcome of valid.slice(1)) expect(succeeded(signedLegacy(outcome))).toBe(false);
 
     const invalid = [
       { state: "exited", exitCode: 0, signal: null, errorCode: "ENOBUFS" },
@@ -135,7 +139,7 @@ describe("CommandExecutionReceipt", () => {
     for (const outcome of invalid) {
       const receipt = signedLegacy(outcome);
       expect(() => assertCommandExecutionReceipt(receipt)).toThrow(/command receipt/);
-      expect(() => commandReceiptSucceeded(receipt)).toThrow(/command receipt/);
+      expect(() => succeeded(receipt)).toThrow(/command receipt/);
     }
   });
 });
