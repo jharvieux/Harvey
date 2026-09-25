@@ -364469,8 +364469,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "65da7b835592d06a086aaa4a54b110a019af2671",
-    "commitPayload": "dHJlZSBmNWZmZmQ1OWE1YTM2ZWY3NTQzNzI3MTNmODU0N2I0Y2M0MjJkMzQ2CnBhcmVudCA3OTgxY2JlNjgxYTViZGQxOTVhNzNlOTk5N2MyYjBhZjE5YjFkODRmCnBhcmVudCA3MTBkYjJiMTZiNTZmOGNlZDM3ODVhM2M2YTk2ZDFjYWIxMGQ1OTM2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NDY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NDY0IC0wNTAwCgpJbnRlZ3JhdGUgc2NoZW1hIGFuZCBkb2N1bWVudCBWaXRhbHMgaGlzdG9yeSAjMjEzNQo=",
+    "commit": "5ff213626a3600fb068c77ff248eaea7d1003c1a",
+    "commitPayload": "dHJlZSAxZDZiYzA1YTc2Zjc4YTc3NjRmZDI0ZWMzZmNkNjI1NTdhZTQ0YTU0CnBhcmVudCA3MGRhOGUyNWJhYzdmYmQ0OTkyZTBhOTJlYWFjMGFkOGYzMTNhZjFjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE2Mjg3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE2Mjg3IC0wNTAwCgpSb3V0ZSBWaXRhbHMgaGlzdG9yeSBjaGFuZ2VzIHRvIGVmZmVjdGl2ZW5lc3MgY2hlY2tzICMyMTM1Cg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364479,13 +364479,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "47cb362cf80a055b22b69898c6ea873ba43b7d86",
+        "gitOid": "c8fba3b8e2a025eebc27c4bc94fd15db4811331c",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "4313de89a101a1cc69499db76d2649709193077e3639a707995f6397c0635a50",
-    "tree": "f5fffd59a5a36ef754372713f8547b4cc422d346"
+    "populationSha256": "3f525754966a3feb4274c63f841bc1bfdd6299c20c7e6c360f2e37658e7d42e6",
+    "tree": "1d6bc05a76f78a7764fd24ec3fcd62557ae44a54"
   },
   "venues": [
     {
@@ -384184,11 +384184,11 @@
       "sha256": "3ef7c016a503b6e424e015ccd92a19aa55d87923bdb7ab68bc45e5d85d83a0c5"
     },
     {
-      "bytes": 17656,
+      "bytes": 17722,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "3f64c5ad302302880ae3bbd35751ff3bd2c3761a",
+      "gitOid": "0c22584048dec5694870e5a854ad6551f3d53bf8",
       "id": "src/heavy-test-workloads.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -384196,7 +384196,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-workloads.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3fce6db68d4455cd5a8cc18c3dd8fce8a0d8720d1e85dadd1e555f01ba5fa98f"
+      "sha256": "d440c7c199a274b3b9ca2c3de3310fd950f2cf55d29cf65cd2491e155b474a46"
     },
     {
       "bytes": 33588,
