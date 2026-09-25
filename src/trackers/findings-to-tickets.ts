@@ -19,6 +19,7 @@
 // Dry-run is structural, not a flag: planTickets is a PURE function that takes no Tracker, so a
 // preview provably cannot touch the network. fileFindings is the only path that writes.
 
+import { PartialTrackerWriteError } from "./recovery.js";
 import { createHash } from "node:crypto";
 import type { Confidence, Finding, Severity } from "../findings.js";
 import { findingIdentity, type FindingIdentityOptions } from "../audit-diff.js";
@@ -113,8 +114,10 @@ interface FileResult {
   skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run (default re-audit behavior)
   updated: { marker: string; ref: CreatedRef }[]; // #747: already-filed tickets patched under --update
   excluded: Exclusion[]; // #824: findings the gate held back (disclosed, never silently dropped)
+  failed: { marker: string; ref?: CreatedRef; stage: string; error: string }[];
   epicsCreated: number;
   epicsReused: number;
+  epics: { marker: string; ref: CreatedRef; status: "created" | "reused" }[];
 }
 
 // A compact, searchable dedup token. The #457 identity string carries spaces and "::"/"/"
@@ -213,41 +216,69 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
 // authorization. Grouped mode creates/reuses a category epic before filing its stories under it.
 export async function fileFindings(tracker: Tracker, findings: Finding[], opts: FileOptions = {}): Promise<FileResult> {
   const plan = planTickets(findings, opts);
-  const result: FileResult = { created: [], skipped: [], updated: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
+  const result: FileResult = { created: [], skipped: [], updated: [], failed: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0, epics: [] };
   // #747: every tracker call goes through the pacer — spacing + backoff-and-retry on a rate limit.
   const pacer = opts.pacer ?? makePacer();
   const call = <T>(fn: () => Promise<T>) => pacer.run(fn);
 
   const epicIdByCategory = new Map<string, string>();
+  const failedEpicCategories = new Set<string>();
   for (const epic of plan.epics) {
-    const existing = await call(() => tracker.findByMarker(epic.marker));
-    if (existing) {
-      epicIdByCategory.set(epic.category, existing.id);
-      result.epicsReused++;
-      continue;
+    let stage = "epic lookup";
+    try {
+      const existing = await call(() => tracker.findByMarker(epic.marker));
+      stage = "epic create";
+      const ref = existing ?? await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
+      epicIdByCategory.set(epic.category, ref.id);
+      result.epics.push({ marker: epic.marker, ref, status: existing ? "reused" : "created" });
+      if (existing) result.epicsReused++;
+      else result.epicsCreated++;
+    } catch (error) {
+      failedEpicCategories.add(epic.category);
+      const ref = error instanceof PartialTrackerWriteError ? error.ref : undefined;
+      if (ref) {
+        result.epics.push({ marker: epic.marker, ref, status: "created" });
+        result.epicsCreated++;
+      }
+      result.failed.push({ marker: epic.marker, ...(ref ? { ref } : {}), stage: error instanceof PartialTrackerWriteError ? error.stage : stage, error: error instanceof Error ? error.message : String(error) });
     }
-    const ref = await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
-    epicIdByCategory.set(epic.category, ref.id);
-    result.epicsCreated++;
   }
 
   for (const t of plan.tickets) {
-    const existing = await call(() => tracker.findByMarker(t.marker));
-    if (existing) {
-      // #747: --update patches the already-filed ticket; the default skips it (never clobber edits).
-      if (opts.update) {
-        await call(() => tracker.updateStory(existing.id, { body: t.body, labels: t.labels }));
-        result.updated.push({ marker: t.marker, ref: existing });
-      } else {
-        result.skipped.push({ marker: t.marker, ref: existing });
-      }
+    if (failedEpicCategories.has(t.group || "Uncategorized")) {
+      result.failed.push({ marker: t.marker, stage: "epic prerequisite", error: `Category epic for ${t.group || "Uncategorized"} was not confirmed; story creation deferred` });
       continue;
     }
-    const input: ItemInput = { title: t.title, description: t.body };
-    const epicId = plan.grouping === "grouped" ? epicIdByCategory.get(t.group || "Uncategorized") : undefined;
-    const ref = epicId ? await call(() => tracker.createStory(input, epicId)) : await call(() => tracker.createEpic(input));
-    await call(() => tracker.setLabels(ref.id, t.labels));
-    result.created.push({ marker: t.marker, ref });
+    let ref: CreatedRef | undefined;
+    let stage = "lookup";
+    try {
+      const existing = await call(() => tracker.findByMarker(t.marker));
+      const input: ItemInput = { title: t.title, description: t.body };
+      const epicId = plan.grouping === "grouped" ? epicIdByCategory.get(t.group || "Uncategorized") : undefined;
+      ref = existing ?? undefined;
+      if (!ref) {
+        stage = "create";
+        ref = epicId ? await call(() => tracker.createStory(input, epicId)) : await call(() => tracker.createEpic(input));
+        result.created.push({ marker: t.marker, ref });
+      }
+      const known = ref;
+      stage = "metadata";
+      if (tracker.completeStory) await call(() => tracker.completeStory!(known.id, input, t.labels, epicId));
+      else if (!existing) await call(() => tracker.setLabels(known.id, t.labels));
+      if (existing) {
+        if (opts.update) {
+          stage = "update";
+          await call(() => tracker.updateStory(existing.id, { body: t.body, labels: t.labels }));
+          result.updated.push({ marker: t.marker, ref: existing });
+        } else result.skipped.push({ marker: t.marker, ref: existing });
+      }
+    } catch (error) {
+      if (error instanceof PartialTrackerWriteError) {
+        ref = error.ref; stage = error.stage;
+        result.created.push({ marker: t.marker, ref });
+      }
+      result.failed.push({ marker: t.marker, ...(ref ? { ref } : {}), stage, error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   return result;

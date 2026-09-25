@@ -64,6 +64,23 @@ describe("findFreshPass (#416 — derive ran only from a fresh, target-matching 
     if (r.fresh) expect(r.artifact.pass).toBe("semantic");
   });
 
+  it("rejects a fresh M3 artifact that measured zero ranked files", () => {
+    const empty = artifact({ module: "M3", pass: "vitals", rankedCount: 0 });
+    const r = findFreshPass(ctx(empty), "M3");
+    expect(r.fresh).toBe(false);
+    if (!r.fresh) expect(r.reason).toMatch(/ranked 0 files/);
+  });
+
+  it("refuses to publish an M3 pass that measured zero ranked files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-empty-m3-pass-"));
+    try {
+      expect(() => writePassArtifact(dir, artifact({ module: "M3", pass: "vitals", rankedCount: 0 }))).toThrow(/ranked 0 files/);
+      expect(existsSync(join(dir, "M3.pass.json"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns not-fresh with no reason when no artifacts dir is configured — probe keeps its normal wording", () => {
     const r = findFreshPass(ctx(artifact(), { artifactsDir: undefined }), "M1");
     expect(r).toEqual({ fresh: false });

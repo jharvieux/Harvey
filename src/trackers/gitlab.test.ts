@@ -79,12 +79,12 @@ describe("GitLabTracker", () => {
     const { tracker, calls } = harness((call) => {
       expect(call.method).toBe("GET");
       expect(call.url).toContain("in=description");
-      return [{ iid: 41, web_url: "https://gitlab.com/acme/app/-/issues/41" }];
+      return [{ iid: 41, web_url: "https://gitlab.com/acme/app/-/issues/41", description: "<!-- epic-builder:csv-export/epic -->" }];
     });
 
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
     expect(ref).toEqual({ id: "41", url: "https://gitlab.com/acme/app/-/issues/41" });
-    const search = decodeURIComponent(calls[0]?.url.split("search=")[1]?.split("&")[0] ?? "");
+    const search = new URL(calls[0]!.url).searchParams.get("search");
     expect(search).toBe("<!-- epic-builder:csv-export/epic -->");
   });
 

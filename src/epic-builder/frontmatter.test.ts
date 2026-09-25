@@ -39,10 +39,44 @@ describe("frontmatter", () => {
     expect(parseFrontmatter(raw)).toEqual({ data: {}, body: raw });
   });
 
+  it("rejects missing, unterminated, malformed, and duplicate builder frontmatter", () => {
+    expect(() => parseFrontmatter("# no frontmatter", { required: true })).toThrow(/frontmatter is required/);
+    expect(() => parseFrontmatter("---\ntitle: x", { required: true })).toThrow(/unterminated/);
+    expect(() => parseFrontmatter("---\ntitle x\n---\nbody", { required: true })).toThrow(/malformed/);
+    expect(() => parseFrontmatter("---\ntitle: first\ntitle: second\n---\nbody", { required: true })).toThrow(/duplicate.*title/);
+    expect(() => parseFrontmatter("---\npublished:\n  ref: one\n  ref: two\n---\nbody", { required: true })).toThrow(/duplicate.*published.ref/);
+  });
+
+  it("retains contract-valid empty body, empty array, empty optional scalar, and comments", () => {
+    expect(parseFrontmatter("---\ndependsOn: []\nnote: \"\"\n# optional comment\n---\n", { required: true }))
+      .toEqual({ data: { dependsOn: [], note: "" }, body: "" });
+  });
+
   it("preserves values containing colons and hashes via quoting", () => {
     const data: FrontmatterData = { url: "https://x.test/a#b", ref: "owner/repo#1" };
     const parsed = parseFrontmatter(serializeFrontmatter(data, "x"));
     expect(parsed.data.url).toBe("https://x.test/a#b");
     expect(parsed.data.ref).toBe("owner/repo#1");
+  });
+});
+
+describe("frontmatter scalar round trips and supported nesting (#2081)", () => {
+  it("preserves escaped and typed-looking strings, including array elements", () => {
+    const strings = ['Two\nlines', 'Bad\nstatus: accepted', 'Title with "quotes"', 'C:\\notes\\file', 'true', 'false', '1.25', 'a,b', 'a]b', "owner's note", '', '\tindented'];
+    for (const value of strings) {
+      const data: FrontmatterData = { title: value, dependsOn: [value, 'sibling'], published: { ref: value } };
+      expect(parseFrontmatter(serializeFrontmatter(data, "body"), { required: true })).toEqual({ data, body: "body" });
+    }
+  });
+
+  it.each([
+    'published:\n  ref: one\n    url: changed',
+    'published:\n    ref: one',
+    'published:\n\tref: one',
+    'dependsOn: [a,,b]',
+    'dependsOn: [[a],b]',
+    'title: "unterminated',
+  ])("rejects unsupported structure without flattening it: %s", (source) => {
+    expect(() => parseFrontmatter(`---\n${source}\n---\nbody`, { required: true })).toThrow(/frontmatter/);
   });
 });
