@@ -535,12 +535,30 @@ export function runDynamicValidation(opts: {
   now: () => string; // injected clock (ISO string) so the result is deterministic under test
   runner: StandUpRunner;
   clientSuite?: ClientSecuritySuite; // detected client suite to try as a bonus signal
+  stop?: () => void; // production single-project lifecycle: cleanup completes before evidence emits
   writeArtifact?: typeof writePassArtifact;
 }): DynamicValidationResult {
-  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite, writeArtifact = writePassArtifact } = opts;
-  const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
-  const r = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite, driftPass });
-  return emitDynamicPass(r, targetDir, artifactsDir, now, writeArtifact);
+  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite, stop, writeArtifact = writePassArtifact } = opts;
+  let probed: ProbeResult | undefined;
+  let primaryFailure: unknown;
+  let cleanupFailure: unknown;
+  try {
+    const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
+    probed = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite, driftPass });
+  } catch (error) {
+    primaryFailure = error;
+  }
+  if (stop) {
+    try {
+      stop();
+    } catch (error) {
+      cleanupFailure = error;
+    }
+  }
+  if (primaryFailure && cleanupFailure) throw new AggregateError([primaryFailure, cleanupFailure], `dynamic validation failed: ${errorText(primaryFailure)}; cleanup also failed: ${errorText(cleanupFailure)}`);
+  if (cleanupFailure) throw new Error(`dynamic validation cleanup failed after probing ${targetDir}: ${errorText(cleanupFailure)}`, { cause: cleanupFailure });
+  if (primaryFailure) throw primaryFailure;
+  return emitDynamicPass(probed!, targetDir, artifactsDir, now, writeArtifact);
 }
 
 function emitDynamicPass(
@@ -633,24 +651,17 @@ export function runMultiProjectDynamicValidation(opts: {
     const project = projects[0]!;
     const plan = buildProvisioningPlan(project.layout, readSchemaSql(project.layout), project.appDir);
     const made = makeProject(project, plan);
-    let probed: ProbeResult | undefined;
-    let primaryFailure: unknown;
-    let cleanupFailure: unknown;
-    try {
-      const driftPass = readDriftPassEvidence(artifactsDir, project.appDir, Date.parse(now()));
-      probed = probeOneProject({ targetDir: project.appDir, appDir: project.appDir, layout: project.layout, plan, runner: made.runner, clientSuite: made.clientSuite, driftPass });
-    } catch (error) {
-      primaryFailure = error;
-    }
-    try {
-      made.stop();
-    } catch (error) {
-      cleanupFailure = error;
-    }
-    if (primaryFailure && cleanupFailure) throw new AggregateError([primaryFailure, cleanupFailure], `dynamic validation failed: ${errorText(primaryFailure)}; cleanup also failed: ${errorText(cleanupFailure)}`);
-    if (cleanupFailure) throw new Error(`dynamic validation cleanup failed after probing ${project.label}: ${errorText(cleanupFailure)}`, { cause: cleanupFailure });
-    if (primaryFailure) throw primaryFailure;
-    const result = emitDynamicPass(probed!, project.appDir, artifactsDir, now, writeArtifact);
+    const result = runDynamicValidation({
+      targetDir: project.appDir,
+      layout: project.layout,
+      plan,
+      artifactsDir,
+      now,
+      runner: made.runner,
+      clientSuite: made.clientSuite,
+      stop: made.stop,
+      writeArtifact,
+    });
     return {
       ...result,
       limitations: [`coverage=${result.coverage}${result.standUp ? "" : " (not stood up)"} — ${result.reason}`, ...result.limitations],
