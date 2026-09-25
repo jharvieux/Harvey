@@ -373547,8 +373547,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "e5f132e337f910167f290b8c21c650d1e9f25cf0",
-    "commitPayload": "dHJlZSAxM2RlNTljMjY1YWZjZWY0YWM3NDRhOTRkYjQ0MmFmOTE2ODJmOTg5CnBhcmVudCBlZDAyYzkyNGE3NjIzYTBlZjQyMjk5ZGZkZDMyMDdkZGI4YjAwYWY1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzczOTkwIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzc0MTQyIC0wNTAwCgpFbmZvcmNlIHJlY2VpcHQgb3V0Y29tZSBjb2hlcmVuY2UgYWNyb3NzIHNjaGVtYXMgKCMyMTg5KQo=",
+    "commit": "1e5deca476b4566144c74db718670426fb797410",
+    "commitPayload": "dHJlZSAzMmFjMzFmMTRiMzc0MDUxMjcwZmNjOGQ4MTQ5ODVkMzYzMGU1ODE4CnBhcmVudCAxYjgzY2YyNTM5N2NhNTVmMDliNDYwOGMzZGEyNjZmMzJjMDAzNmJmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzc0NDI1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzc0NDUyIC0wNTAwCgpUeXBlIHJ1bnRpbWUgcmVjZWlwdCBwYXJzZXIgY29udHJvbHMgc2FmZWx5ICgjMjE4OSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -373557,13 +373557,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "34cac1cdcc8c613d04e3742cbf6c1e90c621f94d",
+        "gitOid": "164e2c82834eb6b75c056488d7389d3790a924c5",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "d09526cfe6b247031dceff1e0e581f6482ccd97988f67a4a4948e0b8d182ffb6",
-    "tree": "13de59c265afcef4ac744a94db442af91682f989"
+    "populationSha256": "55c36b6c8370127ed38f638a9142365b407f7a8e68cb1ace1b521eaaddc30b4f",
+    "tree": "32ac31f14b374051270fcc8d814985d3630e5818"
   },
   "venues": [
     {
@@ -396067,11 +396067,11 @@
       "sha256": "4bbaec6176992cc36895ad0d3b7a1e7debae69c6d9c43ab4a1efcb932d191420"
     },
     {
-      "bytes": 9215,
+      "bytes": 9328,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "fc0cb4b7ce621b7ff39f8d61628a52cb305387f5",
+      "gitOid": "97dd21af43133322194d2f03a4bbd5d60de401d9",
       "id": "src/producer-execution-receipt.test.ts",
       "kind": "source",
       "literalCount": 162,
@@ -396079,7 +396079,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/producer-execution-receipt.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "9197aa5b3bc7626b53efc0b9d98ce5cfb891825b03a7126d139c2b66ef31f164"
+      "sha256": "fc3443835f7f7864b8999e0c5846f0b8d111036aa106acd79083e2e856e6ca9a"
     },
     {
       "bytes": 30995,
