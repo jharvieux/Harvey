@@ -112,12 +112,13 @@ for (const [name, confirmed, pending, inventory, historical, total] of [["ATC", 
   })));
   const targetDir = join(output, name); mkdirSync(targetDir, { recursive: true });
   const inputPath = join(targetDir, "input.json");
+  const rawPath = join(targetDir, "raw.json");
   const context = { engagementId: `${name}-current`, kind: "client-audit", target: { id: `fixture:${name}`, revision: "current" }, producerVersions: { scanner: "current" }, schemaVersion: "1", assessedScope: ["source", "schema"], scopeComplete: true };
   const current = { meta: { ...dispositionFixture.meta, client: `${name} synthetic disposition acceptance` }, findings, testQuality: dispositionFixture.testQuality, auditContext: context };
-  const prior = { ...current, findings: name === "ATC" ? findings.slice(0, 8) : findings.slice(1, 56).map((f, i) => ({ ...f, id: `old-${i}` })), auditContext: name === "ATC" ? { ...context, kind: "same-run-checkpoint", scopeComplete: false } : { ...context, engagementId: `${name}-prior`, producerVersions: { scanner: "legacy" }, assessedScope: ["source"] } };
-  writeFileSync(inputPath, JSON.stringify(current));
+  const prior = { ...current, findings: name === "ATC" ? findings.slice(0, 8) : findings.slice(1, 56).map((f, i) => ({ ...f, id: `old-${i}`, taxonomy: `Legacy scanner: ${f.taxonomy}`, location: `legacy-layout/${i}.ts` })), auditContext: name === "ATC" ? { ...context, kind: "same-run-checkpoint", scopeComplete: false } : { ...context, engagementId: `${name}-prior`, producerVersions: { scanner: "legacy" }, assessedScope: ["source"] } };
+  writeFileSync(rawPath, JSON.stringify({ ...current, findings: [...findings, ...findings.slice(confirmed, confirmed + 3)] }));
   const priorPath = join(targetDir, "prior.json"); writeFileSync(priorPath, JSON.stringify(prior));
-  const compared = await run(process.execPath, ["--import", "tsx", "--input-type=module", "-e", 'import fs from "node:fs"; import { applyBaseline } from "./src/audit-diff.ts"; const [current, prior] = process.argv.slice(1); fs.writeFileSync(current, JSON.stringify(applyBaseline(JSON.parse(fs.readFileSync(current)), JSON.parse(fs.readFileSync(prior)))));', inputPath, priorPath]);
+  const compared = await run(process.execPath, ["--import", "tsx", "--input-type=module", "-e", 'import fs from "node:fs"; import { applyBaseline } from "./src/audit-diff.ts"; import { assembleEngagementDocument } from "./src/audit-report.ts"; const [rawPath, priorPath, output] = process.argv.slice(1); const raw = JSON.parse(fs.readFileSync(rawPath)); const doc = { ...assembleEngagementDocument([], { connected:false, dynamic:false, llm:false }, raw.findings, raw.meta, [], {}, raw.testQuality), auditContext: raw.auditContext }; fs.writeFileSync(output, JSON.stringify(applyBaseline(doc, JSON.parse(fs.readFileSync(priorPath)))));', rawPath, priorPath, inputPath]);
   assert.equal(compared.status, 0, compared.stderr);
   const rendered = await run(process.execPath, [join(root, "report-template/render.mjs"), inputPath, targetDir]);
   assert.equal(rendered.status, 0, rendered.stderr);
@@ -135,6 +136,7 @@ for (const [name, confirmed, pending, inventory, historical, total] of [["ATC", 
       required_actions: Array.from({ length: 6 }, (_, i) => `Current M${i + 4} health work`),
     },
   };
+  expected.required_text.push(`Produced ${total + 3} = delivered ${total} + deduplicated 3`, "byte-identical duplicate capture(s) collapsed");
   const expectationPath = join(targetDir, "expected.json"); writeFileSync(expectationPath, JSON.stringify(expected, null, 2));
   const inspected = await run(python, [join(root, "tools/report-pdf-inspect.py"), join(targetDir, "report.pdf"), expectationPath]);
   assert.equal(inspected.status, 0, inspected.stderr);

@@ -28,7 +28,7 @@
 // which becomes its own warning notification. There is no silent path.
 
 import { semanticFindingIdentity, type FindingIdentityOptions } from "./audit-diff.js";
-import type { AuditContext, BaselineSummary, CoverageRow, Finding, Severity } from "./findings.js";
+import type { AuditContext, BaselineSummary, CoverageRow, Finding, FindingsDocument, Severity } from "./findings.js";
 import { populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
 import { relativizeScanScope } from "./scan/scan-scope.js";
 
@@ -139,6 +139,7 @@ type CoverageInput = { coverage: CoverageRow[] } | { coverageAbsent: string };
 interface SarifOptions extends Pick<FindingIdentityOptions, "caseSensitive"> {
   auditContext?: AuditContext;
   baseline?: BaselineSummary;
+  conservation?: FindingsDocument["conservation"];
   toolVersion?: string;
   // Absolute-path prefix stripped from artifact URIs so they are repo-relative, which is what
   // GitHub code scanning needs to attach an alert to a file.
@@ -295,6 +296,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         harveyIdentityMigration: "Legacy taxonomy/location fingerprints require explicit reviewed mapping; identity changes are not source regressions or resolutions.",
         ...(opts.auditContext ? { harveyAuditContext: opts.auditContext } : {}),
         ...(opts.baseline ? { harveyBaseline: opts.baseline } : {}),
+        ...(opts.conservation ? { harveyConservation: opts.conservation } : {}),
       },
     }],
   };

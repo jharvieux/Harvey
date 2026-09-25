@@ -58,7 +58,7 @@ export async function deliverAuditReplay(options: {
   if (!valid.ok) throw new Error(`Replayed document is invalid: ${valid.errors.join("; ")}`);
   const outputs: [string | undefined, unknown][] = [
     [options.findingsOut, doc], [options.coverageOut, result.recorded],
-    [options.sarifOut, toSarif(doc.findings, { coverage: doc.coverage ?? [] }, { baseUri: options.target, auditContext: doc.auditContext, baseline: doc.baseline })],
+    [options.sarifOut, toSarif(doc.findings, { coverage: doc.coverage ?? [] }, { baseUri: options.target, auditContext: doc.auditContext, baseline: doc.baseline, conservation: doc.conservation })],
     [options.sbomOut, replay.sbom],
     [options.conservationOut, { ...doc.conservation, findingOwners: evidence.findingOwners, currentReceipts: evidence.current.map((receipt) => receipt.id), history: evidence.history.map((row) => ({ receipt: row.receipt.id, supersededBy: row.supersededBy, reason: row.reason })) }],
   ];

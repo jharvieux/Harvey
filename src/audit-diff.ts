@@ -187,26 +187,38 @@ export function semanticFindingIdentity(f: Finding, options: FindingIdentityOpti
 export function diffAgainstBaseline(baseline: Finding[], current: Finding[], options: FindingIdentityOptions = {}): BaselineDiff {
   const compatibility = comparisonContext(options);
   const matched = new Set<number>();
-  const ambiguous = new Set<number>();
+  const indexKeys = (keys: string[]): Map<string, number[]> => {
+    const index = new Map<string, number[]>();
+    keys.forEach((key, i) => { const bucket = index.get(key) ?? []; bucket.push(i); index.set(key, bucket); });
+    return index;
+  };
+  const priorContent = indexKeys(baseline.map(contentIdentity));
+  const currentContentKeys = current.map(contentIdentity);
+  const currentContent = indexKeys(currentContentKeys);
+  const priorSemantic = indexKeys(baseline.map((f) => semanticFindingIdentity(f, options)));
+  const priorTaxonomy = indexKeys(baseline.map(normalizeTaxonomy));
+  const currentTaxonomy = new Set(current.map(normalizeTaxonomy));
   const migrationRows = options.migrations ?? [];
-  const keyCount = (rows: Finding[], key: string): number => rows.filter((f) => contentIdentity(f) === key).length;
-  const validMigrations = migrationRows.filter((m) => m.reason?.trim() && m.reviewedBy?.trim()
-    && keyCount(baseline, m.priorContentKey) === 1 && keyCount(current, m.currentContentKey) === 1
+  const validMigrations = migrationRows.filter((m) => typeof m.reason === "string" && m.reason.trim() && typeof m.reviewedBy === "string" && m.reviewedBy.trim()
+    && priorContent.get(m.priorContentKey)?.length === 1 && currentContent.get(m.currentContentKey)?.length === 1
     && migrationRows.filter((x) => x.priorContentKey === m.priorContentKey || x.currentContentKey === m.currentContentKey).length === 1);
+  const migrationsByCurrent = new Map(validMigrations.map((m) => [m.currentContentKey, m]));
+  const reservedForMigration = new Set(validMigrations.map((m) => priorContent.get(m.priorContentKey)![0]!));
   const eligible = (f: Finding): boolean => ["confirmed", "actionable"].includes(assessmentFor(f).disposition);
   const canClaim = compatibility.kind === "source-change";
   let matchCount = 0;
-  const findings = current.map((f): Finding => {
+  const findings = current.map((f, at): Finding => {
     const key = semanticFindingIdentity(f, options);
-    const migration = validMigrations.find((m) => m.currentContentKey === contentIdentity(f));
+    const migration = migrationsByCurrent.get(currentContentKeys[at]!);
     const specificLocation = looksLikeFileLocation(withoutLinePosition(f.location));
-    const index = baseline.findIndex((b, i) => !matched.has(i) && ((specificLocation && semanticFindingIdentity(b, options) === key) || (migration && contentIdentity(b) === migration.priorContentKey)));
-    if (index >= 0 && options.priorContext?.target.id === options.currentContext?.target.id) {
+    const bucket = migration ? priorContent.get(migration.priorContentKey) : specificLocation ? priorSemantic.get(key) : undefined;
+    while (bucket?.length && (matched.has(bucket[bucket.length - 1]!) || (!migration && reservedForMigration.has(bucket[bucket.length - 1]!)))) bucket.pop();
+    const index = bucket?.pop() ?? -1;
+    if (index >= 0 && options.priorContext?.target?.id && options.priorContext.target.id === options.currentContext?.target?.id) {
       matched.add(index); matchCount++;
       return { ...f, baselineStatus: compatibility.kind === "same-run-checkpoint" ? "checkpoint" : "persistent", baselineReason: migration ? `Reviewed identity migration: ${migration.reason} (${migration.reviewedBy}).` : "Matching semantic evidence and normalized location; producer display IDs are not identity." };
     }
-    const candidates = baseline.flatMap((b, i) => normalizeTaxonomy(b) === normalizeTaxonomy(f) ? [i] : []);
-    for (const i of candidates) ambiguous.add(i);
+    const candidates = priorTaxonomy.get(normalizeTaxonomy(f)) ?? [];
     const sourceNew = canClaim && eligible(f) && candidates.length === 0;
     const status = sourceNew ? "new" : compatibility.kind === "same-run-checkpoint" ? "checkpoint" : compatibility.kind === "tool-change" || compatibility.kind === "scope-change" || compatibility.kind === "incompatible" ? compatibility.kind : "unresolved";
     return { ...f, baselineStatus: status, baselineReason: sourceNew ? "Current actionable observation absent from the comparable prior scope." : candidates.length ? "Possible prior identity has changed evidence or location; explicit reviewed migration is required." : compatibility.limitations.join(" "), ...(candidates.length ? { lowConfidenceMatch: baseline[candidates[0]!]!.id } : {}) };
@@ -216,9 +228,9 @@ export function diffAgainstBaseline(baseline: Finding[], current: Finding[], opt
   const unresolved: Finding[] = [];
   baseline.forEach((f, i) => {
     if (matched.has(i)) return;
-    if (current.some((c) => normalizeTaxonomy(c) === normalizeTaxonomy(f))) ambiguous.add(i);
-    if (canClaim && eligible(f) && !ambiguous.has(i)) resolved.push({ ...f, baselineStatus: "resolved", baselineReason: "Absent from the same complete scope with unchanged producer/schema versions at a later target revision." });
-    else unresolved.push({ ...f, baselineStatus: "unresolved", baselineReason: ambiguous.has(i) ? "Possible changed identity remains unresolved; absence is not a resolution." : compatibility.limitations.join(" ") });
+    const ambiguous = currentTaxonomy.has(normalizeTaxonomy(f));
+    if (canClaim && eligible(f) && !ambiguous) resolved.push({ ...f, baselineStatus: "resolved", baselineReason: "Absent from the same complete scope with unchanged producer/schema versions at a later target revision." });
+    else unresolved.push({ ...f, baselineStatus: "unresolved", baselineReason: ambiguous ? "Possible changed identity remains unresolved; absence is not a resolution." : compatibility.limitations.join(" ") });
   });
   const comparison: BaselineDiff["comparison"] = { ...compatibility,
     ...(options.priorContext ? { prior: options.priorContext } : {}), ...(options.currentContext ? { current: options.currentContext } : {}), migrations: validMigrations,

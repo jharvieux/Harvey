@@ -349,6 +349,7 @@ if (findingsOut || sarifOut) {
   // The baseline diff below runs AFTER, and legitimately carries rows in from a prior engagement, so
   // it is outside the ledger's seam (docs/design/conservation-of-findings.md).
   const ledger = conservationLedger(findings, doc.findings, findingsByModule);
+  doc.conservation = ledger;
   console.log(`\n${formatLedger(ledger)}`);
   if (!ledger.ok) {
     console.error("\nRefusing to export: findings were produced and dropped between the probes and the deliverable.");
@@ -418,7 +419,7 @@ if (sarifOut) {
   // document carries (module names filled in, and a module that was never accounted for at all
   // still gets a row), so the two exports of one run cannot disagree about what ran.
   const ledger = coverageLedger(recorded, env);
-  const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir, auditContext: exportDocument?.auditContext, baseline: exportDocument?.baseline });
+  const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir, auditContext: exportDocument?.auditContext, baseline: exportDocument?.baseline, conservation: exportDocument?.conservation });
   writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
   const gaps = ledger.filter((r) => r.status !== "ran").length;
   // #1061: the result count is printed AGAINST the count the probes captured, so the next time an

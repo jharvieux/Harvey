@@ -14,6 +14,7 @@ import { type DataClassMap, dataClassJoinNotAssessed, escalateFindingsByDataClas
 import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 import { populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
+import { conservationLedger } from "./conservation-ledger.js";
 
 // The derived coverage report's rows, projected onto the report schema's CoverageRow.
 export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv): CoverageRow[] {
@@ -68,7 +69,7 @@ export function assembleEngagementDocument(recorded: ModuleCoverage[], env: Enga
       ? enriched
       : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
   const prepared = prepareFindings(weighted);
-  return { meta, coverage: coverageLedger(recorded, env), findings: prepared, populations: populationSummary(prepared), ...(meta.identityMigrations ? { identityMigrations: meta.identityMigrations } : {}), ...(testQuality ? { testQuality } : {}) };
+  return { meta, coverage: coverageLedger(recorded, env), findings: prepared, populations: populationSummary(prepared), conservation: conservationLedger(findings, prepared), ...(meta.identityMigrations ? { identityMigrations: meta.identityMigrations } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 // The M10 rows' own words for why nothing was classified — quoted into M10-ESCALATION-00 so the

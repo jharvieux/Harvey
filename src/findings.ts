@@ -2,7 +2,7 @@
 // this shape; validate an engagement's findings.json here before rendering.
 
 import { completenessStatement, deriveCompleteness, headlineClaimsCompletion } from "./audit-completeness.js";
-import { assessmentErrors, baselineIntegrityErrors, contentIdentity, populationSummary } from "../report-template/dispositions.mjs";
+import { assessmentErrors, baselineIntegrityErrors, conservationIntegrityErrors, contentIdentity, populationSummary } from "../report-template/dispositions.mjs";
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
@@ -411,6 +411,7 @@ export interface FindingsDocument {
   auditContext?: AuditContext;
   identityMigrations?: IdentityMigration[];
   populations?: { total: number; counts: Record<FindingDisposition, number> };
+  conservation?: ReturnType<typeof import("./conservation-ledger.js").conservationLedger>;
   // The derived per-module coverage ledger (#349). Optional for back-compat with hand-authored
   // engagement docs; when present the renderer states coverage from it rather than from the
   // free-text meta.outOfScope.
@@ -747,5 +748,6 @@ export function validateFindings(data: unknown): ValidationResult {
     if (!isRecord(supplied) || supplied.total !== expected.total || !isRecord(supplied.counts) || Object.entries(expected.counts).some(([key, count]) => (supplied.counts as Record<string, unknown>)[key] !== count)) errors.push("populations: must reconcile every finding by reviewed disposition");
   }
   if (data.baseline !== undefined && !errors.length) errors.push(...baselineIntegrityErrors(data.baseline, data.findings as Finding[]).map((message) => `baseline: ${message}`));
+  if (data.conservation !== undefined && !errors.length) errors.push(...conservationIntegrityErrors(data.conservation, data.findings as Finding[]).map((message) => `conservation: ${message}`));
   return { ok: errors.length === 0, errors };
 }

@@ -125,6 +125,12 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
     breaches.push({ id: "report-populations", kind: "population-misclassified", detail: "Cover, chart or action population does not reconcile reviewed dispositions. Raw candidates, inventory and superseded evidence must stay distinct from current remediation." });
   }
   const regions = regionsById(html);
+  if (doc.conservation) {
+    const accounting = /<section class="conservation">[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+    const ledger = doc.conservation;
+    const summary = `Produced ${ledger.produced} = delivered ${ledger.deliveredFromProduced} + deduplicated ${ledger.deduped} + suppressed ${ledger.suppressed} + capped ${ledger.capped} + not applicable ${ledger.notApplicable}`;
+    if (!accounting.includes(summary) || ledger.rows.some((row) => !rendered(accounting, row.reason))) breaches.push({ id: "raw-occurrences", kind: "reason-dropped", detail: "Raw occurrence accounting or a non-delivery reason did not reach the report." });
+  }
   /** The part of the report the report itself attributes to this finding. Empty ⇒ it rendered no row. */
   const region = (f: Finding): string => regions.get(esc(f.id)) ?? "";
 

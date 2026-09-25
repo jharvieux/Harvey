@@ -68,6 +68,7 @@ export interface DeclaredDrop {
 interface LedgerRow {
   id: string;
   contentKey?: string;
+  count?: number;
   disposition: Disposition;
   /** Why this finding is not delivered. Empty ONLY for `delivered`; `unaccounted` means nobody said. */
   reason: string;
@@ -100,6 +101,29 @@ interface ConservationLedger {
 
 const bodyKey = (f: Finding): string => JSON.stringify(f);
 
+function occurrenceMatcher(findings: Finding[]): { consumed: Set<number>; take: (finding: Finding) => number } {
+  const consumed = new Set<number>();
+  const byContent = new Map<string, number[]>();
+  const byCapture = new Map<string, number[]>();
+  findings.forEach((f, i) => {
+    const content = contentIdentity(f);
+    for (const [index, key] of [[byContent, content], [byCapture, `${content}:${f.origin?.producerId ?? f.id}`]] as const) {
+      const indices = index.get(key) ?? []; indices.push(i); index.set(key, indices);
+    }
+  });
+  const takeIndex = (indices: number[] | undefined): number => {
+    while (indices?.length && consumed.has(indices[indices.length - 1]!)) indices.pop();
+    return indices?.pop() ?? -1;
+  };
+  return { consumed, take: (f) => {
+    const content = contentIdentity(f);
+    let i = takeIndex(byCapture.get(`${content}:${f.origin?.producerId ?? f.id}`));
+    if (i < 0) i = takeIndex(byContent.get(content));
+    if (i >= 0) consumed.add(i);
+    return i;
+  } };
+}
+
 // Attribution for a finding id, from runAudit's per-probe map. Ids can be produced by two probes
 // (the shared-CLI captures), so this is a list, and it is empty when the caller has no map.
 const attribute = (byModule: Partial<Record<AuditModule, Finding[]>>): Map<string, AuditModule[]> => {
@@ -127,7 +151,9 @@ export function conservationLedger(produced: Finding[], delivered: Finding[], by
     else unique.set(key, { finding: f, copies: 1 });
   }
   const rows: LedgerRow[] = [];
-  const consumed = new Set<number>();
+  const { consumed, take } = occurrenceMatcher(delivered);
+  const distinctById = new Map<string, number>();
+  for (const { finding } of unique.values()) distinctById.set(finding.id, (distinctById.get(finding.id) ?? 0) + 1);
   const credited = new Set<DeclaredDrop>();
   let deliveredFromProduced = 0;
   let deduped = 0;
@@ -140,11 +166,11 @@ export function conservationLedger(produced: Finding[], delivered: Finding[], by
     const modules = owners.get(f.id) ?? [];
     if (copies > 1) {
       deduped += copies - 1;
-      rows.push({ id: f.id, contentKey, modules, disposition: "deduped", reason: `${copies - 1} byte-identical duplicate capture(s) collapsed; content ${contentKey}` });
+      rows.push({ id: f.id, contentKey, count: copies - 1, modules, disposition: "deduped", reason: `${copies - 1} byte-identical duplicate capture(s) collapsed; content ${contentKey}` });
     }
-    const index = delivered.findIndex((d, i) => !consumed.has(i) && contentIdentity(d) === contentKey);
-    if (index >= 0) { consumed.add(index); deliveredFromProduced++; continue; }
-    const sameId = [...unique.values()].filter((x) => x.finding.id === f.id).length;
+    const index = take(f);
+    if (index >= 0) { deliveredFromProduced++; continue; }
+    const sameId = distinctById.get(f.id);
     const drops = declared.filter((d) => !credited.has(d) && d.id === f.id && (d.contentKey === contentKey || (!d.contentKey && sameId === 1)) && d.reason.trim() && d.by.trim());
     if (drops.length === 1) {
       const drop = drops[0]!;
@@ -210,8 +236,8 @@ export function formatLedger(ledger: ConservationLedger): string {
 // resolved rows it surfaces come from the PRIOR engagement and live in doc.baseline, not
 // doc.findings. So the honest invariant today is removed == 0 AND gained == 0: any finding that
 // entered and did not exit was silently deleted by a baseline-application bug (the NEW finding the
-// task guards), and any row that exited without entering was invented. Matching is by finding id,
-// which applyBaseline preserves (it spreads `{ ...current, baselineStatus }`). If a future baseline
+// task guards), and any row that exited without entering was invented. Matching binds content and
+// occurrence multiplicity, excluding baseline annotations. If a future baseline
 // design legitimately withholds accepted/persistent findings, it must ACCOUNT each removal — declare
 // it, don't drop it — exactly as the disposition columns above require.
 interface BaselineLedger {
@@ -227,12 +253,10 @@ interface BaselineLedger {
 
 export function baselineLedger(before: Finding[], after: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}): BaselineLedger {
   const owners = attribute(byModule);
-  const consumed = new Set<number>();
+  const { consumed, take } = occurrenceMatcher(after);
   const removed: { id: string; modules: AuditModule[] }[] = [];
   for (const f of before) {
-    const index = after.findIndex((x, i) => !consumed.has(i) && contentIdentity(x) === contentIdentity(f));
-    if (index >= 0) consumed.add(index);
-    else removed.push({ id: f.id, modules: owners.get(f.id) ?? [] });
+    if (take(f) < 0) removed.push({ id: f.id, modules: owners.get(f.id) ?? [] });
   }
   const gained = after.filter((_f, i) => !consumed.has(i)).map((f) => f.id);
   return { entered: before.length, exited: after.length, retained: consumed.size, removed, gained, ok: removed.length === 0 && gained.length === 0 };

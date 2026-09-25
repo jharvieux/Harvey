@@ -8,3 +8,4 @@ export declare function contentIdentity(f: Finding): string;
 export declare function prepareFindings(findings: Finding[]): (Finding & { assessment: FindingAssessment })[];
 export declare function populationSummary(findings: Finding[]): { total: number; counts: Record<FindingDisposition, number> };
 export declare function baselineIntegrityErrors(baseline: unknown, findings: Finding[]): string[];
+export declare function conservationIntegrityErrors(ledger: unknown, findings: Finding[]): string[];

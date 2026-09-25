@@ -61,14 +61,25 @@ export function contentIdentity(f) {
 export function prepareFindings(findings) {
   const idCounts = new Map();
   for (const f of findings) idCounts.set(f.id, (idCounts.get(f.id) ?? 0) + 1);
-  const ordinals = new Map();
-  return findings.map((f) => {
-    const contentKey = contentIdentity(f);
-    const ordinal = (ordinals.get(contentKey) ?? 0) + 1;
-    ordinals.set(contentKey, ordinal);
+  const entries = findings.map((f) => ({ f, contentKey: contentIdentity(f), assessment: assessmentFor(f), ordinal: 0 }));
+  const byContent = new Map();
+  for (const entry of entries) { const group = byContent.get(entry.contentKey) ?? []; group.push(entry); byContent.set(entry.contentKey, group); }
+  for (const group of byContent.values()) {
+    group.sort((a, b) => JSON.stringify(canonical(a.assessment)).localeCompare(JSON.stringify(canonical(b.assessment))));
+    group.forEach((entry, i) => { entry.ordinal = i + 1; });
+  }
+  const reserved = new Set(findings.map((f) => f.id));
+  return entries.map(({ f, contentKey, ordinal, assessment }) => {
     const origin = { contentKey, occurrenceKey: `${contentKey}:${ordinal}`, producerId: f.origin?.producerId ?? f.id };
-    const id = idCounts.get(f.id) > 1 ? `${f.id}~${contentKey.slice(0, 16)}-${ordinal}` : f.id;
-    return { ...f, id, origin, assessment: assessmentFor(f) };
+    let id = f.id;
+    if (idCounts.get(f.id) > 1) {
+      const stem = `${f.id}~${contentKey}-${ordinal}`;
+      id = stem;
+      let suffix = 0;
+      while (reserved.has(id)) id = `${stem}~${++suffix}`;
+      reserved.add(id);
+    }
+    return { ...f, id, origin, assessment };
   });
 }
 
@@ -105,4 +116,19 @@ export function baselineIntegrityErrors(baseline, findings) {
     if ([...findings.filter((f) => f.baselineStatus === "new"), ...(baseline.resolved ?? [])].some((f) => !f || (f.assessment !== undefined && assessmentErrors(f.assessment).length > 0) || !["confirmed", "actionable"].includes(assessmentFor(f).disposition))) errors.push("new/resolved defect counts cannot include pending review or inventory");
   }
   return errors;
+}
+
+export function conservationIntegrityErrors(ledger, findings) {
+  if (ledger === undefined) return [];
+  const keys = ["produced", "delivered", "deliveredFromProduced", "deduped", "suppressed", "capped", "notApplicable", "unaccounted", "synthesized"];
+  if (!ledger || keys.some((key) => !Number.isInteger(ledger[key]) || ledger[key] < 0) || !Array.isArray(ledger.rows)) return ["invalid raw occurrence ledger"];
+  if (!ledger.ok || ledger.unaccounted || ledger.delivered !== findings.length
+    || ledger.produced !== ledger.deliveredFromProduced + ledger.deduped + ledger.suppressed + ledger.capped + ledger.notApplicable
+    || ledger.delivered !== ledger.deliveredFromProduced + ledger.synthesized) return ["raw occurrence totals do not reconcile"];
+  const totals = { deduped: 0, suppressed: 0, capped: 0, "not-applicable": 0 };
+  for (const row of ledger.rows) {
+    if (!row || !Object.hasOwn(totals, row.disposition) || !text(row.id) || !text(row.reason) || !Number.isInteger(row.count ?? 1) || (row.count ?? 1) < 1) return ["every non-delivered occurrence requires an identity, disposition, count and reason"];
+    totals[row.disposition] += row.count ?? 1;
+  }
+  return totals.deduped !== ledger.deduped || totals.suppressed !== ledger.suppressed || totals.capped !== ledger.capped || totals["not-applicable"] !== ledger.notApplicable ? ["non-delivery reasons do not account for every raw occurrence"] : [];
 }

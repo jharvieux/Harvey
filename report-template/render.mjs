@@ -23,7 +23,7 @@ import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
 import { assertFindingNavigation, findingAnchor, findingIdAttribute } from "./navigation.mjs";
 import { draftTermsBadge, esc, legalTermsSection, notApplicableSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
-import { DISPOSITIONS, DISPOSITION_LABELS, baselineIntegrityErrors, findingModule, populationSummary, prepareFindings } from "./dispositions.mjs";
+import { DISPOSITIONS, DISPOSITION_LABELS, baselineIntegrityErrors, conservationIntegrityErrors, findingModule, populationSummary, prepareFindings } from "./dispositions.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -244,6 +244,14 @@ function resolvedSection(resolved) {
     ${rows}`;
 }
 
+function conservationSection(ledger) {
+  if (!ledger) return "<div>Raw producer capture counts were not supplied. The population above counts the observations supplied to this report.</div>";
+  return `<section class="conservation"><h2>Raw occurrence accounting</h2>
+    <div>Produced ${ledger.produced} = delivered ${ledger.deliveredFromProduced} + deduplicated ${ledger.deduped} + suppressed ${ledger.suppressed} + capped ${ledger.capped} + not applicable ${ledger.notApplicable}. Synthesized disclosures: ${ledger.synthesized}.</div>
+    ${ledger.rows.map((row) => `<div class="accounted-occurrence"><b>${esc(row.id)}</b> — ${esc(row.disposition)} (${row.count ?? 1}): ${esc(row.reason || "Unaccounted occurrence — delivery is incomplete")}${row.contentKey ? ` <code>${esc(row.contentKey)}</code>` : ""}</div>`).join("")}
+  </section>`;
+}
+
 // Per-module coverage badge palette (#349). "Not assessed" is deliberately alarming: a module that
 // never ran contributes no findings, and without this row that silence reads as "clean".
 const COV = {
@@ -455,6 +463,8 @@ export function buildHtml(data) {
   const all = prepareFindings(data.findings).map((x) => ({ ...x, _bftb: bftb(x) }));
   const comparisonErrors = baselineIntegrityErrors(data.baseline, all);
   if (comparisonErrors.length) throw new Error(`Invalid baseline: ${comparisonErrors.join("; ")}`);
+  const ledgerErrors = conservationIntegrityErrors(data.conservation, all);
+  if (ledgerErrors.length) throw new Error(`Invalid conservation: ${ledgerErrors.join("; ")}`);
   const byId = new Map(all.map((x) => [x.id, x]));
   if (byId.size !== all.length || all.some((x) => typeof x.id !== "string" || !x.id.trim())) {
     throw new Error("Report findings require nonempty unique identities for navigation");
@@ -531,7 +541,8 @@ export function buildHtml(data) {
   .findings{page-break-before:always}
   .finding{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px;margin:12px 0;page-break-inside:avoid}
   .finding-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-  .fid{font-weight:800;color:var(--accent)}
+  .fid{font-weight:800;color:var(--accent);overflow-wrap:anywhere}
+  .accounted-occurrence{overflow-wrap:anywhere}
   .ftitle{font-weight:700;font-size:13px;flex:1;min-width:240px}
   .badge{color:#fff;border-radius:5px;padding:2px 9px;font-size:10px;font-weight:700;letter-spacing:.3px}
   .badge.bftb{}
@@ -617,6 +628,7 @@ export function buildHtml(data) {
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
+    ${conservationSection(data.conservation)}
     ${data.auditEvidence?.testQualityByScope?.length > 1
       ? data.auditEvidence.testQualityByScope.map((row) => `<h3>${esc(row.scope.workspace)} — ${esc(row.scope.tier)} / ${esc(row.scope.surface)}</h3>${testQualityBlock({ testQuality: row.testQuality })}`).join("")
       : testQualityBlock(data)}
