@@ -1168,6 +1168,31 @@ describe("CycloneDX independent export contract (#2059, #2078)", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it.each([
+    ["UNLICENSED", { license: { name: "UNLICENSED" } }],
+    ["Proprietary", { license: { name: "Proprietary" } }],
+    ["LicenseRef-Internal", { expression: "LicenseRef-Internal" }],
+    ["DocumentRef-Internal:LicenseRef-Custom", { expression: "DocumentRef-Internal:LicenseRef-Custom" }],
+    ["GPL-2.0-only WITH Classpath-exception-2.0", { expression: "GPL-2.0-only WITH Classpath-exception-2.0" }],
+    ["MIT WITH Not-An-Exception", { license: { name: "MIT WITH Not-An-Exception" } }],
+    ["SEE LICENSE IN LICENSE.txt", { license: { name: "SEE LICENSE IN LICENSE.txt" } }],
+    ["MIT OR", { license: { name: "MIT OR" } }],
+    ["MadeUp AND MIT", { license: { name: "MadeUp AND MIT" } }],
+    ["MIT", { license: { id: "MIT" } }],
+    ["(MIT OR Apache-2.0)", { expression: "(MIT OR Apache-2.0)" }],
+    ["MIT AND (Apache-2.0 OR BSD-3-Clause)", { expression: "MIT AND (Apache-2.0 OR BSD-3-Clause)" }],
+  ])("preserves license label %s in the schema-admitted field", (license, expected) => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/a": { version: "1.0.0", license },
+      "node_modules/sibling": { version: "2.0.0", license: "ISC" },
+    } }));
+    const bom = serializedBom(dir);
+    expect(validateCycloneDx15(bom)).toMatchObject({ valid: true, errors: [] });
+    expect(bom.components.find((component: { name: string }) => component.name === "a").licenses).toEqual([expected]);
+    expect(bom.components.find((component: { name: string }) => component.name === "sibling").licenses).toEqual([{ license: { id: "ISC" } }]);
+    expect(propertyValues(bom, "harvey:license-coverage")).toEqual(["2/2 components carry a license from package-lock.json"]);
+  });
+
+  it.each([
     ["npm v3 root", () => {
       writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
       writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {

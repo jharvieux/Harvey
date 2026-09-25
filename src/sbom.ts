@@ -33,6 +33,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
+import parseSpdxExpression from "spdx-expression-parse";
 import { collectWorkspaceManifests } from "./workspaces.js";
 
 const SPEC_VERSION = "1.5";
@@ -1014,12 +1015,24 @@ function purl(c: SbomComponent): string {
   return `pkg:npm/${c.name.replace(/^@/, "%40")}@${encodeURIComponent(c.version)}`;
 }
 
-// CycloneDX splits a single SPDX id (`licenses[].license.id`) from a compound expression
-// (`licenses[].expression`) — "(MIT OR Apache-2.0)" in the id field fails schema validation, which
-// is the one thing a procurement pipeline will actually notice.
+// The pinned CycloneDX 1.5 enum owns ID admission. Other lockfile labels stay names;
+// whitespace alone establishes neither an SPDX ID nor a valid compound expression.
+const CYCLONEDX_SPDX_IDS = new Set<string>((JSON.parse(readFileSync(
+  new URL("./__fixtures__/schemas/cyclonedx-1.5/spdx.schema.json", import.meta.url), "utf8",
+)) as { enum: string[] }).enum);
+
+function supportedLicenseExpression(value: string): boolean {
+  // Keep exceptionally large package metadata as a literal name instead of parsing it.
+  if (value.length > 4096) return false;
+  try { parseSpdxExpression(value); return true; }
+  catch { return false; }
+}
+
 function licenses(c: SbomComponent): object[] | undefined {
   if (!c.license) return undefined;
-  return /[\s()]/.test(c.license) ? [{ expression: c.license }] : [{ license: { id: c.license } }];
+  if (CYCLONEDX_SPDX_IDS.has(c.license)) return [{ license: { id: c.license } }];
+  if (supportedLicenseExpression(c.license)) return [{ expression: c.license }];
+  return [{ license: { name: c.license } }];
 }
 
 // npm records Subresource Integrity (`sha512-<base64>`); CycloneDX wants an algorithm name and a

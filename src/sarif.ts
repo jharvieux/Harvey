@@ -80,15 +80,14 @@ export function parseLocation(location: string): SarifLocation | undefined {
     // that no longer exists and would leak the operator's filesystem layout into a client artifact.
     .replace(/^\[[^\]]*\]\s*/, "") // tier prefix: "[source] "
     // Greedy to the LAST ")": descriptors nest, e.g. "…sql:44 (public.fn(arg))".
-    .replace(/\s*\(.*\)\s*$/, "")
+    .replace(/\s+\(.*\)\s*$/, "")
     .trim();
   if (!stripped) return undefined;
 
-  const m = /^(\S+?):(\d+)(?::(\d+))?(?:-(\d+))?$/.exec(stripped);
+  const m = /^(.+?):(\d+)(?::(\d+))?(?:-(\d+))?$/.exec(stripped);
   const uri = m ? m[1]! : stripped;
-  // A path has no spaces and looks like a path or a file — "main DB" and "repo-wide" must not
-  // become artifact URIs.
-  if (/\s/.test(uri) || !/[/.]/.test(uri)) return undefined;
+  // Source paths may contain spaces; a human location without a path or filename stays unlocated.
+  if (!/[/.]/.test(uri) || (/\s/.test(uri) && !/\.[^/\\.\s]+$/.test(uri))) return undefined;
 
   if (!m) return { uri };
   return {
@@ -212,9 +211,11 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
 
     const parsed = parseLocation(f.location);
     if (!parsed) nonFileLocations.push(f.location);
-    const uri = parsed && opts.baseUri && parsed.uri.startsWith(opts.baseUri)
-      ? parsed.uri.slice(opts.baseUri.length).replace(/^\/+/, "")
-      : parsed?.uri;
+    const path = parsed?.uri.replace(/\\/g, "/");
+    const base = opts.baseUri?.replace(/\\/g, "/").replace(/\/+$/, "");
+    const relativePath = path && base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+    // Encode path components, preserving separators, so #, ?, % and spaces stay filename bytes.
+    const uri = relativePath?.split("/").map(encodeURIComponent).join("/");
 
     return {
       ruleId,
@@ -246,6 +247,8 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         assessment: f.assessment,
         origin: f.origin,
         location: f.location,
+        ...(f.dependencyRangeEvidence ? { dependencyRangeEvidence: f.dependencyRangeEvidence } : {}),
+        ...(f.dependencyMetadataEvidence ? { dependencyMetadataEvidence: f.dependencyMetadataEvidence } : {}),
         ...(f.precisionTier ? { precisionTier: f.precisionTier } : {}),
         ...(f.baselineStatus ? { baselineStatus: f.baselineStatus } : {}),
         ...(f.baselineReason ? { baselineReason: f.baselineReason } : {}),

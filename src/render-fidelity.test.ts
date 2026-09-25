@@ -238,6 +238,11 @@ describe("dependency URL delivery (#1774)", () => {
       expect(validateFindings(delivered).errors).toEqual([]);
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
       const artifact = delivered.findings.find((finding) => finding.id === id)!.dependencyRangeEvidence!;
+      expect(delivered.coverage).toBeDefined();
+      const sarif = JSON.stringify(toSarif(delivered.findings, { coverage: delivered.coverage! }));
+      const parsedSarif = JSON.parse(sarif) as { runs: { results: { properties: { harveyId: string; dependencyRangeEvidence?: unknown } }[] }[] };
+      expect(parsedSarif.runs[0]!.results.find((result) => result.properties.harveyId === id)?.properties.dependencyRangeEvidence).toEqual(artifact);
+      for (const secret of ["canary-user", "canary-password", "canary-query", "canary%2duser", "canary%2dpassword"]) expect(sarif).not.toContain(secret);
       expect(artifact).toMatchObject({ examined: 1, matched: 1, distinctSpecifications: 1, displayedSpecifications: 1, edges: [{
         source: direct ? "package.json" : "package-lock.json", format: direct ? "package-json" : "package-lock", sourceVersion: direct ? "unversioned" : "3",
         ownerPath: direct ? "package.json" : "node_modules/parent", section: "dependencies", direct, redacted,
@@ -313,6 +318,10 @@ describe("dependency metadata delivery (#2141)", () => {
       const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
       expect(validateFindings(delivered).errors).toEqual([]);
       expect(delivered.findings.find((finding) => finding.id === receipt.id)?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      expect(delivered.coverage).toBeDefined();
+      const sarif = JSON.stringify(toSarif(delivered.findings, { coverage: delivered.coverage! }));
+      const parsedSarif = JSON.parse(sarif) as { runs: { results: { properties: { harveyId: string; dependencyMetadataEvidence?: unknown } }[] }[] };
+      expect(parsedSarif.runs[0]!.results.find((result) => result.properties.harveyId === receipt.id)?.properties.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
       expect(delivered.findings.find((finding) => finding.id === scopeFinding.id)?.evidence).toBe(scopeFinding.evidence);
       const html = buildHtml(doc);
       expect(html).toContain("Dependency metadata outcomes");

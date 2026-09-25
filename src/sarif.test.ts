@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Ajv } from "ajv";
 import { describe, expect, it } from "vitest";
 import type { CoverageRow, Finding } from "./findings.js";
@@ -137,6 +137,32 @@ describe("locations", () => {
   it("makes URIs repo-relative so an alert can attach to a file", () => {
     const r = run(toSarif([finding({ location: "/tmp/target/src/a.ts:4" })], { coverage: RAN }, { baseUri: "/tmp/target" }));
     expect(r.results[0].locations[0].physicalLocation.artifactLocation.uri).toBe("src/a.ts");
+  });
+
+  it("resolves emitted URI references to each owned file without interpreting path punctuation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-sarif-paths-"));
+    const root = join(dir, "target");
+    const sibling = join(dir, "target-sibling", "src", "sibling.ts");
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(dirname(sibling), { recursive: true });
+    const names = ["plain.ts", "hash#name.ts", "query?name.ts", "percent%name.ts", "space name.ts", "unicode-é.ts", "paren(name).ts"];
+    const paths = names.map((name) => join(root, "src", name));
+    paths.push(sibling);
+    try {
+      paths.forEach((path, index) => writeFileSync(path, `file identity ${index}`));
+      const locations = names.map((name) => `src/${name}:3`);
+      locations.push(`${sibling}:3`, `${paths[0]}:3`);
+      const value = toSarif(locations.map((location, i) => finding({ id: `path-${i}`, location })), { coverage: RAN }, { baseUri: root });
+      const serialized = JSON.parse(JSON.stringify(value));
+      expect(validateSarif210(serialized)).toMatchObject({ valid: true, errors: [] });
+      const base = pathToFileURL(`${root}/`);
+      serialized.runs[0].results.forEach((result: { locations: { physicalLocation: { artifactLocation: { uri: string } } }[] }, index: number) => {
+        const uri = result.locations[0]!.physicalLocation.artifactLocation.uri;
+        const expected = index === paths.length ? paths[0]! : paths[index]!;
+        expect(fileURLToPath(new URL(uri, base))).toBe(expected);
+        expect(readFileSync(new URL(uri, base), "utf8")).toBe(readFileSync(expected, "utf8"));
+      });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("keeps a non-file finding as a result and says where it is, loudly", () => {

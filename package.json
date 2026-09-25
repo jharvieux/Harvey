@@ -2,7 +2,7 @@
   "name": "harvey",
   "version": "0.1.0",
   "private": true,
-  "description": "External code-audit service \u2014 multi-tenant Supabase/Next.js security & codebase-health scanning",
+  "description": "External code-audit service — multi-tenant Supabase/Next.js security & codebase-health scanning",
   "type": "module",
   "packageManager": "pnpm@11.1.3",
   "engines": {
@@ -98,6 +98,7 @@
   },
   "dependencies": {
     "chrome-launcher": "^1.2.1",
-    "lighthouse": "^13.4.0"
+    "lighthouse": "^13.4.0",
+    "spdx-expression-parse": "4.0.0"
   }
 }
