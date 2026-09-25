@@ -364025,8 +364025,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "329318a2c6270de512619043b684e4b4164bea64",
-    "commitPayload": "dHJlZSA1MTVjMmMzYjM2OTJiNTI3ZTU4MWI4ZDJhMGQ3YjI0ZTkzZWFlYzc2CnBhcmVudCA2ZTNkMDFkN2ZkMWI1NjE3YjJhMjViOTgzZTllYWIwOTRhMGJiYWVlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3NTc5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3NTc5IC0wNTAwCgpLZWVwIGRyaWZ0IHJlc3VsdCB0eXBlcyBpbnRlcm5hbCAoIzIwNzkpCg==",
+    "commit": "eb54b4a82f168efe3a606fe4323172be61b28de4",
+    "commitPayload": "dHJlZSAxOGI4YzFiYTk0YmE3MjdlM2I0ZTc4ZTA3Y2E3NTMzNGNjNTkxY2MyCnBhcmVudCA3ZGZkMTZhODJlY2JhMzdkMzkwNjc5NzI2MzE2NmM5YmM1ODI3OTI4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCgpPd24gdGhlIHdhdGNoZXIgdGVzdCBvdXRwdXQgYXJ0aWZhY3QgKCMyMTgzKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364035,13 +364035,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "ef0be5a26c3b6954433f47ffea138d9c32f0cf64",
+        "gitOid": "e7f8ea2dae4d92230e85b099027969c0e5f0310c",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "daf5d82b76459e1ebd0043704c9175aa704d2d1e816e5d0e12eb4ee89b606443",
-    "tree": "515c2c3b3692b527e581b8d2a0d7b24e93eaec76"
+    "populationSha256": "21f69545eec4a8f9b3888b4f9aa310171a73b3951340210967bc76dd35883699",
+    "tree": "18b8c1ba94ba727e3b4e78e07ca75334cc591cc2"
   },
   "venues": [
     {
@@ -384145,19 +384145,19 @@
       "sha256": "970fa06c3eaa3143cfd92df97d2e8849feffdeba9a9c7328174a59302dd7755b"
     },
     {
-      "bytes": 5837,
+      "bytes": 5997,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "5e54102b9ec1421499c8f51ca50ccf66d67a84bc",
+      "gitOid": "bdf51206cedabe620d5506f12425c8a26891fa6b",
       "id": "src/owasp-ack-watch.test.ts",
       "kind": "source",
-      "literalCount": 129,
-      "literalSha256": "3a09279f41c04fdbae6009e206d0c017ce6ddde367c93b40dca28056348ec5e5",
+      "literalCount": 132,
+      "literalSha256": "dc3d682f46615e6c01ef09ba83716784e0c92ed30b3cdaa801037eedb7bcbec6",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/owasp-ack-watch.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "33efe28f6a8b331f866bb2d455053ba57696fb2fcbfc4531c002c58e6911ad44"
+      "sha256": "641372794377e10b099179a02961db0e37799b165c9dd16229def1ef4e94a63a"
     },
     {
       "bytes": 7112,
