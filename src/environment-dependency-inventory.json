@@ -90282,7 +90282,7 @@
       "evidence": {
         "anchor": "whole-content",
         "line": 1,
-        "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts"
+        "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts.txt"
       },
       "freshness": {
         "enforcedBy": null,
@@ -90290,7 +90290,7 @@
         "observedAt": null,
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
-      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts#whole-content:unresolved:unclassified-content",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts.txt#whole-content:unresolved:unclassified-content",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -90300,7 +90300,7 @@
       "resolution": "unresolved",
       "schemaOwner": null,
       "state": "wholly-unbound",
-      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts"
+      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts.txt"
     },
     {
       "assertionVenue": null,
@@ -90319,7 +90319,7 @@
       "evidence": {
         "anchor": "whole-content",
         "line": 1,
-        "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts"
+        "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts.txt"
       },
       "freshness": {
         "enforcedBy": null,
@@ -90327,7 +90327,7 @@
         "observedAt": null,
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
-      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts#whole-content:unresolved:unclassified-content",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts.txt#whole-content:unresolved:unclassified-content",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -90337,7 +90337,7 @@
       "resolution": "unresolved",
       "schemaOwner": null,
       "state": "wholly-unbound",
-      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.ts"
+      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.ts.txt"
     },
     {
       "assertionVenue": null,
@@ -90467,7 +90467,7 @@
       "evidence": {
         "anchor": "whole-content",
         "line": 1,
-        "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts"
+        "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts.txt"
       },
       "freshness": {
         "enforcedBy": null,
@@ -90475,7 +90475,7 @@
         "observedAt": null,
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
-      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts#whole-content:unresolved:unclassified-content",
+      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts.txt#whole-content:unresolved:unclassified-content",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -90485,7 +90485,7 @@
       "resolution": "unresolved",
       "schemaOwner": null,
       "state": "wholly-unbound",
-      "venue": "src/__fixtures__/mutation-runner-validity/vitest.config.ts"
+      "venue": "src/__fixtures__/mutation-runner-validity/vitest.config.ts.txt"
     },
     {
       "assertionVenue": null,
@@ -91231,7 +91231,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 112,
+        "line": 113,
         "path": "src/__tests__/mutation-runner-validity.ts"
       },
       "freshness": {
@@ -364892,8 +364892,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "d4d634a8cd524033b369ee5f7dfdb4a9bd553752",
-    "commitPayload": "dHJlZSBjMDUwNjYxMjcwZDJlYzIwY2JhMjI1MjQ5MDY1ODhmYmJhOWNlZmMyCnBhcmVudCBhZTcwYTc5Y2NkODQ0NTljNzcyMjgxNmJmYzEzZDBjYWNlNDgyZjdlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzExMzkyIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzExMzkyIC0wNTAwCgpSZWJpbmQgdW5jaGFuZ2VkIG11dGF0aW9uIGNvbW1hbmQgcG9saWN5ICgjMjEzOSkK",
+    "commit": "a2b628a79470866073b1834be71643bfa8d59f41",
+    "commitPayload": "dHJlZSAzY2NkNjY5ZDhmYzI3ZGFhYTNmM2NjY2UzZDhhZGZhYmRkYzFmOWFlCnBhcmVudCA2OTU3MDEwYjhhMmYxZmI0NzJlYWVhNDQ3YTFjNmU2NDg0OWZkZWJhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyMDk3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEyMDk3IC0wNTAwCgpBc3NlcnQgbGVnYWN5IHJlY2VpcHQgaWRlbnRpdHkgYmVmb3JlIHJlcGFja2FnaW5nICgjMjEzOSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364902,13 +364902,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "1d06d5118b885e18e73a4d9f968a45a7ff34093c",
+        "gitOid": "1a0cc1e055733b6aa1155edec8f64cc82694febd",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "fa4d63ea029aea5d3de933b1ce05dc1252eafd37c20bc6696d55c4db76b33241",
-    "tree": "c050661270d2ec20cba22524906588fbba9cefc2"
+    "populationSha256": "53a8d4d244479882eab32f840262cf3501cddddc3d5659ebbc6377f641da4ea3",
+    "tree": "3ccd669d8fc27daaa3f3ccce3d8adfabddc1f9ae"
   },
   "venues": [
     {
@@ -370602,12 +370602,12 @@
       "format": "source",
       "gitMode": "100644",
       "gitOid": "4d9bda15112b94c7cbd32709d643c717da32bf36",
-      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts.txt",
       "kind": "source",
       "literalCount": 9,
       "literalSha256": "9fdab5ca3afff0dbf9aa4855413bda1934b5f27ec0eea0463e33828d112e7ee1",
       "owner": "#1906 discovery; #1909 environment classification",
-      "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts",
+      "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts.txt",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "f831945bda0808c61ff982c2597da17124f3ede42c814e29764bb3d9c56042c4"
     },
@@ -370617,12 +370617,12 @@
       "format": "source",
       "gitMode": "100644",
       "gitOid": "162e3a6d915cdb37751d63a156e7cb6ab2d1a1a1",
-      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts.txt",
       "kind": "source",
       "literalCount": 7,
       "literalSha256": "93c8330313e61295504b8c9052d7e626d1e1f5e0f5bc97fcbff32492680a8f27",
       "owner": "#1906 discovery; #1909 environment classification",
-      "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts",
+      "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts.txt",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "3b463cdc271e3485757fdb673d93aef3432eb021c3e39a1bc039b47c387d64dc"
     },
@@ -370662,12 +370662,12 @@
       "format": "source",
       "gitMode": "100644",
       "gitOid": "15d16f8eb75e976b86c4922a850c16e943a65df4",
-      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts",
+      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts.txt",
       "kind": "source",
       "literalCount": 1,
       "literalSha256": "349eb18fc13f64a7a1cbd8db66d8dbcc1b5e85a965e8f3b54fe35e3f284df863",
       "owner": "#1906 discovery; #1909 environment classification",
-      "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts",
+      "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts.txt",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "8f9a1dd7b6331710d840bfe202418236686ab568358ccca26b155503c2ca5be8"
     },
@@ -370747,19 +370747,19 @@
       "sha256": "cce8f0195a2efe385a932b1681ae352a69664b18f1dc2d5afdccde92786ae2ef"
     },
     {
-      "bytes": 8301,
+      "bytes": 8452,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "0512c38d25cc3667bb547dc452cfb8c68c7435fd",
+      "gitOid": "c66283ba675a6143a4bda90522cf4e5e093eae7f",
       "id": "src/__tests__/mutation-runner-validity.ts",
       "kind": "source",
-      "literalCount": 149,
-      "literalSha256": "b7b7ff27c7b749f764105c1e358c6ce2b81e8112d9adab4e09afcc80de0ef864",
+      "literalCount": 152,
+      "literalSha256": "08d830e7c655fbed5efb05ff489340df6d8be76451f7ab9d7c92b90771563ef3",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/__tests__/mutation-runner-validity.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "b578478b4ed39ba58f94d826a55d38f557290fd9714dafbd1cf1b8995c526339"
+      "sha256": "f0f8ca35da27d9fb52424f97a7065263aee2c5d4e653a4f73d4fb51448d323bd"
     },
     {
       "bytes": 67953,
@@ -370987,19 +370987,19 @@
       "sha256": "4ba37759b29eea8ae87c2e874f5f215b7de63718fe4618b8f3b2cbbddf28afb9"
     },
     {
-      "bytes": 10957,
+      "bytes": 11085,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "570a6611b7d65e1275bb44d6d9a05934c006efad",
+      "gitOid": "6beab1a63662626b81485847d002fa604086a097",
       "id": "src/audit-evidence-import.test.ts",
       "kind": "source",
-      "literalCount": 193,
-      "literalSha256": "67980550dae1e20764d36820925e65feaa1d57cb2f83b86b11c72aa768a0d63c",
+      "literalCount": 196,
+      "literalSha256": "7ca2e9551e56433c0350b43c267629c4f47c09dce4be602268e247257633c209",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/audit-evidence-import.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "d1983134d1f9d9884afc443632839d984c8978c31dca7d3763a6f80fc50e9ab6"
+      "sha256": "de5a4fb02d56e04c52f5f615b7e51921c88f9fe8221d879702cc38060be27b0c"
     },
     {
       "bytes": 12181,
@@ -385132,11 +385132,11 @@
       "sha256": "516485ef70bc70577cd25645c936a9e2f1f7fcdd306e1973d25c68e7b2c06c8a"
     },
     {
-      "bytes": 88717,
+      "bytes": 88710,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "fee6521a61698c58aa956ce19ac5445c98ed52c6",
+      "gitOid": "467ac18cacefa75d69b0a45e8b30c5d4ae97abbf",
       "id": "src/mutation-scan.ts",
       "kind": "source",
       "literalCount": 490,
@@ -385144,7 +385144,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/mutation-scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "33a6ee6d72d46e6d67edf4b5a481c498b1b841e3b6e29549d661ebbb541591ce"
+      "sha256": "235af1a54108aa909ecd493fb241553d704132d76f876a96fd69541371bba6f0"
     },
     {
       "bytes": 5997,
@@ -386917,11 +386917,11 @@
       "sha256": "084ae098b2dedc54ccf2821fe5d84f2ab94a30837b103a83ab65a9bc0249440d"
     },
     {
-      "bytes": 25783,
+      "bytes": 25769,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "59ef2855f85b8ad21a6a613efc515a20e6ace75d",
+      "gitOid": "b608bcd6f79e04ce965846a54dcf312b44b0c65e",
       "id": "src/producer-execution-receipt.ts",
       "kind": "source",
       "literalCount": 202,
@@ -386929,7 +386929,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/producer-execution-receipt.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f95d16d2987a68d7f6d060a319256bc2af39508e15f50c307f50185b019bb7cf"
+      "sha256": "1377cf6f76d2919da05609f33a6f8dc410e9361854fdff2d82e16ed118cfb822"
     },
     {
       "bytes": 53402,
@@ -392152,11 +392152,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 330900,
+      "bytes": 331488,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "c2bb3d7e7b4c4959d247d6f545e3a863138e0692",
+      "gitOid": "683e15fece7206c1f53843b7e464aa78892c72ae",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -392164,7 +392164,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "c45cd243426e51d74df4689579d12e5851c05fe7a6ca95d75a60ee8c46528f81"
+      "sha256": "80d6613d4f6ddcb6a1f1371307460cae4081b4362d7ab57dacc2e3e521d4af8c"
     },
     {
       "bytes": 10289,
