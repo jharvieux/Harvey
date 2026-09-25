@@ -155,7 +155,7 @@ pnpm record-pass --module M6 --target <target-dir> --pass verdict --out <artifac
 ```
 
 `--target` must equal the exact path string `run-audit` will be given (`docs/design/
-audit-pass-artifacts.md`); a mismatched or stale (>30 days) artifact is rejected, not silently
+audit-pass-artifacts.md`); a mismatched, stale (>30 days), or far-future (>5 minutes ahead of the evaluation clock) artifact is rejected, not silently
 accepted.
 
 ## 4. Dynamic M2 — stand up Harvey's own two-tenant stack
@@ -313,6 +313,13 @@ pnpm mutation-scan <app-2-path> --hotspots hotspots.txt --out M8-app2.json --ins
                                                                                          # already
                                                                                          # installed
 ```
+
+Retain each output JSON and its raw Stryker sidecar outside the scanned source directory. To
+compare repeated mutation results, run the same source, selection and tool versions again with
+`--compare-run <retained-first-M8.json>` and a separate `--out` path. The comparison validates
+both command receipts and reports every changed mutant status. A mismatch or unstable result
+remains partial; a single invocation explicitly leaves stability unassessed. Keep both raw
+sidecars with the artifacts so offline receipt validation remains possible.
 
 Run once per app — not once for the whole monorepo. A target that ships its own Stryker config
 runs under it; one that doesn't gets a config scaffolded for its detected runner

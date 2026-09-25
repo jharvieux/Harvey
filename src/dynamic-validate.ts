@@ -22,7 +22,7 @@ import { basename, join, relative } from "node:path";
 import { readEntriesSafe, readNamesSafe, type SafeDirEntry } from "./fs-walk.js";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import { ingestPassArtifactReceipts } from "./audit-pass-artifact.js";
-import { assertUniqueProducerExecutionReceipts, extendProducerExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
+import { assertUniqueProducerExecutionReceipts, extendProducerExecutionReceipt, remapProducerExecutionReceiptFindingIds, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
 import { buildScopeLedger, type AppBehaviorProbed, type ScopeRow } from "./pentest/scope-ledger.js";
@@ -408,6 +408,8 @@ interface ProbeResult {
   producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
 
+const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
 // Probe one Supabase project: assess → stand up its DB (apply its migrations + seed two tenants) →
 // (run its app) → pen-test → (bonus: the client's own suite). Pure over the injected runner; the
 // caller (single-project or per-DB loop) decides what artifact to write. `appDir` is the project's
@@ -533,10 +535,39 @@ export function runDynamicValidation(opts: {
   now: () => string; // injected clock (ISO string) so the result is deterministic under test
   runner: StandUpRunner;
   clientSuite?: ClientSecuritySuite; // detected client suite to try as a bonus signal
+  stop?: () => void; // production single-project lifecycle: cleanup completes before evidence emits
+  writeArtifact?: typeof writePassArtifact;
 }): DynamicValidationResult {
-  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite } = opts;
-  const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
-  const r = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite, driftPass });
+  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite, stop, writeArtifact = writePassArtifact } = opts;
+  let probed: ProbeResult | undefined;
+  let primaryFailure: unknown;
+  let cleanupFailure: unknown;
+  try {
+    const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
+    probed = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite, driftPass });
+  } catch (error) {
+    primaryFailure = error;
+  }
+  if (stop) {
+    try {
+      stop();
+    } catch (error) {
+      cleanupFailure = error;
+    }
+  }
+  if (primaryFailure && cleanupFailure) throw new AggregateError([primaryFailure, cleanupFailure], `dynamic validation failed: ${errorText(primaryFailure)}; cleanup also failed: ${errorText(cleanupFailure)}`);
+  if (cleanupFailure) throw new Error(`dynamic validation cleanup failed after probing ${targetDir}: ${errorText(cleanupFailure)}`, { cause: cleanupFailure });
+  if (primaryFailure) throw primaryFailure;
+  return emitDynamicPass(probed!, targetDir, artifactsDir, now, writeArtifact);
+}
+
+function emitDynamicPass(
+  r: ProbeResult,
+  targetDir: string,
+  artifactsDir: string,
+  now: () => string,
+  writeArtifact: typeof writePassArtifact,
+): DynamicValidationResult {
   let artifactPath: string | null = null;
   if (r.producedEvidence) {
     const artifact = buildPassArtifact({
@@ -545,7 +576,7 @@ export function runDynamicValidation(opts: {
       findings: r.findings,
       producerExecutionReceipts: r.producerExecutionReceipts,
     });
-    artifactPath = writePassArtifact(artifactsDir, artifact);
+    artifactPath = writeArtifact(artifactsDir, artifact);
     if (artifact.producerExecutionReceipts?.length) {
       r.producerExecutionReceipts = ingestPassArtifactReceipts(artifact, "dynamic-validation:artifact-consumer").map((receipt) => extendProducerExecutionReceipt(
         receipt,
@@ -612,30 +643,29 @@ export function runMultiProjectDynamicValidation(opts: {
   artifactsDir: string;
   now: () => string;
   makeProject: (project: ProjectLayout, plan: ProvisioningPlan) => { runner: StandUpRunner; clientSuite?: ClientSecuritySuite; stop: () => void };
+  writeArtifact?: typeof writePassArtifact;
 }): DynamicValidationResult {
-  const { targetDir, layout, artifactsDir, now, makeProject } = opts;
+  const { targetDir, layout, artifactsDir, now, makeProject, writeArtifact = writePassArtifact } = opts;
   const projects = splitLayoutByProject(targetDir, layout);
   if (projects.length === 1) {
     const project = projects[0]!;
     const plan = buildProvisioningPlan(project.layout, readSchemaSql(project.layout), project.appDir);
     const made = makeProject(project, plan);
-    try {
-      const result = runDynamicValidation({
-        targetDir: project.appDir,
-        layout: project.layout,
-        plan,
-        artifactsDir,
-        now,
-        runner: made.runner,
-        clientSuite: made.clientSuite,
-      });
-      return {
-        ...result,
-        limitations: [`coverage=${result.coverage}${result.standUp ? "" : " (not stood up)"} — ${result.reason}`, ...result.limitations],
-      };
-    } finally {
-      made.stop();
-    }
+    const result = runDynamicValidation({
+      targetDir: project.appDir,
+      layout: project.layout,
+      plan,
+      artifactsDir,
+      now,
+      runner: made.runner,
+      clientSuite: made.clientSuite,
+      stop: () => made.stop(),
+      writeArtifact,
+    });
+    return {
+      ...result,
+      limitations: [`coverage=${result.coverage}${result.standUp ? "" : " (not stood up)"} — ${result.reason}`, ...result.limitations],
+    };
   }
   // Resolved once against the ENGAGEMENT's target, not per project: the connected pass is recorded
   // for the repo, while each project's scope statement is keyed on its own app dir.
@@ -650,17 +680,34 @@ export function runMultiProjectDynamicValidation(opts: {
   for (const project of projects) {
     const sql = readSchemaSql(project.layout);
     const plan = buildProvisioningPlan(project.layout, sql, project.appDir);
-    const made = makeProject(project, plan);
-    let r: ProbeResult;
+    let made: ReturnType<typeof makeProject> | undefined;
+    let r: ProbeResult | undefined;
+    let primaryFailure: unknown;
+    let cleanupFailure: unknown;
     try {
+      made = makeProject(project, plan);
       r = probeOneProject({ targetDir: project.appDir, appDir: project.appDir, layout: project.layout, plan, runner: made.runner, clientSuite: made.clientSuite, driftPass });
-    } finally {
-      made.stop(); // tear this project's stack down before the next binds its ports
+    } catch (error) {
+      primaryFailure = error;
     }
+    if (made) {
+      try {
+        made.stop(); // exactly once, and before the next project binds its ports
+      } catch (error) {
+        cleanupFailure = error;
+      }
+    }
+    if (primaryFailure || cleanupFailure) {
+      const diagnostics = [primaryFailure ? `harness exception: ${errorText(primaryFailure)}` : undefined, cleanupFailure ? `cleanup exception: ${errorText(cleanupFailure)}` : undefined].filter(Boolean).join("; ");
+      r = { standUp: false, coverage: "none", reason: diagnostics, limitations: [diagnostics], notes: [], findings: [], producedEvidence: false };
+    }
+    if (!r) throw new Error(`dynamic validation lifecycle for ${project.label} produced no result`);
     results.push(r);
-    producerExecutionReceipts.push(...(r.producerExecutionReceipts ?? []));
     // Only tag/prefix in the multi-project case; a single-project repo keeps its findings verbatim.
-    for (const f of r.findings) findings.push(projects.length > 1 ? tagFindingWithProject(f, project.label) : f);
+    const taggedFindings = r.findings.map((finding) => projects.length > 1 ? tagFindingWithProject(finding, project.label) : finding);
+    for (const finding of taggedFindings) findings.push(finding);
+    const findingIdMapping = Object.fromEntries(r.findings.map((finding, index) => [finding.id, taggedFindings[index]!.id]));
+    producerExecutionReceipts.push(...(r.producerExecutionReceipts ?? []).map((receipt) => remapProducerExecutionReceiptFindingIds(receipt, findingIdMapping)));
     const prefix = projects.length > 1 ? `DB "${project.label}": ` : "";
     limitations.push(`${prefix}coverage=${r.coverage}${r.standUp ? "" : " (not stood up)"} — ${r.reason}`);
     for (const l of r.limitations) limitations.push(`${prefix}${l}`);
@@ -682,7 +729,7 @@ export function runMultiProjectDynamicValidation(opts: {
       findings,
       producerExecutionReceipts,
     });
-    artifactPath = writePassArtifact(artifactsDir, artifact);
+    artifactPath = writeArtifact(artifactsDir, artifact);
     if (artifact.producerExecutionReceipts?.length) {
       producerExecutionReceipts.splice(0, producerExecutionReceipts.length, ...ingestPassArtifactReceipts(artifact, "dynamic-validation:artifact-consumer").map((receipt) => extendProducerExecutionReceipt(
         receipt,
