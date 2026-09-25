@@ -365447,8 +365447,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "517f560ee56b2c6d1bb88932ef5c3b62cd2780d9",
-    "commitPayload": "dHJlZSBjMzFiM2NmZjhmYmRmM2JkOWMwMTgwNDRlNmVkNjRjNWEwNjRjNGI4CnBhcmVudCBjZGE3NGQ0YWU3Mjc1OWQ4YWQzMDFmOWUzOWRmOGEwMGM3ZGJkYjliCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM0Mzk5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM0Mzk5IC0wNTAwCgpSZWJpbmQgdW5jaGFuZ2VkIE9TViBsYXVuY2ggYWZ0ZXIgZXhwb3J0IGNsZWFudXAgKCMyMDQ1KQo=",
+    "commit": "1edccc526d1755e9c476623a1c31fbf86e832b1b",
+    "commitPayload": "dHJlZSA5OWNlODAyNTQ3MjRjODBhYzU4MTlhZjIzY2Q2ZDZmY2RlMzU4Mjk0CnBhcmVudCBlMWY0NjJkYjFjY2I2OTUyOTEzMzIwOTQ5ZDM1ZjhlZjA1Mjc4Mzc4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM0ODMxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM0ODMxIC0wNTAwCgpLZWVwIHByZXJlcXVpc2l0ZSByb3cgdHlwZSBpbnRlcm5hbCAoIzIwNDUpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -365457,13 +365457,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "828c6c3380ef7adb5d1a4b2ab1aed25846356a71",
+        "gitOid": "072a64674dc90742fd83591f9ec1b0159a78a59f",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "d02141a8641f82a77be12cf1bc917dc5c36c024c9cb62c6eb79dd6e909661199",
-    "tree": "c31b3cff8fbdf3bd9c018044e6ed64c5a064c4b8"
+    "populationSha256": "db6034bc1d39ae0ea92880552a39d9ef837406d8c6376b42567d69f15eb03ff1",
+    "tree": "99ce80254724c80ac5819af23cd6d6fcde358294"
   },
   "venues": [
     {
@@ -384022,11 +384022,11 @@
       "sha256": "75a22c8af251d7a104317fe6bb42a97ab8ad705f704fbaa0e2354353d3420181"
     },
     {
-      "bytes": 6240,
+      "bytes": 6233,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "518bfd724128a6bb1593a7c02512ca7ce3f5d190",
+      "gitOid": "ba30718d5ab657bf2a9749b135c68012777e058b",
       "id": "src/engagement-requirements.ts",
       "kind": "source",
       "literalCount": 78,
@@ -384034,7 +384034,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/engagement-requirements.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ca17f0c3d599937d77048e977e15d9cc9a08a3f58d2396d503660176052d7dd7"
+      "sha256": "31ace5863a9de33d452a99b3b8bc76edfc1479418f648ed6d08faaa589330a38"
     },
     {
       "bytes": 9947,
