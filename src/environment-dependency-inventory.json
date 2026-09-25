@@ -16406,26 +16406,26 @@
         },
         {
           "evidence": {
-            "anchor": "REASON@306",
-            "line": 306,
+            "anchor": "REASON@334",
+            "line": 334,
             "path": "src/migration-sql-parse.ts"
           },
-          "key": "src/migration-sql-parse.ts:306",
+          "key": "src/migration-sql-parse.ts:334",
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
-            "src/migration-sql-parse.ts#REASON@306:package-manager:empirical-falsifier"
+            "src/migration-sql-parse.ts#REASON@334:package-manager:empirical-falsifier"
           ]
         },
         {
           "evidence": {
-            "anchor": "REASON@83",
-            "line": 83,
+            "anchor": "REASON@94",
+            "line": 94,
             "path": "src/migration-sql-parse.ts"
           },
-          "key": "src/migration-sql-parse.ts:83",
+          "key": "src/migration-sql-parse.ts:94",
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
-            "src/migration-sql-parse.ts#REASON@83:package-manager:empirical-falsifier"
+            "src/migration-sql-parse.ts#REASON@94:package-manager:empirical-falsifier"
           ]
         },
         {
@@ -168817,8 +168817,8 @@
       "dependencyClass": "package-manager",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
-        "anchor": "REASON@306",
-        "line": 306,
+        "anchor": "REASON@334",
+        "line": 334,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -168831,7 +168831,7 @@
         "observedAt": "2026-08-11",
         "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
       },
-      "id": "src/migration-sql-parse.ts#REASON@306:package-manager:empirical-falsifier",
+      "id": "src/migration-sql-parse.ts#REASON@334:package-manager:empirical-falsifier",
       "identitySource": null,
       "links": [
         "src/cli/validate-reasons.ts",
@@ -168873,8 +168873,8 @@
       "dependencyClass": "package-manager",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
-        "anchor": "REASON@83",
-        "line": 83,
+        "anchor": "REASON@94",
+        "line": 94,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -168887,7 +168887,7 @@
         "observedAt": "2026-08-11",
         "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
       },
-      "id": "src/migration-sql-parse.ts#REASON@83:package-manager:empirical-falsifier",
+      "id": "src/migration-sql-parse.ts#REASON@94:package-manager:empirical-falsifier",
       "identitySource": null,
       "links": [
         "src/cli/validate-reasons.ts",
@@ -168955,7 +168955,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 86,
+        "line": 97,
         "path": "src/migration-sql-parse.ts"
       },
       "freshness": {
@@ -310798,7 +310798,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 340,
+        "line": 327,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -310872,7 +310872,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 335,
+        "line": 322,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -364247,8 +364247,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "799153ee233238b40fff4c9879f2125e52949e91",
-    "commitPayload": "dHJlZSBkZjU2NmFmYjIyOWQ0MTFiOTg4MmYyMWNlY2QwMjQzOTk3ZTc0Y2M2CnBhcmVudCAyMTBiYzc1ZDE3YjUzNzQ2MjQ3ZWVjZTdkY2RhM2Y2MDc1NmE2MjdjCnBhcmVudCBlNmE3NjgxNjdhYTdkMTVmZDFhZDM0ZjQxOTQ0M2U5ZTkyOGYyODU2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3Mzk5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3Mzk5IC0wNTAwCgpNZXJnZSByZW1vdGUtdHJhY2tpbmcgYnJhbmNoICdvcmlnaW4vbWFpbicgaW50byBmZWF0dXJlL3N3ZWVwLTIxMjktc2NoZW1hLXBvcHVsYXRpb25zCgojIENvbmZsaWN0czoKIwlzcmMvZW52aXJvbm1lbnQtZGVwZW5kZW5jeS1pbnZlbnRvcnkuanNvbgo=",
+    "commit": "cca04be179c6adfe75b9b5d4d88e0438115ed19c",
+    "commitPayload": "dHJlZSBiZDI3OGM4NjY0Y2VlNDM4NTgyY2U2MjFiMjY0NzM5MjRhM2EzY2M2CnBhcmVudCBkYWQ0ODlmMmEzMWQ4MGQyYjk4YmQxZjMyYjVlNzExNDdmODIzM2ZmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA4OTY2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA4OTY2IC0wNTAwCgpQcmVzZXJ2ZSBTUUwgaWRlbnRpZmllciBpZGVudGl0eSB0aHJvdWdoIGRyaWZ0IGRlbGl2ZXJ5ICMyMTI5Cg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364257,13 +364257,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "2ba6f75850e897dc39c3223b1e6958f5458cc33a",
+        "gitOid": "f5f6e91f481ff87aae05c1524085314d0c0d8e6b",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "1817e63c47b8b7be8f25ed351c06ce998aa308d3352a7844cff853cd7456372c",
-    "tree": "df566afb229d411b9882f21cecd0243997e74cc6"
+    "populationSha256": "daad4486eca00f41758d6efeba4ab4bb06740cb903f458f5b0b4abdb8c0d85de",
+    "tree": "bd278c8664cee438582ce621b26473924a3a3cc6"
   },
   "venues": [
     {
@@ -384337,34 +384337,34 @@
       "sha256": "5a20ac9698e514098c591695047444c00ba63bdf08d807d33463675e23b19512"
     },
     {
-      "bytes": 27641,
+      "bytes": 28448,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "1d99a4c518e671218ad124bac97520e7368ad5ae",
+      "gitOid": "eb53178cfcf0602c78bb476c3901d5380fb46224",
       "id": "src/migration-sql-parse.test.ts",
       "kind": "source",
-      "literalCount": 380,
-      "literalSha256": "1f7f021c5b6b30eaab9ae63b1805bdbadb5ac16e514791c392a936a625b1b12f",
+      "literalCount": 394,
+      "literalSha256": "8a58248387eb4966c92ba4effdab54febedf94a553e01b645f1061b8c3891e04",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/migration-sql-parse.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "86662f3d888c691d8f5cd50a222a961b1d7bceb1f4c58d54217f2e8bd9d3ef20"
+      "sha256": "a67053d980f396d873282fc693055d7ebd677d8a808e21d5cf4cdd405f48dac1"
     },
     {
-      "bytes": 40407,
+      "bytes": 41880,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "3bfc5e0de6a54adf31f86174bbfa3cc4c50a9931",
+      "gitOid": "b2d22458d7db383d7079610308bb3c2581f25e59",
       "id": "src/migration-sql-parse.ts",
       "kind": "source",
-      "literalCount": 275,
-      "literalSha256": "2a8a526fdd7216035c9760669b405167643e604818657cd055325d8eb496cc2d",
+      "literalCount": 305,
+      "literalSha256": "0592cf9095415e4c57ec6a61a4208a6a38f6b571e56d7d728187f019050d0934",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/migration-sql-parse.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cb216683f3c9b93f5ab173ee31f80e7b80440e6174f3c701bc0b2ff541c2468c"
+      "sha256": "bf2d8ba1ce58f847a6599935f5aacb524d4e9dfed3d4d27d12924762a80d1380"
     },
     {
       "bytes": 70487,
@@ -391042,49 +391042,49 @@
       "sha256": "50248f56fa2550413094becc00d2d847d96d886355981438bc136eb7fa19d351"
     },
     {
-      "bytes": 9835,
+      "bytes": 13969,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "01c0da87862883046c8ecaa1c1699aa97d20fb35",
+      "gitOid": "e0ee58b3edbf30d8c5357b676f56d7e4621e0534",
       "id": "src/scan/supabase-drift-scope.test.ts",
       "kind": "source",
-      "literalCount": 166,
-      "literalSha256": "05fd3df4c3541a0f392e5bb192a335bd3bae3f23ceecb5924840187a293b941d",
+      "literalCount": 236,
+      "literalSha256": "639a740b3fcb9077be21a46da89df16703f2932d5c46eb31a8f948a86f753468",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift-scope.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "bb96e9ef5149774858495d9e26a950cec7d7588e8d2e176610ea03600032b1eb"
+      "sha256": "6d4c444cd07861a2f0351157dd4128fba05bdc6645aebbc08424312b27e0d503"
     },
     {
-      "bytes": 15682,
+      "bytes": 15724,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "00f30f5e2ad7bb3263c59c5da0495e6a3500aee4",
+      "gitOid": "b90a2e1fd11e2514691accd6434b95a9039d5ed4",
       "id": "src/scan/supabase-drift.test.ts",
       "kind": "source",
-      "literalCount": 210,
-      "literalSha256": "bb8bc3d43971655c4dea72d4b36eef72e8a58b24ca5727d50f906cc7ded9c2e9",
+      "literalCount": 212,
+      "literalSha256": "c0b4031aff422d34123f635329c36913f40e926015efe3aaab1abf1b0163fe8a",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "332a223f5d06218c86e4762eb2b5df8ce91b09e73d280308b88179d016dd3b46"
+      "sha256": "b326788ba9474b4493ba974fbd6de78d246883802211bc44cae59a32ddf2d4fb"
     },
     {
-      "bytes": 24721,
+      "bytes": 24189,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9e1fcd7b302696d0142db88b8b494c39a19917a5",
+      "gitOid": "ba5f315e48579d8a7bb951a983bffaf16578f0d9",
       "id": "src/scan/supabase-drift.ts",
       "kind": "source",
-      "literalCount": 115,
-      "literalSha256": "99b8e71fd9a9d8c6d0118f91d48c7dbc997d2e38ce86169597dc918db10a87e6",
+      "literalCount": 97,
+      "literalSha256": "32a539ab47292d6a4099b02ee6618be01c0f509ea66800477bb95cd900aaf196",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "70e7aab7f43a7e1326b08957b9168dbac6b7af59bb01016e91596666f257d247"
+      "sha256": "1861370cd315efd1bbdbc624733b97ec322791e38cb6964a7d8451036d30a03c"
     },
     {
       "bytes": 14315,
