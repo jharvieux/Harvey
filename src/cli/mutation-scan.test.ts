@@ -592,20 +592,62 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
 
   it("a run killed (SIGTERM) mid-mutation leaves the target checkout byte-identical", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
-    const outPath = join(repo, "m8-out.json");
-    // A test command that blocks for 5s — long enough to guarantee the SIGTERM below lands while
-    // the CLI is mid-mutation (stub already written to its copy, execSync blocked waiting on
-    // this child), simulating the timeout/kill that produced #600.
-    const child = spawn("node_modules/.bin/tsx", [CLI, repo, "--stub-check", "--test-cmd", "node -e 'setTimeout(() => {}, 5000)'", "--out", outPath], {
-      cwd: REPO_ROOT,
-      stdio: "ignore",
+    const control = mkdtempSync(join(tmpdir(), "harvey-mutation-ready-"));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    const baselinePath = join(control, "baseline.json");
+    const readyPath = join(control, "ready.json");
+    writeFileSync(runner, `const fs = require('node:fs');
+const source = fs.readFileSync('src/add.ts', 'utf8');
+if (source === ${JSON.stringify(SUBJECT)}) {
+  fs.writeFileSync(${JSON.stringify(baselinePath)}, JSON.stringify({cwd:process.cwd(),source}));
+} else {
+  if (!source.includes('return undefined;')) process.exit(17);
+  fs.writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({pid:process.pid,cwd:process.cwd(),source}));
+  setInterval(() => {}, 1000);
+}
+`);
+    const child = spawn(process.execPath, ["--import", resolve(REPO_ROOT, "node_modules/tsx/dist/loader.mjs"), CLI, repo, "--stub-check", "--test-cmd", `${process.execPath} ${runner}`], {
+      cwd: REPO_ROOT, stdio: ["ignore", "ignore", "pipe"], detached: true,
       env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
     });
-    const exited = new Promise<void>((done) => child.on("exit", () => done()));
-    await new Promise((r) => setTimeout(r, 1000));
-    child.kill("SIGTERM");
-    await exited;
-    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => done({ code, signal }));
+    });
+    const alive = (pid: number): boolean => {
+      try { process.kill(pid, 0); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+    };
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(readyPath) && Date.now() < deadline && child.exitCode === null && child.signalCode === null) await new Promise(done => setTimeout(done, 10));
+      expect(existsSync(readyPath), `Mutation never became ready: ${stderr}`).toBe(true);
+      const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as { cwd: string; source: string };
+      const ready = JSON.parse(readFileSync(readyPath, "utf8")) as { pid: number; cwd: string; source: string };
+      expect(baseline.source).toBe(SUBJECT);
+      expect(ready.source).toContain("return undefined;");
+      expect(ready.cwd).toBe(baseline.cwd);
+      expect(realpathSync(ready.cwd)).not.toBe(realpathSync(repo));
+      expect(alive(child.pid!)).toBe(true);
+      expect(alive(ready.pid)).toBe(true);
+      expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+      expect(process.kill(-child.pid!, "SIGTERM")).toBe(true);
+      expect(await exited).toEqual({ code: null, signal: "SIGTERM" });
+      const reapedBy = Date.now() + 5_000;
+      while (alive(ready.pid) && Date.now() < reapedBy) await new Promise(done => setTimeout(done, 10));
+      expect(alive(ready.pid)).toBe(false);
+      expect(alive(child.pid!)).toBe(false);
+      expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+      rmSync(ready.cwd, { recursive: true, force: true });
+    } finally {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+      await exited;
+    }
   });
 });
 
@@ -1302,15 +1344,20 @@ describe("mutation-scan tree walk survives a dangling symlink (#944, child proce
     expect(JSON.parse(out)).toEqual([]); // meaningful suite present — same as the no-symlink case
   });
 
-  it("still walks a RESOLVABLE symlinked directory (regression guard on the fix itself) — the ONLY test file lives behind the link", async () => {
-    const repo = fixtureRepo({}); // no direct test files at all
-    mkdirSync(join(repo, "real-dir"), { recursive: true });
-    writeFileSync(join(repo, "real-dir", "extra.test.ts"), REAL_SPEC);
-    symlinkSync("real-dir", join(repo, "linked-dir"));
-    const { status, out } = await runCli(repo, ["--detect-only"]);
-    expect(status).toBe(0);
-    // If the symlinked dir weren't walked, this repo would have ZERO test files and emit M8-00
-    // (#252) instead of the meaningful-suite empty-array shape.
-    expect(JSON.parse(out)).toEqual([]);
+  it("discovers the only meaningful spec through its symlinked test path (#2092)", async () => {
+    // The source inventory forbids external aliases. Keep the bytes inside the owned
+    // source boundary, under a non-test filename that ordinary test discovery ignores.
+    const repo = fixtureRepo({ "fixtures/spec.fixture": REAL_SPEC });
+    const link = join(repo, "only.test.ts");
+    symlinkSync("fixtures/spec.fixture", link);
+    expect(realpathSync(link)).toBe(realpathSync(join(repo, "fixtures/spec.fixture")));
+    const linked = await runCli(repo, ["--detect-only"]);
+    expect(linked.status).toBe(0);
+    expect(JSON.parse(linked.out)).toEqual([]);
+    rmSync(link);
+    const unlinked = await runCli(repo, ["--detect-only"]);
+    expect(unlinked.status).toBe(0);
+    expect(JSON.parse(unlinked.out)).toMatchObject({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", noSuite: true } });
+    expect(readFileSync(join(repo, "fixtures/spec.fixture"), "utf8")).toBe(REAL_SPEC);
   });
 });
