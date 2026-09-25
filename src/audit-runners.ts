@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass, rejectedPassLabel } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
@@ -23,7 +23,7 @@ import type {
 } from "./effectiveness-schema.js";
 import type { Finding } from "./findings.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
-import { testQualityFromArtifact } from "./mutation-scan.js";
+import { mutationRunnerValidityReason, testQualityFromArtifact } from "./mutation-scan.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./scan/framework-detect.js";
 import { parseSourcePopulationReceipt, type SourcePopulationReceipt } from "./scan/polyglot-quality.js";
 
@@ -395,7 +395,7 @@ const recordedPassNote = (artifact: PassArtifact, now: number): [string, Finding
   const findings = fresh.flatMap((p) => p.findings ?? []);
   const one = fresh.length === 1;
   return [
-    `${one ? "A recorded" : "Recorded"} ${fresh.map(passLabel).join(", ")} contributed ${findings.length} finding(s) to this row; ${one ? "it covers" : "they cover"} one tier of this module, so ${one ? "it is" : "they are"} not by ${one ? "itself" : "themselves"} evidence the module ran in full (#1042)${stale.length ? `. Also recorded but STALE, and therefore not collected: ${stale.map(passLabel).join(", ")}` : ""}`,
+    `${one ? "A recorded" : "Recorded"} ${fresh.map(passLabel).join(", ")} contributed ${findings.length} finding(s) to this row; ${one ? "it covers" : "they cover"} one tier of this module, so ${one ? "it is" : "they are"} not by ${one ? "itself" : "themselves"} evidence the module ran in full (#1042)${stale.length ? `. Also recorded but REJECTED, and therefore not collected: ${stale.map((pass) => rejectedPassLabel(pass, now)).join(", ")}` : ""}`,
     findings,
   ];
 };
@@ -523,6 +523,8 @@ const mutationVerdict = (
 ): { kind: "ran" } | { kind: "partial"; note: string } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
   try {
     const parsed = (typeof input === "string" ? JSON.parse(input) : input) as { moduleRecord?: { note?: string; noSuite?: boolean }; summary?: unknown };
+    const runnerReason = mutationRunnerValidityReason(parsed);
+    if (runnerReason) return { kind: "partial", note: [parsed.moduleRecord?.note, runnerReason].filter(Boolean).join(" ") };
     if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") {
       return parsed.moduleRecord.noSuite ? { kind: "no-suite", note: parsed.moduleRecord.note } : { kind: "partial", note: parsed.moduleRecord.note };
     }
@@ -858,10 +860,13 @@ const m3: ModuleRunner = {
     if (ok && ranked && /M3 hotspot table/.test(output)) {
       const artifact = readArtifact(ctx, outPath);
       const pass = findFreshPass(ctx, "M3");
-      const findings = [...artifactFindings(artifact), ...(pass.fresh ? ranFromPass(pass.artifact, "recorded M3 specialist evidence", ctx.now ?? Date.now()).findings ?? [] : [])];
+      const findings = artifactFindings(artifact);
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
-      const rankedTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over });
+      const rankedTier = (over: Partial<Examined>): ProbeResult => {
+        const result: Examined = { kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over };
+        return pass.fresh ? foldPassInto(result, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : pass.reason ? rejectedPassNote(result, pass.reason) : result;
+      };
       // #807: the CLI dropped to its reduced Harvey-side tier (vitals not installed) — a churn×
       // complexity ranking only, no coupling/knowledge-risk/AI-provenance. Keyed off the stdout
       // banner so it holds even without an artifacts dir. That is a `partial`, never a clean `ran`;
@@ -1233,19 +1238,22 @@ const m7: ModuleRunner = {
     const lh = findFreshPass(ctx, "M7");
     // #1522: every fresh pass the slot holds, not just the newest — a second recorded M7 tier no
     // longer overwrites the first, so both must reach the row.
-    const lhFresh = lh.fresh ? passSlotCensus(lh.artifact, ctx.now ?? Date.now()).fresh : [];
+    const lhCensus = lh.fresh ? passSlotCensus(lh.artifact, ctx.now ?? Date.now()) : { fresh: [], stale: [] };
+    const lhFresh = lhCensus.fresh;
     const lighthouse = lhFresh.filter((pass) => pass.pass === "lighthouse");
     const otherPasses = lhFresh.filter((pass) => pass.pass !== "lighthouse");
     const cwv = lighthouse.length
       ? `Core Web Vitals WERE measured — recorded ${lighthouse.map(passLabel).join(", ")} supplied ${lighthouse.flatMap((p) => p.findings ?? []).length} finding(s), merged into this deliverable (#1042)`
       : undefined;
     const recordedNote = [cwv, ...(otherPasses.length ? [`Recorded ${otherPasses.map(passLabel).join(", ")} contributed findings for their named scope; those passes do not establish Lighthouse/CWV measurements`] : [])].filter(Boolean).join(". ");
-    const rejectedCwv = lh.fresh ? undefined : lh.reason;
+    const rejectedCwv = lh.fresh ? lhCensus.stale.map((pass) => rejectedPassLabel(pass, ctx.now ?? Date.now())).join(", ") : lh.reason;
     // Only a fresh pass changes a row (merging its findings, upgrading a not-run to partial because
     // something demonstrably ran). Without one, behaviour is exactly as before — except that a
     // present-but-rejected artifact is now named on the row instead of ignored.
-    const withCwv = (outcome: ProbeResult): ProbeResult =>
-      recordedNote ? foldPassInto(outcome, recordedNote, lhFresh.flatMap((pass) => pass.findings ?? [])) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
+    const withCwv = (outcome: ProbeResult): ProbeResult => {
+      const withPass = recordedNote ? foldPassInto(outcome, recordedNote, lhFresh.flatMap((pass) => pass.findings ?? [])) : outcome;
+      return rejectedCwv ? rejectedPassNote(withPass, rejectedCwv) : withPass;
+    };
     // #1062: the code tier is captured like every other emitter. It ran with no --out since capture
     // was wired, so its findings were empty BY CONSTRUCTION and the M7 row asserted the tier ran
     // while carrying zero evidence. On a single-app target M9's unfiltered per-app sweep incidentally

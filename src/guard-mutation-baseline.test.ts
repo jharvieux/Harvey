@@ -34,6 +34,22 @@ function reviewsFor(census: ReturnType<typeof normalize>): GuardMutationReview[]
 }
 
 describe("guard mutation normalization and blocking baseline (#1890)", () => {
+  it("turns a zero-completed guard survivor into an explicit unscored result and retains the count/reason", () => {
+    const r = report();
+    const [file, entry] = Object.entries(r.files).find(([, value]) => value.mutants.some((mutant) => mutant.status === "Survived"))!;
+    const survivor = entry.mutants.find((mutant) => mutant.status === "Survived")!;
+    survivor.testsCompleted = 0;
+    const census = normalize(r);
+    const normalized = census.guards.find((guard) => guard.file === file)!.mutants.find((mutant) => mutant.status === "RuntimeError")!;
+    expect(normalized).toMatchObject({ status: "RuntimeError", testsCompleted: 0 });
+    expect(normalized.statusReason).toContain("Survived with 0 completed tests");
+    expect(census.runnerValidity).toMatchObject({ status: "uncheckable", completedTestEvidence: { zeroCompletedSurvivors: 1 } });
+    expect(compareGuardMutationCensus(census, base()).problems.join("\n")).toContain("new-unscored:");
+
+    survivor.testsCompleted = 1;
+    expect(normalize(r).runnerValidity).toMatchObject({ status: "valid", completedTestEvidence: { survived: 1, zeroCompletedSurvivors: 0 } });
+  });
+
   it("passes the measured capture projection and conserves every declared population", () => {
     const census = normalize(report());
     expect(compareGuardMutationCensus(census, base())).toMatchObject({ ok: true, problems: [], delta: [] });

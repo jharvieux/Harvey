@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { describe, expect, it, vi } from "vitest";
 import { executeCapacityScan, type CapacityScanReceipt } from "./capacity-runner.js";
 
 interface OracleTrace {
@@ -23,6 +24,7 @@ interface LoopbackOptions {
   readonly fastDelayMs?: number;
   readonly slowDelayMs?: number;
   readonly errorDelayMs?: number;
+  readonly redirectTo?: string;
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
@@ -63,7 +65,10 @@ async function startLoopbackOracle(options: LoopbackOptions = {}): Promise<Loopb
 
     const delay = path === "/slow" ? (options.slowDelayMs ?? 80) : path === "/error" ? (options.errorDelayMs ?? 20) : (options.fastDelayMs ?? 2);
     timer = setTimeout(() => {
-      if (path === "/error") response.statusCode = 503;
+      if (path === "/redirect" && options.redirectTo) {
+        response.statusCode = 302;
+        response.setHeader("Location", options.redirectTo);
+      } else if (path === "/error") response.statusCode = 503;
       else if (path !== "/fast" && path !== "/slow") response.statusCode = 404;
       else response.statusCode = 204;
       response.end();
@@ -281,5 +286,79 @@ describe("bounded capacity scheduler with an independent loopback oracle", () =>
     } finally {
       await fixture.close();
     }
+  });
+});
+
+
+describe("completed-response latency and redirect boundaries", () => {
+  for (const status of [204, 503]) {
+    it.each([19, 20, 21])(`isolates completed HTTP ${status} at controlled duration %i ms`, async (durationMs) => {
+      let clock = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const observed: number[] = [];
+      try {
+        const input = contract("http://127.0.0.1:43123", ["/fast"]);
+        Object.assign(input.budget as Record<string, unknown>, { concurrency: 1, maxRequests: 3 });
+        Object.assign(input.abort as Record<string, unknown>, { maxErrors: 10, maxLatencyMs: 20 });
+        (input.warmup as Record<string, unknown>).requests = 0;
+        const receipt = await executeCapacityScan(input, { transport: async request => {
+          observed.push(request.attempt); clock += durationMs; return { status };
+        } });
+        const stops = durationMs >= 20;
+        expect(observed).toEqual(stops ? [1] : [1, 2, 3]);
+        expect(receipt.scheduler.attempted).toBe(observed.length);
+        expect(outcomeTotal(receipt)).toBe(observed.length);
+        expect(receipt.scheduler.results.every(result => result.durationMs === durationMs && result.status === status)).toBe(true);
+        expect(receipt.scheduler.stopReason).toBe(stops ? "safety-threshold" : "request-cap");
+        expect(receipt.scheduler.threshold).toEqual(stops ? { kind: "latency", attempt: 1, limit: 20, observed: durationMs } : null);
+        expect(receipt.scheduler.outcomes).toMatchObject({ timeout: 0, aborted: 0, transportError: 0 });
+      } finally { now.mockRestore(); }
+    });
+  }
+
+  it.each(["/slow", "/error"])("stops after the first completed %s response observed by the server", async path => {
+    const fixture = await startLoopbackOracle({ slowDelayMs: 80, errorDelayMs: 80 });
+    try {
+      const input = contract(fixture.origin, [path]);
+      Object.assign(input.budget as Record<string, unknown>, { concurrency: 1, maxRequests: 3, requestTimeoutMs: 2_000, maxDurationMs: 4_000 });
+      Object.assign(input.abort as Record<string, unknown>, { maxErrors: 10, maxLatencyMs: 20 });
+      (input.warmup as Record<string, unknown>).requests = 0;
+      const receipt = await executeCapacityScan(input);
+      await fixture.waitForIdle();
+      // Check the independent transport oracle first: deleting the latency stop causes extra requests.
+      expect(fixture.trace()).toMatchObject({ total: 1, completed: 1, active: 0, requests: [{ sequence: 1, path }] });
+      expect(receipt.scheduler.threshold).toMatchObject({ kind: "latency", attempt: 1, limit: 20 });
+      expect(receipt.scheduler.threshold!.observed).toBeGreaterThanOrEqual(20);
+      expect(receipt.scheduler.results).toHaveLength(1);
+      expect(receipt.scheduler.results[0]).toMatchObject({ attempt: 1, outcome: path === "/slow" ? "success" : "http-error", status: path === "/slow" ? 204 : 503 });
+      expect(receipt.scheduler.results[0]!.durationMs).toBeLessThan(2_000);
+      expect(outcomeTotal(receipt)).toBe(1);
+      expect(receipt.scheduler.outcomes).toMatchObject({ timeout: 0, aborted: 0, transportError: 0 });
+    } finally { await fixture.close(); }
+  });
+
+  it("keeps redirects on the admitted origin and refuses an explicit foreign route", async () => {
+    const second = await startLoopbackOracle();
+    const first = await startLoopbackOracle({ redirectTo: `${second.origin}/fast` });
+    try {
+      const input = contract(first.origin, ["/redirect"]);
+      Object.assign(input.budget as Record<string, unknown>, { concurrency: 1, maxRequests: 1 });
+      (input.warmup as Record<string, unknown>).requests = 0;
+      const receipt = await executeCapacityScan(input);
+      await first.waitForIdle(); await second.waitForIdle();
+      expect(second.trace().total).toBe(0);
+      expect(first.trace()).toMatchObject({ total: 1, completed: 1, routes: { "/redirect": 1 } });
+      expect(receipt.scheduler.results).toMatchObject([{ attempt: 1, url: `${first.origin}/redirect`, status: 302, outcome: "http-error" }]);
+      expect(receipt.scheduler).toMatchObject({ attempted: 1, stopReason: "request-cap", outcomes: { success: 0, httpError: 1, transportError: 0, timeout: 0, aborted: 0 } });
+      expect(outcomeTotal(receipt)).toBe(1);
+      input.routes = [{ path: "/fast", method: "GET" }];
+      const healthy = await executeCapacityScan(input);
+      await first.waitForIdle();
+      expect(healthy.scheduler.results[0]).toMatchObject({ status: 204, outcome: "success" });
+      expect(first.trace()).toMatchObject({ total: 2, completed: 2, routes: { "/redirect": 1, "/fast": 1 } });
+      input.routes = [{ path: `${second.origin}/fast`, method: "GET" }];
+      await expect(executeCapacityScan(input)).rejects.toThrow(/authorized origin/);
+      expect(first.trace().total).toBe(2); expect(second.trace().total).toBe(0);
+    } finally { await first.close(); await second.close(); }
   });
 });
