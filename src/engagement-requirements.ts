@@ -13,13 +13,13 @@ export interface EngagementRequirement {
 }
 
 export const ENGAGEMENT_REQUIREMENTS: readonly EngagementRequirement[] = [
-  { id: "registry.public-metadata", modules: ["M6"], capability: "Public package metadata",
+  { id: "registry.public-metadata", modules: ["M1"], capability: "Public package metadata",
     metadata: ["registry origin", "package name and resolved version", "lockfile identity", "request outcome and retrieval time"],
     access: ["authorized registry metadata endpoint; respect rate limits"],
     limitation: "Unavailable package metadata is an unresolved assessment, not a healthy package.",
     falsifier: "A bounded metadata request returns the exact locked package and version with usable provenance.",
     nextStep: "Confirm the intended registry and retry only the unresolved package metadata requests." },
-  { id: "registry.private-authorization", modules: ["M6"], capability: "Private package metadata",
+  { id: "registry.private-authorization", modules: ["M1"], capability: "Private package metadata",
     metadata: ["private registry origin and namespace", "package scope", "authorization availability; never its value"],
     access: ["operator-configured read-only package metadata authorization"],
     limitation: "A private, forbidden or missing package response does not establish package health or absence.",
