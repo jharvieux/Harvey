@@ -4,9 +4,9 @@ import { extname, isAbsolute, join, relative, sep } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 import { parseLivePolicies, parseLiveTableNames, schemaSqlParseFailures } from "./migration-sql-parse.js";
 
-export const RESIDUAL_SCOPE_STATUSES = ["implemented", "manual-review", "owned-follow-up", "intentional-exclusion"] as const;
-export type ResidualScopeStatus = (typeof RESIDUAL_SCOPE_STATUSES)[number];
-export type ResidualScopeDomain = "sql" | "source" | "cache" | "m9" | "vitals" | "database-drift";
+const RESIDUAL_SCOPE_STATUSES = ["implemented", "manual-review", "owned-follow-up", "intentional-exclusion"] as const;
+type ResidualScopeStatus = (typeof RESIDUAL_SCOPE_STATUSES)[number];
+type ResidualScopeDomain = "sql" | "source" | "cache" | "m9" | "vitals" | "database-drift";
 
 export interface ResidualScopeRow {
   id: string;
@@ -39,7 +39,13 @@ export function residualScopeDisclosures(findings: readonly unknown[]): PriorFin
   return findings.filter((input): input is PriorFinding => {
     if (!input || typeof input !== "object") return false;
     const row = input as PriorFinding;
-    return typeof row.id === "string" && !/^Superseded\b/i.test(row.title ?? "") && (row.category === "Coverage" || /^Coverage\b/i.test(row.taxonomy ?? "") || (row.confidence === "N/A" && /scope|not assessed|not judged|could not|excluded|did not run|partially resolved/i.test(`${row.title} ${row.taxonomy}`)));
+    if (typeof row.id !== "string" || /^Superseded\b/i.test(row.title ?? "")) return false;
+    // Explicit assessment scopes carry their own meaning regardless of confidence.
+    // A coverage defect (such as an untested module) is not an assessment limitation.
+    const explicitScope = /(?:^|[—:]\s*)(?:coverage\b|(?:input\s+)?scope\b|not[- ]assessed\b|not[- ]applicable\b|unavailable\b)/i.test(row.taxonomy ?? "");
+    const unresolvedAssessment = row.confidence === "N/A"
+      && /scope|not assessed|not judged|not verified|not graded|ungraded|could not|excluded|did not run|partially resolved/i.test(`${row.title} ${row.taxonomy}`);
+    return row.category === "Coverage" || explicitScope || unresolvedAssessment;
   });
 }
 
@@ -77,7 +83,7 @@ function targetFiles(root: string): { files: string[]; gaps: { file: string; rea
   return { files: files.sort(), gaps };
 }
 
-export type SqlPlacement = "supabase-migration" | "prisma-migration" | "schema-snapshot" | "seed-or-fixture" | "unrelated-sql";
+type SqlPlacement = "supabase-migration" | "prisma-migration" | "schema-snapshot" | "seed-or-fixture" | "unrelated-sql";
 export function classifySqlPlacement(path: string): SqlPlacement {
   const lower = path.toLowerCase();
   if (/(^|\/)supabase\/migrations\/[^/]+\.sql$/.test(lower)) return "supabase-migration";
@@ -87,7 +93,7 @@ export function classifySqlPlacement(path: string): SqlPlacement {
   return "unrelated-sql";
 }
 
-export type PythonRole = "application-service" | "maintenance-tool" | "unknown-manual-review";
+type PythonRole = "application-service" | "maintenance-tool" | "unknown-manual-review";
 export function classifyPythonRole(path: string, text: string): PythonRole {
   if (/(^|\/)(codemods?|scripts?|tools?|migrations?|fixtures?|docs?)\//i.test(path)) return "maintenance-tool";
   if (/\b(?:from|import)\s+(?:django|flask|fastapi|celery|sqlalchemy)\b/.test(text)) return "application-service";

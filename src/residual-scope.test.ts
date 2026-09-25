@@ -139,6 +139,37 @@ describe("residual scope evidence boundaries", () => {
     for (const row of rows) { expect(row.owner).toContain("Engagement reviewer"); expect(row.sourceFindingIds).toHaveLength(1); }
     const doc: FindingsDocument = { meta, findings: prior, residualScope: inventory }; expect(validateFindings(doc).ok).toBe(true); for (const f of prior) expect(buildHtml(doc)).toContain(f.id);
   });
+  it("maps explicit applicability and confirmed scope disclosures without relabeling ordinary scope defects", () => {
+    const prior = [
+      finding({ id: "M9-01@apps/web", title: "M9 N/A — non-SSR SPA", category: "M9 — Database patterns", taxonomy: "M9 — Not applicable (non-Next SPA)" }),
+      finding({ id: "M3-SCOPE-00", title: "M3 scan scope capped", confidence: "Confirmed", category: "M3", taxonomy: "M3 — Input scope" }),
+      finding({ id: "M2-UNAVAILABLE", title: "Probe unavailable", confidence: "Review", category: "M2", taxonomy: "M2 — Unavailable" }),
+      finding({ id: "M2-SCOPE", title: "What the dynamic probe covered", confidence: "Confirmed", category: "M2", taxonomy: "M2 — Scope disclosure" }),
+      finding({ id: "M10-PROT-00", title: "PII protection NOT verified — no live database connection", category: "Data protection", taxonomy: "M10 — PII protection" }),
+      finding({ id: "SEC-GL-ALLOW-00", title: "Secret matches suppressed by allowlist (not graded)", category: "Secret exposure", taxonomy: "Committed credential — suppressed by allowlist" }),
+      finding({ id: "M8-05-01", title: "No test coverage at all: src/module", confidence: "Confirmed", category: "Test quality", taxonomy: "M8 — Module has no mutation test coverage" }),
+      finding({ id: "M10-VERIFIED", title: "PII protection verified", category: "Data protection", taxonomy: "M10 — PII protection" }),
+      finding({ id: "M2-SESSION", title: "Session fixation surface assessed (GoTrue session model)", category: "Dynamic pen-test (M2)", taxonomy: "M2 — Auth attack / session fixation" }),
+      finding({ id: "BOLA-01", title: "Tenant scope missing", confidence: "Confirmed", category: "M1", taxonomy: "Tenant scope bypass" }),
+      finding({ id: "CACHE-01", title: "Cache tenant scope missing", confidence: "Review", category: "M1", taxonomy: "Cache tenant scope" }),
+    ];
+    const inventory = buildResidualScopeInventory(fixture(), { revision: meta.commit, priorFindings: prior });
+    const ids = inventory.rows.flatMap(row => row.sourceFindingIds ?? []);
+    expect(ids).toEqual(expect.arrayContaining(["M9-01@apps/web", "M3-SCOPE-00", "M2-UNAVAILABLE", "M2-SCOPE", "M10-PROT-00", "SEC-GL-ALLOW-00"]));
+    expect(ids).not.toContain("BOLA-01"); expect(ids).not.toContain("CACHE-01");
+    expect(ids).not.toContain("M8-05-01"); expect(ids).not.toContain("M10-VERIFIED"); expect(ids).not.toContain("M2-SESSION");
+    const doc: FindingsDocument = { meta, findings: prior, residualScope: inventory };
+    expect(validateFindings(doc).ok).toBe(true);
+    const html = buildHtml(doc);
+    for (const id of ["M9-01@apps/web", "M3-SCOPE-00", "M2-UNAVAILABLE", "M2-SCOPE", "M10-PROT-00", "SEC-GL-ALLOW-00"]) {
+      const row = inventory.rows.find(row => row.sourceFindingIds?.includes(id))!;
+      expect(row.owner).toContain("Engagement reviewer");
+      expect(html).toContain(row.provenance);
+      const missing = structuredClone(doc);
+      missing.residualScope!.rows.find(candidate => candidate.id === row.id)!.sourceFindingIds = [];
+      expect(validateFindings(missing).errors).toContain(`residualScope.sourceFindingIds: missing disposition for ${id}`);
+    }
+  });
   it("rejects omission of a supplied scope disclosure even when summary counts reconcile", () => {
     const prior = [finding({ title: "Tenant isolation not assessed in PHP source" })];
     const inventory = buildResidualScopeInventory(fixture(), { revision: meta.commit, priorFindings: prior });
