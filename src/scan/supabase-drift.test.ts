@@ -21,6 +21,12 @@ create policy "tenant reads own quotes" on quotes for select using (tenant_id = 
 const ids = (fs: { id: string }[]): string[] => fs.map((f) => f.id);
 
 describe("checkMigrationDrift", () => {
+  it("does not accuse an unqueried non-public relation of being missing (#2129)", () => {
+    const findings = checkMigrationDrift([], [], migration("create table extensions.maintenance_heartbeats (\n id uuid\n);\ncreate table public.missing_table (\n id uuid\n);"));
+    expect(ids(findings)).not.toContain("SB-DRIFT-TABLE-MISSING-extensions-maintenance_heartbeats");
+    expect(ids(findings)).toContain("SB-DRIFT-TABLE-MISSING-public-missing_table");
+    expect(findings.find((f) => f.id === "SB-DRIFT-00")?.evidence).toContain("extensions: not queried");
+  });
   it("flags a table the migrations protect and the deployed database does not", () => {
     const findings = checkMigrationDrift([table("quotes", false)], [policy("quotes", "tenant reads own quotes")], migration(PROTECTED));
     const rls = findings.find((f) => f.id === "SB-DRIFT-RLS-public-quotes");
@@ -154,7 +160,7 @@ describe("expectedRlsEnabled", () => {
       { file: "2.sql", sql: "alter table b disable row level security;" },
       { file: "3.sql", sql: "alter table public.c enable row level security;" },
     ];
-    expect([...expectedRlsEnabled(migrations)].sort()).toEqual(["public.a", "public.c"]);
+    expect([...expectedRlsEnabled(migrations)].sort()).toEqual([JSON.stringify(["public", "a"]), JSON.stringify(["public", "c"])]);
   });
 });
 
