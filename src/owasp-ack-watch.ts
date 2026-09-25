@@ -97,7 +97,8 @@ export function buildOwaspWatchDecision(snapshots: readonly OwaspProposalSnapsho
   else if (actionable.length > 1) headline = `OWASP proposals ${actionable.map((number) => `#${number}`).join(" and ")} require action.`;
   else if (completed.length > 0) headline = "The watched proposals are in terminal or waiting states; no new drafting instruction is active.";
 
-  const notify = !baseline(snapshots) && !sameRows(previousRows, currentRows);
+  const initialFilingBaseline = previousRows === undefined && baseline(snapshots);
+  const notify = !initialFilingBaseline && !sameRows(previousRows, currentRows);
   const body = `${headline}\n\n${lines.join("\n")}\n\nBaseline at filing (2026-07-26): both issues open, zero labels, zero comments.\n\nAn acknowledgement is actionable only while its proposal is open. A retained ACK_OBTAINED label on a closed proposal is completion evidence, not permission to recreate drafting work.\n\n<sub>Watch: ${runUrl} · <!-- owasp-ack-receipt: ${receipt} --></sub>`;
   return { notify, receipt, headline, body, actionable };
 }
