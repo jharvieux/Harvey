@@ -265,6 +265,12 @@ rules:
   - id: harvey-lib-path-traversal
     languages: [javascript, typescript]
     mode: taint
+    paths:
+      exclude:
+        # Repository-local agent/build hooks are operator tooling, not remotely callable library
+        # entry points. Their exported functions accept trusted workspace roots and fixed filenames.
+        - "**/.codex/**"
+        - "**/.claude/**"
     severity: WARNING
     metadata:
       confidence: MEDIUM
@@ -337,12 +343,44 @@ rules:
     pattern-sinks:
       - patterns:
           - pattern-either:
-              - pattern: exec($CMD, ...)
-              - pattern: execSync($CMD, ...)
-              - pattern: child_process.exec($CMD, ...)
-              - pattern: child_process.execSync($CMD, ...)
-              - pattern: $CP.exec($CMD, ...)
-              - pattern: $CP.execSync($CMD, ...)
+              # Bind the sink to a real child_process import/require. The old `$CP.exec(...)`
+              # wildcard classified `CODE_PATTERN.exec(compact)` as OS execution.
+              - patterns:
+                  - pattern: $EXEC($CMD, ...)
+                  - metavariable-regex:
+                      metavariable: $EXEC
+                      regex: ^exec(?:Sync)?$
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { ..., $EXEC, ... } from "child_process";
+                          ...
+                      - pattern-inside: |
+                          import { ..., $EXEC, ... } from "node:child_process";
+                          ...
+                      - pattern-inside: |
+                          const { ..., $EXEC, ... } = require("child_process");
+                          ...
+                      - pattern-inside: |
+                          const { ..., $EXEC, ... } = require("node:child_process");
+                          ...
+              - patterns:
+                  - pattern: $CP.$EXEC($CMD, ...)
+                  - metavariable-regex:
+                      metavariable: $EXEC
+                      regex: ^exec(?:Sync)?$
+                  - pattern-either:
+                      - pattern-inside: |
+                          import * as $CP from "child_process";
+                          ...
+                      - pattern-inside: |
+                          import * as $CP from "node:child_process";
+                          ...
+                      - pattern-inside: |
+                          const $CP = require("child_process");
+                          ...
+                      - pattern-inside: |
+                          const $CP = require("node:child_process");
+                          ...
           - focus-metavariable: $CMD
 
   # Code injection from a library entry point: an exported-function param reaches eval / new Function.

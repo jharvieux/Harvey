@@ -4,7 +4,7 @@
   "producer": "src/cli/dry-run.ts",
   "source": {
     "target": "targets/calibration",
-    "targetTree": "b923c5c5b030664205a9150950da808bc8f9517c"
+    "targetTree": "c88338315477448c02eb15d0f402b63ded25a71b"
   },
   "retainedDynamic": {
     "role": "historical-dynamic-evidence",
@@ -50,24 +50,24 @@
   },
   "artifacts": {
     "findings.json": {
-      "sha256": "cb5d1979c151cc77dbe4e37619b020e437d6d477678a3f42ea5bb357c4cbbf73"
+      "sha256": "505c92cb1c0b728dbcb6bcb5a1b8ddeaefaaca371723319a13e3538981047dbe"
     },
     "pii-data-map.json": {
       "sha256": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9"
     },
     "scorecard.json": {
-      "sha256": "d172b6def201c7e1a96f0f4f3b218e031fb16f5dbf4a95aab2d045b4434cefe4"
+      "sha256": "b00bbf40b18836867295e8c1bc929559579ff6575e049513737cb36a8905d500"
     },
     "findings-report.json": {
-      "sha256": "a660a1c857e73b24aeb21ed1bac9036c322de624e56dd8a941a943a7a4f4db74"
+      "sha256": "6d22990082b9975a1acb45b039c46147d71ca7387efe4b7c0badcc4d0cd84346"
     }
   },
   "transformations": {
     "report": {
       "kind": "findings-envelope-v1",
       "reason": "Add report metadata and source linkage; preserve every raw finding occurrence and field. Rendering rollups remain downstream of this artifact seam.",
-      "produced": 822,
-      "delivered": 822,
+      "produced": 823,
+      "delivered": 823,
       "deduped": 0,
       "suppressed": 0,
       "capped": 0,

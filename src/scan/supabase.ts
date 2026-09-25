@@ -55,7 +55,8 @@
 // Management API surface in this session.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
+import { loadSources } from "../detectors/load-sources.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors.js";
@@ -207,13 +208,17 @@ async function managementFetchJson(url: string, headers: Record<string, string>,
   return res.json();
 }
 
-function readEdgeFunctionSources(functionsDir: string): EdgeFunctionSource[] {
+function readEdgeFunctionSources(functionsDir: string, targetRoot: string): EdgeFunctionSource[] {
   if (!existsSync(functionsDir)) return [];
   const sources: EdgeFunctionSource[] = [];
   for (const entry of readEntriesSafe(functionsDir).entries) {
     if (!entry.isDirectory) continue;
     const indexPath = ["index.ts", "index.js"].map((f) => join(functionsDir, entry.name, f)).find(existsSync);
-    if (indexPath) sources.push({ name: entry.name, content: readFileSync(indexPath, "utf8") });
+    if (indexPath) sources.push({
+      name: entry.name,
+      path: relative(targetRoot, indexPath).split(sep).join("/"),
+      content: readFileSync(indexPath, "utf8"),
+    });
   }
   return sources;
 }
@@ -541,8 +546,15 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
   }
 
   if (opts.functionsDir) {
-    const edgeFunctions = readEdgeFunctionSources(opts.functionsDir);
-    findings.push(...checkEdgeFunctionSecrets(edgeFunctions), ...checkUnsignedWebhookHandlers(edgeFunctions));
+    const targetRoot = resolve(opts.functionsDir, "..", "..");
+    const edgeFunctions = readEdgeFunctionSources(opts.functionsDir, targetRoot);
+    const projectSources = loadSources(targetRoot);
+    const denoConfigPath = join(opts.functionsDir, "deno.json");
+    if (existsSync(denoConfigPath)) projectSources.push({
+      path: relative(targetRoot, denoConfigPath).split(sep).join("/"),
+      text: readFileSync(denoConfigPath, "utf8"),
+    });
+    findings.push(...checkEdgeFunctionSecrets(edgeFunctions), ...checkUnsignedWebhookHandlers(edgeFunctions, projectSources));
   }
 
   if (opts.gotrueProbe) {

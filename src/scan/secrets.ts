@@ -28,6 +28,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
+import { isTestSourcePath } from "../detectors/load-sources.js";
 import { statSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
@@ -211,6 +213,32 @@ function gitleaksSortKey(r: GitleaksResult): string {
   return `${r.File} ${String(r.StartLine ?? 0).padStart(10, "0")} ${r.RuleID} ${r.Match ?? r.Secret ?? ""}`;
 }
 
+function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undefined {
+  if (r.RuleID !== "private-key" || !r.StartLine || !existsSync(r.File)) return undefined;
+  const displayPath = relativizeScanScope(r.File);
+  if (!isTestSourcePath(displayPath)) return undefined;
+  const text = readFileSync(r.File, "utf8");
+  const sf = ts.createSourceFile(r.File, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const lineStart = sf.getPositionOfLineAndCharacter(Math.max(0, r.StartLine - 1), 0);
+  let enclosing: ts.FunctionLikeDeclaration | undefined;
+  const visit = (node: ts.Node) => {
+    if (lineStart >= node.getStart(sf) && lineStart <= node.getEnd()) {
+      if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) enclosing = node;
+      ts.forEachChild(node, visit);
+    }
+  };
+  visit(sf);
+  if (!enclosing?.body) return undefined;
+  const body = enclosing.body.getText(sf);
+  if (!/crypto\.subtle\.generateKey\s*\(\s*\{[^}]*name\s*:\s*["']ECDSA["'][^}]*namedCurve\s*:\s*["']P-256["']/s.test(body)) return undefined;
+  const exported = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+crypto\.subtle\.exportKey\s*\(\s*["']pkcs8["']\s*,\s*([A-Za-z_$][\w$]*)\.privateKey\s*\)/s.exec(body);
+  if (!exported) return undefined;
+  const pkcs8 = exported[1]!;
+  const pem = new RegExp(`BEGIN PRIVATE KEY[\\s\\S]*\\$\\{[^}]*\\b${pkcs8}\\b[^}]*\\}[\\s\\S]*END PRIVATE KEY`).test(body);
+  if (!pem) return undefined;
+  return `the matched PEM is assembled inside one test function from crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${exported[2]}.privateKey) -> ${pkcs8}`;
+}
+
 // #1078 — the two suppressions that used to happen inside the gitleaks config, where they left no
 // trace. Both now happen here so they can be COUNTED and disclosed (SEC-GL-ALLOW-00):
 //
@@ -310,7 +338,8 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     .sort((a, b) => gitleaksSortKey(a).localeCompare(gitleaksSortKey(b)))
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
-      const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;
+      const generatedPrivateKeyFixture = generatedPrivateKeyFixtureProvenance(r);
+      const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey && !generatedPrivateKeyFixture;
       // #934: doc/example context only reclassifies a hit that would otherwise be a graded
       // Critical — review-tier matches are already out of the free grade and keep their tier.
       const docContext = high && isDocExamplePath(r.File);
@@ -318,21 +347,27 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
       return mechanicalFinding({
         id: `SEC-GL-${scope}-${i + 1}`,
         title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
-        severity: docContext ? "Low" : high ? "Critical" : "High",
+        severity: generatedPrivateKeyFixture || docContext ? "Low" : high ? "Critical" : "High",
         category: "Secret exposure",
         taxonomy: docContext ? DOC_CONTEXT_CREDENTIAL_TAXONOMY : high ? "Committed credential" : "Possible committed credential",
         location: `[${scope}] ${r.File}${r.StartLine ? `:${r.StartLine}` : ""}${r.Commit ? ` (commit ${r.Commit.slice(0, 12)})` : ""}`,
-        evidence: testIdpPrivateKey
+        evidence: generatedPrivateKeyFixture
+          ? `${evidence} Down-ranked from Critical with source-bound provenance: ${generatedPrivateKeyFixture}. This is still reported for review; test paths alone never suppress a credential.`
+          : testIdpPrivateKey
           ? `${evidence} Down-ranked from Critical: this file also carries a test/example SAML IdP marker (ENTITY_ID / *.example.com) in a CI workflow — treat as a test fixture, confirm before escalating.`
           : docContext
             ? `${evidence} Reclassified from Critical (#934): the file sits in documentation/example-deployment content (docs, contrib, an example/sample file, or a *.dev.yml compose), where a credential-format match is overwhelmingly a shipped placeholder/default, not an application secret.`
             : evidence,
-        impact: docContext
+        impact: generatedPrivateKeyFixture
+          ? "A private-key-shaped value generated at test runtime from an ephemeral keypair, not a committed deployable credential. Confirm the dataflow remains generated and nonproduction."
+          : docContext
           ? "A default/placeholder-shaped credential in docs or an example deployment file. Not graded as a live secret — but a committed default does get deployed by whoever copies this file, so confirm it is a placeholder and that your own deployment rotated it."
           : high
             ? (HIGH_PRECISION_IMPACT[r.RuleID] ?? DEFAULT_HIGH_IMPACT)
             : "Pattern match on a potential secret; confirm before treating as a live credential.",
-        fix: docContext
+        fix: generatedPrivateKeyFixture
+          ? "No rotation is needed if the source-bound generation path is intact. Keep the fixture generated at runtime; if a static key replaces it, treat that new finding as a committed credential."
+          : docContext
           ? "If this is a real credential, rotate it and remove it; if it is the intended placeholder, keep an obviously-fake value and a rotate-me instruction next to it."
           : "Rotate the credential if live, remove from source/history, and add to .gitignore.",
         precisionTier: high ? "high" : "review",

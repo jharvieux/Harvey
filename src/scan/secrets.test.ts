@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDirectorySafe } from "../fs-walk.js";
@@ -201,6 +201,56 @@ describe("parseGitleaksFindings", () => {
   it("never surfaces the internal correlation marker rules as findings themselves", () => {
     const markers = [capturedRule("supabase/seed.sql", "supabase-demo-key-marker"), capturedRule(".github/workflows/saml-test.yml", "harvey-test-idp-marker")];
     expect(parseGitleaksFindings(markers, "source")).toHaveLength(0);
+  });
+
+  it("keeps generated P-256 test keys visible but removes the false Critical credential claim (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-generated-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      writeFileSync(path, readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult = { RuleID: "private-key", Description: "Private Key", File: path, StartLine: 4, Match: "-----BEGIN PRIVATE KEY-----" };
+      const [finding] = parseGitleaksFindings([raw], "source");
+      expect(finding?.severity).toBe("Low");
+      expect(finding?.precisionTier).toBe("review");
+      expect(finding?.evidence).toContain("generateKey(ECDSA/P-256) -> exportKey(pkcs8");
+      expect(finding?.evidence).toContain("test paths alone never suppress a credential");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("broken twin: replacing runtime generation with a committed PEM stays Critical (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-committed-key-"));
+    try {
+      const path = join(dir, "push.test.ts");
+      writeFileSync(path, readFileSync(new URL("./__fixtures__/source-precision/committed-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult = { RuleID: "private-key", Description: "Private Key", File: path, StartLine: 2, Match: "-----BEGIN PRIVATE KEY-----" };
+      const [finding] = parseGitleaksFindings([raw], "source");
+      expect(finding?.severity).toBe("Critical");
+      expect(finding?.precisionTier).toBe("high");
+      expect(finding?.evidence).not.toContain("Down-ranked from Critical with source-bound provenance");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves raw/disposition conservation when generated and committed keys coexist (#2130)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-key-conservation-"));
+    try {
+      const generated = join(dir, "generated.test.ts");
+      const committed = join(dir, "committed.test.ts");
+      writeFileSync(generated, readFileSync(new URL("./__fixtures__/source-precision/generated-private-key.test.ts.txt", import.meta.url), "utf8"));
+      writeFileSync(committed, readFileSync(new URL("./__fixtures__/source-precision/committed-private-key.test.ts.txt", import.meta.url), "utf8"));
+      const raw: GitleaksResult[] = [
+        { RuleID: "private-key", File: generated, StartLine: 4, Match: "-----BEGIN PRIVATE KEY-----" },
+        { RuleID: "private-key", File: committed, StartLine: 2, Match: "-----BEGIN PRIVATE KEY-----" },
+      ];
+      const findings = parseGitleaksFindings(raw, "source");
+      expect(findings).toHaveLength(raw.length);
+      expect(findings.map((finding) => finding.severity).sort()).toEqual(["Critical", "Low"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

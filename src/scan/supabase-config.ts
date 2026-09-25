@@ -3,6 +3,9 @@
 // and Edge Function secret/webhook-signature hygiene. See src/scan/supabase.ts for how each
 // input is fetched (Management API / direct SQL against the project).
 
+import ts from "typescript";
+import type { SourceInput } from "../detectors/common.js";
+import { collectPathAliases, resolveImport } from "../detectors/app-router.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -259,6 +262,8 @@ export function checkDangerousExtensions(extensions: ExtensionInfo[]): Finding[]
 export interface EdgeFunctionSource {
   name: string;
   content: string;
+  /** Target-relative entrypoint path. Required for cross-file verifier proof. */
+  path?: string;
 }
 
 const HARDCODED_SECRET_HINT = /(SUPABASE_SERVICE_ROLE_KEY\s*=\s*["'][^"']|service_role["']?\s*:\s*["'][^"']{10,}|Authorization["']?\s*:\s*["']Bearer\s+sk_)/;
@@ -517,12 +522,191 @@ export function checkColumnGrantsToClientRoles(grants: ColumnGrant[]): Finding[]
   );
 }
 
-const SIGNATURE_CHECK_HINT = /(verifyWebhookSignature|constructEvent|x-webhook-signature|hmac|createHmac|timingSafeEqual)/i;
+const SIGNATURE_CALL_HINT = /(verify\w*Signature|constructEvent|createHmac|timingSafeEqual)/i;
 
-export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding[] {
+function hasInlineSignatureVerification(handler: EdgeFunctionSource): boolean {
+  const path = handler.path ?? `${handler.name}.ts`;
+  const sf = ts.createSourceFile(path, handler.content, ts.ScriptTarget.Latest, true, path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const importedIdentifiers = new Set<string>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause) continue;
+    if (stmt.importClause.name) importedIdentifiers.add(stmt.importClause.name.text);
+    const bindings = stmt.importClause.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) importedIdentifiers.add(element.name.text);
+    if (bindings && ts.isNamespaceImport(bindings)) importedIdentifiers.add(bindings.name.text);
+  }
+  let verified = false;
+  const visit = (node: ts.Node) => {
+    if (verified) return;
+    if (ts.isCallExpression(node) && SIGNATURE_CALL_HINT.test(node.expression.getText(sf))) {
+      if (!ts.isIdentifier(node.expression) || !importedIdentifiers.has(node.expression.text)) verified = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return verified;
+}
+
+interface ImportedCallAssessment {
+  verifiedBeforeEffect: boolean;
+  provenance: string;
+}
+
+function functionBodyForExport(file: SourceInput, exportedName: string): ts.FunctionLikeDeclaration | undefined {
+  const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, file.path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  let found: ts.FunctionLikeDeclaration | undefined;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === exportedName) found = node;
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === exportedName
+      && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) found = node.initializer;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function resolveExportedFunction(
+  fromPath: string,
+  exportName: string,
+  files: ReadonlyMap<string, SourceInput>,
+  allPaths: Set<string>,
+  aliases: ReturnType<typeof collectPathAliases>,
+  seen = new Set<string>(),
+): { file: SourceInput; fn: ts.FunctionLikeDeclaration } | undefined {
+  const key = `${fromPath}#${exportName}`;
+  if (seen.has(key)) return undefined;
+  seen.add(key);
+  const file = files.get(fromPath);
+  if (!file) return undefined;
+  const direct = functionBodyForExport(file, exportName);
+  if (direct) return { file, fn: direct };
+  const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, file.path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)
+      || !stmt.exportClause || !ts.isNamedExports(stmt.exportClause)) continue;
+    for (const element of stmt.exportClause.elements) {
+      if (element.name.text !== exportName) continue;
+      const target = resolveSourceImport(file.path, stmt.moduleSpecifier.text, files, allPaths, aliases);
+      if (!target) return undefined;
+      return resolveExportedFunction(target, element.propertyName?.text ?? element.name.text, files, allPaths, aliases, seen);
+    }
+  }
+  return undefined;
+}
+
+function resolveSourceImport(
+  fromPath: string,
+  specifier: string,
+  files: ReadonlyMap<string, SourceInput>,
+  allPaths: Set<string>,
+  aliases: ReturnType<typeof collectPathAliases>,
+): string | undefined {
+  const standard = resolveImport(fromPath, specifier, allPaths, aliases);
+  if (standard) return standard;
+  const configs = [...files.values()]
+    .filter((file) => file.path.endsWith("/deno.json") || file.path === "deno.json")
+    .filter((file) => {
+      const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "";
+      return dir === "" || fromPath.startsWith(`${dir}/`);
+    })
+    .sort((a, b) => b.path.length - a.path.length);
+  for (const config of configs) {
+    try {
+      const imports = (JSON.parse(config.text) as { imports?: Record<string, string> }).imports;
+      const mapped = imports?.[specifier];
+      if (!mapped) continue;
+      const target = resolveImport(config.path, mapped, allPaths, aliases);
+      if (target) return target;
+    } catch {
+      // An invalid import map cannot prove a cross-file verification path.
+    }
+  }
+  return undefined;
+}
+
+function importedVerifierAssessment(handler: EdgeFunctionSource, projectSources: readonly SourceInput[]): ImportedCallAssessment | undefined {
+  if (!handler.path || projectSources.length === 0) return undefined;
+  const sources = projectSources.some((source) => source.path === handler.path)
+    ? [...projectSources]
+    : [...projectSources, { path: handler.path, text: handler.content }];
+  const files = new Map(sources.map((source) => [source.path, source]));
+  const allPaths = new Set(files.keys());
+  const aliases = collectPathAliases(sources);
+  const sf = ts.createSourceFile(handler.path, handler.content, ts.ScriptTarget.Latest, true, handler.path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const imports = new Map<string, { imported: string; target?: string; specifier: string }>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)
+      || !stmt.importClause?.namedBindings || !ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+    const specifier = stmt.moduleSpecifier.text;
+    const target = resolveSourceImport(handler.path, specifier, files, allPaths, aliases);
+    for (const element of stmt.importClause.namedBindings.elements) {
+      imports.set(element.name.text, { imported: element.propertyName?.text ?? element.name.text, target, specifier });
+    }
+  }
+
+  let assessment: ImportedCallAssessment | undefined;
+  const visit = (node: ts.Node) => {
+    if (assessment) return;
+    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) {
+      ts.forEachChild(node, visit);
+      return;
+    }
+    const imported = imports.get(node.expression.text);
+    if (!imported) {
+      ts.forEachChild(node, visit);
+      return;
+    }
+    const objectArg = node.arguments.find(ts.isObjectLiteralExpression);
+    const passed = new Set(objectArg?.properties
+      .map((property) => ts.isShorthandPropertyAssignment(property) || ts.isPropertyAssignment(property)
+        ? property.name?.getText(sf).replace(/["']/g, "")
+        : undefined)
+      .filter((name): name is string => Boolean(name)) ?? []);
+    if (!["rawBody", "signatureHeader", "secret"].every((name) => passed.has(name))) {
+      ts.forEachChild(node, visit);
+      return;
+    }
+    if (!imported.target) {
+      assessment = {
+        verifiedBeforeEffect: false,
+        provenance: `called ${node.expression.text}(rawBody, signatureHeader, secret), but import ${JSON.stringify(imported.specifier)} could not be resolved`,
+      };
+      return;
+    }
+    const resolved = resolveExportedFunction(imported.target, imported.imported, files, allPaths, aliases);
+    if (!resolved?.fn.body || !ts.isBlock(resolved.fn.body)) {
+      assessment = {
+        verifiedBeforeEffect: false,
+        provenance: `called ${node.expression.text}(rawBody, signatureHeader, secret), resolved to ${imported.target}, but the verifier implementation was not resolved`,
+      };
+      return;
+    }
+    const bodyText = resolved.fn.body.getText();
+    const verify = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+[^;\n]*(?:verify\w*Signature|constructEvent|timingSafeEqual)\s*\(/i.exec(bodyText);
+    const effectIndex = [...bodyText.matchAll(/(?:grant\w*|mutate\w*|write\w*|apply\w*|persist\w*|\.insert|\.update|\.upsert|\.delete)\s*\(/gi)]
+      .map((match) => match.index ?? Number.MAX_SAFE_INTEGER)
+      .sort((a, b) => a - b)[0];
+    const guarded = verify
+      ? new RegExp(`if\\s*\\(\\s*!\\s*${verify[1]}\\s*\\)\\s*(?:\\{[^}]*\\breturn\\b[^}]*\\}|return\\b)`, "s").exec(bodyText)
+      : undefined;
+    const verifiedBeforeEffect = Boolean(verify && guarded && effectIndex !== undefined
+      && (verify.index ?? 0) < effectIndex && (guarded.index ?? 0) < effectIndex);
+    assessment = {
+      verifiedBeforeEffect,
+      provenance: `${node.expression.text}(rawBody, signatureHeader, secret) resolved through ${imported.target} to ${resolved.file.path}; signature verification ${verifiedBeforeEffect ? "guards and precedes" : "does not provably guard and precede"} the first effect`,
+    };
+  };
+  visit(sf);
+  return assessment;
+}
+
+export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[], projectSources: readonly SourceInput[] = []): Finding[] {
   return fns
-    .filter((f) => /webhook/i.test(f.name) && !SIGNATURE_CHECK_HINT.test(f.content))
-    .map((f) =>
+    .filter((f) => /webhook/i.test(f.name))
+    .map((f) => ({ f, imported: importedVerifierAssessment(f, projectSources) }))
+    .filter(({ f, imported }) => !hasInlineSignatureVerification(f) && !imported?.verifiedBeforeEffect)
+    .map(({ f, imported }) =>
       mechanicalFinding({
         id: `SB-EDGE-WEBHOOK-${f.name}`,
         title: `Webhook handler "${f.name}" has no signature-verification hint`,
@@ -530,7 +714,9 @@ export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding
         category: "Supabase config",
         taxonomy: "Unsigned/unverified webhook handler",
         location: `edge function: ${f.name}`,
-        evidence: `No HMAC/signature-check pattern found in ${f.name}, whose name implies it's a webhook receiver.`,
+        evidence: imported
+          ? `No inline HMAC/signature check was found in ${f.name}; ${imported.provenance}. The call remains a review candidate because the verification-before-effect order was not proved.`
+          : `No HMAC/signature-check pattern found in ${f.name}, whose name implies it's a webhook receiver. Imported verification provenance was not proved, so this remains a review candidate.`,
         impact: "An unsigned webhook endpoint accepts forged events from anyone who finds the URL.",
         fix: "Verify the provider's webhook signature (HMAC) before trusting the payload.",
         precisionTier: "review",

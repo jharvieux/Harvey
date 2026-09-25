@@ -1,0 +1,6 @@
+it("signs with an ephemeral key", async () => {
+  const keyPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  const pem = `-----BEGIN PRIVATE KEY-----\n${encode(pkcs8)}\n-----END PRIVATE KEY-----`;
+  await signFixtureJwt(pem);
+});

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { SourceInput } from "../detectors/common.js";
 import { describe, expect, it } from "vitest";
 import {
   AUTH_CONFIG_FIELDS,
@@ -468,5 +469,62 @@ describe("checkUnsignedWebhookHandlers", () => {
 
   it("does not flag a non-webhook function even with no signature check", () => {
     expect(checkUnsignedWebhookHandlers([{ name: "resize-image", content: `export default async () => {}` }])).toEqual([]);
+  });
+
+  const webhookFixture = (variant: string, names: string[]): SourceInput[] => names.map((name) => ({
+    path: `supabase/functions/stripe-webhook/${name}.ts`,
+    text: readFileSync(new URL(`./__fixtures__/source-precision/${variant}/${name}.ts`, import.meta.url), "utf8"),
+  }));
+
+  const handlerFor = (sources: SourceInput[]) => ({
+    name: "stripe-webhook",
+    path: sources[0]!.path,
+    content: sources[0]!.text,
+  });
+
+  it("clears an imported verifier only when raw body, signature and secret resolve to verification before mutation (#2130)", () => {
+    const sources = webhookFixture("webhook-valid", ["handler", "shared", "implementation"]);
+    sources.push({
+      path: "supabase/functions/deno.json",
+      text: JSON.stringify({ imports: { "@fixture/shared/stripe": "./stripe-webhook/implementation.ts" } }),
+    });
+    expect(checkUnsignedWebhookHandlers([handlerFor(sources)], sources)).toEqual([]);
+  });
+
+  it.each([
+    ["verification removed", "webhook-no-verification"],
+    ["verification moved after the effect", "webhook-after-effect"],
+  ])("broken twin: %s restores the review candidate (#2130)", (_label, variant) => {
+    const sources = webhookFixture(variant, ["handler", "implementation"]);
+    const findings = checkUnsignedWebhookHandlers([handlerFor(sources)], sources);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("does not provably guard and precede");
+    expect(findings[0]!.precisionTier).toBe("review");
+  });
+
+  it("does not clear on an unrelated verifier import that the handler never calls (#2130)", () => {
+    const sources = webhookFixture("webhook-unrelated-import", ["handler", "verification"]);
+    const findings = checkUnsignedWebhookHandlers([handlerFor(sources)], sources);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("Imported verification provenance was not proved");
+  });
+
+  it("retains an unresolved imported call as an explicit candidate with call provenance (#2130)", () => {
+    const handler: SourceInput = {
+      path: "supabase/functions/stripe-webhook/index.ts",
+      text: `
+        import { processWebhook } from "@missing/shared";
+        export async function handle(req: Request) {
+          const rawBody = await req.text();
+          const signatureHeader = req.headers.get("Stripe-Signature");
+          const secret = getSecret();
+          return processWebhook({ rawBody, signatureHeader, secret, grantEntitlement });
+        }
+      `,
+    };
+    const findings = checkUnsignedWebhookHandlers([{ name: "stripe-webhook", path: handler.path, content: handler.text }], [handler]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("could not be resolved");
+    expect(findings[0]!.evidence).toContain("rawBody, signatureHeader, secret");
   });
 });
