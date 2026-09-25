@@ -1258,9 +1258,9 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   process.stderr.write(stderr);
   const errorCode = (child.error as NodeJS.ErrnoException | undefined)?.code;
   const outcome = errorCode === "ENOBUFS"
-    ? { state: "output-limit-exceeded" as const, exitCode: null, signal: child.signal, errorCode }
+    ? { state: "output-limit-exceeded" as const, exitCode: null, ...(typeof child.status === "number" ? { observedExitCode: child.status } : {}), signal: child.signal, errorCode }
     : errorCode === "ETIMEDOUT"
-    ? { state: "timed-out" as const, exitCode: null, signal: child.signal, errorCode }
+    ? { state: "timed-out" as const, exitCode: null, ...(typeof child.status === "number" ? { observedExitCode: child.status } : {}), signal: child.signal, errorCode }
     : child.error
     ? { state: "spawn-failed" as const, exitCode: null, signal: child.signal, ...(errorCode ? { errorCode } : {}) }
     : child.status !== null
@@ -1504,9 +1504,9 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     ? (() => { mkdirSync(dirname(receiptArtifactPath), { recursive: true }); writeFileSync(receiptArtifactPath, readFileSync(resultPath)); return receiptArtifactPath; })()
     : undefined;
   const outcome = errorCode === "ENOBUFS"
-    ? { state: "output-limit-exceeded" as const, exitCode: null, signal, errorCode }
+    ? { state: "output-limit-exceeded" as const, exitCode: null, ...(typeof exitCode === "number" ? { observedExitCode: exitCode } : {}), signal, errorCode }
     : errorCode === "ETIMEDOUT"
-    ? { state: "timed-out" as const, exitCode: null, signal, errorCode }
+    ? { state: "timed-out" as const, exitCode: null, ...(typeof exitCode === "number" ? { observedExitCode: exitCode } : {}), signal, errorCode }
     : errorCode
     ? { state: "spawn-failed" as const, exitCode: null, signal, errorCode }
     : exitCode !== null

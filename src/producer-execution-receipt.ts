@@ -47,6 +47,8 @@ export interface CommandExecutionReceipt {
   readonly outcome: {
     readonly state: CommandTerminalState;
     readonly exitCode: number | null;
+    /** Native status observed after an interrupted process handled termination. */
+    readonly observedExitCode?: number;
     readonly signal: string | null;
     readonly errorCode?: string;
   };
@@ -303,8 +305,10 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
     : ["policy-denied", "spawn-failed", "output-limit-exceeded", "exited", "signaled", "timed-out", "cancelled", "unknown-exit"];
   if (!states.includes(receipt.outcome?.state)) throw new Error("command execution receipt has an unknown terminal state");
   if (receipt.outcome.exitCode !== null && !Number.isInteger(receipt.outcome.exitCode)) throw new Error("command execution receipt exit code is malformed");
+  if (receipt.outcome.observedExitCode !== undefined && !Number.isInteger(receipt.outcome.observedExitCode)) throw new Error("command execution receipt observed exit code is malformed");
   if (receipt.outcome.signal !== null && (typeof receipt.outcome.signal !== "string" || !receipt.outcome.signal.trim())) throw new Error("command execution receipt signal is malformed");
   if (receipt.outcome.errorCode !== undefined && (typeof receipt.outcome.errorCode !== "string" || !receipt.outcome.errorCode.trim())) throw new Error("command execution receipt error code is malformed");
+  if (!legacy && receipt.outcome.observedExitCode !== undefined && !["timed-out", "output-limit-exceeded"].includes(receipt.outcome.state)) throw new Error(`${receipt.outcome.state} command receipt cannot claim an observed interrupted exit code`);
   if (legacy) {
     if (receipt.outcome.state === "exited" && (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null)) throw new Error("exited command receipt needs a numeric exit and no signal");
     if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");

@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -85,6 +86,24 @@ describe("probeExec command execution receipts", () => {
     expect(JSON.stringify(interrupted.receipt)).not.toContain(secret);
   });
 
+  it("retains a native exit observed after an output-limit interrupt without inventing success", () => {
+    const script = "process.stdout.on('error', () => {}); process.on('SIGTERM', () => process.exit(7)); process.stdout.write('x'.repeat(2 * 1024 * 1024)); setInterval(() => {}, 1000)";
+    const raw = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    expect(raw.error).toMatchObject({ code: "ENOBUFS" });
+    expect(raw.status).not.toBeNull();
+
+    const interrupted = probeExec(process.execPath, ["-e", script], receiptOptions({ invocationId: "output-limit-handler" }));
+    expect(interrupted.receipt?.outcome).toMatchObject({
+      state: "output-limit-exceeded",
+      exitCode: null,
+      observedExitCode: raw.status,
+      signal: raw.signal,
+      errorCode: "ENOBUFS",
+    });
+    expect(interrupted.ok).toBe(false);
+    expect(commandReceiptSucceeded(interrupted.receipt!)).toBe(false);
+  });
+
   it("rejects contradictory command outcomes while accepting a coherent timeout", () => {
     const receipt = (outcome: Parameters<typeof createCommandExecutionReceipt>[0]["outcome"]) => () => createCommandExecutionReceipt({
       invocationId: "outcome-control",
@@ -100,6 +119,7 @@ describe("probeExec command execution receipts", () => {
     expect(receipt({ state: "timed-out", exitCode: 0, signal: null, errorCode: "ETIMEDOUT" })).toThrow(/timed-out.*exit code/i);
     expect(receipt({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOENT" })).toThrow(/spawn-failed.*signal/i);
     expect(receipt({ state: "exited", exitCode: 0, signal: null, errorCode: "EIO" })).toThrow(/exited.*error/i);
+    expect(receipt({ state: "exited", exitCode: 0, observedExitCode: 7, signal: null })).toThrow(/observed interrupted exit code/i);
 
     const timeout = receipt({ state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" })();
     expect(timeout.outcome.state).toBe("timed-out");

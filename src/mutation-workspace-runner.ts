@@ -93,9 +93,9 @@ function command(bin: string, argv: string[], cwd: string, output: string, plan:
     configuration: { identity: workspace.id, value: workspace }, toolchain,
     startedAt, finishedAt: new Date().toISOString(), stdout, stderr,
     outcome: errorCode === "ENOBUFS"
-      ? { state: "output-limit-exceeded", exitCode: null, signal: result.signal, errorCode }
+      ? { state: "output-limit-exceeded", exitCode: null, ...(typeof result.status === "number" ? { observedExitCode: result.status } : {}), signal: result.signal, errorCode }
       : errorCode === "ETIMEDOUT"
-        ? { state: "timed-out", exitCode: null, signal: result.signal, errorCode }
+        ? { state: "timed-out", exitCode: null, ...(typeof result.status === "number" ? { observedExitCode: result.status } : {}), signal: result.signal, errorCode }
         : result.error
           ? { state: "spawn-failed", exitCode: null, signal: result.signal, ...(errorCode ? { errorCode } : {}) }
           : { state: result.signal ? "signaled" : "exited", exitCode: result.status, signal: result.signal },
