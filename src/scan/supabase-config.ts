@@ -619,7 +619,7 @@ function resolveSourceImport(
       const target = resolveImport(config.path, mapped, allPaths, aliases);
       if (target) return target;
     } catch {
-      // An invalid import map cannot prove a cross-file verification path.
+      continue;
     }
   }
   return undefined;
