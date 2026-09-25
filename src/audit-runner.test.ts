@@ -1441,9 +1441,10 @@ describe("M10 captures its classification findings (#436)", () => {
     expect(findings.some((f) => (f as { id?: string }).id === "M10-01")).toBe(true);
   });
 
-  it("live tier reads ran once its findings are captured — the #420 non-collection partial is retired", () => {
+  it("live tier preserves protection limitations after findings are captured", () => {
     const m10 = status(AUDIT_RUNNERS, { ...capture, env: { connected: true, dynamic: false, llm: false } }, "M10");
-    expect(m10?.status).toBe("ran");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toContain("encryption behavior");
   });
 
   it("a coverage-only run (no capture) still discloses that findings were not collected", () => {
@@ -1698,7 +1699,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
       },
     })).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
-    expect(m10.every((r) => r.status === "ran")).toBe(true);
+    expect(m10.every((r) => r.status === "partial")).toBe(true);
     // Each project's classify ran with ITS url, not a single shared one.
     expect([...envByRef.values()].sort()).toEqual(["postgres://main", "postgres://rag"]);
   });

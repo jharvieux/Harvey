@@ -15,7 +15,6 @@ import {
   createAnthropicSemanticClassifier,
   dataMapToFindings,
   DEFAULT_SEMANTIC_MODEL,
-  gatherProtectionFacts,
   resolveSemanticClassifier,
   resolveValueSampling,
   runValueSampling,
@@ -574,7 +573,7 @@ describe("classifyMigrationSql — ALTER TABLE ADD COLUMN (#852) and unrecognize
     const schema = dataMapToFindings(buildDataMap([{ table_name: "u", column_name: "email", data_type: "text" }]), { tier: "schema" });
     expect(schema[0]?.evidence).toMatch(/views, materialized views, and generated columns are not parsed/i);
     const live = dataMapToFindings(buildDataMap([{ table_name: "u", column_name: "email", data_type: "text" }]), { tier: "live" });
-    expect(live[0]?.evidence).toMatch(/public schema only/i);
+    expect(live[0]?.evidence).toMatch(/configured authorized product schemas/i);
   });
 });
 
@@ -693,47 +692,6 @@ describe("pii-classify --schema CLI — protection disclosure + data map (#1043/
   });
 });
 
-// #1043 — the connected tier's protection inputs, against an injected `sql`. Without this the live
-// path is exercised only in its failure mode, which is how "PII protection verified in production"
-// became a claim nothing tested.
-describe("gatherProtectionFacts — catalog rows → ExposureFacts (#1043)", () => {
-  const rows: Record<string, Record<string, unknown>[]> = {
-    relrowsecurity: [
-      { table_name: "patients", rls_enabled: false }, // granted + RLS off → anon-reachable
-      { table_name: "billing", rls_enabled: true }, // granted but RLS on → not auto-exposed
-      { table_name: "internal_jobs", rls_enabled: false }, // RLS off but no client grant → unreachable
-    ],
-    role_table_grants: [{ table_name: "patients" }, { table_name: "billing" }],
-  };
-  const sqlWith = (masking: Record<string, unknown>[], maskedCols: Record<string, unknown>[]) =>
-    ((strings: TemplateStringsArray) => {
-      const q = strings.join("");
-      if (q.includes("relrowsecurity")) return Promise.resolve(rows.relrowsecurity!);
-      if (q.includes("role_table_grants")) return Promise.resolve(rows.role_table_grants!);
-      if (q.includes("'masking_rule'")) return Promise.resolve(masking);
-      if (q.includes("pgsodium.masking_rule")) return Promise.resolve(maskedCols);
-      throw new Error(`unexpected query: ${q}`);
-    }) as never;
-
-  it("counts a table anon-reachable only when RLS is off AND a client role can SELECT it", async () => {
-    const { facts } = await gatherProtectionFacts(sqlWith([], []));
-    expect(facts.autoExposedTables).toEqual(["public.patients"]);
-  });
-
-  it("credits encryption at rest from pgsodium's masking rules when the view is readable", async () => {
-    const masking = [{ column_name: "relname" }, { column_name: "attname" }];
-    const { encrypted, detail } = await gatherProtectionFacts(sqlWith(masking, [{ table_name: "patients", column_name: "ssn" }]));
-    expect(encrypted.has("patients.ssn")).toBe(true);
-    expect(detail).toMatch(/listed 1 encrypted column/);
-  });
-
-  it("credits NOTHING as encrypted — and says so — when the masking view is absent or unreadable", async () => {
-    const { encrypted, detail } = await gatherProtectionFacts(sqlWith([], []));
-    expect(encrypted.size).toBe(0);
-    expect(detail).toMatch(/no readable pgsodium.masking_rule view/);
-  });
-});
-
 const FINDINGS_META = {
   client: "c", subtitle: "s", date: "d", commit: "abc", auditor: "a", confidential: true, overallHealth: 5,
   tenantIsolation: "t", authModel: "m", headline: "h", scope: "s", methodology: "m", outOfScope: "o",
@@ -787,7 +745,7 @@ describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
   it("records which tier produced the evidence", () => {
     expect(findings[0]?.evidence).toMatch(/static migration-SQL schema parse/i);
     const live = dataMapToFindings(buildDataMap(columns), { tier: "live" });
-    expect(live[0]?.evidence).toMatch(/live information_schema/i);
+    expect(live[0]?.evidence).toMatch(/live pg_catalog/i);
   });
 
   it("#459: marks a review-flag-only table so the renderer never shows it as an asserted PII holding", () => {

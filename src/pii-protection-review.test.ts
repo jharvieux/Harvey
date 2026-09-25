@@ -99,9 +99,10 @@ describe("piiProtectionScope", () => {
 
   it("records the verdict AND its limits when the connected tier did gather the facts", () => {
     const row = piiProtectionScope({ assessed: true, detail: "Read 4 public table(s).", columnsChecked: 7, unprotected: 2 });
-    expect(row.title).toContain("7 classified column(s) checked, 2 unprotected");
+    expect(row.title).toContain("7 classified column(s), 2 access/protection question(s)");
     // The limits are the point: a verdict naming only what it found reads as a clean bill of health.
-    expect(row.impact).toContain("application-layer encryption");
+    expect(row.impact).toContain("database.encryption-boundaries");
+    expect(row.impact).toContain("No finding is a claim that encryption is absent");
   });
 
   it("emits rows the report schema accepts", () => {

@@ -1,0 +1,6 @@
+import { webcrypto } from 'node:crypto';
+export async function encryptPatient(value) {
+  const key = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+  const iv = webcrypto.getRandomValues(new Uint8Array(12));
+  return new Uint8Array(await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value)));
+}
