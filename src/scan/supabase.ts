@@ -60,6 +60,7 @@ import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors.js";
 import { runSplinter } from "./supabase-splinter.js";
+import { loadEffectiveAuthorization } from "./supabase-authorization.js";
 import {
   checkMigrationDrift,
   loadMigrations,
@@ -109,8 +110,8 @@ const BUCKETS_SQL = `select id, name, public from storage.buckets;`;
 const BUCKET_POLICY_COUNTS_SQL = `select (regexp_match(qual, 'bucket_id = ''([^'']+)'''))[1] as bucket_id, count(*) from pg_policies where schemaname = 'storage' and tablename = 'objects' group by 1;`;
 const REALTIME_MESSAGES_SQL = `select rowsecurity as "rlsEnabled" from pg_tables where schemaname = 'realtime' and tablename = 'messages';`;
 const REALTIME_PUBLICATION_SQL = `select pt.schemaname as schema, pt.tablename as name, c.relrowsecurity as "rlsEnabled" from pg_publication_tables pt join pg_namespace n on n.nspname = pt.schemaname join pg_class c on c.relname = pt.tablename and c.relnamespace = n.oid where pt.pubname = 'supabase_realtime';`;
-const DEFAULT_ACL_SQL = `select n.nspname as schema, r.rolname as role, case d.defaclobjtype when 'r' then 'table' when 'f' then 'function' when 'S' then 'sequence' else d.defaclobjtype::text end as "objectType", array_agg(distinct a.privilege_type order by a.privilege_type) as privileges from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace cross join lateral aclexplode(d.defaclacl) a join pg_roles r on r.oid = a.grantee where r.rolname in ('anon', 'authenticated') group by 1, 2, 3;`;
-const COLUMN_GRANTS_SQL = `select n.nspname as schema, c.relname as "tableName", a.attname as "columnName", r.rolname as role, x.privilege_type as "privilegeType" from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace cross join lateral aclexplode(a.attacl) x join pg_roles r on r.oid = x.grantee where a.attacl is not null and r.rolname in ('anon', 'authenticated');`;
+const DEFAULT_ACL_SQL = `select coalesce(n.nspname, '(global)') as schema, r.rolname as role, pg_get_userbyid(d.defaclrole) as owner, case d.defaclobjtype when 'r' then 'table' when 'f' then 'function' when 'S' then 'sequence' else d.defaclobjtype::text end as "objectType", array_agg(distinct a.privilege_type order by a.privilege_type) as privileges from pg_default_acl d left join pg_namespace n on n.oid = d.defaclnamespace cross join lateral aclexplode(d.defaclacl) a join pg_roles r on (a.grantee = 0 or pg_has_role(r.oid, a.grantee, 'USAGE')) where r.rolname in ('anon', 'authenticated') group by 1, 2, 3, 4;`;
+const COLUMN_GRANTS_SQL = `select distinct n.nspname as schema, c.relname as "tableName", a.attname as "columnName", r.rolname as role, x.privilege_type as "privilegeType" from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace cross join lateral aclexplode(a.attacl) x join pg_roles r on (x.grantee = 0 or pg_has_role(r.oid, x.grantee, 'USAGE')) where a.attacl is not null and not a.attisdropped and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' and r.rolname in ('anon', 'authenticated');`;
 const CRON_SCHEMA_EXISTS_SQL = `select exists (select 1 from pg_namespace where nspname = 'cron') as exists;`;
 const CRON_JOBS_SQL = `select j.jobid, j.schedule, j.command, j.nodename, j.database, j.username, j.active, coalesce(r.rolsuper, false) as "isSuperuser" from cron.job j left join pg_roles r on r.rolname = j.username;`;
 const DEFINER_FUNCTION_NAMES_SQL = `select p.proname as name from pg_proc p where p.prosecdef = true;`;
@@ -179,6 +180,7 @@ interface PostgrestConfig {
 interface SupabaseScanOptions {
   projectRef?: string; // required unless local
   local?: boolean;
+  connectionString?: string; // local-mode override; otherwise the standard supabase start connection
   managementApiToken?: string; // falls back to SUPABASE_ACCESS_TOKEN
   fetchImpl?: typeof fetch; // injection point for tests
   functionsDir?: string; // path to the client repo's supabase/functions directory, if scanning it
@@ -198,7 +200,7 @@ interface SupabaseScanOptions {
 }
 
 export function parseExposedSchemas(config: PostgrestConfig): string[] {
-  return (config.db_schema ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return (typeof config?.db_schema === "string" ? config.db_schema : "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 // #1494 — a schema name no target will ever define, so PostgREST always answers PGRST106 with the
@@ -297,8 +299,14 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, m
   const advisors = await managementApiGet<AdvisorsResponse>(`/projects/${ref}/advisors/security`, token, fetchImpl);
   findings.push(...parseAdvisorFindings(advisors, authMethods));
 
+  const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
+  const exposedSchemas = parseExposedSchemas(postgrest);
+  const authorization = await loadEffectiveAuthorization((sql) => managementApiQuery(ref, sql, token, fetchImpl),
+    typeof postgrest?.db_schema === "string" ? exposedSchemas : undefined);
+  findings.push(...authorization.findings);
+
   const tables = await managementApiQuery<TableInfo[]>(ref, TABLES_SQL, token, fetchImpl);
-  findings.push(...checkAutoExposedTables(tables));
+  findings.push(...checkAutoExposedTables(tables, authorization.tables));
 
   const extensions = await managementApiQuery<ExtensionInfo[]>(ref, EXTENSIONS_SQL, token, fetchImpl);
   findings.push(...checkDangerousExtensions(extensions));
@@ -318,7 +326,7 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, m
   findings.push(...checkDefaultPrivilegesToClientRoles(defaultAclGrants));
 
   const columnGrants = await managementApiQuery<ColumnGrant[]>(ref, COLUMN_GRANTS_SQL, token, fetchImpl);
-  findings.push(...checkColumnGrantsToClientRoles(columnGrants));
+  findings.push(...checkColumnGrantsToClientRoles(columnGrants, authorization.tables));
 
   const cronSchemaExists = await managementApiQuery<{ exists: boolean }[]>(ref, CRON_SCHEMA_EXISTS_SQL, token, fetchImpl);
   if (cronSchemaExists[0]?.exists) {
@@ -327,8 +335,6 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, m
     findings.push(...checkCronJobs(cronJobs, definerFunctions.map((f) => f.name)));
   }
 
-  const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
-  const exposedSchemas = parseExposedSchemas(postgrest);
   const pgGraphqlInstalled = hasPgGraphql(extensions);
   findings.push(...checkExposedSchemas(exposedSchemas), ...checkGraphqlIntrospection(pgGraphqlInstalled, exposedSchemas));
 
@@ -534,20 +540,23 @@ async function scanLocal(
         ? [...checkExposedSchemas(restProbe.schemas), ...checkGraphqlIntrospection(hasPgGraphql(extensions), restProbe.schemas)]
         : [];
 
+    const authorization = await loadEffectiveAuthorization((query) => sql.unsafe(query), restProbe && "schemas" in restProbe ? restProbe.schemas : undefined);
+
     return [
+      ...authorization.findings,
       ...checkMigrationDrift(drift?.tables ?? [], drift?.policies ?? [], migrations, driftReason, drift?.scope),
       ...localScopeFinding(restProbe),
       ...restScopeFindings,
       ...(splinterResponse.failure ? splinterFailureFinding(splinterResponse.failure) : []),
       ...unparsedSplinterFinding(splinterResponse.unparsedRows ?? 0),
       ...splinterFindings,
-      ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
+      ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables, authorization.tables)),
       ...checkDangerousExtensions(extensions),
       ...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)),
       ...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }),
       ...checkRealtimePublicationRls(published),
       ...checkDefaultPrivilegesToClientRoles(defaultAclGrants),
-      ...checkColumnGrantsToClientRoles(columnGrants),
+      ...checkColumnGrantsToClientRoles(columnGrants, authorization.tables),
       ...cronFindings,
     ];
   } finally {
@@ -556,6 +565,7 @@ async function scanLocal(
 }
 
 export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Finding[]> {
+  if (opts.connectionString && !opts.local) throw new Error("connectionString requires local mode");
   const driftSchemas = [...new Set(opts.driftSchemas ?? ["public"])];
   if (driftSchemas.length === 0 || driftSchemas.some((schema) => !/^[a-z_][a-z0-9_$]*$/.test(schema))) {
     throw new Error("driftSchemas must list authorized, unquoted lower-case PostgreSQL schema names; quoted schema names are not supported by this comparison");
@@ -572,7 +582,7 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
 
   let findings: Finding[];
   if (opts.local) {
-    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason, opts.restUrl, opts.fetchImpl ?? fetch, driftSchemas);
+    findings = await scanLocal(opts.connectionString ?? LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason, opts.restUrl, opts.fetchImpl ?? fetch, driftSchemas);
   } else {
     if (!opts.projectRef) throw new Error("runSupabaseScan requires projectRef unless local is set");
     const token = opts.managementApiToken ?? process.env.SUPABASE_ACCESS_TOKEN;

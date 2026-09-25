@@ -108,7 +108,7 @@ async function main(): Promise<void> {
     const restUrl = arg("--rest-url") ?? LOCAL_REST_URL;
     const findings =
       supabaseTarget === "local"
-        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, driftSchemas, gotrueProbe, restUrl })
+        ? await runSupabaseScan({ local: true, connectionString: process.env.SUPABASE_LOCAL_DB_URL, functionsDir, migrationsDir, driftSchemas, gotrueProbe, restUrl })
         : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, migrationsDir, driftSchemas, gotrueProbe });
     emit(findings);
     return;

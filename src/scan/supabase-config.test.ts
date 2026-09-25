@@ -24,7 +24,8 @@ describe("checkPublicBucketsWithNoPolicies", () => {
   it("flags a public bucket with zero policies", () => {
     const findings = checkPublicBucketsWithNoPolicies([{ id: "b1", name: "avatars", public: true }], {});
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.precisionTier).toBe("high");
+    expect(findings[0]?.precisionTier).toBe("review");
+    expect(findings[0]?.impact).toContain("establishes no write/delete access");
   });
 
   it("does not flag a public bucket that has policies", () => {
@@ -40,7 +41,8 @@ describe("checkAutoExposedTables", () => {
   it("flags a public-schema table with RLS disabled", () => {
     const findings = checkAutoExposedTables([{ schema: "public", name: "orders", rlsEnabled: false }]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.severity).toBe("Info");
+    expect(findings[0]?.impact).toContain("does not establish current client access");
   });
 
   it("does not flag a public table with RLS enabled", () => {
@@ -289,7 +291,7 @@ describe("checkRealtimePublicationRls", () => {
   it("flags a published table with RLS disabled", () => {
     const findings = checkRealtimePublicationRls([{ schema: "public", name: "orders", rlsEnabled: false }]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({ severity: "High", taxonomy: "Realtime publication broadcasts an unprotected table", location: "public.orders" });
+    expect(findings[0]).toMatchObject({ severity: "Info", taxonomy: "Realtime publication broadcasts an unprotected table", location: "public.orders" });
   });
 
   it("does not flag a published table with RLS enabled", () => {
@@ -318,6 +320,7 @@ describe("checkDefaultPrivilegesToClientRoles", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
       taxonomy: "Default privileges grant future objects to client role",
+      severity: "Info",
       precisionTier: "review",
       location: "schema public: default privileges for anon",
     });
@@ -335,7 +338,8 @@ describe("checkColumnGrantsToClientRoles", () => {
     ]);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
-      taxonomy: "Column-level grant to client role outside RLS model",
+      taxonomy: "Column-level privilege inventory",
+      severity: "Info",
       location: "public.profiles.ssn",
       precisionTier: "review",
     });
