@@ -63,6 +63,22 @@ beforeAll(async () => {
     }
     passes.push(prior);
   }
+  const m2 = passes[1]!;
+  if ("kind" in m2.result && m2.result.kind === "examined") {
+    const first = m2.result.findings[0]!;
+    first.taxonomy = "M2 — Business logic / workflow state-machine bypass";
+    first.impact = "A successful response persists an unauthorized state transition.";
+    first.fix = "Validate every transition before persisting it.";
+    m2.result.findings.push({
+      ...structuredClone(first),
+      id: "M2-CLI-500",
+      title: "M2 failed response persists transition",
+      location: "sample.ts:2",
+      evidence: "Retained producer evidence for failed response",
+      impact: "A failed response still persists an unauthorized state transition.",
+      fix: "Rollback the transition when the downstream response fails.",
+    });
+  }
   writeAuditReplayBundle(bundle, { binding: createAuditReplayBinding(target, { network: false, model: false }), scopes: passes.slice(0, 11).map((pass) => pass.scope), passes, meta, sbomPath: sbom });
   delivery = await run(["--findings-out", join(root, "findings.json"), "--sarif-out", join(root, "findings.sarif"), "--sbom-out", join(root, "inventory.json"), "--out", join(root, "coverage.json"), "--html-out", join(root, "report.html"), "--conservation-out", join(root, "ledger.json")]);
 });
@@ -260,6 +276,14 @@ describe("run-audit assembly capability boundary", () => {
     expect(sarif.runs[0].results).toHaveLength(document.findings.length);
     expect(sarif.runs[0].results.find((row: { properties: { harveyId: string } }) => row.properties.harveyId === "M1-CLI")).toMatchObject({ kind: "review", level: "none", properties: { severity: "Medium", assessment: { disposition: "pending-review" } } });
     expect(sarif.runs[0].results.find((row: { properties: { harveyId: string } }) => row.properties.harveyId === "M4-CLI")).toMatchObject({ kind: "fail", level: "warning" });
+    const workflowResults = sarif.runs[0].results.filter((row: { ruleId: string }) => row.ruleId === "M2 — Business logic / workflow state-machine bypass");
+    expect(workflowResults).toHaveLength(2);
+    expect(workflowResults.map((row: { properties: { harveyId: string; impact?: string; fix?: string } }) => ({
+      id: row.properties.harveyId, impact: row.properties.impact, fix: row.properties.fix,
+    }))).toEqual([
+      { id: "M2-CLI", impact: "A successful response persists an unauthorized state transition.", fix: "Validate every transition before persisting it." },
+      { id: "M2-CLI-500", impact: "A failed response still persists an unauthorized state transition.", fix: "Rollback the transition when the downstream response fails." },
+    ]);
     expect(sarif.runs[0].properties.harveyPopulations).toEqual(document.populations);
     expect(document.testQuality?.mutationScore).toBe(39.7);
     expect(html).toContain("M3-TREND-00"); expect(html).toContain("39.7"); expect(html).toContain("58.6");
