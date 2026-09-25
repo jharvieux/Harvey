@@ -129,6 +129,7 @@ import {
   detectTestRunner,
   detectTs7TsconfigCrash,
   detectWorkspaceTestSuites,
+  declaredTsconfigInputs,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
   isIncompatibleTypeScript7,
@@ -472,25 +473,8 @@ function stageTs7TsconfigFix(dir: string, label: string): string | undefined {
   if (!existsSync(join(dir, "tsconfig.json"))) return undefined;
   // The copied tsconfig may retain absolute references outside the copied root. Those files are
   // consumed by the target's transform pipeline even though Harvey need not rewrite their bytes,
-  // so include the complete relative/absolute JSON chain in the immutable input set.
-  const visitedConfigs = new Set<string>();
-  const registerTsconfigChain = (path: string): void => {
-    const absolute = resolve(path);
-    if (visitedConfigs.has(absolute) || !existsSync(absolute)) return;
-    visitedConfigs.add(absolute);
-    registerProtectedInput(absolute);
-    let cfg: { extends?: unknown; references?: unknown };
-    try { cfg = JSON.parse(readFileSync(absolute, "utf8")) as typeof cfg; } catch { return; }
-    const visitReference = (reference: unknown): void => {
-      if (typeof reference !== "string" || (!reference.startsWith(".") && !isAbsolute(reference))) return;
-      registerTsconfigChain(resolve(dirname(absolute), reference));
-    };
-    visitReference(cfg.extends);
-    if (Array.isArray(cfg.references)) for (const reference of cfg.references) {
-      if (reference && typeof reference === "object") visitReference((reference as { path?: unknown }).path);
-    }
-  };
-  registerTsconfigChain(join(dir, "tsconfig.json"));
+  // so include the complete compiler-resolved declared chain in the immutable input set.
+  for (const path of declaredTsconfigInputs(join(dir, "tsconfig.json"))) registerProtectedInput(path);
   const rewrites = planTsconfigRewrites(dir, "tsconfig.json", (p) => {
     if (!existsSync(p)) return undefined;
     registerProtectedInput(p);
@@ -1604,7 +1588,7 @@ if (reportPath) {
   mutationInvocationRoot = runCwd;
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, HTML/JSON reports and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   // The target-owned config is executable input even though it is not product source. Preserve
-  // its bytes explicitly so a producer cannot hide a same-size edit by restoring the mtime.
+  // its bytes explicitly as part of the declared invocation inputs.
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), [...protectedInputPaths]);
   const run = runStryker(redirect.cfgPath, runCwd);
   strykerExecution = run.execution;

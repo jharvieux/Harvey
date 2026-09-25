@@ -12,13 +12,14 @@ import "../__tests__/mutation-runner-validity.js";
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
 import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
+import { readNamesSafe, statSafe } from "../fs-walk.js";
 import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -938,6 +939,15 @@ describe("mutation-scan report-path auto-discovery (#820, child process)", () =>
 });
 
 describe("mutation reporter capture provenance (#2137)", () => {
+  const FIXED_TIMESTAMP = new Date(1_700_000_000_000);
+
+  function pinWholeSecondTimestamp(path: string): { size: number; mtimeMs: number } {
+    utimesSync(path, FIXED_TIMESTAMP, FIXED_TIMESTAMP);
+    const { size, mtimeMs } = statSafe(path)!;
+    expect(mtimeMs).toBe(FIXED_TIMESTAMP.getTime());
+    return { size, mtimeMs };
+  }
+
   async function execute(target: string, output: string, options: { args?: string[]; env?: Record<string, string>; omitOutput?: boolean } = {}) {
     return await new Promise<{ status: number; stderr: string }>((resolveRun, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", CLI, target, ...(options.omitOutput ? [] : ["--out", output]), ...(options.args ?? [])], { cwd: REPO_ROOT, env: { ...process.env, ...options.env } });
@@ -1023,7 +1033,7 @@ process.exit(0);`));
     expect(result.stderr).toContain("resolves inside protected source root");
     expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe("export const add = (a: number, b: number) => a + b;\n");
-    expect(readdirSync(redirected)).toEqual([]);
+    expect(readNamesSafe(redirected)).toEqual([]);
   });
 
   it.each(["tsconfig.json", "package.json", "test-data.json", "reports/mutation/index.html"])("rejects stamp-preserving changes to retained input %s", async file => {
@@ -1032,6 +1042,7 @@ process.exit(0);`));
     if (!existsSync(input)) writeFileSync(input, '{"value":"before"}');
     const original = readFileSync(input, "utf8");
     const replacement = original.replace(/[a-z]/, letter => letter === "a" ? "b" : "a");
+    const before = pinWholeSecondTimestamp(input);
     const bin = join(repo, "node_modules/.bin/stryker");
     writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(input)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
     const result = await execute(repo, output);
@@ -1039,6 +1050,7 @@ process.exit(0);`));
     expect(result.stderr).toContain("invariant violated");
     expect(result.stderr).toContain(file);
     expect(existsSync(output)).toBe(false);
+    expect(statSafe(input)).toMatchObject(before);
   });
 
   it.each(["selected config", "external tsconfig"] as const)("rejects stamp-preserving changes to %s outside the target", async mode => {
@@ -1059,12 +1071,58 @@ process.exit(0);`));
     }
     const original = readFileSync(external, "utf8");
     const replacement = original.replace(mode === "selected config" ? "perTest" : "ES2020", mode === "selected config" ? "offTest" : "ES2022");
+    const before = pinWholeSecondTimestamp(external);
     writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(external)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
     const result = await execute(repo, output, { args });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("consumed input is no longer byte-identical");
     const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
     expect(JSON.parse(readFileSync(receiptPath!, "utf8")).outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(statSafe(external)).toMatchObject(before);
+  });
+
+  it.each(["extensionless", "array extends", "JSONC", "absolute directory reference", "relative directory reference", "package extends"] as const)("rejects a stamp-preserving change to a compiler-resolved %s config", async shape => {
+    const { repo, output } = prepared("healthy");
+    mkdirSync(join(repo, "node_modules/typescript"), { recursive: true });
+    writeFileSync(join(repo, "node_modules/typescript/package.json"), '{"version":"7.0.2"}');
+
+    let consumed: string;
+    if (shape === "package extends") {
+      consumed = join(repo, "node_modules/owned-config/tsconfig.json");
+      mkdirSync(dirname(consumed), { recursive: true });
+      writeFileSync(join(dirname(consumed), "package.json"), '{"name":"owned-config","version":"1.0.0","tsconfig":"tsconfig.json"}');
+      writeFileSync(join(repo, "tsconfig.json"), '{"extends":"owned-config"}');
+    } else if (shape.endsWith("directory reference")) {
+      const referenceDir = mkdtempSync(join(dirname(repo), "harvey-tsconfig-reference-"));
+      dirs.push(referenceDir);
+      consumed = join(referenceDir, "tsconfig.json");
+      writeFileSync(join(referenceDir, "ref.ts"), "export const value = 1;\n");
+      const reference = shape.startsWith("absolute") ? referenceDir : relative(repo, referenceDir);
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ compilerOptions: { composite: true }, references: [{ path: reference }] }));
+    } else {
+      consumed = `${repo}-${shape.replace(" ", "-").toLowerCase()}-base.json`;
+      dirs.push(consumed);
+      const reference = shape === "extensionless" ? consumed.slice(0, -".json".length) : consumed;
+      const config = shape === "array extends"
+        ? JSON.stringify({ extends: [reference] })
+        : shape === "JSONC"
+          ? `// compiler config\n{ "extends": ${JSON.stringify(reference)}, }`
+          : JSON.stringify({ extends: reference });
+      writeFileSync(join(repo, "tsconfig.json"), config);
+    }
+    writeFileSync(consumed, '{"compilerOptions":{"target":"ES2020"}}');
+    const before = pinWholeSecondTimestamp(consumed);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(consumed)}; const stamp = fs.statSync(input); fs.writeFileSync(input, fs.readFileSync(input, "utf8").replace("ES2020", "ES2022")); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("consumed input is no longer byte-identical");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(JSON.parse(readFileSync(receiptPath!, "utf8")).outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(statSafe(consumed)).toMatchObject(before);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    expect(existsSync(output)).toBe(false);
   });
 
   it("rejects an incremental-file alias before starting the producer", async () => {
@@ -1106,7 +1164,7 @@ process.exit(0);`));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("temporary allocation root");
     expect(result.stderr).not.toContain("M8 upstream execution receipt");
-    expect(readdirSync(unsafeTmp).filter(name => !name.startsWith("tsx-"))).toEqual([]);
+    expect(readNamesSafe(unsafeTmp).filter(name => !name.startsWith("tsx-"))).toEqual([]);
   });
 
   it.each(["existing", "dangling", "late"] as const)("refuses the %s final export alias into the client", async mode => {

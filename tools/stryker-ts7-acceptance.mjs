@@ -4,10 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
+import { readEntriesLstatSafe } from '../src/fs-walk.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = process.argv[2];
 if (!runtime)
-    throw new Error('Usage: node tools/stryker-ts7-acceptance.mjs <installed-runtime-directory>');
+    throw new Error('Usage: node --import tsx tools/stryker-ts7-acceptance.mjs <installed-runtime-directory>');
 const modules = path.resolve(runtime, 'node_modules');
 for (const [name, version] of Object.entries({ 'typescript': '7.0.2', '@stryker-mutator/core': '9.6.1', 'vitest': '3.2.6' }))
     assert.equal(JSON.parse(fs.readFileSync(path.join(modules, name, 'package.json'))).version, version);
@@ -27,14 +28,13 @@ fs.writeFileSync(path.join(target, 'stryker.config.json'), JSON.stringify(cfg, n
 fs.mkdirSync(path.join(target, 'reports/mutation'), { recursive: true });
 fs.writeFileSync(path.join(target, 'reports/mutation/index.html'), 'PREVIOUS REPORT');
 const before = new Map();
-const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+const walk = d => { for (const e of readEntriesLstatSafe(d)) {
     if (e.name === 'node_modules')
         continue;
-    const f = path.join(d, e.name);
-    if (e.isDirectory())
-        walk(f);
+    if (e.isDirectory)
+        walk(e.path);
     else
-        before.set(f, fs.readFileSync(f));
+        before.set(e.path, fs.readFileSync(e.path));
 } };
 walk(target);
 const out = path.join(base, 'engagement', 'm8.json');

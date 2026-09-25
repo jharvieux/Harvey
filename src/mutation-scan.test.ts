@@ -911,11 +911,33 @@ describe("planTsconfigRewrites — Harvey's own preprocessor replacement (#773 r
     expect(planTsconfigRewrites("/repo/apps/web", "tsconfig.json", () => undefined)).toEqual([]);
   });
 
-  it("returns no rewrites for a non-JSON-parseable tsconfig (comments/trailing commas) rather than throwing", () => {
+  it("parses JSONC and rewrites an external extensionless config reference", () => {
     const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) =>
-      p.endsWith("tsconfig.json") ? "// a comment\n{ \"extends\": \"../../tsconfig.base.json\", }" : undefined,
+      p === "/repo/apps/web/tsconfig.json" ? "// a comment\n{ \"extends\": \"../../tsconfig.base\", }" : undefined,
     );
-    expect(rewrites).toEqual([]);
+    expect(rewrites).toHaveLength(1);
+    expect(JSON.parse(rewrites[0]!.text).extends).toBe("/repo/tsconfig.base");
+  });
+
+  it("rewrites every external entry in an extends array", () => {
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) =>
+      p === "/repo/apps/web/tsconfig.json" ? JSON.stringify({ extends: ["../../base-a.json", "../../base-b"] }) : undefined,
+    );
+    expect(JSON.parse(rewrites[0]!.text).extends).toEqual(["/repo/base-a.json", "/repo/base-b"]);
+  });
+
+  it("expands a directory project reference to tsconfig.json without reading the directory as a file", () => {
+    const reads: string[] = [];
+    const files = new Map([
+      ["/repo/apps/web/tsconfig.json", JSON.stringify({ references: [{ path: "./reference" }] })],
+      ["/repo/apps/web/reference/tsconfig.json", JSON.stringify({ extends: "../../../base.json" })],
+    ]);
+    expect(() => planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) => {
+      reads.push(p);
+      if (p === "/repo/apps/web/reference") throw Object.assign(new Error("directory"), { code: "EISDIR" });
+      return files.get(p);
+    })).not.toThrow();
+    expect(reads).toContain("/repo/apps/web/reference/tsconfig.json");
   });
 
   it("does not infinite-loop on a cyclic extends chain", () => {

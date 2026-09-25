@@ -13,7 +13,8 @@
 // and Survived count against the score — each is a mutant the suite had the opportunity to kill
 // and did not.
 
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import ts from "typescript";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
 import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
@@ -1360,6 +1361,39 @@ interface TsconfigRewrite {
   text: string;
 }
 
+/**
+ * Resolve the bounded set of configuration files TypeScript declares through `extends` and
+ * project references. The compiler's config parser supplies JSONC, extensionless, package and
+ * directory-reference semantics; intercepted reads retain the exact config and package metadata
+ * bytes that made resolution possible. Source files discovered by include/exclude are not read by
+ * this API and remain covered by the caller's source snapshot.
+ */
+export function declaredTsconfigInputs(entryPath: string): string[] {
+  const inputs = new Set<string>();
+  const visited = new Set<string>();
+  const host: ts.ParseConfigFileHost = {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic() {},
+    readFile(path) {
+      const text = ts.sys.readFile(path);
+      if (text !== undefined) inputs.add(resolve(path));
+      return text;
+    },
+  };
+
+  const visit = (path: string): void => {
+    const absolute = resolve(path);
+    if (visited.has(absolute)) return;
+    visited.add(absolute);
+    const parsed = ts.getParsedCommandLineOfConfigFile(absolute, {}, host);
+    if (!parsed?.projectReferences) return;
+    for (const reference of parsed.projectReferences) visit(ts.resolveProjectReferencePath(reference));
+  };
+
+  visit(entryPath);
+  return [...inputs];
+}
+
 // undefined ⇒ `reference` resolves inside `boundaryDir` (no rewrite needed at this hop — the file
 // travels with the rest of the sandboxed tree); a reference already absolute is left alone (Stryker's
 // own preprocessor only ever rewrites relative ones).
@@ -1377,28 +1411,41 @@ function tryAbsolutizeOutsideBoundary(reference: string, fromDir: string, bounda
 export function planTsconfigRewrites(boundaryDir: string, entryRelPath: string, readFile: (absPath: string) => string | undefined): TsconfigRewrite[] {
   const rewrites: TsconfigRewrite[] = [];
   const visited = new Set<string>(); // cycle guard — also bounds the walk, no separate depth cap needed
-  function visit(absPath: string): void {
-    if (visited.has(absPath)) return;
-    visited.add(absPath);
-    const text = readFile(absPath);
-    if (!text) return;
-    let cfg: { extends?: unknown; references?: unknown };
-    try {
-      cfg = JSON.parse(text) as typeof cfg;
-    } catch {
-      return; // not statically parseable (comments/trailing commas) — left unrewritten, same boundary #773's original bypass already draws around non-JSON config
-    }
-    let changed = false;
-    const fileDir = dirname(absPath);
-    if (typeof cfg.extends === "string") {
-      const abs = tryAbsolutizeOutsideBoundary(cfg.extends, fileDir, boundaryDir);
-      if (abs) {
-        cfg.extends = abs;
-        changed = true;
-      } else {
-        visit(resolve(fileDir, cfg.extends));
+  function readConfig(requestedPath: string): { path: string; text: string } | undefined {
+    for (const candidate of [requestedPath, `${requestedPath}.json`, join(requestedPath, "tsconfig.json")]) {
+      try {
+        const text = readFile(candidate);
+        if (text !== undefined) return { path: candidate, text };
+      } catch {
+        // A directory-form project reference may throw EISDIR at the literal candidate. Continue
+        // to its supported tsconfig.json expansion rather than treating the directory as a file.
       }
     }
+    return undefined;
+  }
+  function visit(requestedPath: string): void {
+    const loaded = readConfig(requestedPath);
+    if (!loaded) return;
+    const absPath = loaded.path;
+    if (visited.has(absPath)) return;
+    visited.add(absPath);
+    const parsed = ts.parseConfigFileTextToJson(absPath, loaded.text);
+    if (parsed.error || !parsed.config || typeof parsed.config !== "object") return;
+    const cfg = parsed.config as { extends?: unknown; references?: unknown };
+    let changed = false;
+    const fileDir = dirname(absPath);
+    const rewriteExtends = (reference: unknown): unknown => {
+      if (typeof reference !== "string") return reference;
+      const abs = tryAbsolutizeOutsideBoundary(reference, fileDir, boundaryDir);
+      if (abs) {
+        changed = true;
+        return abs;
+      }
+      if (reference.startsWith(".") || isAbsolute(reference)) visit(resolve(fileDir, reference));
+      return reference;
+    };
+    if (typeof cfg.extends === "string") cfg.extends = rewriteExtends(cfg.extends);
+    else if (Array.isArray(cfg.extends)) cfg.extends = cfg.extends.map(rewriteExtends);
     if (Array.isArray(cfg.references)) {
       cfg.references = cfg.references.map((r: unknown) => {
         if (!r || typeof r !== "object" || typeof (r as { path?: unknown }).path !== "string") return r;
