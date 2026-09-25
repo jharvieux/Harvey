@@ -70,12 +70,12 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
           number: 1,
           id: 1,
           key: "AUD-1",
-          html_url: "u",
+          html_url: "https://tracker.invalid/issues/1",
           body: null,
           iid: 1,
-          web_url: "u",
-          _links: { html: { href: "u" } },
-          data: { issueCreate: { issue: { id: "lin-1", url: "u" } } },
+          web_url: "https://tracker.invalid/issues/1",
+          _links: { html: { href: "https://tracker.invalid/issues/1" } },
+          data: { issueCreate: { success: true, issue: { id: "lin-1", url: "https://tracker.invalid/issues/1" } } },
         }),
       );
     }) as unknown as typeof fetch;
@@ -151,20 +151,18 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     const seenAuth: string[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       seenAuth.push((init?.headers as Record<string, string>)?.Authorization ?? "");
+      if (String(_url).includes("/api/v4/projects/") && String(_url).includes("/issues?")) return Response.json([]);
       // Superset body: an empty result set for every adapter's marker search shape, plus the Linear
       // GraphQL sub-objects its updateStory label-resolution path reads (team labels, label create,
       // issue update) — one canned response that satisfies findByMarker and updateStory for all five.
       return new Response(
         JSON.stringify({
-          items: [],
+          items: [], total_count: 0, incomplete_results: false, isLast: true,
           issues: [],
           workItems: [],
-          data: {
-            issues: { nodes: [] },
-            team: { labels: { nodes: [] } },
-            issueLabelCreate: { issueLabel: { id: "lbl-1" } },
-            issueUpdate: { success: true },
-          },
+          data: String(init?.body).includes("issueLabelCreate") ? { issueLabelCreate: { success: true, issueLabel: { id: "lbl-1" } } }
+            : String(init?.body).includes("issueUpdate") ? { issueUpdate: { success: true } }
+              : { issues: { nodes: [], pageInfo: { hasNextPage: false } }, team: { labels: { nodes: [] } } },
         }),
       );
     }) as unknown as typeof fetch;

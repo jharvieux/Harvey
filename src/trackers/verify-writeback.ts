@@ -10,6 +10,7 @@
 // same pacer, and records a per-finding outcome — a tracker failure on one ticket is captured and
 // disclosed, never silently swallowed and never allowed to abort the rest of the batch unseen.
 
+import { createHash } from "node:crypto";
 import type { GateReport, GateResult } from "../fix/gate.js";
 import { makePacer, type Pacer } from "./rate-limit.js";
 import type { CreatedRef, TicketState, TicketWriteback } from "./types.js";
@@ -30,6 +31,7 @@ interface WritebackRecord {
   action: WritebackIntent;
   reason: string;
   ticket?: CreatedRef;
+  commentCompleted?: boolean;
   error?: string; // the tracker call failed; the batch continued, the failure is disclosed here
 }
 
@@ -95,8 +97,10 @@ export async function writeBackVerification(
       result.records.push({ findingId: planned.findingId, marker: planned.marker, action: "none", reason: planned.reason });
       continue;
     }
+    let ticket: CreatedRef | null = null;
+    let commentCompleted = false;
     try {
-      const ticket = await call(() => tracker.findByMarker(planned.marker));
+      ticket = await call(() => tracker.findByMarker(planned.marker));
       if (!ticket) {
         // No ticket carries this finding's marker — it was never filed (or filed under a different
         // --engagement namespace). Disclosed, not an error: the gate report still records the
@@ -109,9 +113,13 @@ export async function writeBackVerification(
         });
         continue;
       }
-      await call(() => tracker.addComment(ticket.id, planned.comment as string));
-      await call(() => tracker.transitionState(ticket.id, planned.intent as TicketState));
-      result.records.push({ findingId: planned.findingId, marker: planned.marker, action: planned.intent, reason: planned.reason, ticket });
+      const known = ticket;
+      const operation = createHash("sha256").update(JSON.stringify([report.engagement, report.commit, planned.marker, planned.intent, planned.comment])).digest("hex");
+      const comment = `${planned.comment}\n\n<!-- harvey-writeback:${operation} -->`;
+      await call(() => tracker.addComment(known.id, comment));
+      commentCompleted = true;
+      await call(() => tracker.transitionState(known.id, planned.intent as TicketState));
+      result.records.push({ findingId: planned.findingId, marker: planned.marker, action: planned.intent, reason: planned.reason, ticket, commentCompleted });
       if (planned.intent === "closed") result.closed++;
       else result.reopened++;
     } catch (err) {
@@ -121,6 +129,8 @@ export async function writeBackVerification(
         marker: planned.marker,
         action: "none",
         reason: planned.reason,
+        ...(ticket ? { ticket } : {}),
+        commentCompleted,
         error: err instanceof Error ? err.message : String(err),
       });
     }

@@ -55,7 +55,7 @@
 // every location Stryker writes to is REDIRECTED off-tree first: `tempDirName` (mutant sandboxes),
 // `jsonReporter.fileName` (the JSON report) and `incrementalFile` are rewritten to absolute paths
 // under a temp dir, in a COPY of whichever config is about to run (never the target's own file).
-// Stryker honours an absolute value for all three — MEASURED, see withOffTreeScratch in
+// Stryker honours absolute output paths — MEASURED, see withOffTreeScratch in
 // src/mutation-scan.ts for the two-run control/treatment and the exact commands. Ordinarily no
 // copy of the target is made: Stryker already copies the project into its sandbox on every run
 // (Harvey never sets `inPlace`), so this moves an existing copy rather than adding one — EXCEPT the
@@ -103,11 +103,11 @@
 import "./sync-stdio.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readEntriesSafe, statSafe } from "../fs-walk.js";
 import { productSourceInventoryForTarget, readStaticConfigObject } from "../source-inventory.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
@@ -129,6 +129,7 @@ import {
   detectTestRunner,
   detectTs7TsconfigCrash,
   detectWorkspaceTestSuites,
+  declaredTsconfigInputs,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
   isIncompatibleTypeScript7,
@@ -207,16 +208,111 @@ const install = process.argv.includes("--install");
 let strykerExecution: CommandObservation | undefined;
 let originalStrykerReportPath: string | undefined;
 let rootScopedComparison: { root: string; appRelative: string; report: StrykerReport } | undefined;
+const protectedRoots = new Set<string>();
+const protectedRootAliases = new Map<string, Set<string>>();
+const protectedInputPaths = new Set<string>();
+
+function registerProtectedRoot(root: string): void {
+  const logical = resolve(root);
+  const physical = realpathSync(logical);
+  protectedRoots.add(physical);
+  const aliases = protectedRootAliases.get(physical) ?? new Set<string>();
+  aliases.add(logical);
+  protectedRootAliases.set(physical, aliases);
+}
+
+function registerProtectedInput(path: string | undefined): void {
+  if (path) protectedInputPaths.add(resolve(path));
+}
+
+for (const input of [configPath, reportPath, hotspotsPath, compareRunPath]) registerProtectedInput(input);
+registerProtectedRoot(targetDir);
 
 function receiptArtifactBesideOutput(suffix: string): string | undefined {
   if (!outPath) return undefined;
   const output = resolve(outPath);
-  const rel = relative(targetDir, output);
+  const physicalOutput = physicalDestination(output);
   // The CLI's existing pristine assertion runs before writing --out. Receipt sidecars must follow
   // the stronger rule and never add extra files to the audited checkout at all.
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return `${output}.${suffix}`;
-  return undefined;
+  if ([...protectedRoots].some((root) => pathInside(root, physicalOutput))) return undefined;
+  const candidate = `${output}.${suffix}`;
+  assertOwnedAllocationDestination(candidate, "retained capture");
+  return candidate;
 }
+
+// Resolve an existing destination (including a symlink) or project a not-yet-created path from
+// its nearest existing ancestor. This check has to happen before mkdir/mkdtemp: validating only
+// the eventual report path lets a pre-existing engagement sidecar symlink redirect the capture
+// setup itself into the client checkout.
+function physicalDestination(destination: string, links = new Set<string>()): string {
+  const absolute = resolve(destination);
+  let link = false;
+  try { link = lstatSync(absolute).isSymbolicLink(); } catch { /* missing destination */ }
+  if (link) {
+    if (links.has(absolute)) throw new Error(`Cyclic output destination: ${absolute}`);
+    links.add(absolute);
+    return physicalDestination(resolve(dirname(absolute), readlinkSync(absolute)), links);
+  }
+  if (existsSync(absolute)) return realpathSync(absolute);
+  const ancestor = dirname(absolute);
+  return resolve(physicalDestination(ancestor, links), relative(ancestor, absolute));
+}
+
+function pathInside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function assertDoesNotAliasProtectedInput(destination: string, physical = physicalDestination(destination)): void {
+  for (const input of protectedInputPaths) {
+    if (!existsSync(input)) continue;
+    if (physical === physicalDestination(input)) {
+      throw new Error(`#1285 invariant violated: output destination ${destination} aliases consumed input ${input}`);
+    }
+  }
+}
+
+function assertOutputDoesNotAliasTarget(destination: string): void {
+  const absolute = resolve(destination);
+  const physical = physicalDestination(absolute);
+  assertDoesNotAliasProtectedInput(destination, physical);
+  for (const root of protectedRoots) {
+    if (!pathInside(root, physical)) continue;
+    const explicitlyOwned = [...(protectedRootAliases.get(root) ?? [])].some((logicalRoot) => {
+      if (!pathInside(logicalRoot, absolute)) return false;
+      return physical === resolve(root, relative(logicalRoot, absolute));
+    });
+    if (!explicitlyOwned) {
+      throw new Error(`#1285 invariant violated: output destination ${destination} aliases a file inside the target checkout`);
+    }
+  }
+}
+
+function assertOwnedAllocationDestination(destination: string, label: string): void {
+  const physical = physicalDestination(destination);
+  assertDoesNotAliasProtectedInput(destination, physical);
+  for (const root of protectedRoots) {
+    if (pathInside(root, physical)) {
+      throw new Error(`#1285 invariant violated: ${label} destination ${destination} resolves inside protected source root ${root}`);
+    }
+  }
+}
+
+function temporaryPrefix(prefix: string): string {
+  const root = realpathSync(tmpdir());
+  assertOwnedAllocationDestination(root, "temporary allocation root");
+  return join(root, prefix);
+}
+
+// An explicitly requested in-target result remains supported. A path that disguises a
+// different target file as an engagement output must fail before any child or export runs.
+for (const destination of [outPath, scopeOutPath]) if (destination) assertOutputDoesNotAliasTarget(destination);
+
+function writeResultFile(destination: string, contents: string): void {
+  assertOutputDoesNotAliasTarget(destination);
+  writeFileSync(destination, contents);
+}
+
 
 function warnIfNotPerTest(cfgPath: string): void {
   if (!cfgPath.endsWith(".json")) return; // .mjs/.cjs configs aren't statically inspectable here
@@ -244,54 +340,20 @@ function reporterFileNameFromConfig(cfgPath: string | undefined): string | undef
   }
 }
 
-// #820: fallback for when neither the config-declared nor Stryker's documented default path has a
-// report — a Stryker major version can move where its json reporter writes by default. Walks `cwd`
-// for a file with the expected basename, preferring the most-recently-modified match (a stale
-// report from a prior run must never win over the one this invocation just produced). Excludes
-// node_modules/.git only — unlike the rest of this CLI's walk, "reports" itself must stay in scope
-// since that is exactly where the file usually lives.
-const REPORT_SEARCH_EXCLUDED_DIR = /^(node_modules|\.git)$/;
-
-function findReportByGlob(cwd: string, wantedBasename: string): string | undefined {
-  const matches: { path: string; mtimeMs: number }[] = [];
-  const walk = (dir: string) => {
-    let entries: SafeDirEntry[];
-    try {
-      entries = readEntriesSafe(dir).entries;
-    } catch {
-      return;
-    }
-    for (const { name: entry, path: full, isDirectory } of entries) {
-      if (isDirectory) {
-        if (!REPORT_SEARCH_EXCLUDED_DIR.test(entry)) walk(full);
-      } else if (entry === wantedBasename) {
-        matches.push({ path: full, mtimeMs: statSafe(full)?.mtimeMs ?? 0 });
-      }
-    }
-  };
-  walk(cwd);
-  return matches.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.path;
-}
-
-// #820: resolves the actual report location for a completed Stryker run — the config-declared (or
-// default) path first, falling back to a glob search of `cwd` when that exact path is absent (a
-// Stryker version writing its json reporter's default somewhere else). Returns the config-declared
-// path unchanged when nothing is found anywhere, so callers' existing "report not found at <path>"
-// messaging still names the path they expected.
-//
-// #1285: `resolve`, not `join` — the config-declared fileName is now an ABSOLUTE off-tree path on
-// every run this CLI drives (withOffTreeScratch), and `join(cwd, "/abs/path")` silently produces
-// `<cwd>/abs/path`, which never exists. This is the producer→consumer seam the redirect has to
-// survive; it is not enough for Stryker to write the report somewhere safe. `searchRoot` is where
-// the #820 glob fallback looks — the off-tree scratch dir when the report was redirected there, so
-// a run that wrote nothing can no longer resolve to a STALE in-tree report from a previous run.
+// The invoked configuration names the authoritative capture. A nearby filename is not
+// evidence that the completed child produced it; accepting one can ingest another run.
 function resolveReportPath(cfgPath: string | undefined, cwd: string, searchRoot: string = cwd): string {
   const expected = resolve(cwd, reporterFileNameFromConfig(cfgPath) ?? "reports/mutation/mutation.json");
-  if (existsSync(expected)) return expected;
-  const found = existsSync(searchRoot) ? findReportByGlob(searchRoot, basename(expected)) : undefined;
-  if (found) {
-    console.error(`#820: no report at the configured/default path ${expected} — found one at ${found} instead (Stryker version difference in the default reporter path)`);
-    return found;
+  if (!existsSync(expected)) return expected;
+  const stat = lstatSync(expected);
+  const root = realpathSync(searchRoot);
+  const resolved = realpathSync(expected);
+  const rel = relative(root, resolved);
+  if (!stat.isFile() || stat.isSymbolicLink() || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Mutation report is foreign to the invocation capture: ${expected}`);
+  }
+  if (strykerExecution && (stat.mtimeMs < Date.parse(strykerExecution.startedAt) || stat.mtimeMs > Date.parse(strykerExecution.finishedAt) + 1000)) {
+    throw new Error(`Mutation report is stale or outside the invocation time window: ${expected}`);
   }
   return expected;
 }
@@ -362,7 +424,7 @@ function walkRelPaths(root: string, includeContextExcluded = false, inventory = 
       provenance: "Canonical source-alias boundaries in the selected target inventory",
       falsifier: "Re-run after the source aliases resolve to an acyclic population within the selected target tree",
     };
-    if (scopeOutPath) writeFileSync(scopeOutPath, JSON.stringify(sourceScope, null, 2) + "\n");
+    if (scopeOutPath) writeResultFile(scopeOutPath, JSON.stringify(sourceScope, null, 2) + "\n");
     emitAndExit({ moduleRecord: mutationNotRunModuleRecord(reason), sourceScope }, `M8 source scope is not assessed: ${reason}`);
   }
   const walk = (dir: string) => {
@@ -409,9 +471,17 @@ const mirrorSourceDependencies = (root: string, destination: string) => {
 // never leaves `dir`) — the ordinary in-place invocation is unaffected either way.
 function stageTs7TsconfigFix(dir: string, label: string): string | undefined {
   if (!existsSync(join(dir, "tsconfig.json"))) return undefined;
-  const rewrites = planTsconfigRewrites(dir, "tsconfig.json", (p) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  // The copied tsconfig may retain absolute references outside the copied root. Those files are
+  // consumed by the target's transform pipeline even though Harvey need not rewrite their bytes,
+  // so include the complete compiler-resolved declared chain in the immutable input set.
+  for (const path of declaredTsconfigInputs(join(dir, "tsconfig.json"))) registerProtectedInput(path);
+  const rewrites = planTsconfigRewrites(dir, "tsconfig.json", (p) => {
+    if (!existsSync(p)) return undefined;
+    registerProtectedInput(p);
+    return readFileSync(p, "utf8");
+  });
   if (rewrites.length === 0) return undefined;
-  const runDir = mkdtempSync(join(tmpdir(), `harvey-stryker-ts7-copy-${label}-`));
+  const runDir = mkdtempSync(temporaryPrefix(`harvey-stryker-ts7-copy-${label}-`));
   try {
     copySource(dir, runDir);
     if (existsSync(join(dir, "node_modules"))) mirrorSourceDependencies(dir, runDir);
@@ -434,10 +504,9 @@ function stageTs7TsconfigFix(dir: string, label: string): string | undefined {
 // recorded as entries too, so an EMPTY leftover dir is still a violation.
 const PRISTINE_WALK_EXCLUDED_DIR = /^(node_modules|\.git)$/;
 
-// Path → a cheap identity stamp ("dir", or size:mtime for a file). Size+mtime rather than a content
-// hash: the walk already stats each entry, and a tree the size of inbox-zero's apps/web would
-// otherwise be read end-to-end twice per run. Source files get a real byte comparison on top
-// (assertTreePristine below), so the stamp is the second line, not the only one.
+// Configs, fixtures and previous reports can affect a run even when they are not product
+// source. Hash every retained file's bytes: restoring size/mtime must not certify a changed
+// input as pristine. Dependency installations and Git internals retain their explicit exclusion.
 function snapshotTreePaths(root: string): Map<string, string> {
   const paths = new Map<string, string>();
   const walk = (dir: string) => {
@@ -445,7 +514,7 @@ function snapshotTreePaths(root: string): Map<string, string> {
       const st = statSafe(full);
       if (!st) continue; // a link that resolved during readEntriesSafe but not now
       const rel = relative(root, full).split(sep).join("/");
-      paths.set(rel, st.isDirectory() ? "dir" : `${st.size}:${st.mtimeMs}`);
+      paths.set(rel, st.isDirectory() ? "dir" : `${st.size}:${st.mtimeMs}:${createHash("sha256").update(readFileSync(full)).digest("hex")}`);
       if (st.isDirectory() && !PRISTINE_WALK_EXCLUDED_DIR.test(name)) walk(full);
     }
   };
@@ -457,10 +526,20 @@ interface PristineSnapshot {
   root: string;
   paths: Map<string, string>;
   sources: SourceInput[];
+  protectedFiles: { absolutePath: string; displayPath: string; text: string }[];
 }
 
-function snapshotPristine(root: string, sources: SourceInput[]): PristineSnapshot {
-  return { root, paths: snapshotTreePaths(root), sources };
+function snapshotPristine(root: string, sources: SourceInput[], protectedPaths: string[] = []): PristineSnapshot {
+  const protectedFiles = [...new Set(protectedPaths)].flatMap((path) => {
+    const absolute = resolve(path);
+    const rel = relative(root, absolute);
+    if (!statSafe(absolute)?.isFile()) return [];
+    const displayPath = rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+      ? rel.split(sep).join("/")
+      : absolute;
+    return [{ absolutePath: absolute, displayPath, text: readFileSync(absolute, "utf8") }];
+  });
+  return { root, paths: snapshotTreePaths(root), sources, protectedFiles };
 }
 
 // #600's acceptance check, widened by #1285 from --stub-check to every Stryker rung and from
@@ -471,6 +550,11 @@ function assertTreePristine(before: PristineSnapshot, issueRef: string): void {
   for (const s of before.sources) {
     const now = readFileSync(join(before.root, ...s.path.split("/")), "utf8");
     if (now !== s.text) throw new Error(`${issueRef} invariant violated: ${s.path} in ${before.root} changed during the run — the target checkout is no longer pristine`);
+  }
+  for (const file of before.protectedFiles) {
+    let now: string | undefined;
+    try { now = readFileSync(file.absolutePath, "utf8"); } catch { /* removed or unreadable */ }
+    if (now !== file.text) throw new Error(`${issueRef} invariant violated: ${file.displayPath} changed during the run — a consumed input is no longer byte-identical`);
   }
   const now = snapshotTreePaths(before.root);
   const drift = [
@@ -489,40 +573,34 @@ const SOURCE_PATH = /\.([cm]?[jt]s|[jt]sx)$/;
 
 const loadSourceFiles = (root: string): SourceInput[] => walkRelPaths(root).filter((p) => SOURCE_PATH.test(p)).map((rel) => readRel(root, rel));
 
-// #1285: where every Stryker write goes instead of the target tree. Created lazily — a
-// --detect-only/--report run never invokes Stryker and has nothing to redirect. `process.on("exit")`
-// rather than a try/finally because this CLI's degrade rungs all leave through process.exit(), which
-// terminates before a finally can unwind; a SIGKILL still leaks the dir, and that is deliberately
-// the same trade #600 already accepts — what must never leak is a write into the client's checkout,
-// which no signal can now cause because nothing is ever opened for writing there.
+// Retained captures belong beside the engagement output when it is outside the client
+// checkout. Without --out, retain a named temporary capture and print its location.
 let strykerScratchRoot: string | undefined;
 function scratchRoot(): string {
   if (!strykerScratchRoot) {
-    // realpathSync, and it is load-bearing on macOS: os.tmpdir() returns /var/folders/..., which is
-    // a SYMLINK to /private/var/folders/.... Stryker hands the sandboxed file's path to
-    // `vitest --related`, whose module graph is keyed by real paths — an unresolved /var prefix
-    // matches nothing there, and Stryker exits "No tests were executed" before running a mutant.
-    // MEASURED 2026-07-28 against the pinned proposit clone: identical config under
-    // /var/folders/... → "Vitest failed to find test files related to mutated files", the same
-    // config under /private/var/folders/... → 100% (21/21). The old in-target sandbox never met
-    // this because a path inside the target tree is already real.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "harvey-stryker-scratch-")));
+    const storage = receiptArtifactBesideOutput("stryker");
+    if (storage) {
+      assertOwnedAllocationDestination(storage, "capture storage");
+      mkdirSync(storage, { recursive: true });
+    }
+    const prefix = storage ? join(storage, "harvey-stryker-capture-") : temporaryPrefix("harvey-stryker-capture-");
+    const root = realpathSync(mkdtempSync(prefix));
     strykerScratchRoot = root;
-    process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+    process.on("exit", () => {
+      for (const label of ["target", "root-scoped"]) rmSync(join(root, label, "stryker-tmp"), { recursive: true, force: true });
+    });
   }
   return strykerScratchRoot;
 }
 
-// #1285: the ONE Stryker write that is deliberately NOT under the per-run scratch dir. `--incremental`
-// exists so a re-run after a client fixes findings only re-runs affected mutants (docs/m8-test-quality.md),
-// which needs the file to outlive the run — so it gets a stable, target-keyed path under the OS temp
-// dir. Off-tree either way; the cost of moving it out of the target is that an OS temp sweep (or a
-// reboot) discards the incremental state, where the old in-target location survived one.
 function incrementalFileFor(dir: string): string {
-  return join(realpathSync(tmpdir()), "harvey-m8-incremental", `${basename(dir)}-${createHash("sha1").update(dir).digest("hex").slice(0, 16)}.json`);
+  const storage = receiptArtifactBesideOutput("stryker") ?? join(realpathSync(tmpdir()), "harvey-m8-incremental");
+  const destination = join(storage, `incremental-${createHash("sha256").update(dir).digest("hex").slice(0, 16)}.json`);
+  assertOwnedAllocationDestination(destination, "incremental report");
+  return destination;
 }
 
-// #1285: patch a COPY of whichever config is about to run so Stryker's three write locations point
+// #1285: patch a COPY of whichever config is about to run so Stryker's output locations point
 // outside the target, and hand back where the report will land. `label` keeps a root-scoped run's
 // scratch from colliding with the per-app one in the same process.
 function redirectStrykerWritesOffTree(cfgPath: string | undefined, label: string, dir: string): { cfgPath: string; scratchRoot: string } | { blocked: string } {
@@ -651,6 +729,8 @@ if (detectedEnv.length) {
 // when that isn't possible, not the only outcome. Never called under --detect-only (which must
 // never invoke Stryker, #470) or --stub-check (a different, non-Stryker measurement tier).
 function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ancestors: AncestorTestSignals[]): { reportPath: string; refConfigPath: string } | { degradeReason: string } {
+  registerProtectedRoot(rootSuite.root);
+  for (const destination of [outPath, scopeOutPath]) if (destination) assertOutputDoesNotAliasTarget(destination);
   const rootPkg = ancestors.find((a) => a.dir === rootSuite.root)?.pkg;
   const runner = detectTestRunner(rootPkg);
   if (!runner) return { degradeReason: `no recognized test runner (vitest/jest/mocha) detected in the root package.json at ${rootSuite.root} to scaffold a Stryker config for` };
@@ -691,7 +771,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // rootSuite.root itself (the ordinary, unmodified path) when there's nothing to rewrite.
   const runCwd = (ts7 && stageTs7TsconfigFix(rootSuite.root, "root-scoped")) || rootSuite.root;
 
-  const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-root-scaffold-"));
+  const scaffoldDir = mkdtempSync(temporaryPrefix("harvey-stryker-root-scaffold-"));
   const rootCfgPath = join(scaffoldDir, "stryker.root.config.json");
   const refCfgPath = join(scaffoldDir, "stryker.app-reference.config.json");
   writeFileSync(rootCfgPath, JSON.stringify(rootCfgForStryker, null, 2) + "\n");
@@ -705,7 +785,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // same invariant, a different tree to keep pristine.
   const redirect = redirectStrykerWritesOffTree(rootCfgPath, "root-scoped", rootSuite.root);
   if ("blocked" in redirect) return { degradeReason: redirect.blocked };
-  const pristineRoot = snapshotPristine(rootSuite.root, loadSourceFiles(rootSuite.root));
+  const pristineRoot = snapshotPristine(rootSuite.root, loadSourceFiles(rootSuite.root), [...protectedInputPaths]);
 
   // Package directories existing (checked above) doesn't guarantee node_modules/.bin/stryker was
   // hoisted there too — pnpm workspace hoisting can differ from a plain npm install's layout — so
@@ -723,7 +803,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
     return { degradeReason: `root-scoped Stryker crashed with the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility signature (#773: "parseConfigFileTextToJson is not a function") — a tooling gap, not a defect in the target` };
   }
 
-  const rawReportPath = resolveReportPath(redirect.cfgPath, rootSuite.root, redirect.scratchRoot);
+  const rawReportPath = resolveReportPath(redirect.cfgPath, runCwd, redirect.scratchRoot);
   originalStrykerReportPath = rawReportPath;
   if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
 
@@ -808,7 +888,7 @@ if (!reportPath) {
         const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord, ...(strykerExecution ? { executionReceipt: finalizeStrykerReceipt() } : {}) };
         const json = JSON.stringify(output, null, 2);
         if (outPath) {
-          writeFileSync(outPath, json + "\n");
+          writeResultFile(outPath, json + "\n");
           console.error(`wrote M8 finding to ${outPath}`);
         } else {
           console.log(json);
@@ -830,7 +910,7 @@ if (!reportPath) {
         const output = { finding: workspaceTestSuiteFinding(workspaceSuites), moduleRecord: workspaceTestSuiteModuleRecord(workspaceSuites) };
         const json = JSON.stringify(output, null, 2);
         if (outPath) {
-          writeFileSync(outPath, json + "\n");
+          writeResultFile(outPath, json + "\n");
           console.error(`wrote M8 finding to ${outPath}`);
         } else {
           console.log(json);
@@ -847,7 +927,7 @@ if (!reportPath) {
     const output = { finding: noTestSuiteFinding(why), moduleRecord: noTestSuiteModuleRecord(why) };
     const json = JSON.stringify(output, null, 2);
     if (outPath) {
-      writeFileSync(outPath, json + "\n");
+      writeResultFile(outPath, json + "\n");
       console.error(`wrote M8 finding to ${outPath}`);
     } else {
       console.log(json);
@@ -864,7 +944,7 @@ if (!reportPath) {
   if (detectOnly) {
     console.error(`✓ ${targetDir}: test suite detected — mutation scoring skipped (--detect-only; a real run needs a provisioned Stryker install)`);
     const json = "[]";
-    if (outPath) writeFileSync(outPath, json + "\n");
+    if (outPath) writeResultFile(outPath, json + "\n");
     else console.log(json);
     emitDetectOnlyScope();
     process.exit(0);
@@ -893,7 +973,7 @@ if (stubCheck) {
   // #600: copy the target into a scratch dir the stubbing writes to, excluding the same heavy/
   // irrelevant dirs walkRelPaths already skips (node_modules is symlinked back in below rather
   // than copied, so the target's real dependency install is reused without re-copying it).
-  const copyDir = mkdtempSync(join(tmpdir(), "harvey-stub-check-"));
+  const copyDir = mkdtempSync(temporaryPrefix("harvey-stub-check-"));
   const sources = loadSourceFiles(targetDir); // read from the ORIGINAL — read-only, and the copy is a byte-identical mirror
   const pristineBefore = snapshotPristine(targetDir, sources);
   // process.exit() does NOT run pending finally blocks (it terminates before the stack unwinds),
@@ -982,7 +1062,7 @@ if (stubCheck) {
     rmSync(copyDir, { recursive: true, force: true });
   }
   if (outPath) {
-    writeFileSync(outPath, stubJson + "\n");
+    writeResultFile(outPath, stubJson + "\n");
     console.error(`wrote stub-check results to ${outPath}`);
   } else {
     console.log(stubJson);
@@ -997,7 +1077,7 @@ function emitAndExit(output: Record<string, unknown>, stderrNote: string): never
   console.error(stderrNote);
   const json = JSON.stringify({ ...output, ...(strykerExecution ? { executionReceipt: finalizeStrykerReceipt() } : {}) }, null, 2);
   if (outPath) {
-    writeFileSync(outPath, json + "\n");
+    writeResultFile(outPath, json + "\n");
     console.error(`wrote M8 artifact to ${outPath}`);
   } else {
     console.log(json);
@@ -1036,11 +1116,18 @@ function finalizeStrykerReceipt(report?: StrykerReport, measurements?: CommandEx
   const execution = strykerExecution;
   const source = originalStrykerReportPath ?? execution.expectedReportPath;
   let artifact = source;
-  const retained = receiptArtifactBesideOutput("raw-stryker.json");
-  if (retained && existsSync(source)) {
-    mkdirSync(dirname(retained), { recursive: true });
-    writeFileSync(retained, readFileSync(source));
-    artifact = retained;
+  // A malformed producer artifact must not erase proof that the producer completed. Retain a
+  // readable report when possible; otherwise bind the declared path and let the receipt record an
+  // explicit artifactFailure (directory/EISDIR, missing file, etc.) alongside the exited outcome.
+  try {
+    const retained = receiptArtifactBesideOutput(`raw-stryker-${execution.invocationId}.json`);
+    if (retained && existsSync(source)) {
+      mkdirSync(dirname(retained), { recursive: true });
+      writeFileSync(retained, readFileSync(source));
+      artifact = retained;
+    }
+  } catch {
+    artifact = source;
   }
   return createCommandExecutionReceipt({
     invocationId: execution.invocationId,
@@ -1062,6 +1149,31 @@ function finalizeStrykerReceipt(report?: StrykerReport, measurements?: CommandEx
   });
 }
 
+function persistStrykerReceipt(receipt: CommandExecutionReceipt, preferred: string): string {
+  const candidates: string[] = [preferred];
+  try {
+    const besideOutput = receiptArtifactBesideOutput(`command-receipt-${receipt.invocationId}.json`);
+    if (besideOutput) candidates.push(besideOutput);
+  } catch { /* use the fresh temporary fallback below */ }
+  for (const destination of candidates) {
+    try {
+      assertOwnedAllocationDestination(destination, "command receipt");
+      if (existsSync(destination)) continue;
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, JSON.stringify(receipt, null, 2) + "\n");
+      return destination;
+    } catch {
+      // A child may have occupied the preferred entry with a link or directory. Preserve the
+      // completed observation at the next fresh wrapper-owned location instead of overwriting it.
+    }
+  }
+  const fallbackDir = mkdtempSync(temporaryPrefix("harvey-m8-command-receipt-"));
+  const fallback = join(fallbackDir, "command-receipt.json");
+  assertOwnedAllocationDestination(fallback, "command receipt");
+  writeFileSync(fallback, JSON.stringify(receipt, null, 2) + "\n");
+  return fallback;
+}
+
 interface StrykerRunResult {
   dryRunFailure?: string;
   ts7Crash?: boolean;
@@ -1071,6 +1183,7 @@ interface StrykerRunResult {
 }
 
 function runStryker(cfgPath: string | undefined, cwd: string = targetDir): StrykerRunResult {
+  originalStrykerReportPath = undefined;
   const strykerArgs = ["run"];
   if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
@@ -1085,9 +1198,9 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   const startedAt = new Date().toISOString();
   const configuration = { path: cfgPath ?? null, contents: cfgPath && existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : null };
   const selectionConfig = cfgPath?.endsWith(".json") && configuration.contents ? JSON.parse(configuration.contents) as Record<string, unknown> : { contents: configuration.contents };
-  // These three destinations are allocated afresh by withOffTreeScratch; every execution option,
+  // Output destinations are allocated outside the client tree by withOffTreeScratch; every execution option,
   // including test selection, concurrency and timeout policy, stays in the comparison identity.
-  for (const key of ["tempDirName", "incrementalFile", "jsonReporter"]) delete selectionConfig[key];
+  for (const key of ["tempDirName", "incrementalFile", "jsonReporter", "htmlReporter"]) delete selectionConfig[key];
   const comparisonIdentity = {
     sourceSha256: sha256Text(JSON.stringify(walkRelPaths(cwd).sort().map((path) => [path, sha256Text(readFileSync(resolve(cwd, path)))]))),
     selectionSha256: sha256Text(JSON.stringify({ config: selectionConfig, concurrency: concurrency ?? null, incremental, timeout: "no-parent-timeout" })),
@@ -1116,6 +1229,11 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
     comparisonIdentity,
   };
   strykerExecution = execution;
+  // Retain upstream completion before pristine checks, parsing, or final export can fail.
+  const retainedReceipt = join(dirname(cfgPath ?? execution.expectedReportPath), "command-receipt.json");
+  const receipt = finalizeStrykerReceipt();
+  const durableReceipt = persistStrykerReceipt(receipt, retainedReceipt);
+  console.error(`M8 upstream execution receipt: ${durableReceipt}`);
   if (errorCode === "ENOENT") return { dryRunFailure: "stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo", execution };
   if (child.status === 0) {
     const phases = strykerPhaseDurations(stdout);
@@ -1167,7 +1285,7 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
     return { status: "partial", reason: "mocha has no built-in coverage tool (nyc/c8 wrapping is target-specific and was not auto-detected) — line coverage was not auto-pulled" };
   }
 
-  const outDir = mkdtempSync(join(tmpdir(), "harvey-line-coverage-"));
+  const outDir = mkdtempSync(temporaryPrefix("harvey-line-coverage-"));
   // #1285: this rung runs the TARGET'S OWN test runner, whose writes no Stryker config option can
   // redirect — MEASURED 2026-07-28 against the pinned boxyhq clone, where `next/jest --coverage`
   // creates `.swc/plugins/<platform>/` in its cwd and the #1285 invariant caught it. So this one
@@ -1181,7 +1299,7 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
   // column blank while lineCoverage.status still read "ran". MEASURED 2026-07-28 on `main` against
   // the pinned boxyhq clone: same clone, `/var/...` path → row has no lineCoverage,
   // `/private/var/...` path → row has lineCoverage 66.7.
-  const runDir = mkdtempSync(join(realpathSync(tmpdir()), "harvey-line-coverage-run-"));
+  const runDir = mkdtempSync(temporaryPrefix("harvey-line-coverage-run-"));
   const localBin = join(cwd, "node_modules", ".bin", runner.runner);
   const bin = existsSync(localBin) ? localBin : runner.runner;
   const runArgs =
@@ -1253,8 +1371,8 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   const rel = relative(comparisonRoot, sourcePath);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !existsSync(sourcePath)) return undefined;
 
-  const runDir = mkdtempSync(join(realpathSync(tmpdir()), "harvey-native-mutant-"));
-  const resultPath = join(mkdtempSync(join(realpathSync(tmpdir()), "harvey-native-mutant-result-")), "vitest.json");
+  const runDir = mkdtempSync(temporaryPrefix("harvey-native-mutant-"));
+  const resultPath = join(mkdtempSync(temporaryPrefix("harvey-native-mutant-result-")), "vitest.json");
   const selectedTests = (() => {
     const ids = new Set(mutant.coveredBy ?? []);
     const entries = Object.entries(report.testFiles ?? {});
@@ -1363,6 +1481,8 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
 
 const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
 let effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
+registerProtectedInput(defaultConfigPath);
+registerProtectedInput(effectiveConfigPath);
 
 function degradeExit(reason: string): never {
   emitAndExit(
@@ -1390,7 +1510,7 @@ function applyTs7BypassIfNeeded(cfgPath: string | undefined, cwd: string): strin
   } catch (err) {
     degradeExit(`${incompatibility}, and ${cfgPath} could not be read to patch around it (${(err as Error).message.slice(0, 200)})`);
   }
-  const bypassDir = mkdtempSync(join(tmpdir(), "harvey-stryker-ts7-bypass-"));
+  const bypassDir = mkdtempSync(temporaryPrefix("harvey-stryker-ts7-bypass-"));
   const bypassPath = join(bypassDir, "stryker.ts7-bypass.config.json");
   writeFileSync(bypassPath, JSON.stringify(withTs7TsconfigBypass(cfg), null, 2) + "\n");
   console.error(`#773: target TypeScript is v${tsVersion} — patched a copy of the Stryker config at ${bypassPath} so Stryker's tsconfig preprocessor no-ops instead of crashing on TS7's restructured compiler API`);
@@ -1428,7 +1548,7 @@ if (!reportPath && !effectiveConfigPath) {
     }
   }
   const cfg = scaffoldStrykerConfig(runner.runner, SCAFFOLD_SOURCE_DIRS.filter((d) => existsSync(join(targetDir, d))));
-  const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-scaffold-"));
+  const scaffoldDir = mkdtempSync(temporaryPrefix("harvey-stryker-scaffold-"));
   effectiveConfigPath = join(scaffoldDir, "stryker.config.json");
   writeFileSync(effectiveConfigPath, JSON.stringify(cfg, null, 2) + "\n");
   scaffolded = { runner: runner.runner };
@@ -1466,8 +1586,10 @@ if (reportPath) {
   // (the ordinary in-place invocation) when there's nothing to rewrite.
   const runCwd = (isIncompatibleTypeScript7(readStrykerTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
   mutationInvocationRoot = runCwd;
-  console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
-  pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
+  console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, HTML/JSON reports and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
+  // The target-owned config is executable input even though it is not product source. Preserve
+  // its bytes explicitly as part of the declared invocation inputs.
+  pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), [...protectedInputPaths]);
   const run = runStryker(redirect.cfgPath, runCwd);
   strykerExecution = run.execution;
   strykerPhases = run.phases;
@@ -1657,7 +1779,7 @@ const output = {
   // belief: assertTreePristine throws before this artifact is written if the tree gained a path or
   // a source file's bytes moved, so `pristine: true` here can only mean the check ran and passed.
   ...(strykerScratchUsed
-    ? { targetTreeUntouched: { pristine: true, scratchDir: strykerScratchUsed, note: `Stryker ran with its working directory set to ${targetDir}, but its mutant sandboxes, JSON report and incremental file were redirected out of the target tree to ${strykerScratchUsed}; the target's own checkout was verified unchanged (no new paths, no changed source bytes) after the run (#1285), extending --stub-check's #600 guarantee to this rung.` } }
+    ? { targetTreeUntouched: { pristine: true, scratchDir: strykerScratchUsed, note: `Stryker ran with its working directory set to ${mutationInvocationRoot ?? targetDir}; its mutant sandboxes, HTML/JSON reports and incremental file were redirected out of the target tree to ${strykerScratchUsed}; the target's own checkout was verified unchanged (no new paths, no changed source bytes) after the run (#1285), extending --stub-check's #600 guarantee to this rung.` } }
     : {}),
   // #819: always present (never a silent blank column) — "ran" alongside the module rows above
   // when the coverage pull succeeded, "partial" + reason when it could not.
@@ -1694,7 +1816,7 @@ else if (!scope.verified) console.error(`⚠ M8 coverage: partial (mutate scope 
 if (pristine) assertTreePristine(pristine, "#1285");
 const json = JSON.stringify(output, null, 2);
 if (outPath) {
-  writeFileSync(outPath, json + "\n");
+  writeResultFile(outPath, json + "\n");
   console.error(`wrote summary to ${outPath}`);
 } else {
   console.log(json);

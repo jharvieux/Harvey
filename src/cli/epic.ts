@@ -21,6 +21,7 @@ import { publish, NoopTracker } from "../epic-builder/publish.js";
 import {
   acceptEpic,
   acceptStory,
+  assertArtifactReviewable,
   draftEpic,
   fanOutStories,
   recordDirectEdit,
@@ -94,6 +95,7 @@ async function reviewLoop(
     if (choice === "s" && allowSkip) return "skipped";
     if (choice === "q") return "quit";
     if (choice === "e") {
+      assertArtifactReviewable(session, file);
       openEditor(join(dir, file));
       recordDirectEdit(dir, session, file);
       continue;
