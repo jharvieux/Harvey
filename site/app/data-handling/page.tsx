@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
+import { AUDIT_PREREQUISITES } from "../../../src/audit-prerequisites";
 
 export const metadata: Metadata = {
   title: "Data Handling — Harvey",
@@ -70,6 +71,24 @@ export default function DataHandling() {
                   attacks that copy. Your production environment is never stood up, never attacked, and never contacted.
                 </li>
               </ul>
+
+              <div id="audit-prerequisites" data-requirements-version={AUDIT_PREREQUISITES.version}>
+                <h2>Inputs and permissions we agree before the audit</h2>
+                <p>
+                  We confirm the capabilities in scope and request only the inputs they need. Send secrets through
+                  the agreed expiring, view-limited sharing channel, never through a form or ordinary email.
+                  Missing access is recorded in the delivered report alongside the work we could complete.
+                </p>
+                {AUDIT_PREREQUISITES.requirements.map((requirement) => (
+                  <div key={requirement.id} id={`requirement-${requirement.id}`}>
+                    <h3>{requirement.capability}</h3>
+                    <p><b>What to provide:</b> {requirement.requestedInput}</p>
+                    <p><b>Permission boundary:</b> {requirement.accessBoundary}</p>
+                    <p><b>If unavailable:</b> {requirement.ifUnavailable}</p>
+                    <p><b>How we verify coverage:</b> {requirement.verification}</p>
+                  </div>
+                ))}
+              </div>
 
               <h2>What we collect, and why</h2>
               <ul>
