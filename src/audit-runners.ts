@@ -260,6 +260,7 @@ const M2_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
 const M3_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
   binding({ id: "analytics:m3-facts", modules: ["M3"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/hotspot-scan.ts", "toFactFindings")], findingFamilies: [family("M3", "M3-TRUCKFACTOR-*", "Knowledge risk (truck-factor-1)"), family("M3", "M3-COUPLING-*", "Coupling (co-change)"), family("M3", "M3-AIPROV-*", "AI provenance (AI-authored, high-churn)"), family("M3", "M3-TREND-*", "Codebase health trend (degrading)"), family("M3", "M3-KNOWLEDGE-00", "M3 — Knowledge risk coverage", "coverage-disclosure")] }),
   binding({ id: "disclosure:m3-input-scope", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/hotspot-scan.ts", "capScopeFinding")], findingFamilies: [family("M3", "M3-SCOPE-00", "M3 — Input scope", "coverage-disclosure")] }),
+  binding({ id: "disclosure:m3-signal-availability", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/vitals-history.ts", "vitalsAvailabilityFinding")], findingFamilies: [family("M3", "M3-AVAILABILITY-00", "M3 — Signal availability", "coverage-disclosure")] }),
   binding({ id: "synthesizer:m3-hotspot-cross-reference", modules: ["M3"], tiers: ["free"], populationClass: "synthesizer", implementations: [impl("src/hotspot-scan.ts", "crossReferenceHotspots", "synthesizer"), impl("src/hotspot-scan.ts", "enrichFindingsWithHotspots", "synthesizer")] }),
 ]);
 
@@ -450,6 +451,19 @@ const artifactFindings = (artifact: Record<string, unknown> | undefined): Findin
   if (Array.isArray(artifact.findings)) return artifact.findings as Finding[];
   if (artifact.finding && typeof artifact.finding === "object") return [artifact.finding as Finding];
   return [];
+};
+
+// A live M3 capture and a fresh specialist pass may bind the same Vitals report. Preserve distinct
+// same-ID evidence for the collision guard, while collapsing the byte-identical copy so a valid
+// history comparison reaches the client exactly once.
+const uniqueEvidence = (findings: Finding[]): Finding[] => {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = JSON.stringify(finding);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
 // Runs a module's CLI and returns the raw result plus a printable command for the ledger's detail.
@@ -858,7 +872,7 @@ const m3: ModuleRunner = {
     if (ok && ranked && /M3 hotspot table/.test(output)) {
       const artifact = readArtifact(ctx, outPath);
       const pass = findFreshPass(ctx, "M3");
-      const findings = [...artifactFindings(artifact), ...(pass.fresh ? ranFromPass(pass.artifact, "recorded M3 specialist evidence", ctx.now ?? Date.now()).findings ?? [] : [])];
+      const findings = uniqueEvidence([...artifactFindings(artifact), ...(pass.fresh ? ranFromPass(pass.artifact, "recorded M3 specialist evidence", ctx.now ?? Date.now()).findings ?? [] : [])]);
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
       const rankedTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over });

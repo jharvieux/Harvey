@@ -43,6 +43,7 @@ import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
 import { writePassArtifact } from "../audit-pass-artifact.js";
 import { buildFallbackReport, buildM3PassArtifact, capScopeFinding, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, vitalsScope, type VitalsReport } from "../hotspot-scan.js";
+import { prepareVitalsRun, vitalsAvailability, vitalsAvailabilityFinding, type PreparedVitalsRun, type VitalsHistoryBinding } from "../vitals-history.js";
 
 // #808: the vitals version src/hotspot-scan.ts's VitalsReport shape is verified against (#94/#369).
 // A mismatch fails loud with expected/actual BEFORE the report schema-drift check, so version drift
@@ -99,7 +100,7 @@ function discoverVitalsCli(): string | undefined {
 const targetArg = args.find((a) => !a.startsWith("--"));
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/hotspot-scan.ts <target-dir> [--report <vitals.json>] [--out <m3.json>] [--hotspots-out <file>] [--findings <file>]... [--top <k>] [--artifacts-dir <dir>]");
+  console.error("usage: pnpm exec tsx src/cli/hotspot-scan.ts <target-dir> [--report <vitals.json>] [--out <m3.json>] [--hotspots-out <file>] [--findings <file>]... [--top <k>] [--artifacts-dir <dir>] [--history-cache <dir>]");
   process.exit(2);
 }
 
@@ -107,6 +108,7 @@ const targetDir = resolve(targetArg);
 const reportPath = arg("--report");
 const outPath = arg("--out");
 const hotspotsOutPath = arg("--hotspots-out");
+const historyCacheRoot = arg("--history-cache");
 // #1364: writes M3.pass.json directly (the #416 durable-artifact convention), so a captured/replayed
 // vitals pass records itself without a separate `record-pass` hand-off.
 const artifactsDirPath = arg("--artifacts-dir");
@@ -173,12 +175,12 @@ function resolveVitals(): { bin: string; prefixArgs: string[]; scriptPath?: stri
 // repo root, or None when they are the same directory.
 //
 // MEASURED 2026-07-28 against this repo: 10 pairs pre-cap vs the 5 vitals reports, in 0.207s.
-function deriveCouplingTotal(scriptPath: string): { total: number } | { unavailable: string } {
+function deriveCouplingTotal(scriptPath: string, analysisTarget = targetDir): { total: number } | { unavailable: string } {
   const py = [
     "import sys, os, json",
     `sys.path.insert(0, ${JSON.stringify(dirname(scriptPath))})`,
     "import git_analysis as g",
-    `target = ${JSON.stringify(targetDir)}`,
+    `target = ${JSON.stringify(analysisTarget)}`,
     "root = g.get_repo_root(target)",
     "if root is None: raise SystemExit('not a git checkout')",
     "scope = os.path.relpath(os.path.abspath(target), root)",
@@ -188,7 +190,7 @@ function deriveCouplingTotal(scriptPath: string): { total: number } | { unavaila
   ].join("\n");
   let out: string;
   try {
-    out = execFileSync("python3", ["-c", py], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    out = execFileSync("python3", ["-c", py], { cwd: analysisTarget, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
     return { unavailable: `re-running vitals' own get_co_change_coupling failed: ${(e.stderr || e.message || "").trim().split("\n").pop()}` };
@@ -196,6 +198,16 @@ function deriveCouplingTotal(scriptPath: string): { total: number } | { unavaila
   const total = Number(out.trim());
   if (!Number.isInteger(total)) return { unavailable: `vitals' get_co_change_coupling returned unparseable output: ${JSON.stringify(out.trim().slice(0, 120))}` };
   return { total };
+}
+
+function initializeHistorySchema(scriptPath: string, dbPath: string, cwd: string): void {
+  const py = [
+    "import sys",
+    `sys.path.insert(0, ${JSON.stringify(dirname(scriptPath))})`,
+    "import db",
+    `db.init_db(${JSON.stringify(dbPath)})`,
+  ].join("\n");
+  execFileSync("python3", ["-c", py], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
 // #807 reduced tier: Harvey computes the churn×complexity ranking itself from git when vitals is not
@@ -233,7 +245,14 @@ function buildReducedReport(): { report: VitalsReport; qualifying: number } {
   return { report: buildFallbackReport(files, Math.max(topK, 50)), qualifying: fallbackQualifyingCount(files) };
 }
 
-type LoadedReport = { report: VitalsReport; reduced: boolean; qualifying?: number; coupling: { total: number } | { unavailable: string } };
+type LoadedReport = {
+  report: VitalsReport;
+  reduced: boolean;
+  qualifying?: number;
+  coupling: { total: number } | { unavailable: string };
+  binding?: VitalsHistoryBinding;
+  prepared?: PreparedVitalsRun;
+};
 
 // A pre-captured --report is deliberately NOT re-derived against the target's CURRENT git state:
 // the coupling total would then describe a different repository state than the report it bounds.
@@ -250,25 +269,50 @@ function loadReport(): LoadedReport {
     return { report, reduced: true, qualifying, coupling: { unavailable: "the reduced M3 tier computes no coupling at all" } };
   }
   let raw: string;
+  let prepared: PreparedVitalsRun | undefined;
   try {
+    prepared = prepareVitalsRun({ targetDir, toolVersion: EXPECTED_VITALS_VERSION, ...(historyCacheRoot ? { cacheRoot: historyCacheRoot } : {}) });
+    const cleanupPrepared = prepared;
+    process.once("exit", () => cleanupPrepared.cleanup());
+    if (vitals.scriptPath) initializeHistorySchema(vitals.scriptPath, prepared.historyDbPath, prepared.targetDir);
+    console.log(`✓ Vitals preflight: runtime ${EXPECTED_VITALS_VERSION}; writable audit scratch ready; history ${prepared.binding.history.status} (${prepared.binding.history.source})`);
     // maxBuffer: vitals' --json carries a file_health entry per scored file, so the payload scales
     // with the repo. Node's 1MB default made M3 unrunnable against Harvey's own checkout — MEASURED
     // 2026-07-28 on `main` @8d7bd1a: `✗ vitals report failed: spawnSync python3 ENOBUFS`, the report
     // being 1.2MB. Matches the ceiling buildReducedReport already uses for `git log`.
-    raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", prepared.targetDir], { cwd: prepared.targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
-    console.error(`✗ vitals report failed: ${e.stderr || e.message}`);
-    process.exit(1);
+    if (prepared && prepared.binding.history.status === "usable") {
+      const firstFailure = String(e.stderr || e.message || "Vitals subprocess failed").trim().split("\n").pop()!;
+      prepared.markHistoryFailed(`Vitals rejected the preserved prior history: ${firstFailure}`);
+      prepared.removeScratchHistory();
+      console.log(`⚠ Vitals history failed; retrying current-health analysis without it: ${firstFailure}`);
+      try {
+        raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", prepared.targetDir], { cwd: prepared.targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+      } catch (retryError) {
+        const retry = retryError as { stderr?: string; message?: string };
+        console.error(`✗ vitals report failed after isolated-history retry: ${retry.stderr || retry.message}`);
+        process.exit(1);
+      }
+    } else {
+      console.error(`✗ vitals report failed: ${e.stderr || e.message}`);
+      process.exit(1);
+    }
   }
+  const report = parseReport(raw!);
+  const publication = prepared!.publishHistory(report);
+  console.log(`✓ Vitals history cache: ${publication} at audit-owned key ${prepared!.binding.cacheKey}`);
   return {
-    report: parseReport(raw),
+    report,
     reduced: false,
-    coupling: vitals.scriptPath ? deriveCouplingTotal(vitals.scriptPath) : { unavailable: NO_PLUGIN_DIR },
+    coupling: vitals.scriptPath ? deriveCouplingTotal(vitals.scriptPath, prepared!.targetDir) : { unavailable: NO_PLUGIN_DIR },
+    binding: prepared!.binding,
+    prepared: prepared!,
   };
 }
 
-const { report, reduced, qualifying, coupling } = loadReport();
+const { report, reduced, qualifying, coupling, binding, prepared } = loadReport();
 if (reduced) {
   console.log("⚠ M3 REDUCED TIER (vitals plugin unavailable) — Harvey-computed churn×complexity ranking from git history only.");
   console.log("  NOT assessed in this tier: file health, co-change coupling, knowledge-risk (truck-factor), AI-provenance. Install the vitals plugin for the full M3 signal.");
@@ -281,6 +325,8 @@ const unranked = isUnranked(report);
 const ranked = rankHotspots(report);
 const top = unranked ? [] : topKFiles(report, topK);
 const findings = toFactFindings(report);
+const availability = vitalsAvailability(report, binding, reduced);
+findings.push(vitalsAvailabilityFinding(availability));
 // #1075 point 3 disclosed vitals' own caps but with no denominators ("capped at the first 50 source
 // files"), so a reader could not tell 50-of-52 from 50-of-1792. #1290 replaces the hedge with the
 // measured "N of M" per cap — and, because a console line reaches no client, ships the same three
@@ -379,6 +425,8 @@ if (outPath) {
     topK: top,
     hotspots: ranked,
     findings,
+    availability,
+    ...(binding ? { historyBinding: binding } : {}),
     crossReferenced,
     ...(rowsTruncated ? { qualifyingFileCount: qualifying } : {}),
     ...(reduced ? { reduced: true } : {}),
@@ -395,3 +443,5 @@ if (artifactsDirPath) {
   const path = writePassArtifact(artifactsDirPath, passArtifact);
   console.log(`\nM3 pass artifact → ${path} (run-audit --artifacts-dir ${artifactsDirPath} derives M3 ran from it)`);
 }
+
+prepared?.cleanup();
