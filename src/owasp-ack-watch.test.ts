@@ -12,14 +12,18 @@ const issue = (number: number, state: "open" | "closed", labels: string[], comme
 const decide = (current: OwaspProposalSnapshot[], previous?: OwaspProposalSnapshot[]) => buildOwaspWatchDecision(current, previous ? encodeOwaspReceipt(previous) : undefined, "https://example.test/actions/runs/1");
 const OWASP_WATCH = resolve(import.meta.dirname, "owasp-ack-watch.ts");
 
-function runShippingWatch(script: string, snapshots: OwaspProposalSnapshot[], previous: string): { status: number | null; stdout: string; stderr: string; body: string } {
+function runShippingWatch(script: string, snapshots: OwaspProposalSnapshot[], previous: string): { status: number | null; outputs: string; stderr: string; body: string } {
   const directory = mkdtempSync(join(tmpdir(), "harvey-owasp-watch-"));
   try {
     const input = join(directory, "snapshots.json");
     const body = join(directory, "message.md");
+    const outputs = join(directory, "outputs");
     writeFileSync(input, JSON.stringify(snapshots));
-    const result = spawnSync(process.execPath, ["--experimental-strip-types", script, "--input", input, "--body", body, "--run-url", "https://example.test/actions/runs/1", "--previous", previous], { encoding: "utf8" });
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, body: existsSync(body) ? readFileSync(body, "utf8") : "" };
+    writeFileSync(outputs, "");
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", script, "--input", input, "--body", body, "--run-url", "https://example.test/actions/runs/1", "--previous", previous], {
+      encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: outputs },
+    });
+    return { status: result.status, outputs: readFileSync(outputs, "utf8"), stderr: result.stderr, body: existsSync(body) ? readFileSync(body, "utf8") : "" };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -62,7 +66,7 @@ describe("OWASP acknowledgement actionability", () => {
     const previous = encodeOwaspReceipt(closed);
     const shipping = runShippingWatch(OWASP_WATCH, reopened, previous);
     expect(shipping.status, shipping.stderr).toBe(0);
-    expect(shipping.stdout).toContain("notify=true");
+    expect(shipping.outputs).toContain("notify=true");
     expect(shipping.body).toContain("proposal was reopened");
 
     const directory = mkdtempSync(join(tmpdir(), "harvey-owasp-watch-revert-"));
@@ -77,7 +81,7 @@ describe("OWASP acknowledgement actionability", () => {
       writeFileSync(copied, reverted);
       const revertedRun = runShippingWatch(copied, reopened, previous);
       expect(revertedRun.status, revertedRun.stderr).toBe(0);
-      expect(revertedRun.stdout).toContain("notify=false");
+      expect(revertedRun.outputs).toContain("notify=false");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
