@@ -4,18 +4,21 @@
 
 import type { SessionState } from "./types.js";
 
-export type WorkflowEvent =
-  | "clarify-start" // intake captured -> begin clarifying questions
-  | "clarify-done" // clarify rounds finished -> draft the epic
-  | "epic-drafted" // an epic draft (or redraft) is on disk, ready for review
-  | "epic-revise" // reviewer asked for an AI revision of the epic
-  | "epic-accept" // reviewer accepted the epic
-  | "stories-drafted" // fan-out + consistency pass complete
-  | "story-redraft" // a story needs a full redraft -> re-enter fan-out
-  | "stories-accept" // every story accepted -> publish
-  | "publish-ok" // publish (or dry-run) succeeded
-  | "publish-partial" // some creates failed -> stay in publish for idempotent re-run
-  | "summary-shown"; // results rendered -> terminal
+export const WORKFLOW_EVENTS = [
+  "clarify-start", // intake captured -> begin clarifying questions
+  "clarify-done", // clarify rounds finished -> draft the epic
+  "epic-drafted", // an epic draft (or redraft) is on disk, ready for review
+  "epic-revise", // reviewer asked for an AI revision of the epic
+  "epic-accept", // reviewer accepted the epic
+  "stories-drafted", // fan-out + consistency pass complete
+  "story-redraft", // a story needs a full redraft -> re-enter fan-out
+  "stories-accept", // every story accepted -> publish
+  "publish-ok", // publish (or dry-run) succeeded
+  "publish-partial", // some creates failed -> stay in publish for idempotent re-run
+  "summary-shown", // results rendered -> terminal
+] as const;
+
+export type WorkflowEvent = (typeof WORKFLOW_EVENTS)[number];
 
 const TRANSITIONS: Record<SessionState, Partial<Record<WorkflowEvent, SessionState>>> = {
   intake: { "clarify-start": "clarify" },
@@ -30,6 +33,7 @@ const TRANSITIONS: Record<SessionState, Partial<Record<WorkflowEvent, SessionSta
 };
 
 export function canTransition(state: SessionState, event: WorkflowEvent): boolean {
+  if (!WORKFLOW_EVENTS.includes(event)) return false;
   return TRANSITIONS[state][event] !== undefined;
 }
 

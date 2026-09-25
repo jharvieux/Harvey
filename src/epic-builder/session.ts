@@ -18,10 +18,12 @@ import { extractComments, hasUnresolvedComments, renderDiff } from "./revision.j
 import { missingSections } from "./render.js";
 import {
   appendAction,
+  draftExists,
   readDraft,
   readFileRaw,
   saveSession,
   slugify,
+  validateStoryManifest,
   writeDraft,
   writeFile,
 } from "./workspace.js";
@@ -40,24 +42,30 @@ export async function runClarify(
   model: ModelClient,
   answer: (questions: ClarifyQuestion[], round: number) => Promise<string>,
 ): Promise<DraftSession> {
-  session.state = transition(session.state, "clarify-start");
-  saveSession(dir, session);
+  if (session.state === "intake") {
+    session.state = transition(session.state, "clarify-start");
+    saveSession(dir, session);
+  } else if (session.state !== "clarify") {
+    // Use the state-machine error as the single transition-policy diagnostic.
+    transition(session.state, "clarify-start");
+  }
 
-  let transcript = `# Intake: ${session.slug}\n\n**Prompt:** ${session.prompt}\n\n## Clarifying Q&A\n`;
-  const priorQA: string[] = [];
-  for (let round = 1; round <= 2; round++) {
+  let transcript = draftExists(dir, "intake.md")
+    ? readFileRaw(dir, "intake.md")
+    : `# Intake: ${session.slug}\n\n**Prompt:** ${session.prompt}\n\n## Clarifying Q&A\n`;
+  writeFile(dir, "intake.md", transcript);
+  for (let round = session.clarifyRounds + 1; round <= 2; round++) {
     const tier = selectTier({ task: "clarify", revisionCount: 0, flags: [] });
-    const questions = await model.clarify({ prompt: session.prompt, round, priorQA: priorQA.join("\n") }, tier);
+    const questions = await model.clarify({ prompt: session.prompt, round, priorQA: transcript }, tier);
     if (questions.length === 0) break;
     const rendered = questions.map((q, i) => `${i + 1}. ${q.question} [assume: ${q.assumption}]`).join("\n");
     const reply = await answer(questions, round);
     transcript += `\n### Round ${round}\n${rendered}\n\n**Answers:** ${reply}\n`;
-    priorQA.push(rendered, reply);
+    writeFile(dir, "intake.md", `${transcript}\n`);
     session.clarifyRounds = round;
     saveSession(dir, session);
     if (reply.trim().toLowerCase() === "defaults") break;
   }
-  writeFile(dir, "intake.md", `${transcript}\n`);
   session.state = transition(session.state, "clarify-done");
   saveSession(dir, session);
   return session;
@@ -71,16 +79,18 @@ export async function draftEpic(
   model: ModelClient,
   templates: Templates,
 ): Promise<DraftSession> {
+  const nextState = transition(session.state, "epic-drafted");
   const intake = readFileRaw(dir, "intake.md");
   const tier = selectTier({ task: "epic-draft", revisionCount: session.epic.revisions, flags: revisionFlags(session.epic.revisions) });
   const body = await model.draftEpic({ prompt: session.prompt, intake, template: templates.epic }, tier);
+  if (typeof body !== "string" || body.trim() === "") throw new Error("model returned an empty or non-string epic draft");
   const title = extractTitle(body) ?? session.prompt;
   writeDraft(dir, "epic.md", {
     data: { kind: "epic", epic: session.slug, title, status: "in-review" },
     body,
   });
   session.epic.status = "in-review";
-  session.state = transition(session.state, "epic-drafted");
+  session.state = nextState;
   saveSession(dir, session);
   return session;
 }
@@ -88,29 +98,40 @@ export async function draftEpic(
 // --- Review-loop actions (design §2.3, §4.4) ---
 
 export function acceptEpic(dir: string, session: DraftSession): DraftSession {
+  assertArtifactReviewable(session, "epic.md");
+  const nextState = transition(session.state, "epic-accept");
   setStatus(dir, "epic.md", "accepted");
   session.epic.status = "accepted";
-  session.state = transition(session.state, "epic-accept");
+  session.state = nextState;
   appendAction(dir, { kind: "accept", target: "epic.md" });
   saveSession(dir, session);
   return session;
 }
 
 export function acceptStory(dir: string, session: DraftSession, file: string): DraftSession {
+  assertArtifactReviewable(session, file);
+  const story = storyState(session, file);
+  const completesReview = session.stories.every((candidate) =>
+    candidate.file === file || candidate.status === "accepted" || candidate.status === "skipped");
+  const nextState = completesReview ? transition(session.state, "stories-accept") : session.state;
   setStatus(dir, file, "accepted");
-  storyState(session, file).status = "accepted";
+  story.status = "accepted";
   appendAction(dir, { kind: "accept", target: file });
-  if (session.stories.every((s) => s.status === "accepted" || s.status === "skipped")) {
-    session.state = transition(session.state, "stories-accept");
-  }
+  session.state = nextState;
   saveSession(dir, session);
   return session;
 }
 
 export function skipStory(dir: string, session: DraftSession, file: string): DraftSession {
+  assertArtifactReviewable(session, file);
+  const story = storyState(session, file);
+  const completesReview = session.stories.every((candidate) =>
+    candidate.file === file || candidate.status === "accepted" || candidate.status === "skipped");
+  const nextState = completesReview ? transition(session.state, "stories-accept") : session.state;
   setStatus(dir, file, "skipped");
-  storyState(session, file).status = "skipped";
+  story.status = "skipped";
   appendAction(dir, { kind: "skip", target: file });
+  session.state = nextState;
   saveSession(dir, session);
   return session;
 }
@@ -118,6 +139,7 @@ export function skipStory(dir: string, session: DraftSession, file: string): Dra
 // Direct edit: the user is the author, so the on-disk file is authoritative and no diff is shown
 // (design §4.4). We just re-read to pick up their change and record the action.
 export function recordDirectEdit(dir: string, session: DraftSession, file: string): DraftSession {
+  assertArtifactReviewable(session, file);
   appendAction(dir, { kind: "direct-edit", target: file });
   saveSession(dir, session);
   return session;
@@ -141,6 +163,7 @@ export async function reviseArtifact(
   confirm: (diff: string) => Promise<boolean>,
   userRequestedFlagship = false,
 ): Promise<RevisionResult> {
+  assertArtifactReviewable(session, file);
   const doc = readDraft(dir, file);
   const comments = extractComments(doc.body);
   const revisionCount = artifactRevisions(session, file);
@@ -174,11 +197,12 @@ export async function fanOutStories(
   templates: Templates,
   confirmManifest: (entries: StoryManifestEntry[]) => Promise<StoryManifestEntry[]>,
 ): Promise<DraftSession> {
+  const nextState = transition(session.state, "stories-drafted");
   const epicBody = readDraft(dir, "epic.md").body;
   const intake = readFileRaw(dir, "intake.md");
   const manifestTier = selectTier({ task: "story-draft", revisionCount: 0, flags: [] });
-  const proposed = await model.storyManifest({ epicBody, intake }, manifestTier);
-  const entries = await confirmManifest(proposed);
+  const proposed = validateStoryManifest(await model.storyManifest({ epicBody, intake }, manifestTier), "proposed");
+  const entries = validateStoryManifest(await confirmManifest(proposed), "confirmed");
 
   const drafts = await Promise.all(
     entries.map((entry, idx) =>
@@ -195,6 +219,12 @@ export async function fanOutStories(
       ),
     ),
   );
+  drafts.forEach((draft, index) => {
+    if (!draft || typeof draft.body !== "string" || draft.body.trim() === ""
+        || typeof draft.brief !== "string" || draft.brief.trim() === "") {
+      throw new Error(`model returned a malformed story draft for manifest entry ${index + 1}`);
+    }
+  });
 
   const stories: StoryState[] = [];
   entries.forEach((entry, idx) => {
@@ -212,7 +242,7 @@ export async function fanOutStories(
   session.stories = stories;
 
   consistencyPass(dir, session, templates);
-  session.state = transition(session.state, "stories-drafted");
+  session.state = nextState;
   saveSession(dir, session);
   return session;
 }
@@ -255,6 +285,22 @@ export function consistencyPass(dir: string, session: DraftSession, templates: T
 }
 
 // --- helpers ---
+
+export function assertArtifactReviewable(session: DraftSession, file: string): void {
+  if (file === "epic.md") {
+    if (session.state !== "epic-review" || session.epic.status !== "in-review") {
+      throw new Error(`epic.md is not reviewable from state "${session.state}" with status "${session.epic.status}"`);
+    }
+    return;
+  }
+  if (session.state !== "stories-review") {
+    throw new Error(`${file} is not reviewable from state "${session.state}"`);
+  }
+  const story = storyState(session, file);
+  if (story.status !== "draft" && story.status !== "in-review") {
+    throw new Error(`${file} is not reviewable with status "${story.status}"`);
+  }
+}
 
 function extractTitle(body: string): string | null {
   for (const line of body.split("\n")) {
