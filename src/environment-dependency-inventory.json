@@ -48,33 +48,33 @@
     "authoritativeRecords": 2244,
     "authoritativeUnresolved": 1524,
     "authoritativeVenues": 108,
-    "candidateVenues": 2568,
+    "candidateVenues": 2575,
     "classes": [
       {
         "accepted": 0,
         "authoritativeRecords": 323,
-        "candidateRows": 575,
+        "candidateRows": 578,
         "dependencyClass": "tool",
         "dynamic": 190,
         "emptyReason": null,
         "pinned": 12,
         "recorded": 221,
-        "rows": 898,
-        "unresolved": 660,
-        "whollyUnbound": 665
+        "rows": 901,
+        "unresolved": 663,
+        "whollyUnbound": 668
       },
       {
         "accepted": 0,
         "authoritativeRecords": 244,
-        "candidateRows": 839,
+        "candidateRows": 840,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1083,
-        "unresolved": 1077,
-        "whollyUnbound": 1078
+        "rows": 1084,
+        "unresolved": 1078,
+        "whollyUnbound": 1079
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2679,
+        "candidateRows": 2686,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3795,
-        "unresolved": 3795,
-        "whollyUnbound": 3795
+        "rows": 3802,
+        "unresolved": 3802,
+        "whollyUnbound": 3802
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7357,
+    "noAssertions": 7368,
     "opaqueVenues": 3,
-    "residualRows": 2679,
-    "rows": 8508,
+    "residualRows": 2686,
+    "rows": 8519,
     "schemaAssertions": 10,
-    "venues": 2679,
-    "vocabularyCandidates": 3585
+    "venues": 2686,
+    "vocabularyCandidates": 3589
   },
   "reconciliations": [
     {
@@ -77690,7 +77690,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -77699,7 +77699,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -77719,7 +77719,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -77761,7 +77761,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -77770,7 +77770,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -77790,7 +77790,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -77832,7 +77832,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -77841,7 +77841,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -77861,7 +77861,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -77903,7 +77903,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -77912,7 +77912,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -77932,7 +77932,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -77974,7 +77974,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -77983,7 +77983,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -78003,7 +78003,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -78045,7 +78045,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -78054,7 +78054,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "The production comparator reads this root baseline and compares exact current receipt toolchain identities.",
@@ -78074,7 +78074,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87636,7 +87636,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87645,7 +87645,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87665,7 +87665,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87699,7 +87699,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87708,7 +87708,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87728,7 +87728,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87762,7 +87762,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87771,7 +87771,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87791,7 +87791,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87825,7 +87825,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87834,7 +87834,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87854,7 +87854,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87888,7 +87888,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87897,7 +87897,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87917,7 +87917,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -87951,7 +87951,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -87960,7 +87960,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -87980,7 +87980,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -88828,7 +88828,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -88837,7 +88837,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -88857,7 +88857,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -88891,7 +88891,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -88900,7 +88900,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -88920,7 +88920,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -88954,7 +88954,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -88963,7 +88963,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -88983,7 +88983,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -89017,7 +89017,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -89026,7 +89026,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -89046,7 +89046,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -89080,7 +89080,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -89089,7 +89089,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -89109,7 +89109,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -89143,7 +89143,7 @@
         "claim": "The comparator rejects unequal toolchain receipts. This census records that assertion venue without executing Stryker.",
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "scope": "environment-behavior"
@@ -89152,7 +89152,7 @@
       "consumer": {
         "location": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "reason": "This receipt is a retained test/capture input; its toolchain is historical and is not independently a current live run.",
@@ -89172,7 +89172,7 @@
       "freshness": {
         "enforcedBy": {
           "anchor": "compareGuardMutationCensus",
-          "line": 370,
+          "line": 376,
           "path": "src/guard-mutation-baseline.ts"
         },
         "expiresAt": null,
@@ -90141,6 +90141,302 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/__fixtures__/lighthouse-report.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "tool",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 6,
+        "path": "src/__fixtures__/mutation-runner-validity/package.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/package.json#content-hint:tool:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/package.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/package.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/package.json#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/package.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/src/subject.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "tool",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 2,
+        "path": "src/__fixtures__/mutation-runner-validity/stryker.config.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/stryker.config.json#content-hint:tool:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/stryker.config.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/stryker.config.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/stryker.config.json#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/stryker.config.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/tsconfig.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/tsconfig.json#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/tsconfig.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__fixtures__/mutation-runner-validity/vitest.config.ts"
     },
     {
       "assertionVenue": null,
@@ -105912,7 +106208,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 183,
+        "line": 188,
         "path": "src/cli/mutation-scan.ts"
       },
       "freshness": {
@@ -163985,7 +164281,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 136,
+        "line": 152,
         "path": "src/guard-mutation-baseline.test.ts"
       },
       "freshness": {
@@ -164059,7 +164355,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 64,
+        "line": 66,
         "path": "src/guard-mutation-baseline.ts"
       },
       "freshness": {
@@ -164096,7 +164392,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 31,
+        "line": 32,
         "path": "src/guard-mutation-baseline.ts"
       },
       "freshness": {
@@ -164170,7 +164466,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 25,
+        "line": 26,
         "path": "src/guard-mutation-baseline.ts"
       },
       "freshness": {
@@ -164207,7 +164503,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 75,
+        "line": 77,
         "path": "src/guard-mutation-baseline.ts"
       },
       "freshness": {
@@ -168914,11 +169210,122 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/mutation-runner-validity.integration.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/mutation-runner-validity.integration.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/mutation-runner-validity.integration.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "tool",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 7,
+        "path": "src/mutation-runner-validity.integration.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/mutation-runner-validity.integration.test.ts#content-hint:tool:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/mutation-runner-validity.integration.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/mutation-runner-validity.integration.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/mutation-runner-validity.integration.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/mutation-runner-validity.integration.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "database",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 163,
+        "line": 212,
         "path": "src/mutation-scan.test.ts"
       },
       "freshness": {
@@ -168955,7 +169362,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 949,
+        "line": 998,
         "path": "src/mutation-scan.test.ts"
       },
       "freshness": {
@@ -168992,7 +169399,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 558,
+        "line": 607,
         "path": "src/mutation-scan.test.ts"
       },
       "freshness": {
@@ -169066,7 +169473,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 29,
+        "line": 30,
         "path": "src/mutation-scan.test.ts"
       },
       "freshness": {
@@ -169140,7 +169547,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 757,
+        "line": 877,
         "path": "src/mutation-scan.ts"
       },
       "freshness": {
@@ -169177,7 +169584,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 455,
+        "line": 575,
         "path": "src/mutation-scan.ts"
       },
       "freshness": {
@@ -364147,8 +364554,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "fd532e7488ff5a593833f105774cf9584982fc2b",
-    "commitPayload": "dHJlZSBlNWI5MDY0NTljMjQ4NzAxYzZmYWRmZjQ2OGQyODYxYmM4MDFhMGUzCnBhcmVudCBlMDM5NmM4NjQ5YjA5YmU2MzlhNWE1NjRjYzA5M2MwMjUyZjc2NTUxCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA1ODk0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA1ODk0IC0wNTAwCgpSb3V0ZSByZWNlaXB0IGFydGlmYWN0IHJlYWRzIHRocm91Z2ggc2FmZSBzdGF0IChyZWZzICMyMTM5KQo=",
+    "commit": "b382541a89be6533743ab555844e7e6fca8cec93",
+    "commitPayload": "dHJlZSAxZThlMDM3MDVlZjcxODY5NDg1MDM3YTQxYTBhYzQwYWU5ZmY5MTY1CnBhcmVudCA0NGI1ZjM5NjYyNDU4NDZlN2UyYjQxNThlNGJkNTc1ZTgzZmFlOTU3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2NjE5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2NjE5IC0wNTAwCgpEb2N1bWVudCBib3VuZGVkIGZ1dHVyZSBwYXNzIGZyZXNobmVzcyBmb3IgIzIxMTcK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364157,13 +364564,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "7e1b60a117ac65a48884ab4bad65e380c9c98dd7",
+        "gitOid": "d03234b530249c1731e45c6908f0002f309353e1",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "a30418a4130eb2e5001b2346ca7a6484414d945b984a65f74e0605d0f775619a",
-    "tree": "e5b906459c248701c6fadff468d2861bc801a0e3"
+    "populationSha256": "d69f6408d0b2e5c58ed5c041f29f8bcedb087ca3ef5002c624b56cbeb3bde67d",
+    "tree": "1e8e03705ef71869485037a41a0ac40ae9ff9165"
   },
   "venues": [
     {
@@ -365457,11 +365864,11 @@
       "sha256": "fcf328d588c7b62443abb4131343c6b86bb521de88d3c3b1f60ba747302bb7e0"
     },
     {
-      "bytes": 13703,
+      "bytes": 13891,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "c6ec58d12b914e344066365b0824d4f3fae759ee",
+      "gitOid": "6c6f4d7c1d20c8a33ca7fdbcf8f4d7d101dbf2e9",
       "id": "docs/design/audit-pass-artifacts.md",
       "kind": "document",
       "literalCount": 0,
@@ -365469,7 +365876,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "docs/design/audit-pass-artifacts.md",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "030525b2744aadd92f23a209525de327f12b6fcb767e16de2183353083ad4f49"
+      "sha256": "a38b5d048cc543fb962cfbabc12d85fe2bacace7576e76830162029c70548607"
     },
     {
       "bytes": 20112,
@@ -367482,11 +367889,11 @@
       "sha256": "1cb5b93b779a6b2fbd7767c17bbc5ce0d7a8b2a3387f16cfa2d2a7ddd7a5fb0b"
     },
     {
-      "bytes": 26012,
+      "bytes": 26068,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "d82db4a23a0de7a0629948425ed1cc7901128984",
+      "gitOid": "9ad5e564c51f43c2a2ff9554a1f1ba1bde20883d",
       "id": "docs/runbooks/full-engagement-run.md",
       "kind": "document",
       "literalCount": 0,
@@ -367494,7 +367901,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "docs/runbooks/full-engagement-run.md",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "633062758704450832ac862debce35090591046542f0b92140cd6a24f345c7f4"
+      "sha256": "29798d791b76ff98d498e81f45b743d642d974104f149baaeebd8fa15fa4ec89"
     },
     {
       "bytes": 17081,
@@ -369822,6 +370229,96 @@
       "sha256": "83c82782787ecd00a31b55cc275f40ffb48429f5d0cb211186708ee9d5adf804"
     },
     {
+      "bytes": 223,
+      "disposition": "conservative-candidate",
+      "format": "json",
+      "gitMode": "100644",
+      "gitOid": "1cd70bcd501f9e955214b7743ce03b2779f5cae5",
+      "id": "src/__fixtures__/mutation-runner-validity/package.json",
+      "kind": "structured-data",
+      "literalCount": 0,
+      "literalSha256": null,
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/package.json",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "833f8cd06e830bae3681e655e318faf2c4be2c66b93ca66e2e488ab268292d97"
+    },
+    {
+      "bytes": 410,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "4d9bda15112b94c7cbd32709d643c717da32bf36",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts",
+      "kind": "source",
+      "literalCount": 9,
+      "literalSha256": "9fdab5ca3afff0dbf9aa4855413bda1934b5f27ec0eea0463e33828d112e7ee1",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/src/subject.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "f831945bda0808c61ff982c2597da17124f3ede42c814e29764bb3d9c56042c4"
+    },
+    {
+      "bytes": 354,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "162e3a6d915cdb37751d63a156e7cb6ab2d1a1a1",
+      "id": "src/__fixtures__/mutation-runner-validity/src/subject.ts",
+      "kind": "source",
+      "literalCount": 7,
+      "literalSha256": "93c8330313e61295504b8c9052d7e626d1e1f5e0f5bc97fcbff32492680a8f27",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/src/subject.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "3b463cdc271e3485757fdb673d93aef3432eb021c3e39a1bc039b47c387d64dc"
+    },
+    {
+      "bytes": 925,
+      "disposition": "conservative-candidate",
+      "format": "json",
+      "gitMode": "100644",
+      "gitOid": "8be574090095d91cbca0da151a4d3ec66dd7ce0c",
+      "id": "src/__fixtures__/mutation-runner-validity/stryker.config.json",
+      "kind": "structured-data",
+      "literalCount": 0,
+      "literalSha256": null,
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/stryker.config.json",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "a41eb56e546b949a193a6a51c250c346daeab2a2768e591cf7bd79a958ae6bab"
+    },
+    {
+      "bytes": 166,
+      "disposition": "conservative-candidate",
+      "format": "json",
+      "gitMode": "100644",
+      "gitOid": "c24065ea6e52e8e35f3f15a951a5c8c313234e70",
+      "id": "src/__fixtures__/mutation-runner-validity/tsconfig.json",
+      "kind": "structured-data",
+      "literalCount": 0,
+      "literalSha256": null,
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/tsconfig.json",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "aba68f1689b654f5d0343194a1b6c22179198ff48599c1557c769cc3c39f1446"
+    },
+    {
+      "bytes": 70,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "15d16f8eb75e976b86c4922a850c16e943a65df4",
+      "id": "src/__fixtures__/mutation-runner-validity/vitest.config.ts",
+      "kind": "source",
+      "literalCount": 1,
+      "literalSha256": "349eb18fc13f64a7a1cbd8db66d8dbcc1b5e85a965e8f3b54fe35e3f284df863",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__fixtures__/mutation-runner-validity/vitest.config.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "8f9a1dd7b6331710d840bfe202418236686ab568358ccca26b155503c2ca5be8"
+    },
+    {
       "bytes": 3261,
       "disposition": "conservative-candidate",
       "format": "source",
@@ -371547,19 +372044,19 @@
       "sha256": "e2528cd41a8847c25fc71152ba884ffbb2443d32415d4a2ab6bf7d2a132553c6"
     },
     {
-      "bytes": 88000,
+      "bytes": 99808,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "43ee1a564e6bbb4aa963189b11d311203f42dd59",
+      "gitOid": "4cffc82dbea5a41374f5d25a2730b553471ff084",
       "id": "src/cli/mutation-scan.ts",
       "kind": "source",
-      "literalCount": 379,
-      "literalSha256": "58dd1cac206fed80b2386a037910b72bdd67b3ea6272910bced19d32b5dcafc7",
+      "literalCount": 471,
+      "literalSha256": "6ca2b08091c68d390aa1d60fe82c75680422b158e80151519eb3b9a6fff5dc20",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/mutation-scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "b4b4e0c6cebe4a40fdc5437c37b4e25a811af7caa2ad666552cb805ecd0bff36"
+      "sha256": "971946ce6639401caaa128831f91faade559ce3c257a579a2972dde61e07a1f5"
     },
     {
       "bytes": 5107,
@@ -383607,34 +384104,34 @@
       "sha256": "e9b40e558c42231e6dad7ff6b6c19187905053d79f4a4c06ad11b39ced943b86"
     },
     {
-      "bytes": 12614,
+      "bytes": 13758,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "8f765737f8a00030b567e56900fd5f9161c67efc",
+      "gitOid": "457ae934f84ce110347c41d97617d2fd30736404",
       "id": "src/guard-mutation-baseline.test.ts",
       "kind": "source",
-      "literalCount": 163,
-      "literalSha256": "d57d6295952849dd133fd7ebb1e1f5008f87d91cfb56448fecf52eeb71a0ee18",
+      "literalCount": 179,
+      "literalSha256": "4ff1ce9a687848d3b7b38674c98d68251781b072566b3703abce681c71301970",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/guard-mutation-baseline.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "c9be35b5fdb7ae3e3bde3d1775a7ea769edb2282cf75be5d2b48069a566f9ea5"
+      "sha256": "bb7ff18b65aef4b96958174753dbb078c9326dbae600de3edcccec4863c667f4"
     },
     {
-      "bytes": 26311,
+      "bytes": 27151,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "89775a6f948e61d15a4f512c526e5b6d8e470a69",
+      "gitOid": "d90e82a9337da22795068d3a0ec2b7119841b656",
       "id": "src/guard-mutation-baseline.ts",
       "kind": "source",
-      "literalCount": 226,
-      "literalSha256": "3ca7fabfb46f28e308160f781fea94b060b1a51ff215c1906c48a0c3313e81c5",
+      "literalCount": 229,
+      "literalSha256": "090f38fc1a2e68c481882e7213d7c54531778440b86eb7ccc8e807cf5f29dc76",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/guard-mutation-baseline.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "5880f5cd564715508bfff3643b3002b36f2a070ab9b36e91ee1c0d940f364b01"
+      "sha256": "9ba5eb203ed969772e43d031879094f698824e23e814dc96fde98fb7c3bd1205"
     },
     {
       "bytes": 23149,
@@ -384237,34 +384734,49 @@
       "sha256": "cb1b5200395d936130ef3174ae1bc4b1648502cd8159b3fae0c93d7b8a727db9"
     },
     {
-      "bytes": 70487,
+      "bytes": 6123,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "32276126ce55094d537e3ba16cb7b83ec98dcab1",
+      "gitOid": "17878a164f639ccfc1a628273bb929b5b49606cc",
+      "id": "src/mutation-runner-validity.integration.test.ts",
+      "kind": "source",
+      "literalCount": 110,
+      "literalSha256": "3ea88c7e0bb55fd24d0b590aa82e9e10bd9988598e37435ee4b4e9220238b9eb",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/mutation-runner-validity.integration.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "fc6de977c130627000fa9d916ed58e0953f6796735c9b69dcfb1c940826dfa9d"
+    },
+    {
+      "bytes": 73333,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "6a9132637ab0a8db5d7fc17666bf07d8d0f0f1b5",
       "id": "src/mutation-scan.test.ts",
       "kind": "source",
-      "literalCount": 1033,
-      "literalSha256": "8ec827b8098b0e5f2c828c2980db7546fdb415c8f393a0c3085c594a6333c4d9",
+      "literalCount": 1107,
+      "literalSha256": "e1fc3028ee57cfd9f2f565ef01e109b030d0316df5fa6d59442dbaa797a84d76",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/mutation-scan.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "4560b532e2bb9b6252e2cdf29480b3cbab856ae1171a03842857884999beae51"
+      "sha256": "cb96e2d21a37b8bc72d835fd1f6ae675c12863bde2dcc1fa42dcc26ad60c8b0c"
     },
     {
-      "bytes": 78779,
+      "bytes": 83940,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "86baef690ac53ee17d3ad95ad4332f0e8d23e581",
+      "gitOid": "76f2fbc0b87814200f0b7558aec3ad0fc6ea9583",
       "id": "src/mutation-scan.ts",
       "kind": "source",
-      "literalCount": 413,
-      "literalSha256": "f1f6b2dd709f036a5a686de27e7469fd595997a3b8cacf812713bb5775ecc896",
+      "literalCount": 463,
+      "literalSha256": "61fc5f2e8e55ff6eb5a59e96dd75ae07ca6e4121390ba45d2dff154a45af6016",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/mutation-scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "970fa06c3eaa3143cfd92df97d2e8849feffdeba9a9c7328174a59302dd7755b"
+      "sha256": "eb83aa3651f033a2222726658ef8352b742ad529836658f62326216305e0d401"
     },
     {
       "bytes": 5997,
