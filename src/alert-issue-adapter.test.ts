@@ -26,6 +26,7 @@ describe("alert-issue production result adapter (#1348)", () => {
   it("binds the live non-drill action branch to the tested adapter", () => {
     const action = readFileSync(ACTION_YML, "utf8");
     expect(action.match(/run_production_find_or_update "\$TITLE" "\$BODY"/g)).toHaveLength(1);
+    expect(action).toContain("ALERT_INCIDENT: ${{ inputs.incident }}");
     expect(action).not.toContain("result=$(find_or_update real");
   });
 

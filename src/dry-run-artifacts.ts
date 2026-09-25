@@ -10,6 +10,13 @@ import type { DynamicScorecard } from "./pentest/scorecard.js";
 const ARTIFACT_FILES = ["findings.json", "pii-data-map.json", "scorecard.json", "findings-report.json"] as const;
 type ArtifactFile = typeof ARTIFACT_FILES[number];
 
+/**
+ * The deterministic files published by one dry-run generation. Keep consumers on this owning
+ * contract instead of copying a historical member count. timing.json is intentionally absent:
+ * it records wall-clock observations and is expected to differ between identical generations.
+ */
+export const DETERMINISTIC_DRY_RUN_FILES = [...ARTIFACT_FILES, "artifact-family.json"] as const;
+
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {
@@ -157,7 +164,7 @@ function findingDifference(raw: Finding[], derived: Finding[]) {
 export function validateDryRunFamily(outDir: string): ValidationResult {
   const errors: string[] = [];
   const files: Record<string, unknown> = {};
-  for (const name of [...ARTIFACT_FILES, "artifact-family.json"]) {
+  for (const name of DETERMINISTIC_DRY_RUN_FILES) {
     try { files[name] = JSON.parse(readFileSync(join(outDir, name), "utf8")) as unknown; }
     catch (error) { errors.push(`${name}: cannot read complete artifact (${error instanceof Error ? error.message : String(error)})`); }
   }

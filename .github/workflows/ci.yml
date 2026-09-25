@@ -397,22 +397,33 @@ jobs:
           mode: assert
           expect: heavy-cli-tests ${{ contains(matrix.gates, 'calibration') && 'calibration-gate' || '' }} ${{ contains(matrix.gates, 'source-recall') && 'source-recall-gate' || '' }} ${{ contains(matrix.gates, 'm2-coverage') && 'm2-coverage-gate' || '' }} ${{ contains(matrix.gates, 'shared-source-match') && 'shared-source-match' || '' }}
 
+      - id: heavy-alert-message
+        name: Bind the heavy-cli alert to this run identity
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          ALERT_EVENT: ${{ github.event_name }}
+          ALERT_REF: ${{ github.ref }}
+          ALERT_HEAD: ${{ github.sha }}
+          ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node --experimental-strip-types src/workflow-alert.ts --scope heavy --shard "shard ${{ matrix.shard }} of ${{ matrix.total }}"
+
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
       # label. Still never fires on PR/push — those failures already gate the `verify` check on the
       # PR — but `workflow_dispatch` is now permanently in the condition (#1287): this path had never
       # executed once, and until this change the workflow had no manual trigger to prove it with.
       - name: Open or update the heavy-cli tracking issue
-        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && steps.heavy-alert-message.outcome == 'success' && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-heavy-cli-alert
-          label-description: Auto-opened when the scheduled heavy-cli CI run fails
-          title: heavy-cli scheduled run failing
+          label-description: Auto-opened when an identity-bound heavy-cli CI run fails
+          title: ${{ steps.heavy-alert-message.outputs.title }}
+          incident: ${{ steps.heavy-alert-message.outputs.incident }}
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The scheduled heavy-cli run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, shard ${{ matrix.shard }} of ${{ matrix.total }}). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
+          body: ${{ steps.heavy-alert-message.outputs.body }}
 
   actionlint:
     name: actionlint
@@ -489,6 +500,18 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - id: main-alert-message
+        name: Bind the aggregate alert to this run identity
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        env:
+          ALERT_EVENT: ${{ github.event_name }}
+          ALERT_REF: ${{ github.ref }}
+          ALERT_HEAD: ${{ github.sha }}
+          ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node --experimental-strip-types src/workflow-alert.ts --scope aggregate
       # `pull_request` is deliberately absent: a red PR is already in front of its author, and a
       # tracking issue per red PR would bury the real alarm.
       #
@@ -496,13 +519,14 @@ jobs:
       # reaches here — so ONE dispatch proves both of this workflow's alert paths, each into its own
       # marker namespace.
       - name: Open or update the red-main tracking issue
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        if: steps.main-alert-message.outcome == 'success' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-main-red-alert
-          label-description: Auto-opened when CI fails on the main branch itself
-          title: main is red — the merged result does not pass verify
+          label-description: Auto-opened when an identity-bound aggregate CI run fails
+          title: ${{ steps.main-alert-message.outputs.title }}
+          incident: ${{ steps.main-alert-message.outputs.incident }}
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "CI failed on `main` itself (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, commit ${{ github.sha }}). Every subsequent PR now inherits this failure, so fix or revert before merging anything else. Note what this usually is NOT: a PR that was wrong. `strict: false` means the merged pair is tested for the first time here, so the common cause is two individually-green PRs whose combination breaks a repo-wide gate — `fs-walk`, `validate-reasons`, `validate-disclosure-venue`, the BOUNDED_RULES ratchet, `selfMatchingMatchKeys`, `test-only-exports` or the parity census — with neither PR appearing in the other's diff (#1507, #1451/#1445). Read the failing job before assuming the last merge is the culprit. Close this issue once `main` is green."
+          body: ${{ steps.main-alert-message.outputs.body }}

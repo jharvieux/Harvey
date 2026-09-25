@@ -282,6 +282,196 @@ function collectExecutable(node: unknown, out: string[], underWith: boolean): vo
   }
 }
 
+function collectRunScripts(doc: unknown): string[] {
+  if (doc === null || typeof doc !== "object") return [];
+  const jobs = (doc as { readonly jobs?: unknown }).jobs;
+  if (jobs === null || typeof jobs !== "object" || Array.isArray(jobs)) return [];
+  const out: string[] = [];
+  for (const job of Object.values(jobs)) {
+    if (job === null || typeof job !== "object" || Array.isArray(job)) continue;
+    const steps = (job as { readonly steps?: unknown }).steps;
+    if (!Array.isArray(steps)) continue;
+    for (const step of steps) {
+      if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
+      const run = (step as { readonly run?: unknown }).run;
+      if (typeof run === "string") out.push(run);
+    }
+  }
+  return out;
+}
+
+interface ShellCommand {
+  readonly tokens: readonly ShellToken[];
+  readonly ambiguous: boolean;
+}
+
+interface ShellToken {
+  readonly value: string;
+  /** Bash recognizes assignments only when the name and `=` are unquoted and unescaped. */
+  readonly assignment: boolean;
+}
+
+/**
+ * Tokenize the shell subset whose execution semantics this gate can prove. Quotes, escapes, line
+ * continuations, command separators and pipelines are supported. Command substitutions, backticks,
+ * heredocs and incomplete quotes make that simple command ambiguous, so this checker rejects text
+ * inside them as cadence evidence. Complex shell syntax may still run a gate, but it must be
+ * replaced with one of the supported direct forms before this checker will accept it.
+ */
+function shellCommands(script: string): ShellCommand[] | undefined {
+  const commands: ShellCommand[] = [];
+  let tokens: ShellToken[] = [];
+  let token = "";
+  let tokenStarted = false;
+  let assignmentNamePlain = true;
+  let sawPlainEquals = false;
+  let quote: "single" | "double" | undefined;
+  let ambiguous = false;
+  let sawAmbiguousShape = false;
+
+  const markAmbiguous = (): void => {
+    ambiguous = true;
+    sawAmbiguousShape = true;
+  };
+
+  const finishToken = (): void => {
+    if (!tokenStarted) return;
+    tokens.push({
+      value: token,
+      assignment: assignmentNamePlain && sawPlainEquals && SHELL_ASSIGNMENT.test(token),
+    });
+    token = "";
+    tokenStarted = false;
+    assignmentNamePlain = true;
+    sawPlainEquals = false;
+  };
+  const finishCommand = (): void => {
+    finishToken();
+    if (tokens.length > 0) commands.push({ tokens, ambiguous });
+    tokens = [];
+    ambiguous = false;
+  };
+
+  for (let index = 0; index < script.length; index += 1) {
+    const char = script[index]!;
+    const next = script[index + 1];
+    if (quote === "single") {
+      if (char === "'") quote = undefined;
+      else token += char;
+      tokenStarted = true;
+      continue;
+    }
+    if (quote === "double") {
+      if (char === '"') quote = undefined;
+      else if (char === "\\") {
+        if (next === "\n") index += 1;
+        else if (next !== undefined && ["$", "`", '"', "\\"].includes(next)) {
+          token += next;
+          index += 1;
+        } else token += char;
+      } else {
+        if ((char === "$" && next === "(") || char === "`") markAmbiguous();
+        token += char;
+      }
+      tokenStarted = true;
+      continue;
+    }
+    if (char === "\\") {
+      if (next === "\n") {
+        index += 1;
+        continue;
+      }
+      if (!sawPlainEquals) assignmentNamePlain = false;
+      if (next !== undefined) {
+        token += next;
+        tokenStarted = true;
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "'") {
+      if (!sawPlainEquals) assignmentNamePlain = false;
+      quote = "single";
+      tokenStarted = true;
+      continue;
+    }
+    if (char === '"') {
+      if (!sawPlainEquals) assignmentNamePlain = false;
+      quote = "double";
+      tokenStarted = true;
+      continue;
+    }
+    if ((char === "$" && next === "(") || char === "`" || (char === "<" && next === "<")
+      || char === "(" || char === ")" || char === "{" || char === "}") markAmbiguous();
+    if (char === "#" && !tokenStarted) {
+      while (index + 1 < script.length && script[index + 1] !== "\n") index += 1;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      finishToken();
+      if (char === "\n") finishCommand();
+      continue;
+    }
+    if (char === ";" || char === "|" || char === "&") {
+      if ((char === "|" || char === "&") && next === char) markAmbiguous();
+      finishCommand();
+      if (next === char) index += 1;
+      continue;
+    }
+    if (char === "=" && !sawPlainEquals) sawPlainEquals = true;
+    token += char;
+    tokenStarted = true;
+  }
+  if (quote) return undefined;
+  finishCommand();
+  const compound = new Set(["!", "case", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if", "select", "then", "until", "while"]);
+  if (commands.some((command) => compound.has(command.tokens[0]?.value ?? ""))) sawAmbiguousShape = true;
+  return sawAmbiguousShape ? commands.map((command) => ({ ...command, ambiguous: true })) : commands;
+}
+
+const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Supported command-recognition policy: optional leading assignments, then bare `env`, `command`
+ * or `exec` wrappers, followed by an exact `pnpm <script>`, `pnpm run <script>`, or
+ * `pnpm exec tsx src/cli/<gate>.ts` command. Individual tokens may be quoted and trailing arguments
+ * are allowed. Wrapper options and indirect shells/eval are intentionally unsupported and fail
+ * closed because they are outside this parser's supported execution subset.
+ */
+function commandInvokesGate(command: ShellCommand, gate: ScoredGate): boolean {
+  if (command.ambiguous) return false;
+  const tokens = [...command.tokens];
+  while (tokens[0]?.assignment) tokens.shift();
+  let shellBuiltinsAvailable = true;
+  while (tokens[0]?.value === "env"
+    || (shellBuiltinsAvailable && ["command", "exec"].includes(tokens[0]?.value ?? ""))) {
+    const wrapper = tokens.shift()!.value;
+    if (tokens.at(0)?.value === "--") tokens.shift();
+    // `env` parses assignment operands. Bash's `command` and `exec` builtins do not: after either
+    // wrapper, `CI=1` is a command name and must not be normalized into an environment prefix.
+    if (wrapper === "env") while (tokens[0]?.assignment) tokens.shift();
+    // `env` and `exec` dispatch their operand as an external executable. Shell builtins such as
+    // `command` and `exec` are therefore wrappers only while Bash itself still owns dispatch.
+    if (wrapper === "env" || wrapper === "exec") shellBuiltinsAvailable = false;
+  }
+  if (tokens[0]?.value !== "pnpm") return false;
+  if (tokens[1]?.value === gate.script) return true;
+  if (tokens[1]?.value === "run" && tokens[2]?.value === gate.script) return true;
+  return tokens[1]?.value === "exec"
+    && tokens[2]?.value === "tsx"
+    && tokens[3]?.value === `src/cli/${gate.id}.ts`;
+}
+
+function workflowRunScripts(yml: string): string[] | undefined {
+  let doc: unknown;
+  try {
+    doc = parse(yml);
+  } catch {
+    return undefined;
+  }
+  return collectRunScripts(doc);
+}
+
 /**
  * The parts of a workflow that can actually EXECUTE: every `run:` and `uses:` value anywhere in the
  * document, plus the `with:` inputs handed to a `uses:`. `undefined` when the YAML will not parse —
@@ -318,9 +508,9 @@ export function executableWorkflowText(yml: string): string | undefined {
  * secbench.yml and free-recall.yml do it.
  */
 function invokes(yml: string, gate: ScoredGate): boolean | undefined {
-  const executable = executableWorkflowText(yml);
-  if (executable === undefined) return undefined;
-  return executable.includes(`src/cli/${gate.id}.ts`) || executable.includes(`pnpm ${gate.script}`);
+  const runs = workflowRunScripts(yml);
+  if (runs === undefined) return undefined;
+  return runs.some((script) => shellCommands(script)?.some((command) => commandInvokesGate(command, gate)) === true);
 }
 
 export function checkScoredGates(
@@ -377,7 +567,7 @@ export function checkScoredGates(
           violations.push(`${gate.id}: ${gate.cadence.file} does not parse as YAML, so whether it invokes src/cli/${gate.id}.ts cannot be read. An unreadable venue is not a passing one.`);
         } else if (!reached) {
           violations.push(
-            `${gate.id}: declares cadence in ${gate.cadence.file} (${gate.cadence.job}) but no \`run:\`/\`uses:\` there invokes src/cli/${gate.id}.ts — the cadence was removed, or never landed. A comment, a step \`name:\` or a \`paths:\` filter naming it does not count (#1691/#1702).`,
+            `${gate.id}: declares cadence in ${gate.cadence.file} (${gate.cadence.job}) but no supported shell command in a \`run:\` step invokes src/cli/${gate.id}.ts — the cadence was removed, or never landed. Comments, echoes, longer command tokens and workflow metadata do not prove execution (#1691/#1702/#2085).`,
           );
         }
       }

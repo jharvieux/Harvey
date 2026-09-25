@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NOT_SCORED, SCORED_GATES, checkScoredGates, discoverValidateClis, loadGateInputs, type GateInputs, type ScoredGate } from "./scored-gates.js";
 
@@ -59,7 +63,7 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
       inputs({ workflows: { ".github/workflows/ci.yml": "run: pnpm test" } }),
       gate({ cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli planned slot", when: "every code PR + daily schedule" } }),
     );
-    expect(v.join("\n")).toContain("there invokes src/cli/validate-x.ts");
+    expect(v.join("\n")).toContain("no supported shell command");
   });
 
   it("fails when a new validate-* CLI is classified nowhere", () => {
@@ -104,15 +108,15 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
   it("REFUSES a cadence evidenced only by a PR-trigger paths: filter", () => {
     const yml = ['on:', '  pull_request:', '    paths:', '      - "src/cli/validate-x.ts"', 'jobs:', '  x:', '    steps:', '      - run: echo hi'].join("\n");
     const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence: { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } }));
-    expect(v.join("\n")).toContain("there invokes src/cli/validate-x.ts");
+    expect(v.join("\n")).toContain("no supported shell command");
   });
 
   it("accepts an invocation by CLI path or by package script, so the check above is not always-on", () => {
     const base = ['on:', '  pull_request:', '    paths:', '      - "docs/**"', 'jobs:', '  x:', '    steps:'].join("\n");
     const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
     for (const step of ["      - run: pnpm exec tsx src/cli/validate-x.ts", "      - run: pnpm validate:x"]) {
-      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }));
-      expect(v.join("\n"), step).not.toContain("there invokes src/cli/validate-x.ts");
+      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }), [], []);
+      expect(v, step).toEqual([]);
     }
   });
 
@@ -129,21 +133,129 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
     };
     for (const [label, lines] of Object.entries(cases)) {
       const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
-      expect(v.join("\n"), label).toContain("there invokes src/cli/validate-x.ts");
+      expect(v.join("\n"), label).toContain("no supported shell command");
     }
   });
 
-  // The other direction for the same extraction: a `uses:` value and a `with:` input are executable
-  // positions too, so narrowing to `run:` alone would have made this check fail on a live cadence.
-  it("accepts an invocation in a uses: value or a with: input", () => {
+  it("accepts an invocation in a multiline run block", () => {
     const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
-    for (const lines of [
-      ["jobs:", "  x:", "    steps:", "      - uses: ./.github/actions/run-cli", "        with:", "          cmd: pnpm exec tsx src/cli/validate-x.ts"],
-      ["jobs:", "  x:", "    steps:", "      - run: |", "          set -e", "          pnpm validate:x"],
-    ]) {
-      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
-      expect(v.join("\n"), lines.join("\n")).not.toContain("there invokes src/cli/validate-x.ts");
+    const lines = ["jobs:", "  x:", "    steps:", "      - run: |", "          set -e", "          pnpm validate:x"];
+    const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
+    expect(v.join("\n")).not.toContain("no supported shell command");
+  });
+
+  it("recognizes exact shell commands and rejects comments, echoes, longer tokens and absence", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const cases = {
+      exact: { run: "pnpm validate:x", accepted: true },
+      comment: { run: "# pnpm validate:x\necho disabled", accepted: false },
+      echo: { run: "echo 'pnpm validate:x'", accepted: false },
+      longer: { run: "pnpm validate:x-ray", accepted: false },
+      absent: { run: "echo disabled", accepted: false },
+    };
+    for (const [name, testCase] of Object.entries(cases)) {
+      const indented = testCase.run.split("\n").map((line) => `          ${line}`).join("\n");
+      const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${indented}`;
+      const violations = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence }));
+      expect(violations.join("\n").includes("no supported shell command"), name).toBe(!testCase.accepted);
     }
+  });
+
+  it("supports quoted tokens, trailing arguments and explicit transparent wrappers", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const commands = [
+      "pnpm 'validate:x' --json",
+      'env CI=1 pnpm run "validate:x" -- --json',
+      "command pnpm validate:x --json",
+      'exec pnpm exec tsx "src/cli/validate-x.ts" --json',
+      "pnpm validate:x \\\n+  --json",
+    ];
+    for (const command of commands) {
+      const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${command.split("\n").map((line) => `          ${line}`).join("\n")}`;
+      const violations = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence }));
+      expect(violations.join("\n"), command).not.toContain("no supported shell command");
+    }
+  });
+
+  it("matches the supported shell subset to real Bash execution of the target gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "scored-gate-shell-"));
+    const bin = join(root, "bin");
+    const marker = join(root, "target-executed");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), `#!/bin/sh
+case "$1:$2:$3" in
+  validate:x:*|run:validate:x:*|exec:tsx:src/cli/validate-x.ts) printf executed > "$HARVEY_GATE_MARKER" ;;
+esac
+exit 0
+`);
+    chmodSync(join(bin, "pnpm"), 0o755);
+    symlinkSync("/usr/bin/env", join(bin, "env"));
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const cases = {
+      direct: { script: "pnpm validate:x", expected: true },
+      quoted: { script: "pnpm 'validate:x' --json", expected: true },
+      env: { script: 'env CI=1 pnpm run "validate:x" -- --json', expected: true },
+      command: { script: "command pnpm validate:x --json", expected: true },
+      exec: { script: 'exec pnpm exec tsx "src/cli/validate-x.ts" --json', expected: true },
+      "nested env": { script: "env env pnpm validate:x", expected: true },
+      "command then env": { script: "command env CI=1 pnpm validate:x", expected: true },
+      "exec then env": { script: "exec env CI=1 pnpm validate:x", expected: true },
+      "env then command": { script: "env command pnpm validate:x", expected: false },
+      "env then exec": { script: "env exec pnpm validate:x", expected: false },
+      "exec then command": { script: "exec command pnpm validate:x", expected: false },
+      "quoted assignment word": { script: '"CI=1" pnpm validate:x', expected: false },
+      "command assignment operand": { script: "command CI=1 pnpm validate:x", expected: false },
+      "double-quoted ordinary backslash": { script: 'pnpm "validate\\:x"', expected: false },
+      "uncalled function": { script: "unused() {\n  pnpm validate:x\n}", expected: false },
+      "false shell conditional": { script: "if false; then\n  pnpm validate:x\nfi", expected: false },
+    };
+    try {
+      for (const [name, testCase] of Object.entries(cases)) {
+        const { script, expected } = testCase;
+        rmSync(marker, { force: true });
+        spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+          encoding: "utf8",
+          env: { HARVEY_GATE_MARKER: marker, PATH: bin },
+        });
+        const executed = existsSync(marker);
+        expect(executed, `${name}: Bash marker`).toBe(expected);
+        const indented = script.split("\n").map((line) => `          ${line}`).join("\n");
+        const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${indented}`;
+        const accepted = checkScoredGates(
+          inputs({ workflows: { ".github/workflows/x.yml": yml } }),
+          gate({ cadence }),
+          [],
+          [],
+        ).length === 0;
+        expect(accepted, `${name}: checker recognition`).toBe(expected);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for indirect shell shapes and arbitrary uses/with metadata", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const workflows = {
+      eval: ["jobs:", "  x:", "    steps:", "      - run: eval 'pnpm validate:x'"],
+      "nested shell": ["jobs:", "  x:", "    steps:", "      - run: bash -c 'pnpm validate:x'"],
+      substitution: ["jobs:", "  x:", "    steps:", "      - run: echo $(pnpm validate:x)"],
+      uses: ["jobs:", "  x:", "    steps:", "      - uses: ./src/cli/validate-x.ts"],
+      with: ["jobs:", "  x:", "    steps:", "      - uses: ./action", "        with:", "          command: pnpm validate:x"],
+      "with run key": ["jobs:", "  x:", "    steps:", "      - uses: ./action", "        with:", "          run: pnpm validate:x"],
+    };
+    for (const [name, lines] of Object.entries(workflows)) {
+      const violations = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
+      expect(violations.join("\n"), name).toContain("no supported shell command");
+    }
+  });
+
+  it("fails when a real invocation is removed but its comment and echo remain", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const live = "jobs:\n  x:\n    steps:\n      - run: |\n          # pnpm validate:x\n          echo 'pnpm validate:x'\n          pnpm validate:x";
+    const removed = live.replace("\n          pnpm validate:x", "");
+    expect(checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": live } }), gate({ cadence })).join("\n")).not.toContain("no supported shell command");
+    expect(checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": removed } }), gate({ cadence })).join("\n")).toContain("no supported shell command");
   });
 
   // A venue that fails to parse is not a venue that passed. Falling back to a raw text match here

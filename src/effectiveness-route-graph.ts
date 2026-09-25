@@ -424,23 +424,124 @@ function transparentExpressionOperand(node: ts.Node): ts.Expression | undefined 
   return undefined;
 }
 
-function expressionSymbol(checker: ts.TypeChecker, expression: ts.Expression): ts.Symbol | undefined {
+const MAX_LOCAL_ALIAS_HOPS = 8;
+
+function isConstVariable(declaration: ts.VariableDeclaration): boolean {
+  return (declaration.parent.flags & ts.NodeFlags.Const) !== 0;
+}
+
+function expressionSymbol(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+  remainingAliasHops = MAX_LOCAL_ALIAS_HOPS,
+): ts.Symbol | undefined {
   const operand = transparentExpressionOperand(expression);
-  if (operand) return expressionSymbol(checker, operand);
+  if (operand) return expressionSymbol(checker, operand, seen, remainingAliasHops);
   if (ts.isPropertyAccessExpression(expression)) {
     const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
     // Follow named aliases (`{ exec: execFileSync }`) but retain the property identity for an
     // anonymous function initializer. The latter is where importedExecutionSymbols records an
     // executor wrapper; resolving the anonymous arrow/function itself yields no symbol.
-    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
+    return initializer ? expressionSymbol(checker, initializer, seen, remainingAliasHops) ?? property : property;
   }
   if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
     const property = canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
     const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
-    return initializer ? expressionSymbol(checker, initializer) ?? property : property;
+    return initializer ? expressionSymbol(checker, initializer, seen, remainingAliasHops) ?? property : property;
   }
-  return canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  if (!ts.isIdentifier(expression) || !symbol || seen.has(symbol) || remainingAliasHops === 0) return symbol;
+  const declarations = (symbol.declarations ?? []).filter(ts.isVariableDeclaration);
+  if (declarations.length !== 1 || !isConstVariable(declarations[0]!) || !declarations[0]!.initializer) return symbol;
+  return expressionSymbol(
+    checker,
+    declarations[0]!.initializer,
+    new Set([...seen, symbol]),
+    remainingAliasHops - 1,
+  ) ?? symbol;
+}
+
+function assignedPropertyKeys(checker: ts.TypeChecker, sources: readonly ts.SourceFile[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const source of sources) {
+    const visit = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node)
+        && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+        && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const left = transparentExpressionOperand(node.left) ?? node.left;
+        let candidates: readonly (ts.Symbol | undefined)[] = [];
+        if (ts.isPropertyAccessExpression(left)) candidates = [checker.getSymbolAtLocation(left.name)];
+        else if (ts.isElementAccessExpression(left) && left.argumentExpression) {
+          const owner = checker.getTypeAtLocation(left.expression);
+          const keyType = checker.getTypeAtLocation(left.argumentExpression);
+          if (keyType.isStringLiteral()) candidates = [owner.getProperty(keyType.value)];
+          else {
+            const alternatives = keyType.isUnion() ? keyType.types : [keyType];
+            // Numeric array-element writes change data, not named producer properties. An unknown
+            // string key may replace any named property and is conservatively tracked as such.
+            if (!alternatives.every((type) => (type.flags & ts.TypeFlags.NumberLike) !== 0)) candidates = owner.getProperties();
+          }
+        }
+        for (const candidate of candidates) {
+          const key = symbolKey(checker, candidate);
+          if (key) keys.add(key);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return keys;
+}
+
+interface AliasContext {
+  assignedProperties: ReadonlySet<string>;
+  isDefaultLibrary: (source: ts.SourceFile) => boolean;
+}
+
+function localAliasAmbiguity(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  context: AliasContext,
+  seen = new Set<ts.Symbol>(),
+  remainingAliasHops = MAX_LOCAL_ALIAS_HOPS,
+): string | undefined {
+  const operand = transparentExpressionOperand(expression);
+  if (operand) return localAliasAmbiguity(checker, operand, context, seen, remainingAliasHops);
+  if (ts.isPropertyAccessExpression(expression)) {
+    const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
+    if (context.assignedProperties.has(symbolKey(checker, property) ?? "")) return `mutable property alias ${expression.name.text}`;
+    if (property?.declarations?.some((declaration) => context.isDefaultLibrary(declaration.getSourceFile()))) return undefined;
+    const ownerAmbiguity = localAliasAmbiguity(checker, expression.expression, context, seen, remainingAliasHops);
+    if (ownerAmbiguity) return ownerAmbiguity;
+    const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
+    return initializer ? localAliasAmbiguity(checker, initializer, context, seen, remainingAliasHops) : undefined;
+  }
+  if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
+    const property = canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
+    if (context.assignedProperties.has(symbolKey(checker, property) ?? "")) return `mutable property alias ${expression.argumentExpression.text}`;
+    if (property?.declarations?.some((declaration) => context.isDefaultLibrary(declaration.getSourceFile()))) return undefined;
+    const ownerAmbiguity = localAliasAmbiguity(checker, expression.expression, context, seen, remainingAliasHops);
+    if (ownerAmbiguity) return ownerAmbiguity;
+    const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
+    return initializer ? localAliasAmbiguity(checker, initializer, context, seen, remainingAliasHops) : undefined;
+  }
+  if (!ts.isIdentifier(expression)) return undefined;
+  const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+  if (!symbol || seen.has(symbol)) return undefined;
+  const declarations = (symbol.declarations ?? []).filter(ts.isVariableDeclaration);
+  if (declarations.length !== 1 || !declarations[0]!.initializer) return undefined;
+  if (!isConstVariable(declarations[0]!)) return `mutable local alias ${expression.text}`;
+  if (remainingAliasHops === 0) return `local alias ${expression.text} exceeds the ${MAX_LOCAL_ALIAS_HOPS}-hop resolution limit`;
+  return localAliasAmbiguity(
+    checker,
+    declarations[0]!.initializer,
+    context,
+    new Set([...seen, symbol]),
+    remainingAliasHops - 1,
+  );
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {
@@ -474,6 +575,11 @@ function typeContainsFinding(checker: ts.TypeChecker, type: ts.Type, seen = new 
   if (indexed && indexed !== type && typeContainsFinding(checker, indexed, seen)) return true;
   const properties = new Set(type.getProperties().map((property) => property.getName()));
   return properties.has("id") && properties.has("taxonomy") && properties.has("severity") && properties.has("location");
+}
+
+function callableReturnsFinding(checker: ts.TypeChecker, node: ts.Expression): boolean {
+  return checker.getTypeAtLocation(node).getCallSignatures()
+    .some((signature) => typeContainsFinding(checker, checker.getReturnTypeOfSignature(signature)));
 }
 
 function programForSources(sources: readonly string[], oldProgram?: ts.Program): ts.Program {
@@ -633,6 +739,10 @@ function routeGraphForReachability(
   const corpusIds = new Set<string>();
   const rootIds = new Set(roots.map((entry) => repoRelative(root, entry)).filter((entry): entry is string => !!entry));
   const registeredFiles = new Set(implementations.map((item) => item.file));
+  const aliasContext: AliasContext = {
+    assignedProperties: assignedPropertyKeys(checker, program.getSourceFiles().filter((source) => reachable.has(source.fileName))),
+    isDefaultLibrary: (source) => program.isSourceFileDefaultLibrary(source),
+  };
 
   for (const source of program.getSourceFiles()) {
     if (!reachable.has(source.fileName)) continue;
@@ -644,10 +754,18 @@ function routeGraphForReachability(
         && node.name.text === "id"
         && ts.isStringLiteralLike(node.initializer)) corpusIds.add(node.initializer.text);
       if (ts.isCallExpression(node)) {
+        const ambiguousAlias = localAliasAmbiguity(checker, node.expression, aliasContext);
         const signature = checker.getResolvedSignature(node);
         const identity = symbolIdentity(root, checker, expressionSymbol(checker, node.expression))
           ?? (signature?.declaration ? symbolIdentity(root, checker, checker.getSymbolAtLocation((signature.declaration as ts.NamedDeclaration).name ?? signature.declaration)) : undefined);
-        if (identity) {
+        const findingBearing = typeContainsFinding(checker, checker.getTypeAtLocation(node));
+        if (ambiguousAlias) {
+          // Known alias ambiguity needs an exclusion reason in every reachable consumer, including
+          // venue graphs that suppress diagnostics for otherwise unregistered producers.
+          if (findingBearing) {
+            unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing call has ambiguous producer identity`);
+          }
+        } else if (identity) {
           const target = `${identity.file}#${identity.symbol}`;
           const id = `call:${consumerFile}->${target}`;
           const implementation = implementationByIdentity.get(target);
@@ -659,28 +777,35 @@ function routeGraphForReachability(
               .sort(byText)[0] ?? consumerFile;
             const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
             live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "call" }]);
-          } else if (options.detectUnknown !== false && !identity.file.startsWith("node_modules/") && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile)) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
+          } else if (options.detectUnknown !== false && !identity.file.startsWith("node_modules/") && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile)) && findingBearing) {
             unresolvedCandidates.push({ message: `${consumerFile}#${identity.symbol}: finding-bearing call target ${target} is unregistered`, consumerFile, targetFile: identity.file });
           }
-        } else if (options.detectUnknown !== false && rootIds.has(consumerFile) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
+        } else if (options.detectUnknown !== false && rootIds.has(consumerFile) && findingBearing) {
           unresolvedCandidates.push({ message: `${consumerFile}: finding-bearing dispatch has no resolvable declaration`, consumerFile });
         }
       }
       if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
         && ((ts.isCallExpression(node.parent) && node.parent.arguments.includes(node))
           || (ts.isNewExpression(node.parent) && node.parent.arguments?.includes(node) === true))) {
-        const identity = symbolIdentity(root, checker, expressionSymbol(checker, node));
-        if (identity) {
-          const target = `${identity.file}#${identity.symbol}`;
-          if (implementationByIdentity.has(target)) {
-            const id = `registry:${consumerFile}->${target}`;
-            calls.set(id, { id, kind: "registry", consumerFile, targetFile: identity.file, targetSymbol: identity.symbol });
-            const rootId = (reachability.rootsByFile.get(source.fileName) ?? [])
-              .map((entry) => repoRelative(root, entry))
-              .filter((entry): entry is string => !!entry)
-              .sort(byText)[0] ?? consumerFile;
-            const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
-            live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "registry" }]);
+        const ambiguousAlias = localAliasAmbiguity(checker, node, aliasContext);
+        if (ambiguousAlias) {
+          if (callableReturnsFinding(checker, node)) {
+            unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing registry reference has ambiguous producer identity`);
+          }
+        } else {
+          const identity = symbolIdentity(root, checker, expressionSymbol(checker, node));
+          if (identity) {
+            const target = `${identity.file}#${identity.symbol}`;
+            if (implementationByIdentity.has(target)) {
+              const id = `registry:${consumerFile}->${target}`;
+              calls.set(id, { id, kind: "registry", consumerFile, targetFile: identity.file, targetSymbol: identity.symbol });
+              const rootId = (reachability.rootsByFile.get(source.fileName) ?? [])
+                .map((entry) => repoRelative(root, entry))
+                .filter((entry): entry is string => !!entry)
+                .sort(byText)[0] ?? consumerFile;
+              const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
+              live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "registry" }]);
+            }
           }
         }
       }

@@ -48,6 +48,10 @@ inputs:
   body:
     description: Issue body, posted on create and on every update comment.
     required: true
+  incident:
+    description: Stable incident partition within the marker. Branch dispatches use a ref-derived partition so they cannot update a main incident.
+    required: false
+    default: default
   drill:
     description: "true = prove the path end-to-end against a self-cleaning drill issue instead of alerting."
     required: false
@@ -71,6 +75,7 @@ runs:
         LABEL_DESC: ${{ inputs.label-description }}
         TITLE: ${{ inputs.title }}
         BODY: ${{ inputs.body }}
+        ALERT_INCIDENT: ${{ inputs.incident }}
         DRILL: ${{ inputs.drill }}
         WORKFLOW: ${{ github.workflow }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -99,7 +104,7 @@ runs:
           exit 0
         fi
 
-        real=$(find_open real)
+        real=$(find_any_open real)
         if [ -n "$real" ]; then
           echo "::error::a REAL $MARKER alert (#$real) is open — a drill run now would be indistinguishable from it. Resolve #$real, then re-run the drill."
           exit 1

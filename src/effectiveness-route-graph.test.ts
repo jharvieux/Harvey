@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
+import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs, discoverEffectivenessVenueRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
@@ -53,6 +53,174 @@ describe("schema-v3 route graph", () => {
     expect(live.routes).toHaveLength(1);
     writeFileSync(join(root, "src", "root.ts"), 'import { produce } from "./producer.js"; void produce;\n');
     expect(discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]).routes).toEqual([]);
+  });
+
+  it("preserves producer identity through direct, import and bounded local aliases with an execution oracle", () => {
+    const root = fixture("export {};\n");
+    writeFileSync(join(root, "src", "producer.mjs"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{ id: 'executed', taxonomy: 'test', severity: 'Low', location: 'fixture' }]; }\n");
+    const cases = {
+      direct: "import { produce } from './producer.mjs'; export const findings = produce();\n",
+      "import-alias": "import { produce as alias } from './producer.mjs'; export const findings = alias();\n",
+      "local-alias": "import { produce } from './producer.mjs'; const alias = produce; export const findings = alias();\n",
+      "multi-hop": "import { produce } from './producer.mjs'; const first = produce; const second = first; const third = second; export const findings = third();\n",
+    };
+    const aliasImplementation = { ...implementation, file: "src/producer.mjs" };
+
+    for (const [name, source] of Object.entries(cases)) {
+      const file = join(root, "src", `${name}.mjs`);
+      writeFileSync(file, source);
+      const graph = discoverEffectivenessRouteGraph(root, [aliasImplementation], [`src/${name}.mjs`]);
+      expect(graph.routes, name).toHaveLength(1);
+      expect(graph.routes[0]?.implementationId, name).toBe("src/producer.mjs#produce");
+      expect(runNode(root, [`src/${name}.mjs`]), name).toEqual({ status: 0, executed: true });
+    }
+  });
+
+  it("discloses ambiguous aliases and suppresses guessed routes in venue mode", () => {
+    const cases = {
+      "const through mutable": {
+        source: "import { produce } from './producer.ts'; let first = produce; const alias = first; alias();\n",
+        executed: true,
+        diagnostic: "mutable local alias first",
+      },
+      "over alias limit": {
+        source: "import { produce } from './producer.ts'; const a0=produce; const a1=a0; const a2=a1; const a3=a2; const a4=a3; const a5=a4; const a6=a5; const a7=a6; const a8=a7; a8();\n",
+        executed: true,
+        diagnostic: "exceeds the 8-hop resolution limit",
+      },
+      "reassigned property": {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; const alias=obj.run; alias();\n",
+        executed: false,
+        diagnostic: "mutable property alias run",
+      },
+    };
+    for (const [name, testCase] of Object.entries(cases)) {
+      const root = fixture(testCase.source);
+      writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id:string; taxonomy:string; severity:string; location:string }\nexport function produce(): Finding[] { console.log('PRODUCER_EXECUTED'); return [{id:'x',taxonomy:'x',severity:'Low',location:'x'}]; }\n");
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(runNode(root, ["src/root.ts"]).executed, name).toBe(testCase.executed);
+      expect(graph.routes, name).toEqual([]);
+      expect(graph.unresolvedFindingDispatches.join("\n"), name).toContain(testCase.diagnostic);
+      const venueGraph = discoverEffectivenessVenueRouteGraphs(root, [implementation], ["src/root.ts"])[0]!;
+      expect(venueGraph.routes, `${name}: venue`).toEqual([]);
+      expect(venueGraph.unresolvedFindingDispatches.join("\n"), `${name}: venue ambiguity disclosed`).toContain(testCase.diagnostic);
+    }
+  });
+
+  it("applies property-alias provenance to reachable calls and callback registry receipts", () => {
+    const producer = "export interface Finding { id:string; taxonomy:string; severity:string; location:string }\nexport function produce(): Finding[] { console.log('PRODUCER_EXECUTED'); return [{id:'x',taxonomy:'x',severity:'Low',location:'x'}]; }\n";
+    const reassignedCall = "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; const alias=obj.run; alias();\n";
+    const reachableRoot = fixture("import './consumer.ts';\n");
+    writeFileSync(join(reachableRoot, "src", "producer.ts"), producer);
+    writeFileSync(join(reachableRoot, "src", "consumer.ts"), reassignedCall);
+    expect(runNode(reachableRoot, ["src/root.ts"]).executed).toBe(false);
+    for (const detectUnknown of [true, false]) {
+      const graph = discoverEffectivenessRouteGraph(reachableRoot, [implementation], ["src/root.ts"], { detectUnknown });
+      expect(graph.routes, `reachable reassigned call, detectUnknown=${detectUnknown}`).toEqual([]);
+      expect(graph.unresolvedFindingDispatches.join("\n")).toContain("ambiguous producer identity");
+    }
+
+    const callbacks = {
+      immutable: {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; function invoke(fn:()=>Finding[]){fn();} invoke(obj.run);\n",
+        executed: true,
+        routes: 1,
+      },
+      reassigned: {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; function invoke(fn:()=>Finding[]){fn();} invoke(obj.run);\n",
+        executed: false,
+        routes: 0,
+      },
+    };
+    for (const [name, testCase] of Object.entries(callbacks)) {
+      const root = fixture(testCase.source);
+      writeFileSync(join(root, "src", "producer.ts"), producer);
+      expect(runNode(root, ["src/root.ts"]).executed, `${name}: execution`).toBe(testCase.executed);
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(graph.routes, `${name}: production`).toHaveLength(testCase.routes);
+      const venueGraph = discoverEffectivenessVenueRouteGraphs(root, [implementation], ["src/root.ts"])[0]!;
+      expect(venueGraph.routes, `${name}: venue`).toHaveLength(testCase.routes);
+      if (name === "reassigned") {
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("finding-bearing registry reference has ambiguous producer identity");
+        expect(venueGraph.unresolvedFindingDispatches.join("\n")).toContain("finding-bearing registry reference has ambiguous producer identity");
+      }
+    }
+  });
+
+  it("distinguishes native container methods from producer aliases while disclosing overridden methods", () => {
+    for (const member of [".filter", '["filter"]']) {
+      for (const override of [false, true]) {
+        const root = fixture("import './consumer.ts';");
+        writeFileSync(join(root, "src", "consumer.ts"), `import { produce } from './producer.ts'; let findings = produce(); const index = 0; findings[index] = findings[0]; ${override ? 'findings.filter = () => [];' : ''} findings${member}(item => item.id);`);
+        writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; }");
+        expect(runNode(root, ["src/root.ts"])).toEqual({ status: 0, executed: true });
+        for (const detectUnknown of [true, false]) {
+          const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], { detectUnknown });
+          expect(graph.routes).toHaveLength(1);
+          if (override) expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias filter");
+          else expect(graph.unresolvedFindingDispatches).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("tracks imported property reassignment in the reachable consumer before aliases or callbacks", () => {
+    for (const callback of [false, true]) {
+      for (const reassigned of [false, true]) {
+        const root = fixture("import './consumer.ts';");
+        writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; } export const registry = {run: produce};");
+        writeFileSync(join(root, "src", "consumer.ts"), `import {registry} from './producer.ts'; ${reassigned ? 'registry.run = () => [];' : ''} ${callback ? 'function invoke(fn) { fn(); } invoke(registry.run);' : 'const alias = registry.run; alias();'}`);
+        expect(runNode(root, ["src/root.ts"])).toEqual({status: 0, executed: !reassigned});
+        for (const detectUnknown of [true, false]) {
+          const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], {detectUnknown});
+          expect(graph.routes).toHaveLength(reassigned ? 0 : 1);
+          if (reassigned) expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias run");
+          else expect(graph.unresolvedFindingDispatches).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("discloses constant and unresolved string-key writes to imported producer properties", () => {
+    for (const key of ['"run"', "key", '["r", "un"].join("")']) {
+      const root = fixture(`import {registry} from './producer.ts'; const key = "run"; registry[${key}] = () => []; const alias = registry.run; alias();`);
+      writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; } export const registry = {run: produce};");
+      expect(runNode(root, ["src/root.ts"])).toEqual({status: 0, executed: false});
+      for (const detectUnknown of [true, false]) {
+        const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], {detectUnknown});
+        expect(graph.routes).toEqual([]);
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias run");
+      }
+    }
+  });
+
+  it("does not invent routes for unused, unrelated, shadowed or mutable aliases", () => {
+    const cases = {
+      unused: "import { produce } from './producer.js'; const alias = produce; void alias;\n",
+      unrelated: "import { produce } from './producer.js'; function alias() { return []; } alias(); void produce;\n",
+      "same-name unrelated": "function produce() { return []; } produce();\n",
+      shadowed: "import { produce } from './producer.js'; function run(produce: () => unknown[]) { produce(); } run(() => []);\n",
+      reassigned: "import { produce, type Finding } from './producer.js'; const unrelated = (): Finding[] => []; let alias = produce; alias = unrelated; alias();\n",
+    };
+    for (const [name, source] of Object.entries(cases)) {
+      const root = fixture(source);
+      writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id: string; taxonomy: string; severity: string; location: string }\nexport function produce(): Finding[] { return []; }\n");
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(graph.routes, name).toEqual([]);
+      if (name === "reassigned") {
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable local alias");
+      }
+    }
+  });
+
+  it("reports the underlying producer when a local alias calls an unregistered implementation", () => {
+    const root = fixture('import { produce } from "./producer.js"; const alias = produce; alias();\n');
+    writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id: string; taxonomy: string; severity: string; location: string }\nexport function produce(): Finding[] { return []; }\n");
+    const graph = discoverEffectivenessRouteGraph(root, [], ["src/root.ts"]);
+    expect(graph.routes).toEqual([]);
+    expect(graph.unresolvedFindingDispatches).toContain(
+      "src/root.ts#produce: finding-bearing call target src/producer.ts#produce is unregistered",
+    );
   });
 
   it("batches separate root and venue reachability without retaining stale source", () => {
