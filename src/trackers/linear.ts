@@ -56,7 +56,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
 
   // Runs one GraphQL operation. A GraphQL endpoint answers 200 even for query errors, so a non-empty
   // `errors` array is surfaced as a throw here (the transport-level non-2xx throw lives in http.ts).
-  async #graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  async #graphql<T>(query: string, variables: Record<string, unknown>, mutation?: "issueCreate" | "commentCreate" | "issueUpdate" | "issueLabelCreate"): Promise<T> {
     const res = await trackerFetchJson<GraphQLResponse<T>>(this.#fetch, this.#url, {
       method: "POST",
       headers: { Authorization: this.#apiKey, "Content-Type": "application/json" },
@@ -64,9 +64,10 @@ export class LinearTracker implements Tracker, TicketWriteback {
     });
     if (res.errors?.length) throw new Error(`Linear GraphQL error: ${res.errors.map((e) => e.message).join("; ")}`);
     if (!res.data) throw new Error("Linear GraphQL response has no data");
-    if (/^\s*mutation\b/.test(query) && Object.keys(res.data).length === 0) throw new Error("Linear mutation response has no operation result");
-    for (const [operation, value] of Object.entries(res.data)) {
-      if (/^\s*mutation\b/.test(query) && (!value || typeof value !== "object" || !("success" in value) || value.success !== true)) throw new Error(`Linear ${operation} failed: success was not true`);
+    if (/^\s*mutation\b/.test(query)) {
+      if (!mutation || !Object.hasOwn(res.data, mutation)) throw new Error("Linear mutation response has no operation result for the requested mutation");
+      const value: unknown = (res.data as Record<string, unknown>)[mutation];
+      if (!value || typeof value !== "object" || !("success" in value) || value.success !== true) throw new Error(`Linear ${mutation} failed: success was not true`);
     }
     return res.data as T;
   }
@@ -83,6 +84,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
     const data = await this.#graphql<{ issueCreate: { issue: IssueRef } }>(
       `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id url } } }`,
       { input: { teamId: this.#teamId, title: input.title, description: input.description, parentId } },
+      "issueCreate",
     );
     const issue = data.issueCreate.issue;
     return assertTrackerRef({ id: issue?.id, url: issue?.url });
@@ -140,6 +142,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
     const data = await this.#graphql<{ commentCreate: { comment: { url: string } } }>(
       `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { url } } }`,
       { input: { issueId: id, body: briefMarkdown } },
+      "commentCreate",
     );
     return { url: data.commentCreate.comment.url };
   }
@@ -169,6 +172,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
     await this.#graphql(
       `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { url } } }`,
       { input: { issueId: id, body } },
+      "commentCreate",
     );
   }
 
@@ -190,6 +194,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
     const data = await this.#graphql<{ issueUpdate: { success: boolean } }>(
       `mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
       { id, input },
+      "issueUpdate",
     );
     if (data.issueUpdate?.success !== true) throw new Error("Linear issueUpdate failed: success was not true");
   }
@@ -214,6 +219,7 @@ export class LinearTracker implements Tracker, TicketWriteback {
     const data = await this.#graphql<{ issueLabelCreate: { issueLabel: { id: string } } }>(
       `mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id } } }`,
       { input: { teamId: this.#teamId, name } },
+      "issueLabelCreate",
     );
     return data.issueLabelCreate.issueLabel.id;
   }

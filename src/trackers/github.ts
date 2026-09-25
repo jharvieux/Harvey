@@ -21,7 +21,7 @@
 // #50: findByMarker uses the Issues Search API (in:body) scoped to this repo; updateStory PATCHes
 // the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
-import { assertTrackerRef, PartialTrackerWriteError, trackerRecoveryPages } from "./recovery.js";
+import { assertTrackerRef, PartialTrackerWriteError, trackerNextLink, trackerRecoveryPages } from "./recovery.js";
 import { trackerFetch, trackerFetchJson } from "./http.js";
 import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
@@ -126,21 +126,41 @@ export class GitHubTracker implements Tracker, TicketWriteback {
   async findByMarker(marker: string): Promise<CreatedRef | null> {
     const q = `repo:${this.#owner}/${this.#repo} is:issue in:body "${marker.replaceAll('"', '\\"')}"`;
     const matches = new Map<string, CreatedRef>();
+    const seen = new Set<string>();
+    const identities = new Set<string>();
+    let total: number | undefined;
+    let url = `${this.#base}/search/issues?q=${encodeURIComponent(q)}&per_page=100&page=1`;
     for (let page = 1; page <= 10; page++) {
-      const res = await trackerFetchJson<GitHubSearchResponse>(this.#fetch,
-        `${this.#base}/search/issues?q=${encodeURIComponent(q)}&per_page=100&page=${page}`,
-        { method: "GET", headers: this.#headers() });
+      if (seen.has(url)) throw new Error("GitHub marker lookup repeats a page");
+      seen.add(url);
+      const response = await trackerFetch(this.#fetch, url, { method: "GET", headers: this.#headers() });
+      const res = await response.json() as GitHubSearchResponse;
       if (!Array.isArray(res.items) || !Number.isSafeInteger(res.total_count) || res.total_count! < 0 || res.incomplete_results !== false) throw new Error("GitHub marker lookup incomplete; refusing ambiguous recovery");
+      if (total !== undefined && total !== res.total_count) throw new Error("GitHub marker lookup population changed during recovery");
+      total = res.total_count!;
       for (const hit of res.items) {
         if (typeof hit.repository_url !== "string" || !hit.repository_url || !Number.isSafeInteger(hit.number) || hit.number <= 0 || typeof hit.html_url !== "string") throw new Error("GitHub marker lookup lacks verified scope or identity");
         const repository = hit.repository_url;
+        const identity = `${repository}#${hit.number}`;
+        if (identities.has(identity)) throw new Error("GitHub marker lookup repeats an issue across pages");
+        identities.add(identity);
         const expected = this.#repoUrl("");
         if (!hit.pull_request && repository === expected && hit.body?.includes(marker)) {
           matches.set(String(hit.number), { id: String(hit.number), url: hit.html_url });
         }
       }
       if (matches.size > 1) throw new Error("GitHub marker lookup ambiguous: multiple exact matches in repository");
-      if (page * 100 >= res.total_count!) return [...matches.values()][0] ?? null;
+      const next = trackerNextLink(response, url);
+      if (identities.size > total || (next && identities.size >= total)) throw new Error("GitHub marker lookup has contradictory pagination");
+      if (!next && identities.size === total) return [...matches.values()][0] ?? null;
+      if (res.items.length === 0) throw new Error("GitHub marker lookup has an empty incomplete page");
+      if (next) url = next;
+      else {
+        const fallback = new URL(url);
+        const currentPage = Number(fallback.searchParams.get("page"));
+        if (!Number.isSafeInteger(currentPage) || currentPage < 1) throw new Error("GitHub marker lookup has invalid continuation");
+        fallback.searchParams.set("page", String(currentPage + 1)); url = fallback.href;
+      }
     }
     throw new Error("GitHub marker lookup exceeds search limit; refusing incomplete recovery");
   }

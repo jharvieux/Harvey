@@ -175,15 +175,32 @@ export class AzureDevOpsTracker implements Tracker, TicketWriteback {
       let token: string | undefined;
       const seen = new Set<string>();
       let complete = false;
+      let examined = 0;
       for (let page = 0; page < 100; page++) {
         const query = new URLSearchParams({"api-version": `${this.#apiVersion}-preview.4`, "$top": "200", includeDeleted: "false"});
         if (token) query.set("continuationToken", token);
-        const result = await trackerFetchJson<{comments: {text: string}[]; continuationToken?: string}>(this.#fetch, `${this.#orgUrl}/${this.#project}/_apis/wit/workItems/${id}/comments?${query}`, {method: "GET", headers: {Authorization: this.#auth}});
-        if (!Array.isArray(result.comments) || (result.continuationToken != null && typeof result.continuationToken !== "string")) throw new Error("Azure comment recovery has invalid pagination");
+        const currentUrl = `${this.#orgUrl}/${this.#project}/_apis/wit/workItems/${id}/comments?${query}`;
+        const result = await trackerFetchJson<{comments: {text: string}[]; continuationToken?: string; nextPage?: string; count?: number; totalCount?: number}>(this.#fetch, currentUrl, {method: "GET", headers: {Authorization: this.#auth}});
+        if (!Array.isArray(result.comments) || (result.continuationToken != null && typeof result.continuationToken !== "string") || (result.nextPage != null && typeof result.nextPage !== "string")) throw new Error("Azure comment recovery has invalid pagination");
+        examined += result.comments.length;
+        if (result.count !== undefined && (!Number.isSafeInteger(result.count) || result.count !== result.comments.length)) throw new Error("Azure comment recovery has contradictory batch count");
+        if (result.totalCount !== undefined && (!Number.isSafeInteger(result.totalCount) || result.totalCount < examined)) throw new Error("Azure comment recovery has contradictory total count");
+        let continuation = result.continuationToken;
+        if (result.nextPage) {
+          const next = new URL(result.nextPage, currentUrl);
+          const current = new URL(currentUrl);
+          if (next.origin !== current.origin || next.pathname !== current.pathname || next.username || next.password || next.hash) throw new Error("Azure comment recovery next page changes endpoint scope");
+          const nextToken = next.searchParams.get("continuationToken");
+          if (!nextToken || (continuation && nextToken !== continuation)) throw new Error("Azure comment recovery has contradictory continuation");
+          continuation = nextToken;
+        }
         if (result.comments.some(comment => comment.text.includes(marker))) return;
-        if (!result.continuationToken) {complete = true; break;}
-        if (seen.has(result.continuationToken)) throw new Error("Azure comment recovery incomplete: repeated cursor");
-        token = result.continuationToken; seen.add(token);
+        if (!continuation) {
+          if (result.totalCount !== undefined && examined < result.totalCount) throw new Error("Azure comment recovery is missing a continuation");
+          complete = true; break;
+        }
+        if (seen.has(continuation)) throw new Error("Azure comment recovery incomplete: repeated cursor");
+        token = continuation; seen.add(token);
       }
       if (!complete) throw new Error("Azure comment recovery incomplete: pagination limit");
     }

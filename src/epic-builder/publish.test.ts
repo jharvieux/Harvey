@@ -178,7 +178,7 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
       const method = init?.method ?? "GET";
       calls.push({ method, url: u });
       const ok = (data: unknown) =>
-        ({ ok: true, status: 200, json: async () => data, text: async () => "" }) as unknown as Response;
+        Response.json(data);
       if (method === "POST" && u.endsWith("/issues")) {
         const n = ++issueNo;
         return ok({ number: n, html_url: `https://github.com/o/r/issues/${n}`, body: "" });

@@ -4,7 +4,9 @@ import { GitLabTracker } from "./gitlab.js";
 import { JiraTracker } from "./jira.js";
 import { LinearTracker } from "./linear.js";
 import { AzureDevOpsTracker } from "./azure-devops.js";
-import { fileFindings } from "./findings-to-tickets.js";
+import { fileFindings, findingMarker } from "./findings-to-tickets.js";
+import { writeBackVerification } from "./verify-writeback.js";
+import type { GateReport } from "../fix/gate.js";
 import type { Finding } from "../findings.js";
 
 const marker = "<!-- harvey-finding:abc123 -->";
@@ -20,6 +22,87 @@ function adapter(kind: Kind, fetchImpl: typeof fetch) {
 }
 
 describe("recovery refuses unproved remote state", () => {
+  it.each(["short-link", "empty-positive-total", "duplicate-pages", "changed-total", "changed-query"] as const)("GitHub prevents filing against %s search state", async mode => {
+    let reads = 0;
+    let writes = 0;
+    const actualMarker = findingMarker(finding);
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") { writes++; return Response.json({ number: 99, html_url: "https://github.com/acme/app/issues/99" }); }
+      if (!String(url).includes("/search/issues?")) return Response.json({ labels: [] });
+      reads++;
+      const next = new URL(url); next.searchParams.set("page", "2");
+      if (mode === "changed-query") next.searchParams.set("q", "repo:foreign/app");
+      const items = mode === "empty-positive-total" ? [] : [{ number: mode === "duplicate-pages" ? 42 : 41 + reads, html_url: `https://github.com/acme/app/issues/${41 + reads}`, repository_url: "https://api.github.com/repos/acme/app", body: actualMarker }];
+      return Response.json({ items, total_count: mode === "changed-total" && reads > 1 ? 3 : 2, incomplete_results: false }, reads === 1 && mode !== "empty-positive-total" ? { headers: { Link: `<${next}>; rel="next"` } } : undefined);
+    }) as typeof fetch;
+    const result = await fileFindings(adapter("github", fetchImpl), [finding], { grouping: "flat", paid: true });
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.stage).toBe("lookup");
+    expect(result.created).toEqual([]);
+    expect(writes).toBe(0);
+    expect(reads).toBe(mode === "empty-positive-total" || mode === "changed-query" ? 1 : 2);
+  });
+
+  it.each([false, true])("Linear writeback requires the selected comment mutation result (valid=%s)", async valid => {
+    let commentsCreated = 0;
+    let stateMutations = 0;
+    const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      const json = (data: unknown) => Response.json({ data });
+      if (query.includes("issues(filter:")) return json({ issues: { nodes: [{ id: "42", url: "https://linear.app/acme/issue/42", description: marker, team: { id: "APP" } }], pageInfo: { hasNextPage: false } } });
+      if (query.includes("comments(first:")) return json({ issue: { comments: { nodes: [], pageInfo: { hasNextPage: false } } } });
+      if (query.includes("commentCreate(input:")) {
+        if (!valid) return json({ issueUpdate: { success: true } });
+        commentsCreated++; return json({ commentCreate: { success: true, comment: { url: "https://linear.app/comment/1" } } });
+      }
+      if (query.includes("states(first:")) return json({ team: { states: { nodes: [{ id: "done", type: "completed", name: "Done" }] } } });
+      if (query.includes("issueUpdate(id:")) { stateMutations++; return json({ issueUpdate: { success: true } }); }
+      throw new Error(`Unexpected fixture operation: ${query}`);
+    }) as typeof fetch;
+    const report: GateReport = { engagement: "synthetic", targetDir: "/synthetic", commit: "abc", generatedAt: "2026-01-01T00:00:00Z", counts: { resolved: 1, persistent: 0, regressed: 0, unverifiable: 0 }, results: [{ findingId: "F-1", marker, identity: "synthetic", title: "Finding", taxonomy: "TEST", location: "a.ts:1", status: "resolved", detail: "Detector ran" }] };
+    const result = await writeBackVerification(new LinearTracker({ apiKey: "synthetic", teamId: "APP", fetchImpl }), report);
+    expect(result.failed).toBe(valid ? 0 : 1);
+    expect(result.closed).toBe(valid ? 1 : 0);
+    expect(result.records[0]?.commentCompleted).toBe(valid);
+    expect(commentsCreated).toBe(valid ? 1 : 0);
+    expect(stateMutations).toBe(valid ? 1 : 0);
+  });
+
+  it("GitLab follows its next-page header even when the current notes page is empty", async () => {
+    let reads = 0;
+    let writes = 0;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") { writes++; return Response.json({}); }
+      reads++;
+      expect(new URL(url).searchParams.get("page")).toBe(String(reads));
+      return reads === 1 ? Response.json([], { headers: { "x-next-page": "2" } }) : Response.json([{ body: comment }], { headers: { "x-next-page": "" } });
+    }) as typeof fetch;
+    await adapter("gitlab", fetchImpl).addComment("42", comment);
+    expect(reads).toBe(2);
+    expect(writes).toBe(0);
+  });
+
+  it.each(["next-page", "wrong-count", "missing-continuation", "foreign-next"] as const)("Azure preserves comments with %s response", async mode => {
+    let reads = 0;
+    let writes = 0;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") { writes++; return Response.json({}); }
+      reads++;
+      const next = new URL(url); next.searchParams.set("continuationToken", "next");
+      if (mode === "foreign-next") next.hostname = "foreign.invalid";
+      if (mode === "wrong-count") return Response.json({ comments: [], count: 1, totalCount: 0 });
+      if (mode === "missing-continuation") return Response.json({ comments: [], count: 0, totalCount: 2 });
+      if (reads === 1) return Response.json({ comments: [{ text: "Client note" }], count: 1, totalCount: 2, nextPage: next.href });
+      expect(new URL(url).searchParams.get("continuationToken")).toBe("next");
+      return Response.json({ comments: [{ text: comment }], count: 1, totalCount: 2, nextPage: null, continuationToken: null });
+    }) as typeof fetch;
+    const pending = adapter("azure", fetchImpl).addComment("42", comment);
+    if (mode === "next-page") await pending;
+    else await expect(pending).rejects.toThrow(/count|continuation|scope/);
+    expect(reads).toBe(mode === "next-page" ? 2 : 1);
+    expect(writes).toBe(0);
+  });
+
   it.each(["github", "jira", "linear"] as const)("%s requires explicit complete marker pagination before accepting an empty result", async kind => {
     let writes = 0;
     const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
