@@ -8,6 +8,7 @@ import { deliverAuditReplay } from "./audit-replay-delivery.js";
 import { runAudit, type Examined, type ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import type { Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
+import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.restoreAllMocks(); });
@@ -31,6 +32,60 @@ function fixture() {
 }
 
 describe("bound audit replay", () => {
+  const bindCommand = (f: ReturnType<typeof fixture>, report: string, invocationId = "run-1") => createCommandExecutionReceipt({
+    invocationId,
+    command: { executable: "pnpm", argv: ["exec", "tsx", "src/cli/quality-scan.ts", "--out", report], cwd: f.target },
+    target: { identity: "audit-target", value: f.binding.target },
+    toolchain: [{ name: "quality-scan", version: f.binding.engine.sha256 }],
+    configuration: { identity: "effective-config", value: f.binding.effectiveConfig },
+    startedAt: new Date(f.now - 3_000).toISOString(),
+    finishedAt: new Date(f.now - 2_500).toISOString(),
+    outcome: { state: "exited", exitCode: 0, signal: null },
+    stdout: "measured output",
+    stderr: "",
+    artifacts: [{ role: "report", path: report }],
+  });
+
+  const installOwningRun = (f: ReturnType<typeof fixture>, report: string, receipts: unknown[]): void => {
+    const legacy = join(f.root, "legacy-owning-run.json");
+    writeFileSync(legacy, JSON.stringify({ producer: "fixture", result: "legacy bytes" }));
+    for (const pass of f.passes) pass.rawArtifacts = [legacy];
+    writeFileSync(f.raw, JSON.stringify({ module: "M1", reports: [f.passes[0]!.result], commandExecutionReceipts: receipts }));
+    f.passes[0]!.rawArtifacts = [f.raw, report];
+  };
+
+  it("binds an accepted report to one exact invocation and rejects regeneration, mixed runs and duplicate invocation IDs", () => {
+    const accepted = fixture();
+    const report = join(accepted.root, "M1-report.json");
+    writeFileSync(report, JSON.stringify({ run: "accepted" }));
+    const command = bindCommand(accepted, report);
+    installOwningRun(accepted, report, [command]);
+    accepted.write();
+    expect(() => replayAuditBundle(accepted.bundle, accepted.target, { now: accepted.now })).not.toThrow();
+
+    const regenerated = fixture();
+    const regeneratedReport = join(regenerated.root, "M1-report.json");
+    writeFileSync(regeneratedReport, JSON.stringify({ run: "before" }));
+    const staleReceipt = bindCommand(regenerated, regeneratedReport);
+    writeFileSync(regeneratedReport, JSON.stringify({ run: "after" }));
+    installOwningRun(regenerated, regeneratedReport, [staleReceipt]);
+    expect(() => regenerated.write()).toThrow(/missing or mixed with another run/);
+
+    const mixed = fixture();
+    const first = join(mixed.root, "first.json"), second = join(mixed.root, "second.json");
+    writeFileSync(first, JSON.stringify({ run: 1 })); writeFileSync(second, JSON.stringify({ run: 2 }));
+    const secondRun = bindCommand(mixed, second, "run-2");
+    installOwningRun(mixed, first, [secondRun]);
+    expect(() => mixed.write()).toThrow(/missing or mixed with another run/);
+
+    const duplicate = fixture();
+    const duplicateReport = join(duplicate.root, "duplicate.json");
+    writeFileSync(duplicateReport, JSON.stringify({ run: "duplicate" }));
+    const duplicateReceipt = bindCommand(duplicate, duplicateReport, "same-id");
+    installOwningRun(duplicate, duplicateReport, [duplicateReceipt, duplicateReceipt]);
+    expect(() => duplicate.write()).toThrow(/repeats command invocation same-id/);
+  });
+
   it("conserves fresh producer findings and explicit scopes without invoking any runner", () => {
     const f = fixture();
     const env = { connected: false, dynamic: false, llm: false };

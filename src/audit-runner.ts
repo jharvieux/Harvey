@@ -18,7 +18,7 @@
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { DataClassMap } from "./data-class-escalation.js";
 import type { ProductionProducerBinding } from "./effectiveness-schema.js";
-import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
+import { assertUniqueProducerExecutionReceipts, type CommandExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding, TestQuality } from "./findings.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 
@@ -167,7 +167,25 @@ export interface RunContext {
   // parse stdout as JSON. It is where quality-scan reports the jscpd/knip scope counts M4 and M5
   // need to state what they examined — the real runner always supplies it; a test double that does
   // not is telling those probes their tool printed no scope summary, which they report as such.
-  exec: (command: string, args: string[], opts?: { env?: Record<string, string> }) => { ok: boolean; output: string; stderr?: string };
+  exec: (command: string, args: string[], opts?: {
+    env?: Record<string, string>;
+    cwd?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    receipt?: {
+      invocationId?: string;
+      attempt?: number;
+      target?: { identity: string; value: unknown };
+      toolchain?: readonly { name: string; version: string; sha256?: string }[];
+      configuration?: { identity: string; value: unknown };
+      artifacts?: readonly { role: "report" | "stdout" | "stderr" | "raw-output" | "other"; path: string }[];
+      measurements?: { completedTests?: number; testsDiscovered?: number; suiteLoadErrors?: number };
+      secretValues?: readonly string[];
+      policyAllowed?: boolean;
+      policyReason?: string;
+      now?: () => string;
+    };
+  }) => { ok: boolean; output: string; stderr?: string; receipt?: CommandExecutionReceipt };
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
   // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in

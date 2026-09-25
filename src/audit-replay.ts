@@ -3,10 +3,11 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathS
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv } from "./audit-coverage.js";
-import { MAX_PASS_AGE_MS } from "./audit-pass-artifact.js";
+import { MAX_PASS_AGE_MS, MAX_PASS_FUTURE_SKEW_MS } from "./audit-pass-artifact.js";
 import { runAudit, toOutcome, type ModuleRunner, type ProbeReport, type ProbeResult } from "./audit-runner.js";
 import type { ReportMeta, TestQuality } from "./findings.js";
 import { readEntriesLstatSafe } from "./fs-walk.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 /** Scope identity is independent of a pass's display name. One surface never replaces another. */
 export interface AuditEvidenceScope {
@@ -135,7 +136,7 @@ function assertScope(scope: AuditEvidenceScope): void {
 
 function assertFresh(generatedAt: string, now: number): void {
   const timestamp = Date.parse(generatedAt);
-  if (!Number.isFinite(timestamp) || timestamp > now + 5 * 60_000 || now - timestamp > MAX_PASS_AGE_MS) {
+  if (!Number.isFinite(timestamp) || timestamp > now + MAX_PASS_FUTURE_SKEW_MS || now - timestamp > MAX_PASS_AGE_MS) {
     throw new Error(`Stale or invalid evidence timestamp ${generatedAt}; record a fresh pass for the bound target/configuration`);
   }
 }
@@ -164,6 +165,49 @@ function writeRaw(dir: string, source: string): FileReceipt {
   return { path, sha256 };
 }
 
+interface RawArtifactBytes { ref: FileReceipt; bytes: Buffer }
+
+function commandReceiptsInArtifact(bytes: Buffer): CommandExecutionReceipt[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || !("commandExecutionReceipts" in parsed)) return undefined;
+  const receipts = (parsed as { commandExecutionReceipts?: unknown }).commandExecutionReceipts;
+  if (!Array.isArray(receipts)) throw new Error("Owning-run commandExecutionReceipts must be an array");
+  return receipts.map((receipt) => {
+    assertCommandExecutionReceipt(receipt);
+    return receipt;
+  });
+}
+
+/** Bind nested invocation receipts to the exact raw files copied into this accepted pass. */
+function assertCommandReceiptBindings(raw: readonly RawArtifactBytes[]): void {
+  const owners = raw.flatMap((artifact) => {
+    const receipts = commandReceiptsInArtifact(artifact.bytes);
+    return receipts === undefined ? [] : [{ artifact, receipts }];
+  });
+  if (owners.length > 1) throw new Error("Accepted pass contains multiple owning-run command receipt catalogs");
+  if (owners.length === 0) return; // Explicit legacy/manual evidence has no command-attempt catalog.
+  const owner = owners[0]!;
+  const invocationIds = new Set<string>();
+  const artifactOwners = new Map<string, string>();
+  for (const receipt of owner.receipts) {
+    if (invocationIds.has(receipt.invocationId)) throw new Error(`Accepted pass repeats command invocation ${receipt.invocationId}`);
+    invocationIds.add(receipt.invocationId);
+    for (const artifact of receipt.artifacts) {
+      if (artifact.sha256 === owner.artifact.ref.sha256) throw new Error(`Command receipt ${receipt.invocationId} creates a digest cycle through its owning-run catalog`);
+      const matches = raw.filter((candidate) => candidate.ref.sha256 === artifact.sha256 && candidate.bytes.byteLength === artifact.bytes);
+      if (matches.length !== 1) throw new Error(`Command receipt ${receipt.invocationId} report ${artifact.path} is missing or mixed with another run`);
+      const prior = artifactOwners.get(artifact.sha256);
+      if (prior && prior !== receipt.invocationId) throw new Error(`Accepted report digest is ambiguously owned by invocations ${prior} and ${receipt.invocationId}`);
+      artifactOwners.set(artifact.sha256, receipt.invocationId);
+    }
+  }
+}
+
 /** Create a portable bundle only after execution has stopped; raw owning-run outputs stay intact. */
 export function writeAuditReplayBundle(dir: string, input: {
   binding: AuditReplayBinding;
@@ -187,7 +231,9 @@ export function writeAuditReplayBundle(dir: string, input: {
     if (pass.result.instance && pass.result.instance !== pass.scope.workspace) throw new Error("Pass workspace does not match its owning-run instance");
     if (!input.scopes.some((scope) => scopeKey(scope) === scopeKey(pass.scope) && scope.wholeModule === pass.scope.wholeModule)) throw new Error("Pass scope is not in the bound evidence plan");
     if (!pass.producer.name?.trim() || !pass.producer.version?.trim() || !pass.rawArtifacts.length) throw new Error("Pass needs a producer version and raw owning-run artifacts");
-    const rawArtifacts = pass.rawArtifacts.map((path) => writeRaw(output, path));
+    const rawInputs = pass.rawArtifacts.map((path) => ({ ref: writeRaw(output, path), bytes: readFileSync(path) }));
+    assertCommandReceiptBindings(rawInputs);
+    const rawArtifacts = rawInputs.map(({ ref }) => ref);
     const body = { ...pass, rawArtifacts, bindingSha256: objectDigest(input.binding) };
     const id = objectDigest(body);
     const receipt: AuditEvidenceReceipt = { ...body, id };
@@ -239,7 +285,8 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
     if (receipt.result.instance && receipt.result.instance !== receipt.scope.workspace) throw new Error("Pass workspace does not match its owning-run instance");
     if (!receipt.producer.name?.trim() || !receipt.producer.version?.trim() || !receipt.rawArtifacts.length) throw new Error("Pass lacks producer identity or raw evidence");
     if (!manifest.scopes.some((scope) => scopeKey(scope) === scopeKey(receipt.scope) && scope.wholeModule === receipt.scope.wholeModule)) throw new Error("Unexpected pass scope");
-    receipt.rawArtifacts.forEach((artifact) => readRaw(dir, artifact));
+    const raw = receipt.rawArtifacts.map((artifact) => ({ ref: artifact, bytes: readRaw(dir, artifact) }));
+    assertCommandReceiptBindings(raw);
     return receipt;
   });
   if (new Set(receipts.map((receipt) => receipt.id)).size !== receipts.length) throw new Error("Replay repeats an owning-run receipt");
