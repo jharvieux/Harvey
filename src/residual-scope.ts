@@ -123,8 +123,11 @@ function vitalsPopulation(vitals: unknown, target: string[], revision: string, a
   const contained = files.every(path => !isAbsolute(path) && target.includes(path));
   const revisionBound = value.sourceRevision === revision;
   const complete = files.length > 0 && new Set(files).size === files.length && !historicalOnly && revisionBound && contained && countBound && (health !== undefined || value.populationComplete === true || value.completePopulation === true);
+  const freshCapture = value.captureKind === "fresh-rerun" && typeof value.capturedAt === "string" && Number.isFinite(Date.parse(value.capturedAt))
+    ? `Fresh Vitals rerun captured ${value.capturedAt} at source revision ${String(value.sourceRevision)}; this does not replace the original historical capture. `
+    : "";
   const limits = [historicalOnly ? "Historical cache population retained; it did not freshly examine the bound source revision and cannot replace the recorded capture." : "", !revisionBound ? "The artifact has no matching sourceRevision; retained paths are historical or unbound." : "", !contained ? "Some supplied paths are outside or absent from the target census." : "", !countBound ? "The scored population count is missing or disagrees with the retained path population." : ""].filter(Boolean);
-  return { files, complete, detail: complete ? "Revision and scored-file population reconcile with the target paths; display caps do not truncate this machine population." : limits.join(" ") || "Artifact does not establish a complete nonempty scored population.", ...(complete ? { binding: { revision, declared: files.length, pathsSha256: pathsDigest(files), artifactSha256 } } : {}) };
+  return { files, complete, detail: freshCapture + (complete ? "Revision and scored-file population reconcile with the target paths; display caps do not truncate this machine population." : limits.join(" ") || "Artifact does not establish a complete nonempty scored population."), ...(complete ? { binding: { revision, declared: files.length, pathsSha256: pathsDigest(files), artifactSha256 } } : {}) };
 }
 
 export function buildResidualScopeInventory(root: string, options: BuildOptions): ResidualScopeInventory {

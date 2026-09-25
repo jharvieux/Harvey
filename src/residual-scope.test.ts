@@ -192,9 +192,10 @@ describe("residual scope evidence boundaries", () => {
   });
   it("certifies a revision/count/path-bound Vitals population and rejects later truncation", () => {
     const root = fixture(); add(root, "src/a.ts", "export {}"); add(root, "src/b.ts", "export {}");
-    const inventory = buildResidualScopeInventory(root, { revision: meta.commit, vitalsArtifact: { sourceRevision: meta.commit, filesScored: 2, file_health: { "src/a.ts": {}, "src/b.ts": {} } } });
+    const inventory = buildResidualScopeInventory(root, { revision: meta.commit, vitalsArtifact: { sourceRevision: meta.commit, filesScored: 2, captureKind: "fresh-rerun", capturedAt: "2026-09-25T14:00:00.000Z", file_health: { "src/a.ts": {}, "src/b.ts": {} } } });
     const row = inventory.rows.find(row => row.domain === "vitals")!; expect(row.status).toBe("implemented");
     const doc: FindingsDocument = { meta, findings: [], residualScope: inventory }; expect(validateFindings(doc).ok).toBe(true);
+    expect(buildHtml(doc)).toContain("Fresh Vitals rerun captured 2026-09-25T14:00:00.000Z at source revision abc; this does not replace the original historical capture.");
     row.population.files.pop(); row.population.examined--; expect(validateFindings(doc).errors.join(" ")).toContain("path digest");
   });
   it("rejects a missing comparison contract or a mismatched attached revision", () => {
