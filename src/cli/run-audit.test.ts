@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AUDIT_MODULES } from "../audit-coverage.js";
 import type { ReadinessPlanV1 } from "../audit-readiness.js";
-import type { FindingsDocument, ReportMeta } from "../findings.js";
+import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
+import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
 
 // #1470: a valid meta to mutate one field of, for the refused-export negative control below.
 const m1470Meta: ReportMeta = {
@@ -199,20 +201,79 @@ describe("run-audit CLI export capture", () => {
   });
 
   it("passes the target root into baseline identity matching", async () => {
-    const baselineFinding = engagement.findings.find((finding) => finding.location.includes("shared/Widget.tsx"));
-    if (!baselineFinding) throw new Error("fixture produced no shared/Widget.tsx finding");
-    writeFileSync(
-      join(scratch, "baseline.json"),
-      JSON.stringify({ ...engagement, findings: [{ ...baselineFinding, location: join(scratch, "target", baselineFinding.location) }] }),
-    );
+    // Fresh-run documents from before receipt-bound retention are intentionally unbound. Keep
+    // accepting them as historical input, but never turn their unmatched rows into remediation.
+    const unboundBaselinePath = join(scratch, "unbound-baseline.json");
+    writeFileSync(unboundBaselinePath, JSON.stringify(engagement));
+    await run([
+      join(scratch, "target"), "--findings-out", join(scratch, "unbound-comparison.json"),
+      "--baseline", unboundBaselinePath,
+    ]);
+    const unboundComparison = JSON.parse(readFileSync(join(scratch, "unbound-comparison.json"), "utf8")) as FindingsDocument;
+    expect(unboundComparison.baseline?.comparison?.kind).toBe("incompatible");
+    expect(unboundComparison.baseline?.counts).toMatchObject({ resolved: 0, new: 0, persistent: 0 });
+    expect(unboundComparison.baseline?.comparison?.denominators.unresolvedCurrent).toBe(unboundComparison.findings.length);
+    expect(unboundComparison.baseline?.comparison?.limitations.join(" ")).toContain("Missing engagement");
+    expect(new Set(unboundComparison.findings.map((finding) => finding.baselineStatus))).toEqual(new Set(["incompatible"]));
+
+    // A fresh scan does not invent the strict producer/scope provenance required by #2136.
+    // Exercise the shipping assembly path, which derives that provenance from bound receipts,
+    // and make only one prior location absolute so omitting target root breaks this exact match.
+    const bundle = join(scratch, "baseline-bundle");
+    const raw = join(scratch, "baseline-raw.json");
+    const sbom = join(scratch, "baseline-sbom.json");
+    writeFileSync(raw, '{"source":"baseline identity fixture"}\n');
+    writeFileSync(sbom, '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}\n');
+    const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module): AuditEvidenceInput => {
+      const finding: Finding = {
+        id: `${module}-BASELINE`, title: `${module} baseline identity`, severity: "Low",
+        confidence: "Review", category: "Maintainability", taxonomy: `${module} — baseline identity`,
+        location: module === "M7" ? "shared/Widget.tsx:1" : `src/${module}.ts:1`, status: "Open",
+        evidence: "Bound fixture evidence", impact: "Measured impact", fix: "Repair", value: 1, ease: 1, safety: 1,
+      };
+      return {
+        scope: { module, workspace: ".", tier: "source", surface: "module", wholeModule: true },
+        generatedAt: new Date().toISOString(), producer: { name: module, version: "fixture" },
+        rawArtifacts: [raw], result: { kind: "examined", unitsExamined: 1, scope: "fixture source", detail: "Bound fixture source", findings: [finding] },
+      };
+    });
+    writeAuditReplayBundle(bundle, {
+      binding: createAuditReplayBinding(join(scratch, "target"), { network: false }),
+      scopes: passes.map((pass) => pass.scope), passes, sbomPath: sbom, meta: m1470Meta,
+    });
+    const baselinePath = join(scratch, "baseline.json");
+    await run([join(scratch, "target"), "--assemble", bundle, "--findings-out", baselinePath]);
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as FindingsDocument;
+    const baselineFinding = baseline.findings.find((finding) => finding.id === "M7-BASELINE")!;
+    writeFileSync(baselinePath, JSON.stringify({
+      ...baseline,
+      findings: baseline.findings.map((finding) => finding.id === baselineFinding.id
+        ? { ...finding, location: join(scratch, "target", finding.location) }
+        : finding),
+    }));
     await run([
       join(scratch, "target"),
+      "--assemble", bundle,
       "--findings-out", join(scratch, "baseline-engagement.json"),
-      "--baseline", join(scratch, "baseline.json"),
+      "--baseline", baselinePath,
     ]);
     const baselineEngagement = JSON.parse(readFileSync(join(scratch, "baseline-engagement.json"), "utf8")) as FindingsDocument;
-    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFinding.id)?.baselineStatus).toBe("persistent");
+    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFinding.id)?.baselineStatus).toBe("checkpoint");
+    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFinding.id)?.baselineReason).toContain("normalized location");
+    expect(baselineEngagement.baseline?.counts.persistent).toBeGreaterThan(0);
     expect(baselineEngagement.baseline?.counts.resolved).toBe(0);
+
+    // Missing strict provenance stays explicitly incompatible and cannot claim remediation.
+    delete baseline.auditContext;
+    writeFileSync(baselinePath, JSON.stringify(baseline));
+    await run([
+      join(scratch, "target"), "--assemble", bundle,
+      "--findings-out", join(scratch, "incompatible-baseline-engagement.json"),
+      "--baseline", baselinePath,
+    ]);
+    const incompatible = JSON.parse(readFileSync(join(scratch, "incompatible-baseline-engagement.json"), "utf8")) as FindingsDocument;
+    expect(incompatible.baseline?.comparison?.kind).toBe("incompatible");
+    expect(incompatible.baseline?.counts).toMatchObject({ resolved: 0, new: 0, persistent: 0 });
   }, CASE_TIMEOUT_MS);
 
   it("emits readiness from the same app inventory without changing M1-M10 execution", async () => {
