@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "coverageAnalysis": "perTest",
+  "vitest": {
+    "related": false,
+    "configFile": "vitest.config.ts"
+  },
+  "mutate": ["src/subject.ts"],
+  "mutator": {
+    "excludedMutations": [
+      "ArrayDeclaration",
+      "ArrowFunction",
+      "BlockStatement",
+      "BooleanLiteral",
+      "ConditionalExpression",
+      "EqualityOperator",
+      "LogicalOperator",
+      "MethodExpression",
+      "ObjectLiteral",
+      "OptionalChaining",
+      "Regex",
+      "StringLiteral",
+      "UnaryOperator",
+      "UpdateOperator"
+    ]
+  },
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": {
+    "fileName": "mutation.json"
+  },
+  "concurrency": 1,
+  "thresholds": {
+    "high": 100,
+    "low": 0,
+    "break": null
+  }
+}
