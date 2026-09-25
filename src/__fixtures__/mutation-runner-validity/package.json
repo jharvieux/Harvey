@@ -1,0 +1,10 @@
+{
+  "name": "mutation-runner-validity-fixture",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@stryker-mutator/core": "9.6.1",
+    "@stryker-mutator/vitest-runner": "9.6.1",
+    "vitest": "3.2.6"
+  }
+}

@@ -63,7 +63,7 @@ That is the silent-drop shape #1042 closed, re-created. Accumulating also keeps 
 every existing reader already looks, so no consumer had to change to keep working.
 
 The schema and the freshness window live in `src/audit-pass-artifact.ts`
-(`PassArtifact`, `MAX_PASS_AGE_MS`).
+(`PassArtifact`, `MAX_PASS_AGE_MS`, `MAX_PASS_FUTURE_SKEW_MS`).
 
 `hotspots` (#530) is the M3 vitals pass's top-K hotspot ranking. When present, the M3 probe surfaces
 it so the cross-module enrichment (#515 — every module's findings tagged `onHotspot`/`hotspotRank`)
@@ -79,9 +79,9 @@ ranking.json …`, where `ranking.json` is a JSON array of file-path strings.
 2. `<module>.pass.json` exists there;
 3. its `module` matches the probe;
 4. its `target` equals the audited directory (a pass over a *different* app is not evidence);
-5. its `generatedAt` is within the freshness window (`MAX_PASS_AGE_MS`, 30 days).
+5. its `generatedAt` is at most 30 days old (`MAX_PASS_AGE_MS`) and no more than five minutes ahead of the evaluation clock (`MAX_PASS_FUTURE_SKEW_MS`). The same bound applies to each retained prior pass.
 
-If an artifact is **present but rejected** (stale, wrong target, malformed), the probe does **not**
+If an artifact is **present but rejected** (stale, more than five minutes in the future, wrong target, malformed), the probe does **not**
 silently ignore it — it falls back to its honest not-run status and appends the rejection reason, so
 a stale pass fails loud rather than reading as a clean gap.
 
