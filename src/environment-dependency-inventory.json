@@ -45,8 +45,8 @@
     "authoritativeDeclaredIdentities": 299,
     "authoritativeDynamic": 470,
     "authoritativeObservedIdentities": 272,
-    "authoritativeRecords": 2247,
-    "authoritativeUnresolved": 1527,
+    "authoritativeRecords": 2246,
+    "authoritativeUnresolved": 1526,
     "authoritativeVenues": 108,
     "candidateVenues": 2577,
     "classes": [
@@ -65,29 +65,29 @@
       },
       {
         "accepted": 0,
-        "authoritativeRecords": 245,
-        "candidateRows": 840,
+        "authoritativeRecords": 246,
+        "candidateRows": 841,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1085,
-        "unresolved": 1079,
-        "whollyUnbound": 1080
+        "rows": 1087,
+        "unresolved": 1081,
+        "whollyUnbound": 1082
       },
       {
         "accepted": 0,
-        "authoritativeRecords": 71,
+        "authoritativeRecords": 69,
         "candidateRows": 554,
         "dependencyClass": "package-manager",
         "dynamic": 8,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 2,
-        "rows": 625,
-        "unresolved": 614,
-        "whollyUnbound": 622
+        "rows": 623,
+        "unresolved": 612,
+        "whollyUnbound": 620
       },
       {
         "accepted": 0,
@@ -207,15 +207,15 @@
         "whollyUnbound": 3804
       }
     ],
-    "environmentAssertions": 1122,
+    "environmentAssertions": 1121,
     "integrityAssertions": 21,
-    "noAssertions": 7374,
+    "noAssertions": 7375,
     "opaqueVenues": 3,
     "residualRows": 2688,
     "rows": 8527,
     "schemaAssertions": 10,
     "venues": 2688,
-    "vocabularyCandidates": 3592
+    "vocabularyCandidates": 3593
   },
   "reconciliations": [
     {
@@ -16237,7 +16237,7 @@
           "key": "src/audit-runner.ts:174",
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
-            "src/audit-runner.ts#REASON@174:package-manager:empirical-falsifier"
+            "src/audit-runner.ts#REASON@174:runtime:empirical-falsifier"
           ]
         },
         {
@@ -16276,18 +16276,6 @@
           "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
           "rowIds": [
             "src/cli/genai-admission-census.ts#REASON@45:package-manager:empirical-falsifier"
-          ]
-        },
-        {
-          "evidence": {
-            "anchor": "REASON@1683",
-            "line": 1683,
-            "path": "src/cli/mutation-scan.ts"
-          },
-          "key": "src/cli/mutation-scan.ts:1683",
-          "reason": "Reused parsed reason fields; no new reason or baseline was authored and no live falsifier was run.",
-          "rowIds": [
-            "src/cli/mutation-scan.ts#REASON@1683:package-manager:empirical-falsifier"
           ]
         },
         {
@@ -93054,7 +93042,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 16,
+        "line": 18,
         "path": "src/audit-evidence-import.test.ts"
       },
       "freshness": {
@@ -95356,7 +95344,7 @@
     },
     {
       "assertionVenue": {
-        "claim": "Declared falsifier, not executed by the offline census: pnpm exec vitest run src/probe-exec.test.ts -t synchronous",
+        "claim": "Declared falsifier, not executed by the offline census: test -f src/probe-exec.ts && test -d node_modules/tsx || exit 127; node --import tsx --input-type=module -e 'try { const {probeExec}=await import(\"./src/probe-exec.ts\"); const c=new AbortController(); setTimeout(()=>c.abort(),1); const r=await probeExec(process.execPath,[\"-e\",\"setTimeout(()=>process.exit(7),100)\"],{signal:c.signal}); process.exit(r.receipt?.outcome.state===\"cancelled\"?0:1); } catch { process.exit(127); }'",
         "location": {
           "anchor": "revalidateReasons",
           "line": 697,
@@ -95378,7 +95366,7 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "empirical-falsifier",
-      "dependencyClass": "package-manager",
+      "dependencyClass": "runtime",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "REASON@174",
@@ -95395,7 +95383,7 @@
         "observedAt": "2026-09-25",
         "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
       },
-      "id": "src/audit-runner.ts#REASON@174:package-manager:empirical-falsifier",
+      "id": "src/audit-runner.ts#REASON@174:runtime:empirical-falsifier",
       "identitySource": null,
       "links": [
         "src/cli/validate-reasons.ts",
@@ -95500,7 +95488,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 177,
+        "line": 214,
         "path": "src/audit-runner.ts"
       },
       "freshness": {
@@ -95510,6 +95498,43 @@
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
       "id": "src/audit-runner.ts#content-hint:package-manager:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/audit-runner.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 177,
+        "path": "src/audit-runner.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/audit-runner.ts#content-hint:runtime:unresolved-reference",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -104031,7 +104056,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 110,
+        "line": 111,
         "path": "src/cli/guard-mutation-census.test.ts"
       },
       "freshness": {
@@ -104068,7 +104093,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 210,
+        "line": 211,
         "path": "src/cli/guard-mutation-census.test.ts"
       },
       "freshness": {
@@ -104142,7 +104167,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 145,
+        "line": 146,
         "path": "src/cli/guard-mutation-census.test.ts"
       },
       "freshness": {
@@ -104179,7 +104204,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 110,
+        "line": 111,
         "path": "src/cli/guard-mutation-census.test.ts"
       },
       "freshness": {
@@ -104216,7 +104241,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 210,
+        "line": 211,
         "path": "src/cli/guard-mutation-census.test.ts"
       },
       "freshness": {
@@ -106493,62 +106518,6 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/cli/mutation-scan.test.ts"
-    },
-    {
-      "assertionVenue": {
-        "claim": "Declared falsifier, not executed by the offline census: pnpm exec vitest run src/mutation-scan.test.ts -t zero",
-        "location": {
-          "anchor": "revalidateReasons",
-          "line": 697,
-          "path": "src/recorded-reasons.ts"
-        },
-        "scope": "environment-behavior"
-      },
-      "classification": "authoritative-record",
-      "consumer": {
-        "location": {
-          "anchor": "parseRecordedReasons",
-          "line": 97,
-          "path": "src/recorded-reasons.ts"
-        },
-        "reason": "The existing recorded-reason parser supplies the block fields; its usual directory/extension and execution-tier scope is not extended by this census.",
-        "resolution": "authoritative"
-      },
-      "decision": null,
-      "declarationSource": null,
-      "declaredIdentity": null,
-      "dependency": "empirical-falsifier",
-      "dependencyClass": "package-manager",
-      "environmentOwner": "#1909 stability evidence",
-      "evidence": {
-        "anchor": "REASON@1683",
-        "line": 1683,
-        "path": "src/cli/mutation-scan.ts"
-      },
-      "freshness": {
-        "enforcedBy": {
-          "anchor": "revalidateReasons",
-          "line": 697,
-          "path": "src/recorded-reasons.ts"
-        },
-        "expiresAt": null,
-        "observedAt": "2026-09-25",
-        "requirement": "Revalidate the reason with its declared falsifier in its declared tier. This census records the command, never executes it."
-      },
-      "id": "src/cli/mutation-scan.ts#REASON@1683:package-manager:empirical-falsifier",
-      "identitySource": null,
-      "links": [
-        "src/cli/validate-reasons.ts",
-        "#1909"
-      ],
-      "observedIdentity": null,
-      "owner": "src/recorded-reasons.ts reason policy",
-      "pinSource": null,
-      "reason": "Empirical reason with environment/tool identities not supplied by the reason format. A zero-completed survivor is uncheckable and excluded from the mutation score.",
-      "resolution": "unresolved",
-      "schemaOwner": null,
-      "state": "wholly-unbound",
-      "venue": "src/cli/mutation-scan.ts"
     },
     {
       "assertionVenue": null,
@@ -364923,8 +364892,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "36e2e5d68b276471226c8ecc63cbd55287fc73b7",
-    "commitPayload": "dHJlZSA2ZDVkNzM5MzAxYWQzMzkxNzNlODU1NGRmNzRlYmJiYTE3MTk2YzcyCnBhcmVudCAwZjkzZTQwOWNlMDRkMWEyYmExMGU5MGEwZGEwMmQyMTZiYTFmZWFlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5MzcxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5MzcxIC0wNTAwCgpWZXJpZnkgaW5zdGFsbGVkIG11dGF0aW9uIHVuY2VydGFpbnR5IHJlYWNoZXMgcmVwb3J0cyAjMjA4OQo=",
+    "commit": "2947dfd1f983cbda3a77229ae1f48336ba15885e",
+    "commitPayload": "dHJlZSBkZTMxN2M5NDgxNzJlOGZhNDQ1ZTM2YzU5NjljOTJjYmQ2NmJiMzc3CnBhcmVudCA1ZmM4NjgxMjAwMWM2YzBlNmZhNDgzMDY5Nzg2NTFiMDE1ZTYxOTNlCnBhcmVudCBlYzlmMGUwNDQ1NGQ4NGU2MzU5MjUyYTk2ZDIwZThiMTgwMjk0YTA5CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEwODQ3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzEwODQ3IC0wNTAwCgpNZXJnZSByZW1vdGUtdHJhY2tpbmcgYnJhbmNoICdvcmlnaW4vbWFpbicgaW50byBmZWF0dXJlL3N3ZWVwLTIxMzktY29tbWFuZC1yZWNlaXB0cwoKIyBDb25mbGljdHM6CiMJc3JjL2Vudmlyb25tZW50LWRlcGVuZGVuY3ktaW52ZW50b3J5Lmpzb24K",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364933,13 +364902,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "35b02bca2d92347f04be686eb3878b3d8d4fe843",
+        "gitOid": "7af1b9dbdf2575167c1f4edd843e5cd30f905a3e",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "733391ba873ba3f355c324758f0c4956cff743c3c17c08538d76454019b8aa0c",
-    "tree": "6d5d739301ad339173e8554df74ebbba17196c72"
+    "populationSha256": "5a23218e03ee16c84ac68f8ba25f4a0492cedf63e741c932b808cd40d303df17",
+    "tree": "de317c948172e8fa445e36c5969c92cbd66bb377"
   },
   "venues": [
     {
@@ -371018,26 +370987,26 @@
       "sha256": "4ba37759b29eea8ae87c2e874f5f215b7de63718fe4618b8f3b2cbbddf28afb9"
     },
     {
-      "bytes": 7322,
+      "bytes": 10957,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "94dfd9fccd82bbfcaab8aa488efbcc480a5b52d8",
+      "gitOid": "570a6611b7d65e1275bb44d6d9a05934c006efad",
       "id": "src/audit-evidence-import.test.ts",
       "kind": "source",
-      "literalCount": 138,
-      "literalSha256": "5c65333d7999477a1ee30f3a8de5d0886a0b1a79896fc87040dd30c060e515ef",
+      "literalCount": 193,
+      "literalSha256": "67980550dae1e20764d36820925e65feaa1d57cb2f83b86b11c72aa768a0d63c",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/audit-evidence-import.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "be53593405bfe76f2b7074ba5a70a2a5d0abec3715174364f1f76956fe83f5f9"
+      "sha256": "d1983134d1f9d9884afc443632839d984c8978c31dca7d3763a6f80fc50e9ab6"
     },
     {
-      "bytes": 12121,
+      "bytes": 12181,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "17f10f1a3b8dd5533a018b1794eff6bee374e9a0",
+      "gitOid": "5e5f1c94652a60c2abac5c942fdd15aef256bf3a",
       "id": "src/audit-evidence-import.ts",
       "kind": "source",
       "literalCount": 65,
@@ -371045,7 +371014,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/audit-evidence-import.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "1536d5f383fc2c7edf382369eb39532e2878de01f6091f4628ce63cf2b97ac56"
+      "sha256": "97cc5e83cbde12a35a00f0619cdfa839987c9a96fa36434a4e69c34b6cb1673d"
     },
     {
       "bytes": 4824,
@@ -371213,19 +371182,19 @@
       "sha256": "9ed59e0ade362aa4da5619725aa8b130c4141de9cb503947cc7b57f369d699d0"
     },
     {
-      "bytes": 28415,
+      "bytes": 29216,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "1639c21babde32be7fde0f49ab69cc0b52567adb",
+      "gitOid": "eddb4a6a3ad4ab63626c68b4d57fe807c1861d81",
       "id": "src/audit-replay.ts",
       "kind": "source",
-      "literalCount": 204,
-      "literalSha256": "14303d804ffe145ce98ac19c1d541642bcb7fdf61f27782c23113897d0ae9cc2",
+      "literalCount": 209,
+      "literalSha256": "7dc60df3859a1ce672860b97c80d6e19ee06832d3f05fa596c9fe282e2ac0e88",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/audit-replay.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "9228cc1a33d142009d07dcac59e34b2a829f0219b1e85bd666e787bd2a164221"
+      "sha256": "204188751b945d6031117df820bd5e7e090bfb3837d1b6bd49f058bb613e0c5b"
     },
     {
       "bytes": 17374,
@@ -371273,11 +371242,11 @@
       "sha256": "2c863d377836fec416c5157bc89bbf46df32b5da63728fa95c222e5230dc1627"
     },
     {
-      "bytes": 35958,
+      "bytes": 36325,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "997f3b43ace81a07fc98e5d4ee2a6a9721e28458",
+      "gitOid": "b2ff0641f53d4717a6c90b6b390c6b58ec1abccc",
       "id": "src/audit-runner.ts",
       "kind": "source",
       "literalCount": 64,
@@ -371285,7 +371254,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/audit-runner.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "9044b782d9a30ac85d7404afd78ba8d09d9861e8d7906578c200d9b22561ad93"
+      "sha256": "a02074658b577ae2071d08506c07fb432b20a6adb938ad6886f7536f3f4ad805"
     },
     {
       "bytes": 128640,
@@ -372188,19 +372157,19 @@
       "sha256": "6b236b9622535234213c585749eeddea692f22f50623dd3b127ef47e8af9e552"
     },
     {
-      "bytes": 41108,
+      "bytes": 42029,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "40071e0690f69f0b2be3517491eca9ec0ff94540",
+      "gitOid": "0a26cbfc03be762cecd0df514a3baca0794d12eb",
       "id": "src/cli/guard-mutation-census.test.ts",
       "kind": "source",
-      "literalCount": 657,
-      "literalSha256": "cf393faac719274d989bb4f87c42d55318b98f904d7fa7bddae4859cf54ef9af",
+      "literalCount": 663,
+      "literalSha256": "03172dbfbaffbd14bfa7c8fcdef974a8a76963be888dd953c6d4b6b058a5cd49",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/guard-mutation-census.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "71b801dfe7c6dce56d38aedd518586cebd106b72679eb9e436fbc6deee64af69"
+      "sha256": "0639bb4ebb4d81e09db6624ba5d07c5d7882726f3432f950e120b665ffeb94de"
     },
     {
       "bytes": 14244,
@@ -372458,11 +372427,11 @@
       "sha256": "d96f5df292000f72521f4c8b53128a398d6dc077eade682cb132ff73ef84207c"
     },
     {
-      "bytes": 106107,
+      "bytes": 105874,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "083f4841a8520139eaa7eb5eda6059653b0afde7",
+      "gitOid": "16429c23fbb5d22769b604af730f75aa82b402e9",
       "id": "src/cli/mutation-scan.ts",
       "kind": "source",
       "literalCount": 505,
@@ -372470,7 +372439,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/mutation-scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cd412ec718eb46fed3fa44fac96ce70cb6bd8c704808e62d5b139bc84fe8b0a8"
+      "sha256": "6cd471f70769341e2f97c5e58d782a0806948f7439bfa989fea60e1e36e9f9e6"
     },
     {
       "bytes": 5107,
@@ -392768,19 +392737,19 @@
       "sha256": "396a2c93f88212eda31139c4cac1b3dc8aa0e2edd44149cace1148aa40dc3926"
     },
     {
-      "bytes": 3192,
+      "bytes": 6318,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "1052f6baa8bd56708cbab07476c40922c832381a",
+      "gitOid": "53c14441c0e4c60d7b9c1358682e7aab8a01756e",
       "id": "src/trackers/rate-limit.test.ts",
       "kind": "source",
-      "literalCount": 77,
-      "literalSha256": "afaeab6ebd528decdbc6ab79b2fd8f79dab6cc8e6284acb853f47cdd7255c3bb",
+      "literalCount": 148,
+      "literalSha256": "6b2469f1ef1077edecad2ea33cf2b34161c0fd98cb035ac0cc5683bdb311e49f",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/trackers/rate-limit.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ef6c6adbdcf1729633dd03abfd443f6fccc5670f18e49df31d49d9900a48e1be"
+      "sha256": "8af66beb8d30b3cf9cadd147dcb53c945431b9c01697e02e20ef876772732e7d"
     },
     {
       "bytes": 2835,
