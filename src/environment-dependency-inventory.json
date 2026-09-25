@@ -42,39 +42,39 @@
     "#1853 owns the future external-corpus schema migration; this adapter reports the committed monolith and current advisory schema separately. #1901 owns captured-output properties; #1909 owns shared stability records. None is described as delivered by this census."
   ],
   "population": {
-    "authoritativeDeclaredIdentities": 297,
+    "authoritativeDeclaredIdentities": 300,
     "authoritativeDynamic": 470,
     "authoritativeObservedIdentities": 272,
-    "authoritativeRecords": 2243,
-    "authoritativeUnresolved": 1523,
+    "authoritativeRecords": 2249,
+    "authoritativeUnresolved": 1529,
     "authoritativeVenues": 108,
-    "candidateVenues": 2567,
+    "candidateVenues": 2581,
     "classes": [
       {
         "accepted": 0,
-        "authoritativeRecords": 323,
+        "authoritativeRecords": 324,
         "candidateRows": 575,
         "dependencyClass": "tool",
         "dynamic": 190,
         "emptyReason": null,
         "pinned": 12,
         "recorded": 221,
-        "rows": 898,
-        "unresolved": 660,
-        "whollyUnbound": 665
+        "rows": 899,
+        "unresolved": 661,
+        "whollyUnbound": 666
       },
       {
         "accepted": 0,
-        "authoritativeRecords": 243,
-        "candidateRows": 838,
+        "authoritativeRecords": 245,
+        "candidateRows": 841,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1081,
-        "unresolved": 1075,
-        "whollyUnbound": 1076
+        "rows": 1086,
+        "unresolved": 1080,
+        "whollyUnbound": 1081
       },
       {
         "accepted": 0,
@@ -195,27 +195,27 @@
       },
       {
         "accepted": 0,
-        "authoritativeRecords": 1116,
-        "candidateRows": 2678,
+        "authoritativeRecords": 1119,
+        "candidateRows": 2692,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3794,
-        "unresolved": 3794,
-        "whollyUnbound": 3794
+        "rows": 3811,
+        "unresolved": 3811,
+        "whollyUnbound": 3811
       }
     ],
-    "environmentAssertions": 1120,
+    "environmentAssertions": 1123,
     "integrityAssertions": 21,
-    "noAssertions": 7354,
+    "noAssertions": 7374,
     "opaqueVenues": 3,
-    "residualRows": 2678,
-    "rows": 8505,
+    "residualRows": 2692,
+    "rows": 8528,
     "schemaAssertions": 10,
-    "venues": 2678,
-    "vocabularyCandidates": 3584
+    "venues": 2692,
+    "vocabularyCandidates": 3587
   },
   "reconciliations": [
     {
@@ -6362,7 +6362,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-CONFIG-GET",
-            "line": 389,
+            "line": 392,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-CONFIG-GET",
@@ -6374,7 +6374,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-CSV-FAST-CSV",
-            "line": 406,
+            "line": 409,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-CSV-FAST-CSV",
@@ -6386,7 +6386,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-CSV-JSON2CSV",
-            "line": 407,
+            "line": 410,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-CSV-JSON2CSV",
@@ -6398,7 +6398,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-CSV-PAPAPARSE-STATIC",
-            "line": 404,
+            "line": 407,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-CSV-PAPAPARSE-STATIC",
@@ -6410,7 +6410,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-CSV-STRINGIFY",
-            "line": 405,
+            "line": 408,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-CSV-STRINGIFY",
@@ -6446,7 +6446,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-DRIZZLE-QUERY",
-            "line": 392,
+            "line": 395,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-DRIZZLE-QUERY",
@@ -6458,7 +6458,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-EVAL-PARSED-AS-DATA",
-            "line": 400,
+            "line": 403,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-EVAL-PARSED-AS-DATA",
@@ -6470,7 +6470,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-HEADERS-GET",
-            "line": 390,
+            "line": 393,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-HEADERS-GET",
@@ -6482,7 +6482,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-LOCAL-FORMDATA-EVAL",
-            "line": 417,
+            "line": 420,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-LOCAL-FORMDATA-EVAL",
@@ -6494,7 +6494,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-MAP-GET",
-            "line": 391,
+            "line": 394,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-MAP-GET",
@@ -6506,7 +6506,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-REQUEST-FORMDATA-EVAL",
-            "line": 416,
+            "line": 419,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-REQUEST-FORMDATA-EVAL",
@@ -6518,7 +6518,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-CLIENT-URL-XXE-DOMPARSER",
-            "line": 413,
+            "line": 416,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-CLIENT-URL-XXE-DOMPARSER",
@@ -7730,7 +7730,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-CMD-CONST-GUARD",
-            "line": 363,
+            "line": 366,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-CMD-CONST-GUARD",
@@ -7742,7 +7742,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-CMD-INCLUDES-GUARD",
-            "line": 364,
+            "line": 367,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-CMD-INCLUDES-GUARD",
@@ -7754,7 +7754,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-CMD-REGEX-GUARD",
-            "line": 362,
+            "line": 365,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-CMD-REGEX-GUARD",
@@ -7766,7 +7766,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-CMD-THROW-GUARD",
-            "line": 365,
+            "line": 368,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-CMD-THROW-GUARD",
@@ -7778,7 +7778,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-CMD-ZOD-GUARD",
-            "line": 368,
+            "line": 371,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-CMD-ZOD-GUARD",
@@ -7790,7 +7790,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-EVAL-GUARD",
-            "line": 366,
+            "line": 369,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-EVAL-GUARD",
@@ -7802,7 +7802,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-EXEC-NOSINK",
-            "line": 345,
+            "line": 348,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-EXEC-NOSINK",
@@ -7814,7 +7814,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-PARAM-NOSINK",
-            "line": 344,
+            "line": 347,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-PARAM-NOSINK",
@@ -7826,7 +7826,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-PATH-GUARD",
-            "line": 367,
+            "line": 370,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-PATH-GUARD",
@@ -7838,13 +7838,37 @@
         {
           "evidence": {
             "anchor": "CORPUS/N-LIB-PATH-SANITIZED",
-            "line": 343,
+            "line": 346,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "N-LIB-PATH-SANITIZED",
           "reason": "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member.",
           "rowIds": [
             "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-PATH-SANITIZED:unresolved:calibration-execution-environment"
+          ]
+        },
+        {
+          "evidence": {
+            "anchor": "CORPUS/N-LIB-REGEXP-EXEC",
+            "line": 344,
+            "path": "src/scan/calibration/b3-injection.entries.ts"
+          },
+          "key": "N-LIB-REGEXP-EXEC",
+          "reason": "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member.",
+          "rowIds": [
+            "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-REGEXP-EXEC:unresolved:calibration-execution-environment"
+          ]
+        },
+        {
+          "evidence": {
+            "anchor": "CORPUS/N-LIB-TRUSTED-WORKSPACE-PATH",
+            "line": 340,
+            "path": "src/scan/calibration/b3-injection.entries.ts"
+          },
+          "key": "N-LIB-TRUSTED-WORKSPACE-PATH",
+          "reason": "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member.",
+          "rowIds": [
+            "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-TRUSTED-WORKSPACE-PATH:unresolved:calibration-execution-environment"
           ]
         },
         {
@@ -10706,7 +10730,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-CLIENT-URL-CSV-PAPAPARSE",
-            "line": 402,
+            "line": 405,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-CLIENT-URL-CSV-PAPAPARSE",
@@ -10718,7 +10742,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-CLIENT-URL-CSV-XLSX",
-            "line": 403,
+            "line": 406,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-CLIENT-URL-CSV-XLSX",
@@ -10742,7 +10766,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-CLIENT-URL-EVAL",
-            "line": 398,
+            "line": 401,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-CLIENT-URL-EVAL",
@@ -10754,7 +10778,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-CLIENT-URL-NEW-FUNCTION",
-            "line": 399,
+            "line": 402,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-CLIENT-URL-NEW-FUNCTION",
@@ -10766,7 +10790,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-CLIENT-URL-SEARCHPARAMS-GET",
-            "line": 393,
+            "line": 396,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-CLIENT-URL-SEARCHPARAMS-GET",
@@ -12506,7 +12530,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-CMD-DENYLIST-GUARD",
-            "line": 370,
+            "line": 373,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CMD-DENYLIST-GUARD",
@@ -12518,7 +12542,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-CMD-INJECTION",
-            "line": 341,
+            "line": 342,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CMD-INJECTION",
@@ -12529,8 +12553,20 @@
         },
         {
           "evidence": {
+            "anchor": "CORPUS/P-LIB-CMD-NAMESPACE-INJECTION",
+            "line": 343,
+            "path": "src/scan/calibration/b3-injection.entries.ts"
+          },
+          "key": "P-LIB-CMD-NAMESPACE-INJECTION",
+          "reason": "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member.",
+          "rowIds": [
+            "src/scan/calibration/b3-injection.entries.ts#CORPUS/P-LIB-CMD-NAMESPACE-INJECTION:unresolved:calibration-execution-environment"
+          ]
+        },
+        {
+          "evidence": {
             "anchor": "CORPUS/P-LIB-CMD-THROW-SWALLOWED",
-            "line": 371,
+            "line": 374,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CMD-THROW-SWALLOWED",
@@ -12542,7 +12578,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-CMD-UNANCHORED-GUARD",
-            "line": 369,
+            "line": 372,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CMD-UNANCHORED-GUARD",
@@ -12554,7 +12590,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-CMD-ZOD-UNANCHORED",
-            "line": 372,
+            "line": 375,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CMD-ZOD-UNANCHORED",
@@ -12566,7 +12602,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-CODE-INJECTION",
-            "line": 342,
+            "line": 345,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-CODE-INJECTION",
@@ -12578,7 +12614,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-LIB-HTTP-TRAVERSAL",
-            "line": 340,
+            "line": 341,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-LIB-HTTP-TRAVERSAL",
@@ -14426,7 +14462,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-SERVER-CSV-FAST-CSV-RETAINED",
-            "line": 409,
+            "line": 412,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-SERVER-CSV-FAST-CSV-RETAINED",
@@ -14438,7 +14474,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-SERVER-CSV-JSON2CSV-RETAINED",
-            "line": 410,
+            "line": 413,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-SERVER-CSV-JSON2CSV-RETAINED",
@@ -14450,7 +14486,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-SERVER-CSV-XLSX-RETAINED",
-            "line": 411,
+            "line": 414,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-SERVER-CSV-XLSX-RETAINED",
@@ -14462,7 +14498,7 @@
         {
           "evidence": {
             "anchor": "CORPUS/P-SERVER-XXE-DOMPARSER-CONTROL",
-            "line": 414,
+            "line": 417,
             "path": "src/scan/calibration/b3-injection.entries.ts"
           },
           "key": "P-SERVER-XXE-DOMPARSER-CONTROL",
@@ -15734,7 +15770,7 @@
             "path": "dry-run/artifact-family.json"
           },
           "key": "findings-report.json",
-          "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+          "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
           "rowIds": [
             "dry-run/findings-report.json#artifact-family-member:source-revision:family-source-and-content"
           ]
@@ -15746,7 +15782,7 @@
             "path": "dry-run/artifact-family.json"
           },
           "key": "findings.json",
-          "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+          "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
           "rowIds": [
             "dry-run/findings.json#artifact-family-member:source-revision:family-source-and-content"
           ]
@@ -15758,7 +15794,7 @@
             "path": "dry-run/artifact-family.json"
           },
           "key": "pii-data-map.json",
-          "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+          "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
           "rowIds": [
             "dry-run/pii-data-map.json#artifact-family-member:source-revision:family-source-and-content"
           ]
@@ -15782,7 +15818,7 @@
             "path": "dry-run/artifact-family.json"
           },
           "key": "scorecard.json",
-          "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+          "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
           "rowIds": [
             "dry-run/scorecard.json#artifact-family-member:source-revision:family-source-and-content"
           ]
@@ -73435,10 +73471,10 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "a660a1c857e73b24aeb21ed1bac9036c322de624e56dd8a941a943a7a4f4db74",
+      "observedIdentity": "6d22990082b9975a1acb45b039c46147d71ca7387efe4b7c0badcc4d0cd84346",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
-      "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+      "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
       "resolution": "identified",
       "schemaOwner": null,
       "state": "recorded",
@@ -73460,7 +73496,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 27224,
+        "line": 27248,
         "path": "dry-run/findings-report.json"
       },
       "freshness": {
@@ -73682,7 +73718,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 29179,
+        "line": 29203,
         "path": "dry-run/findings-report.json"
       },
       "freshness": {
@@ -73825,10 +73861,10 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "cb5d1979c151cc77dbe4e37619b020e437d6d477678a3f42ea5bb357c4cbbf73",
+      "observedIdentity": "505c92cb1c0b728dbcb6bcb5a1b8ddeaefaaca371723319a13e3538981047dbe",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
-      "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+      "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
       "resolution": "identified",
       "schemaOwner": null,
       "state": "recorded",
@@ -73850,7 +73886,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 27208,
+        "line": 27232,
         "path": "dry-run/findings.json"
       },
       "freshness": {
@@ -74181,7 +74217,7 @@
       "observedIdentity": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
-      "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+      "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
       "resolution": "identified",
       "schemaOwner": null,
       "state": "recorded",
@@ -74309,10 +74345,10 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "d172b6def201c7e1a96f0f4f3b218e031fb16f5dbf4a95aab2d045b4434cefe4",
+      "observedIdentity": "b00bbf40b18836867295e8c1bc929559579ff6575e049513737cb36a8905d500",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
-      "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
+      "reason": "Family target tree: c88338315477448c02eb15d0f402b63ded25a71b. The family does not retain one complete toolchain/environment identity for its historical production run.",
       "resolution": "identified",
       "schemaOwner": null,
       "state": "recorded",
@@ -150887,6 +150923,102 @@
     },
     {
       "assertionVenue": null,
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "registry-import-boundary/270",
+          "line": 5,
+          "path": "src/detectors/load-sources.ts"
+        },
+        "reason": "Value-import initialization is reachable from src/scan/external-corpus.ts#EXTERNAL_CORPUS, including unused bindings. Every committed relative source dependency passes the finite initializer admission check.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": {
+        "anchor": "registry-import-boundary/270",
+        "line": 5,
+        "path": "src/detectors/load-sources.ts"
+      },
+      "declaredIdentity": "node:fs",
+      "dependency": "node:fs",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "registry-import-boundary/270",
+        "line": 5,
+        "path": "src/detectors/load-sources.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/detectors/load-sources.ts#registry-import-boundary/270:runtime:node:fs",
+      "identitySource": null,
+      "links": [
+        "src/scan/external-corpus.ts#EXTERNAL_CORPUS",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "#1906 registry import admission; #1909 runtime and package initialization",
+      "pinSource": null,
+      "reason": "Native/package module initialization is outside the committed relative source graph and remains unresolved. No package code executes in the census. Known inert metadata operations cannot determine registry membership; opaque values cannot control admission. This declaration is not an observed package identity or an environment assertion.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/detectors/load-sources.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "registry-import-boundary/324",
+          "line": 6,
+          "path": "src/detectors/load-sources.ts"
+        },
+        "reason": "Value-import initialization is reachable from src/scan/external-corpus.ts#EXTERNAL_CORPUS, including unused bindings. Every committed relative source dependency passes the finite initializer admission check.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": {
+        "anchor": "registry-import-boundary/324",
+        "line": 6,
+        "path": "src/detectors/load-sources.ts"
+      },
+      "declaredIdentity": "node:path",
+      "dependency": "node:path",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "registry-import-boundary/324",
+        "line": 6,
+        "path": "src/detectors/load-sources.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/detectors/load-sources.ts#registry-import-boundary/324:runtime:node:path",
+      "identitySource": null,
+      "links": [
+        "src/scan/external-corpus.ts#EXTERNAL_CORPUS",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "#1906 registry import admission; #1909 runtime and package initialization",
+      "pinSource": null,
+      "reason": "Native/package module initialization is outside the committed relative source graph and remains unresolved. No package code executes in the census. Known inert metadata operations cannot determine registry membership; opaque values cannot control admission. This declaration is not an observed package identity or an environment assertion.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/detectors/load-sources.ts"
+    },
+    {
+      "assertionVenue": null,
       "classification": "residual-unresolved",
       "consumer": {
         "location": null,
@@ -195208,6 +195340,450 @@
     },
     {
       "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/committed-private-key.test.ts.txt"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/committed-private-key.test.ts.txt#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/committed-private-key.test.ts.txt"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/generated-private-key.test.ts.txt"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/generated-private-key.test.ts.txt#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/generated-private-key.test.ts.txt"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-after-effect/handler.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-after-effect/handler.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-after-effect/handler.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-after-effect/implementation.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-after-effect/implementation.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-after-effect/implementation.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-no-verification/handler.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-no-verification/handler.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-no-verification/handler.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-no-verification/implementation.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-no-verification/implementation.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-no-verification/implementation.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/handler.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/handler.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/handler.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/verification.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/verification.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/verification.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-valid/handler.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/handler.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-valid/handler.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-valid/implementation.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/implementation.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-valid/implementation.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts"
+    },
+    {
+      "assertionVenue": null,
       "classification": "vocabulary-candidate",
       "consumer": {
         "location": null,
@@ -195771,7 +196347,7 @@
       "consumer": {
         "location": {
           "anchor": "capture-read",
-          "line": 150,
+          "line": 151,
           "path": "src/scan/supabase-config.test.ts"
         },
         "reason": "The inventory names this test consumer and its source directly names the capture. This does not assert that a live environment was re-created.",
@@ -195854,7 +196430,7 @@
       "consumer": {
         "location": {
           "anchor": "capture-read",
-          "line": 194,
+          "line": 195,
           "path": "src/scan/supabase-config.test.ts"
         },
         "reason": "The inventory names this test consumer and its source directly names the capture. This does not assert that a live environment was re-created.",
@@ -215043,7 +215619,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-CONFIG-GET",
-        "line": 389,
+        "line": 392,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215097,7 +215673,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-CSV-FAST-CSV",
-        "line": 406,
+        "line": 409,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215151,7 +215727,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-CSV-JSON2CSV",
-        "line": 407,
+        "line": 410,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215205,7 +215781,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-CSV-PAPAPARSE-STATIC",
-        "line": 404,
+        "line": 407,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215259,7 +215835,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-CSV-STRINGIFY",
-        "line": 405,
+        "line": 408,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215313,7 +215889,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-DRIZZLE-QUERY",
-        "line": 392,
+        "line": 395,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215367,7 +215943,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-EVAL-PARSED-AS-DATA",
-        "line": 400,
+        "line": 403,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215421,7 +215997,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-HEADERS-GET",
-        "line": 390,
+        "line": 393,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215475,7 +216051,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-LOCAL-FORMDATA-EVAL",
-        "line": 417,
+        "line": 420,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215529,7 +216105,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-MAP-GET",
-        "line": 391,
+        "line": 394,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215583,7 +216159,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-REQUEST-FORMDATA-EVAL",
-        "line": 416,
+        "line": 419,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -215637,7 +216213,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-CLIENT-URL-XXE-DOMPARSER",
-        "line": 413,
+        "line": 416,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -216825,7 +217401,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-CMD-CONST-GUARD",
-        "line": 363,
+        "line": 366,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -216879,7 +217455,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-CMD-INCLUDES-GUARD",
-        "line": 364,
+        "line": 367,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -216933,7 +217509,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-CMD-REGEX-GUARD",
-        "line": 362,
+        "line": 365,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -216987,7 +217563,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-CMD-THROW-GUARD",
-        "line": 365,
+        "line": 368,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217041,7 +217617,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-CMD-ZOD-GUARD",
-        "line": 368,
+        "line": 371,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217095,7 +217671,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-EVAL-GUARD",
-        "line": 366,
+        "line": 369,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217149,7 +217725,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-EXEC-NOSINK",
-        "line": 345,
+        "line": 348,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217203,7 +217779,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-PARAM-NOSINK",
-        "line": 344,
+        "line": 347,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217257,7 +217833,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-PATH-GUARD",
-        "line": 367,
+        "line": 370,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217311,7 +217887,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/N-LIB-PATH-SANITIZED",
-        "line": 343,
+        "line": 346,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -217321,6 +217897,114 @@
         "requirement": "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes."
       },
       "id": "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-PATH-SANITIZED:unresolved:calibration-execution-environment",
+      "identitySource": null,
+      "links": [
+        "targets/calibration",
+        "src/scan/calibration.test.ts",
+        "src/cli/validate-calibration.ts",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "src/scan/calibration.ts scored answer keys",
+      "pinSource": null,
+      "reason": "The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. The named assertion consumes this specific scored subset. A source-file digest is not a runtime measurement.",
+      "resolution": "unresolved",
+      "schemaOwner": "#1901 only for overlapping captured parser inputs",
+      "state": "wholly-unbound",
+      "venue": "src/scan/calibration/b3-injection.entries.ts"
+    },
+    {
+      "assertionVenue": {
+        "claim": "The actual mechanicalCorpus filter admits this untagged entry to live CLI scoring. Entries requiring a live tier remain separately unresolved. The census records availability, not a run.",
+        "location": {
+          "anchor": "scoredCorpus",
+          "line": 112,
+          "path": "src/cli/validate-calibration.ts"
+        },
+        "scope": "environment-behavior"
+      },
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "CORPUS",
+          "line": 75,
+          "path": "src/scan/calibration.ts"
+        },
+        "reason": "Resolved from the actual CORPUS initializer through named imports, constants, inline entries, spreads and finite data factories. Unconsumed sibling objects do not become registry members.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "calibration-execution-environment",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "CORPUS/N-LIB-REGEXP-EXEC",
+        "line": 344,
+        "path": "src/scan/calibration/b3-injection.entries.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes."
+      },
+      "id": "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-REGEXP-EXEC:unresolved:calibration-execution-environment",
+      "identitySource": null,
+      "links": [
+        "targets/calibration",
+        "src/scan/calibration.test.ts",
+        "src/cli/validate-calibration.ts",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "src/scan/calibration.ts scored answer keys",
+      "pinSource": null,
+      "reason": "The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. The named assertion consumes this specific scored subset. A source-file digest is not a runtime measurement.",
+      "resolution": "unresolved",
+      "schemaOwner": "#1901 only for overlapping captured parser inputs",
+      "state": "wholly-unbound",
+      "venue": "src/scan/calibration/b3-injection.entries.ts"
+    },
+    {
+      "assertionVenue": {
+        "claim": "The actual mechanicalCorpus filter admits this untagged entry to live CLI scoring. Entries requiring a live tier remain separately unresolved. The census records availability, not a run.",
+        "location": {
+          "anchor": "scoredCorpus",
+          "line": 112,
+          "path": "src/cli/validate-calibration.ts"
+        },
+        "scope": "environment-behavior"
+      },
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "CORPUS",
+          "line": 75,
+          "path": "src/scan/calibration.ts"
+        },
+        "reason": "Resolved from the actual CORPUS initializer through named imports, constants, inline entries, spreads and finite data factories. Unconsumed sibling objects do not become registry members.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "calibration-execution-environment",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "CORPUS/N-LIB-TRUSTED-WORKSPACE-PATH",
+        "line": 340,
+        "path": "src/scan/calibration/b3-injection.entries.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes."
+      },
+      "id": "src/scan/calibration/b3-injection.entries.ts#CORPUS/N-LIB-TRUSTED-WORKSPACE-PATH:unresolved:calibration-execution-environment",
       "identitySource": null,
       "links": [
         "targets/calibration",
@@ -219687,7 +220371,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-CLIENT-URL-CSV-PAPAPARSE",
-        "line": 402,
+        "line": 405,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -219741,7 +220425,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-CLIENT-URL-CSV-XLSX",
-        "line": 403,
+        "line": 406,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -219795,7 +220479,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-CLIENT-URL-EVAL",
-        "line": 398,
+        "line": 401,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -219849,7 +220533,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-CLIENT-URL-NEW-FUNCTION",
-        "line": 399,
+        "line": 402,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -219903,7 +220587,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-CLIENT-URL-SEARCHPARAMS-GET",
-        "line": 393,
+        "line": 396,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221523,7 +222207,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-CMD-DENYLIST-GUARD",
-        "line": 370,
+        "line": 373,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221577,7 +222261,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-CMD-INJECTION",
-        "line": 341,
+        "line": 342,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221630,8 +222314,62 @@
       "dependencyClass": "unresolved",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
+        "anchor": "CORPUS/P-LIB-CMD-NAMESPACE-INJECTION",
+        "line": 343,
+        "path": "src/scan/calibration/b3-injection.entries.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes."
+      },
+      "id": "src/scan/calibration/b3-injection.entries.ts#CORPUS/P-LIB-CMD-NAMESPACE-INJECTION:unresolved:calibration-execution-environment",
+      "identitySource": null,
+      "links": [
+        "targets/calibration",
+        "src/scan/calibration.test.ts",
+        "src/cli/validate-calibration.ts",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "src/scan/calibration.ts scored answer keys",
+      "pinSource": null,
+      "reason": "The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. The named assertion consumes this specific scored subset. A source-file digest is not a runtime measurement.",
+      "resolution": "unresolved",
+      "schemaOwner": "#1901 only for overlapping captured parser inputs",
+      "state": "wholly-unbound",
+      "venue": "src/scan/calibration/b3-injection.entries.ts"
+    },
+    {
+      "assertionVenue": {
+        "claim": "The actual mechanicalCorpus filter admits this untagged entry to live CLI scoring. Entries requiring a live tier remain separately unresolved. The census records availability, not a run.",
+        "location": {
+          "anchor": "scoredCorpus",
+          "line": 112,
+          "path": "src/cli/validate-calibration.ts"
+        },
+        "scope": "environment-behavior"
+      },
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "CORPUS",
+          "line": 75,
+          "path": "src/scan/calibration.ts"
+        },
+        "reason": "Resolved from the actual CORPUS initializer through named imports, constants, inline entries, spreads and finite data factories. Unconsumed sibling objects do not become registry members.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "calibration-execution-environment",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
         "anchor": "CORPUS/P-LIB-CMD-THROW-SWALLOWED",
-        "line": 371,
+        "line": 374,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221685,7 +222423,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-CMD-UNANCHORED-GUARD",
-        "line": 369,
+        "line": 372,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221739,7 +222477,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-CMD-ZOD-UNANCHORED",
-        "line": 372,
+        "line": 375,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221793,7 +222531,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-CODE-INJECTION",
-        "line": 342,
+        "line": 345,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -221847,7 +222585,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-LIB-HTTP-TRAVERSAL",
-        "line": 340,
+        "line": 341,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -223143,7 +223881,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-SERVER-CSV-FAST-CSV-RETAINED",
-        "line": 409,
+        "line": 412,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -223197,7 +223935,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-SERVER-CSV-JSON2CSV-RETAINED",
-        "line": 410,
+        "line": 413,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -223251,7 +223989,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-SERVER-CSV-XLSX-RETAINED",
-        "line": 411,
+        "line": 414,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -223305,7 +224043,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "CORPUS/P-SERVER-XXE-DOMPARSER-CONTROL",
-        "line": 414,
+        "line": 417,
         "path": "src/scan/calibration/b3-injection.entries.ts"
       },
       "freshness": {
@@ -306270,7 +307008,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 464,
+        "line": 499,
         "path": "src/scan/secrets.ts"
       },
       "freshness": {
@@ -306580,6 +307318,54 @@
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
       "id": "src/scan/secrets.ts#registry-import-boundary/1927:runtime:node:path",
+      "identitySource": null,
+      "links": [
+        "src/scan/external-corpus.ts#EXTERNAL_CORPUS",
+        "#1909"
+      ],
+      "observedIdentity": null,
+      "owner": "#1906 registry import admission; #1909 runtime and package initialization",
+      "pinSource": null,
+      "reason": "Native/package module initialization is outside the committed relative source graph and remains unresolved. No package code executes in the census. Known inert metadata operations cannot determine registry membership; opaque values cannot control admission. This declaration is not an observed package identity or an environment assertion.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/secrets.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "authoritative-record",
+      "consumer": {
+        "location": {
+          "anchor": "registry-import-boundary/1961",
+          "line": 31,
+          "path": "src/scan/secrets.ts"
+        },
+        "reason": "Value-import initialization is reachable from src/scan/external-corpus.ts#EXTERNAL_CORPUS, including unused bindings. Every committed relative source dependency passes the finite initializer admission check.",
+        "resolution": "authoritative"
+      },
+      "decision": null,
+      "declarationSource": {
+        "anchor": "registry-import-boundary/1961",
+        "line": 31,
+        "path": "src/scan/secrets.ts"
+      },
+      "declaredIdentity": "typescript",
+      "dependency": "typescript",
+      "dependencyClass": "tool",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "registry-import-boundary/1961",
+        "line": 31,
+        "path": "src/scan/secrets.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/secrets.ts#registry-import-boundary/1961:tool:typescript",
       "identitySource": null,
       "links": [
         "src/scan/external-corpus.ts#EXTERNAL_CORPUS",
@@ -310169,7 +310955,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 21,
+        "line": 22,
         "path": "src/scan/supabase-config.test.ts"
       },
       "freshness": {
@@ -310243,7 +311029,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 196,
+        "line": 197,
         "path": "src/scan/supabase-config.test.ts"
       },
       "freshness": {
@@ -310354,7 +311140,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 266,
+        "line": 271,
         "path": "src/scan/supabase-config.ts"
       },
       "freshness": {
@@ -311686,7 +312472,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 418,
+        "line": 431,
         "path": "src/scan/supabase.ts"
       },
       "freshness": {
@@ -320127,6 +320913,80 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "stryker.guards.config.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs"
     },
     {
       "assertionVenue": null,
@@ -333435,6 +334295,117 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "targets/calibration/lib/lib-guarded-runner.js"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "targets/calibration/lib/lib-namespace-exec-runner.js"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "targets/calibration/lib/lib-namespace-exec-runner.js#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "targets/calibration/lib/lib-namespace-exec-runner.js"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "targets/calibration/lib/lib-namespace-exec-runner.js"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "targets/calibration/lib/lib-namespace-exec-runner.js#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "targets/calibration/lib/lib-namespace-exec-runner.js"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "targets/calibration/lib/lib-regexp-parser.js"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "targets/calibration/lib/lib-regexp-parser.js#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "targets/calibration/lib/lib-regexp-parser.js"
     },
     {
       "assertionVenue": null,
@@ -364025,8 +364996,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "eb54b4a82f168efe3a606fe4323172be61b28de4",
-    "commitPayload": "dHJlZSAxOGI4YzFiYTk0YmE3MjdlM2I0ZTc4ZTA3Y2E3NTMzNGNjNTkxY2MyCnBhcmVudCA3ZGZkMTZhODJlY2JhMzdkMzkwNjc5NzI2MzE2NmM5YmM1ODI3OTI4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCgpPd24gdGhlIHdhdGNoZXIgdGVzdCBvdXRwdXQgYXJ0aWZhY3QgKCMyMTgzKQo=",
+    "commit": "0dbba34c30481cc1822159f0dd10e4e3c9236b70",
+    "commitPayload": "dHJlZSAwNjM2NDdjYzYxYzczY2Q0YzViMzNhYWNlMTBhZDA2Yzg5MjU4YzUxCnBhcmVudCBjNjhlOGQ2OWQyYThiN2VkYzRlNDMwNmNjZmU1YzhkZmY1ODgwYWJkCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2Njk0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2Njk0IC0wNTAwCgpQcmVzZXJ2ZSB3ZWJob29rIHNjYW4gcm9vdCBib3VuZHMgcmVmcyAjMjEzMAo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364035,13 +365006,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "e7f8ea2dae4d92230e85b099027969c0e5f0310c",
+        "gitOid": "e218a9017a9117f1f83f052592cdcd3fecdf39da",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "21f69545eec4a8f9b3888b4f9aa310171a73b3951340210967bc76dd35883699",
-    "tree": "18b8c1ba94ba727e3b4e78e07ca75334cc591cc2"
+    "populationSha256": "ad813dd9e80e0f8e43531905181d42765339e6a5b1c362b3f54cff863b30a6a7",
+    "tree": "063647cc61c73cd4c5b33aace10ad06c89258c51"
   },
   "venues": [
     {
@@ -367514,7 +368485,7 @@
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "728aafc887aaa24dedb2ecf91121baaddc1e7433",
+      "gitOid": "39e36cc9d4c7702fa22b893449f4f23bc051f74d",
       "id": "dry-run/artifact-family.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367522,7 +368493,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/artifact-family.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "a49755265f2de136111a00e84c6bef444aa04eb556026cd4fb8fe6ec2e83e3fd"
+      "sha256": "89a231ae98ff7da46cf5c2599978dbeffff3560b4e8b5e5db1b5e31f2de700c2"
     },
     {
       "bytes": 930,
@@ -367555,11 +368526,11 @@
       "sha256": "a32656e84a19b36c6175c7d12003fdd18d42e72507e39e06daa49bed3e0eec9f"
     },
     {
-      "bytes": 1850652,
+      "bytes": 1852132,
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "fa17a5067e5cd63c9ce41789aa857909fd34702c",
+      "gitOid": "691207482bc76e5f2c9410b87add96a67c90efac",
       "id": "dry-run/findings-report.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367567,14 +368538,14 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/findings-report.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "d474cc007fc6b63afc7b244e457a85561b408ff6b991b91bbd441b9ecd9ff14c"
+      "sha256": "55e6e73bd6987ba648f26a7b64567f19a2629689bc39492726455ec2763cfc34"
     },
     {
-      "bytes": 1790466,
+      "bytes": 1791898,
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "f4298ccf9c6ced46a715c7cb814b04c764738798",
+      "gitOid": "62e7f111a3275b47556ab8c6702cd81e4b866fa1",
       "id": "dry-run/findings.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367582,7 +368553,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/findings.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "25e6ab8d79bbe6725e4705a2b92aa2b4b9eb92b00e0b83a2723c08e559654b22"
+      "sha256": "d09c7cc83cadcfe647634b76efd4d8b887c804376e82c29981b797077bcaa040"
     },
     {
       "bytes": 12948,
@@ -367619,7 +368590,7 @@
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "0e8a1d4dc140cf7f5b4b42cc243d71a14ba9d2e9",
+      "gitOid": "0663947defdd1b43a0229f556c236691ca7e6009",
       "id": "dry-run/scorecard.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367627,7 +368598,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/scorecard.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "5ad0b347228a71e3573b7825325016784e216d56ecdf3b08b9ba87815db9513f"
+      "sha256": "8342c1a59157101c9d862196d55f55cf6400d09bdee1aec26b38621e148e2c9c"
     },
     {
       "bytes": 68,
@@ -386830,6 +387801,171 @@
       "sha256": "acb7d8668bf67cd4c1aed5c1fc4b5ee3a8b1d6fc91eb32053cf1bfe1d2656cdb"
     },
     {
+      "bytes": 288,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "2fa34e62434d354098bbd51ce068564ce804ddd9",
+      "id": "src/scan/__fixtures__/source-precision/committed-private-key.test.ts.txt",
+      "kind": "source",
+      "literalCount": 2,
+      "literalSha256": "c7e3fe6160d4661752f95731df65630b3686f185ac112f52b2b5d61ab3142ca0",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/committed-private-key.test.ts.txt",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "d7dc08cd71e14b4b438ea812f99b94631e1300d82c53296fc69ddb89cbb394e7"
+    },
+    {
+      "bytes": 364,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "39e28d57c2b94b92757d7afb8b3261ef6f578a30",
+      "id": "src/scan/__fixtures__/source-precision/generated-private-key.test.ts.txt",
+      "kind": "source",
+      "literalCount": 7,
+      "literalSha256": "b3c02292101303691ebcea36cb7078bc5494308c1183e8f3cafd8ba803783214",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/generated-private-key.test.ts.txt",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "5cfbaa6e55a9c1a6e873662971649aa3e1e8d4cc6f15c353cd236130a1e9804a"
+    },
+    {
+      "bytes": 512,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "4fd2ee9593e48f8eedac62c443b9e83c4b66c7b7",
+      "id": "src/scan/__fixtures__/source-precision/webhook-after-effect/handler.ts",
+      "kind": "source",
+      "literalCount": 3,
+      "literalSha256": "020b92dd3a1a1ca431117bee1530e2fa435c2648a0b7705e552483aa368ba116",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-after-effect/handler.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "86f1b5185d45141e0e17da288ab62d29032c2e29473f53f3de13a0afbaea6639"
+    },
+    {
+      "bytes": 512,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "07e2829a79b4d2b20970d1799f57c391befcb167",
+      "id": "src/scan/__fixtures__/source-precision/webhook-after-effect/implementation.ts",
+      "kind": "source",
+      "literalCount": 3,
+      "literalSha256": "ed1507af32b9e57547f33d058b05b8b290e5355ffd02241341d638d79f1a7005",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-after-effect/implementation.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "925251e4c1c279744062162f2f29a890763d4534ac1fef484ec61db860bcdd75"
+    },
+    {
+      "bytes": 512,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "4fd2ee9593e48f8eedac62c443b9e83c4b66c7b7",
+      "id": "src/scan/__fixtures__/source-precision/webhook-no-verification/handler.ts",
+      "kind": "source",
+      "literalCount": 3,
+      "literalSha256": "020b92dd3a1a1ca431117bee1530e2fa435c2648a0b7705e552483aa368ba116",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-no-verification/handler.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "86f1b5185d45141e0e17da288ab62d29032c2e29473f53f3de13a0afbaea6639"
+    },
+    {
+      "bytes": 252,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "40e932e238172971daaf6d50d34a478d832d84d9",
+      "id": "src/scan/__fixtures__/source-precision/webhook-no-verification/implementation.ts",
+      "kind": "source",
+      "literalCount": 2,
+      "literalSha256": "401ef28128b857ce1fe08ef36708ed2f91cc278644a210ca057a85a9105a0975",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-no-verification/implementation.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "30f04b33b40e2d8a8db7f1cb0167efab8aa300011579da1809cf8bf31f696a93"
+    },
+    {
+      "bytes": 325,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "089c118d9bd593b95e38448526251243cde89a8f",
+      "id": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/handler.ts",
+      "kind": "source",
+      "literalCount": 1,
+      "literalSha256": "da437adaffbcfc318ea666d5713922e82ac569604e38dcd2740666e848a225eb",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/handler.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "c40b794963edd097ea1c9b8e7bbb8193085d6a56b02e1c1ee3fe6448ad029d96"
+    },
+    {
+      "bytes": 65,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "71fe64e3c8ad4cf2733ef04a99ebaa208b566f2f",
+      "id": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/verification.ts",
+      "kind": "source",
+      "literalCount": 1,
+      "literalSha256": "8894cdad26ef749f311249c169d54f2f48118502d7fdacfad532d5d190fb98ff",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-unrelated-import/verification.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "33620ac9478e416521fe36005fb7a97cdec60fbeece1aa9f0d3378bc977b81bd"
+    },
+    {
+      "bytes": 504,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "dca5e74376e60caf8d3b5fb96edb05cb1abb14fc",
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/handler.ts",
+      "kind": "source",
+      "literalCount": 3,
+      "literalSha256": "6a336e02a986d900e6d05397f3e79cb553a086f671c98fabf32662365422a63f",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-valid/handler.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "768c9ba5e9db6ab1b0ac2660998ef81f30c2e32e63afaf8658cfb3dcbf60988e"
+    },
+    {
+      "bytes": 512,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "2cd6b259805145a56bb8f2c952f9111455637f68",
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/implementation.ts",
+      "kind": "source",
+      "literalCount": 3,
+      "literalSha256": "7e4c07105b640b3a1e83b9ee3ba8755a4a64d850c2ee7c8dcdc83b7b4dbdfafb",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-valid/implementation.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "00376e8a2ac14fac16ba62ea920c19069430a2a0173cb5e9ed456bfe298d71e9"
+    },
+    {
+      "bytes": 156,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "67318560bbecb5eb439d4d90a4ab4b208a59b23a",
+      "id": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts",
+      "kind": "source",
+      "literalCount": 1,
+      "literalSha256": "d0ba6a064b5f2e5cb8c49ba94b06ae2224e738dc5dedac0eb311b549756350d6",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/__fixtures__/source-precision/webhook-valid/shared.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "14947ed0c16ac06074be0316b5d63381c4479c3630405d4583ae1cee5332ce49"
+    },
+    {
       "bytes": 3002,
       "disposition": "conservative-candidate",
       "format": "text",
@@ -387535,19 +388671,19 @@
       "sha256": "49f74849277f44f863b80b7feb5e8dbd081dcc5fde0c83226776f97cadf38afe"
     },
     {
-      "bytes": 112344,
+      "bytes": 113807,
       "disposition": "authoritative-adapter",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "c756f6bcb4f48a129fa4ff283247790e0a92e627",
+      "gitOid": "c1d4aad3e60b07866a1e5434a6f7109ceb7379a2",
       "id": "src/scan/calibration/b3-injection.entries.ts",
       "kind": "source",
-      "literalCount": 1230,
-      "literalSha256": "9765b4bb2266fa47c5bfd64a4aeb0e1434ca2c7c52a8f57f703d9506f1102a90",
+      "literalCount": 1249,
+      "literalSha256": "9d35e0a6885d74cd710c9f25f01ceb9aeb813b24977dfd6751207a61301f4539",
       "owner": "calibration answer-key registry",
       "path": "src/scan/calibration/b3-injection.entries.ts",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "4ee60369db9a7a092807f9aea3c93f5464408131234750c742869481cbd5d25e"
+      "sha256": "113ad30ffe5faa6ad9d36223e7dfd516750e3923f9e75ccecee7616add3dc39a"
     },
     {
       "bytes": 9533,
@@ -390145,11 +391281,11 @@
       "sha256": "8edb38d438c641bef68974a1f6ab0ca54f2faad2c10739004a48fb0e3dac751f"
     },
     {
-      "bytes": 17634,
+      "bytes": 19427,
       "disposition": "conservative-candidate",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "0e3b5d362e9739cc80b7bc776311584f59d56f18",
+      "gitOid": "c806f1dcb2ff5e347fe48a4698a0d0430582b4b3",
       "id": "src/scan/rules/semgrep/library-taint.yml",
       "kind": "structured-data",
       "literalCount": 0,
@@ -390157,7 +391293,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/rules/semgrep/library-taint.yml",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "e2373e5c0afc24f0d32dc75ac39ecfde2b44ad36d66faa4c0e27790ddb689ab4"
+      "sha256": "35e2a750cc9f1bd96ba72987ecb2e78bc4185628057254768263da001673a546"
     },
     {
       "bytes": 51537,
@@ -390355,34 +391491,34 @@
       "sha256": "aff53f89e698977562c90654b70fe83b8d9e88c99ef470f9974816f87c9b708c"
     },
     {
-      "bytes": 36509,
+      "bytes": 39501,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "95a54f898c3c67391a9dd0a7df343efa644ccf7d",
+      "gitOid": "9b9b1721a4847326035c8f65fdfbe782e655ecef",
       "id": "src/scan/secrets.test.ts",
       "kind": "source",
-      "literalCount": 466,
-      "literalSha256": "0f182f5fe272abbf7fb3ecfcc6d3224a6a119a53934b620790fc407e986aec92",
+      "literalCount": 516,
+      "literalSha256": "e6c69a594d1f5b5f4089c9b93ece282e30005d1980182ba85c834e11261152df",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/secrets.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "21bd1ed67a8d6645b01155e95dfbc75a16f9d275b0fc14ca9a83379aed2e7163"
+      "sha256": "dc1c520b39ddc6dc5cb60a73fc169c38a4c5e34ec8eb0b0d23b2cc431a0dbdb6"
     },
     {
-      "bytes": 40717,
+      "bytes": 43339,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "22e326bb730b67582599e3653803ef6530935e65",
+      "gitOid": "334c96fe982e486c88dbcf0a3e43783c967f48a9",
       "id": "src/scan/secrets.ts",
       "kind": "source",
-      "literalCount": 258,
-      "literalSha256": "10bc4be03fb14d0b6e93da9854ca3ba8cf7b2ed4d8f4396fb5d7a5cf8d9daf58",
+      "literalCount": 270,
+      "literalSha256": "5ef8b9952fbfc94d23dac154b5779102e0cfdce8b48bf8847efbafbab4141479",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/secrets.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "fa1578dcedaa4a8dd530cd09b8b180d7a62aee36ec319175646115571ec2e83c"
+      "sha256": "58ebbe903c4742334a8140c5da8b99aca215abc77cfbd7069e48b2cffaba9667"
     },
     {
       "bytes": 5928,
@@ -390760,34 +391896,34 @@
       "sha256": "537e110089c04500e5bebf8be3382d3b8bb045aa4ad67757a5509754f5d95996"
     },
     {
-      "bytes": 23590,
+      "bytes": 26483,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "855d5cc1ebe50415105cb43eee7b800625982927",
+      "gitOid": "9cf981deb328193cf798e6d8c70f17101fc0155a",
       "id": "src/scan/supabase-config.test.ts",
       "kind": "source",
-      "literalCount": 341,
-      "literalSha256": "6620c451391bf4086dadc227bb4fb8e25336547218215bd56948882ff2fd25bb",
+      "literalCount": 382,
+      "literalSha256": "0b66d97ab82b9823a9f9ad14a37a904544af8ec342ebec6b5a4806ab64f41949",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-config.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "7385cc7c559cd423b08c9a17c20bfeccbf0992c231eb82ccf078863655644089"
+      "sha256": "0d8708ad64a2699328dc1ce3f5b0ccc578930e8f4506121e8f7bba7fd8832e4b"
     },
     {
-      "bytes": 32125,
+      "bytes": 41529,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "75a6b08bad9014108ef8f0d298d72994747a0c9f",
+      "gitOid": "2bdb88471a36f0e62802a9420835f82f72db3182",
       "id": "src/scan/supabase-config.ts",
       "kind": "source",
-      "literalCount": 212,
-      "literalSha256": "d8353ee580dd31158a28cab01cd3c8581c53c81ae5a7824da95a1f30fba28c71",
+      "literalCount": 246,
+      "literalSha256": "bd26dfec1589d40594da7fcb292ed02137eea440ef81afd094db047adcbf3565",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-config.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "50248f56fa2550413094becc00d2d847d96d886355981438bc136eb7fa19d351"
+      "sha256": "350c1a9efcefd6d572d7b66f89f4dbc6603b25515650d76fc8d379a427334d18"
     },
     {
       "bytes": 15118,
@@ -390880,34 +392016,34 @@
       "sha256": "bb5bbe543e1b72253494cb123557355b25d7eaa63aeac2cd49acdd77c66d4ebc"
     },
     {
-      "bytes": 37865,
+      "bytes": 39537,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "6cf33404d8e5359f213e491f2093b881e6686d1f",
+      "gitOid": "b257bc6061da0af5d8617425ae2dc43d6301a3c8",
       "id": "src/scan/supabase.test.ts",
       "kind": "source",
-      "literalCount": 478,
-      "literalSha256": "018b7c36ad69cff504384c312b8a0db77981218081333e3092d62b2abbaa5f4d",
+      "literalCount": 505,
+      "literalSha256": "bda80d7222b7df3b96970e0c0eb59cf953bd00ba67b0016708d0e4545d882316",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ead5cf1d47f4d8f34588ecf63266460ac339ec0da52cd26377ce656ccb47994c"
+      "sha256": "89624a5ac5f224f09e16b5318b7071bd8c90c5cdb0883fd6e3de65cbe08fd07e"
     },
     {
-      "bytes": 36318,
+      "bytes": 37199,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "e6c64cc9921a1266609fd7a5feae009acde594f0",
+      "gitOid": "f840e2bc2262fe59faee94cf2a1e0d846b47b33e",
       "id": "src/scan/supabase.ts",
       "kind": "source",
-      "literalCount": 147,
-      "literalSha256": "4efcca36bcacc82c3d30386b6f62779ab59d2a75e063f7dbe9ab76c4fdfa9804",
+      "literalCount": 154,
+      "literalSha256": "9f5cdae640928f2bc0572ced6961804aa8138ffd36f6d4417da847aa756d0e5b",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "46a4268d5db5bc98b102ea5ab2f291c3cae30e4af5a3f85e4bc86c4bf208940c"
+      "sha256": "1c1e4d4f39903501fa0089cb3525575d9385b7d20b07974c3ebff8e2e5a62195"
     },
     {
       "bytes": 33344,
@@ -391135,11 +392271,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 320760,
+      "bytes": 321392,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "d5436c55fdae9b2844edfe6e8229c7f702ff6334",
+      "gitOid": "34de26d72f3a4cfdc2d18bc4af273ecca190d3c7",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -391147,7 +392283,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "50cdfc284385e51799f30ca5b03b4fcd09db263035af3b32b65d09e3576e3202"
+      "sha256": "bdae42d78e34361c9d535aa4b980cb90e0385124b48ef1b03b23ef4ae6dd8e15"
     },
     {
       "bytes": 10289,
@@ -392018,6 +393154,21 @@
       "path": "stryker.guards.config.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "cf9b33817a9d53163aa90dbc1ea81ff331229d153544f2f41644df77a87f1b6c"
+    },
+    {
+      "bytes": 352,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "7ec5674fc66594404adc11bf9ad2b90b5327d965",
+      "id": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs",
+      "kind": "source",
+      "literalCount": 4,
+      "literalSha256": "01eb5986d08a105773a5ee3e4ff928b715c26ad043dff597ad483852f8110c8d",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "targets/calibration/.codex/hooks/fixed-workspace-read.mjs",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "32dafef2949bd3d5735291d8c1ed01d42f5087d29fa47b7154618551f281d0f6"
     },
     {
       "bytes": 1339,
@@ -395558,6 +396709,36 @@
       "path": "targets/calibration/lib/lib-guarded-runner.js",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "bd540c7c27a84ab4dcfe1158ab4924edbc544685d5228e083c3b142dead7a4d1"
+    },
+    {
+      "bytes": 232,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "6987ff3178c30e5bd707a2e041df2a857b22abd6",
+      "id": "targets/calibration/lib/lib-namespace-exec-runner.js",
+      "kind": "source",
+      "literalCount": 1,
+      "literalSha256": "d1dbf99daeb1f9c81789dd254701a6d415529a6bf51db03ec90578e4ceff4e2e",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "targets/calibration/lib/lib-namespace-exec-runner.js",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "cd97dad9030fb6917301324ede85fd85caba4558a8ce6b3d0da212f76d849053"
+    },
+    {
+      "bytes": 300,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "bb41b37e4f3c9194be2297d74a22505f2d418b7b",
+      "id": "targets/calibration/lib/lib-regexp-parser.js",
+      "kind": "source",
+      "literalCount": 0,
+      "literalSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "targets/calibration/lib/lib-regexp-parser.js",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "be2c11b266238b02ecb1e04ba8be7c492d0cfde28e3fff6dc54c5b73b62a1773"
     },
     {
       "bytes": 684,
