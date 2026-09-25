@@ -51,6 +51,9 @@ describe("validateFindings — mechanical scan fields", () => {
       { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], installScriptAssessment: "maybe" }] },
       { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], hasInstallScript: true, installScriptAssessment: "absent" }] },
     ]) expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: broken }] }).errors.join("\n")).toContain("dependencyMetadataEvidence");
+    const malformed = { ...dependencyMetadataEvidence, complete: false, outcomes: [{ coordinate: "registry-pkg@1.0.0", status: "malformed-metadata" as const, provenance: "https://registry.npmjs.org/registry-pkg/1.0.0", installScriptAssessment: "unsupported" as const, detail: "scripts.install must be a string" }] };
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: malformed }] }).errors).toEqual([]);
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: { ...malformed, complete: true } }] }).errors.join("\n")).toContain("incompatible with complete receipt");
   });
 
   it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {

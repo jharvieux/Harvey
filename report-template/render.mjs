@@ -184,7 +184,7 @@ function dependencyMetadataSection(findings) {
       <td><code>${esc(outcome.provenance)}</code>${outcome.detail ? `<br>${esc(outcome.detail)}` : ""}</td>
     </tr>`).join("");
     return `<h3>${esc(finding.id)} — ${receipt.processed} of ${receipt.population} packages recorded</h3>
-      <table class="dep-metadata"><tr><th>Package/version</th><th>Metadata status</th><th>Install script</th><th>License</th><th>Provenance / cause</th></tr>${rows}</table>`;
+      <table class="dep-metadata"><tr><th>Package identity</th><th>Metadata status</th><th>Install script</th><th>License</th><th>Provenance / cause</th></tr>${rows}</table>`;
   }).join("");
   return `<h2>Dependency metadata outcomes</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Every assessed package is listed with its exact coordinate, metadata status, install-script result, and source. Unsupported or failed outcomes state their cause in the final column.</div>

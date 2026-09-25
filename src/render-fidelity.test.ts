@@ -12,7 +12,7 @@
 // including the exact defect that shipped, reconstructed verbatim — and asserts this gate goes red.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -293,27 +293,59 @@ describe("pnpm range disclosure delivery (#1774)", () => {
 describe("dependency metadata delivery (#2141)", () => {
   it("preserves the complete per-package receipt through assembly, JSON validation, and rendered evidence", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-metadata-report-"));
-    const pkg = { name: "metadata-report", dependencies: { child: "1.0.0" } };
+    const child = `metadata-delivery-child-${process.pid}-${Date.now()}`;
+    const pkg = { name: "metadata-report", dependencies: { [child]: "1.0.0" } };
     let context: MechanicalScanContext | undefined;
+    const originalFetch = globalThis.fetch;
     try {
       writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
-      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "metadata-report", dependencies: { child: "1.0.0" } }, "node_modules/child": { name: "child", version: "1.0.0", license: "MIT", hasInstallScript: false } } }));
+      writeFileSync(join(dir, "pnpm-lock.yaml"), `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      ${child}: {specifier: 1.0.0, version: 1.0.0}\npackages:\n  ${child}@1.0.0: {}\n`);
+      globalThis.fetch = (async (_input, init) => init?.method === "HEAD" ? new Response(null, { status: 200 }) : Response.json({ name: child, version: "1.0.0", license: "MIT", scripts: {} })) as typeof fetch;
       context = new MechanicalScanContext(dir);
-      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline metadata fixture" }, skipNetworkChecks: true }, "supply");
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "bounded metadata fixture" }, skipNetworkChecks: false }, "supply");
       const receipt = result.findings.find((finding) => finding.id === "SUP-METADATA-00")!;
-      expect(receipt.dependencyMetadataEvidence).toMatchObject({ population: 1, processed: 1, complete: true, outcomes: [{ coordinate: "child@1.0.0", status: "lockfile", provenance: "package-lock.json", license: "MIT", installScriptAssessment: "absent" }] });
-      const doc = assembleEngagementDocument(RECORDED, ENV, [receipt], META);
+      const scopeFinding = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(receipt.dependencyMetadataEvidence).toMatchObject({ population: 1, processed: 1, complete: true, outcomes: [{ coordinate: `${child}@1.0.0`, status: "registry", provenance: `https://registry.npmjs.org/${child}/1.0.0`, license: "MIT", installScriptAssessment: "absent" }] });
+      expect(scopeFinding.evidence).toContain("registry/local metadata separately assessed 1 of 1 packages");
+      const doc = assembleEngagementDocument(RECORDED, ENV, result.findings, META);
       const filename = join(dir, "findings.json");
       writeFileSync(filename, JSON.stringify(doc));
       const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
       expect(validateFindings(delivered).errors).toEqual([]);
-      expect(delivered.findings[0]?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      expect(delivered.findings.find((finding) => finding.id === receipt.id)?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
+      expect(delivered.findings.find((finding) => finding.id === scopeFinding.id)?.evidence).toBe(scopeFinding.evidence);
       const html = buildHtml(doc);
       expect(html).toContain("Dependency metadata outcomes");
-      expect(html).toContain("child@1.0.0");
-      expect(html).toContain("package-lock.json");
+      expect(html).toContain("Package identity");
+      expect(html).toContain(`${child}@1.0.0`);
+      expect(html).toContain(`https://registry.npmjs.org/${child}/1.0.0`);
       expect(html).toContain("absent");
+      expect(html).toContain(esc(scopeFinding.evidence));
       expect(html).not.toContain("Complete per-package outcomes are attached");
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+    } finally { globalThis.fetch = originalFetch; context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("renders distinct local manifests with the same package name as separate proved identities", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-local-metadata-report-"));
+    const pkg = { name: "metadata-report", workspaces: ["packages/*"], dependencies: { "@local/shared": "file:packages/first" } };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      for (const path of ["packages/first", "packages/second", "packages/consumer"]) mkdirSync(join(dir, path), { recursive: true });
+      writeFileSync(join(dir, "packages/first/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "MIT" }));
+      writeFileSync(join(dir, "packages/second/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "GPL-3.0", scripts: { install: "node install.js" } }));
+      writeFileSync(join(dir, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/shared": "file:../second" } }));
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "bounded local identity fixture" }, skipNetworkChecks: true }, "supply");
+      const doc = assembleEngagementDocument(RECORDED, ENV, result.findings, META);
+      expect(validateFindings(doc).errors).toEqual([]);
+      const html = buildHtml(doc);
+      for (const coordinate of [
+        "@local/shared@local:packages/first/package.json",
+        "@local/shared@local:packages/second/package.json",
+      ]) expect(html).toContain(coordinate);
+      expect(html).toContain("packages/second/package.json#license/scripts");
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
     } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });

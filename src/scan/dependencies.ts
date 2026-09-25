@@ -709,7 +709,7 @@ interface NormalizedPnpmInput {
 // and drops the package. The parser already gives explicit entry metadata precedence, so add only
 // the exact name/version the lock key itself encodes to a disposable provider copy. Package keys,
 // peer contexts, dev/optional flags, and the client input bytes remain unchanged.
-export function normalizePnpmV6ForOsv(text: string): NormalizedPnpmInput {
+function normalizePnpmV6ForOsv(text: string): NormalizedPnpmInput {
   const version = /^lockfileVersion:\s*['"]?([\d.]+)['"]?\s*$/m.exec(text)?.[1];
   if (!version || Number(version) < 6 || Number(version) >= 9) {
     return { text, normalizedEntries: 0, normalizedSha256: inputHash(text) };

@@ -632,6 +632,8 @@ export function classifyLicense(raw: string | undefined): LicenseClass {
 // denormalized snapshot of the LATEST publish, not necessarily the version actually installed;
 // `versions[<v>]` carries each release's own metadata. (#1099)
 interface NpmPackageMeta {
+  name?: string;
+  version?: string;
   license?: string | { type?: string };
   licenses?: { type?: string }[];
   scripts?: Record<string, unknown>;
@@ -648,6 +650,53 @@ function extractLicenseFrom(meta: NpmPackageMeta): string | undefined {
     if (ids.length > 0) return ids.join(" OR "); // pre-npm5 array = a choice of alternatives
   }
   return undefined;
+}
+
+function registryMetadataAdmissionError(value: unknown, expectedName: string, expectedVersion?: string): string | undefined {
+  if (!isRegistryMetadata(value)) return "metadata root must be an object";
+  if (value.name !== undefined && (typeof value.name !== "string" || value.name !== expectedName)) {
+    return `name must be ${JSON.stringify(expectedName)} when present; received ${JSON.stringify(value.name)}`;
+  }
+  if (value.version !== undefined && (typeof value.version !== "string" || (expectedVersion !== undefined && value.version !== expectedVersion))) {
+    return expectedVersion === undefined
+      ? `version must be a string when present; received ${JSON.stringify(value.version)}`
+      : `version must be ${JSON.stringify(expectedVersion)} when present; received ${JSON.stringify(value.version)}`;
+  }
+  if (value.license !== undefined && !(typeof value.license === "string" || (isRegistryMetadata(value.license) && typeof value.license.type === "string"))) {
+    return "license must be a string or an object with a string type";
+  }
+  if (value.licenses !== undefined) {
+    if (!Array.isArray(value.licenses)) return "licenses must be an array when present";
+    const invalid = value.licenses.findIndex((entry) => !isRegistryMetadata(entry) || typeof entry.type !== "string");
+    if (invalid >= 0) return `licenses[${invalid}] must be an object with a string type`;
+  }
+  if (value.scripts !== undefined) {
+    if (!isRegistryMetadata(value.scripts)) return "scripts must be an object when present";
+    const invalid = Object.entries(value.scripts).find(([, command]) => typeof command !== "string");
+    if (invalid) return `scripts.${invalid[0]} must be a string`;
+  }
+  return undefined;
+}
+
+function normalizeMetadataCandidates(candidates: readonly LicenseCandidate[]): LicenseCandidate[] {
+  const normalized: LicenseCandidate[] = [];
+  const localIndexes = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (!candidate.localMetadata) {
+      normalized.push(candidate);
+      continue;
+    }
+    const identity = `${candidate.name}\u0000${candidate.localMetadata.manifest}`;
+    const existingIndex = localIndexes.get(identity);
+    if (existingIndex === undefined) {
+      localIndexes.set(identity, normalized.length);
+      normalized.push(candidate);
+      continue;
+    }
+    const existing = normalized[existingIndex]!;
+    if (candidate.direct && !existing.direct) normalized[existingIndex] = { ...existing, direct: true };
+  }
+  return normalized;
 }
 
 // License lookup over the RESOLVED DEPENDENCY TREE (src/sbom.ts's `licenseScope`, the same parse
@@ -680,11 +729,18 @@ export async function checkLicenseCompliance(
   let registryRequests = 0;
   let cacheHits = 0;
   const cacheDir = opts.cacheDir;
-  const ordered = [...scope.candidates].sort((a, b) => Number(b.direct) - Number(a.direct));
+  const ordered = normalizeMetadataCandidates(scope.candidates).sort((a, b) => Number(b.direct) - Number(a.direct));
+  const baseCoordinate = (candidate: LicenseCandidate): string => candidate.version ? `${candidate.name}@${candidate.version}` : candidate.name;
+  const coordinateCounts = new Map<string, number>();
+  for (const candidate of ordered) coordinateCounts.set(baseCoordinate(candidate), (coordinateCounts.get(baseCoordinate(candidate)) ?? 0) + 1);
+  const coordinateOf = (candidate: LicenseCandidate): string => {
+    const base = baseCoordinate(candidate);
+    return candidate.localMetadata && (coordinateCounts.get(base) ?? 0) > 1 ? `${base}@local:${candidate.localMetadata.manifest}` : base;
+  };
   type Resolved = { candidate: LicenseCandidate; licenseId?: string; source: string; outcome: DependencyMetadataEvidence["outcomes"][number]; installScript?: boolean };
   const resolveCandidate = async (candidate: LicenseCandidate): Promise<Resolved> => {
     const { name, version } = candidate;
-    const coordinate = version ? `${name}@${version}` : name;
+    const coordinate = coordinateOf(candidate);
     if (candidate.unresolvedAlias) {
       const { declared, targetName, range, ownerPath } = candidate.unresolvedAlias;
       const detail = `Declares ${declared}${targetName ? `; target ${targetName}, range ${range}` : ""}${ownerPath ? `; owner ${ownerPath}` : ""}; declaration-to-installation resolution unproved.`;
@@ -715,9 +771,9 @@ export async function checkLicenseCompliance(
   for (let offset = 0; offset < ordered.length; offset += batchSize) resolved.push(...await Promise.all(ordered.slice(offset, offset + batchSize).map(resolveCandidate)));
   for (const item of resolved) {
     const { candidate, licenseId, source, outcome } = item;
-    const coordinate = candidate.version ? `${candidate.name}@${candidate.version}` : candidate.name;
+    const coordinate = coordinateOf(candidate);
     outcomes.push(outcome);
-    if (["unresolved-identity", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied"].includes(outcome.status)) {
+    if (["unresolved-identity", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata"].includes(outcome.status)) {
       indeterminate.push(outcome.detail ? `${coordinate} (${outcome.detail})` : coordinate);
       reasons.set(outcome.status, outcome.detail ?? outcome.status);
       continue;
@@ -769,7 +825,7 @@ export async function checkLicenseCompliance(
   }
   outcomes.sort((a, b) => a.coordinate.localeCompare(b.coordinate) || a.status.localeCompare(b.status));
   const evidence: DependencyMetadataEvidence = { schemaVersion: 1, population: ordered.length, processed: outcomes.length, cacheHits, registryRequests,
-    complete: outcomes.length === ordered.length && outcomes.every((outcome) => !["unresolved-identity", "registry-not-found", "registry-access-denied", "network-denied"].includes(outcome.status)), outcomes };
+    complete: outcomes.length === ordered.length && outcomes.every((outcome) => !["unresolved-identity", "registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata"].includes(outcome.status)), outcomes };
   if (opts.emitAssessment) findings.unshift(metadataAssessmentFinding(evidence));
   if (indeterminate.length > 0 || scope.completeness !== "complete") {
     const reason = indeterminate.length > 0 ? `The dependency license lookup could not reach a verdict: ${[...reasons.entries()].map(([status, detail]) => `${status}: ${detail}`).join("; ")}.` : "";
@@ -804,6 +860,7 @@ function causeSpecificMetadataFixes(outcomes: DependencyMetadataEvidence["outcom
     statuses.has("registry-access-denied") ? "The fixed public npm registry endpoint denied access. Confirm the coordinate is public or provide local manifest metadata; private/custom registry authentication is not supported by this scanner." : undefined,
     statuses.has("registry-not-found") ? "Verify the package/version coordinate and registry mapping; if it is unpublished, provide its manifest metadata locally." : undefined,
     statuses.has("network-denied") ? REGISTRY_FIX : undefined,
+    statuses.has("malformed-metadata") ? "Verify that the selected registry or cache entry matches the requested package/version and contains valid license and scripts fields; no conclusions were drawn from the malformed metadata." : undefined,
     statuses.has("unresolved-identity") ? "Use a supported lockfile that proves each alias target and selected version." : undefined,
   ].filter((value): value is string => value !== undefined);
   return fixes.length > 0 ? fixes.join(" ") : fallback;
@@ -814,7 +871,7 @@ function causeSpecificMetadataFixes(outcomes: DependencyMetadataEvidence["outcom
 // non-OK answer falls back to the packument only when it contains the requested version entry.
 async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | undefined, name: string, version?: string): Promise<
   | { body: NpmPackageMeta; status: "cache" | "registry"; provenance: string; requests: number }
-  | { error: string; status: "registry-not-found" | "registry-access-denied" | "network-denied"; provenance: string; requests: number }
+  | { error: string; status: "registry-not-found" | "registry-access-denied" | "network-denied" | "malformed-metadata"; provenance: string; requests: number }
 > {
   const coordinate = version ? `${name}@${version}` : name;
   const base = `${NPM_REGISTRY}/${encodeURIComponent(name)}`;
@@ -824,8 +881,8 @@ async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | unde
     const cached = JSON.parse(await readFile(cachePath, "utf8")) as { schemaVersion?: unknown; coordinate?: unknown; observedAt?: unknown; sourceUrl?: unknown; body?: unknown };
     const observedAt = typeof cached.observedAt === "string" ? Date.parse(cached.observedAt) : Number.NaN;
     const fresh = Number.isFinite(observedAt) && observedAt <= Date.now() + 5 * 60_000 && Date.now() - observedAt <= 24 * 60 * 60_000;
-    if (cached.schemaVersion === 2 && cached.coordinate === coordinate && typeof cached.sourceUrl === "string" && urls.includes(cached.sourceUrl) && fresh && isRegistryMetadata(cached.body)) {
-      return { body: cached.body, status: "cache", provenance: `${cachePath} (fetched from ${cached.sourceUrl} at ${cached.observedAt})`, requests: 0 };
+    if (cached.schemaVersion === 2 && cached.coordinate === coordinate && typeof cached.sourceUrl === "string" && urls.includes(cached.sourceUrl) && fresh && registryMetadataAdmissionError(cached.body, name, version) === undefined) {
+      return { body: cached.body as NpmPackageMeta, status: "cache", provenance: `${cachePath} (fetched from ${cached.sourceUrl} at ${cached.observedAt})`, requests: 0 };
     }
   } catch { /* missing or corrupt cache entries are refetched */ }
   let lastStatus = 0;
@@ -850,6 +907,8 @@ async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | unde
       if (!isRegistryMetadata(selected)) {
         return { error: `registry metadata does not contain requested version ${JSON.stringify(version)}`, status: "registry-not-found", provenance: url, requests };
       }
+      const admissionError = registryMetadataAdmissionError(selected, name, version);
+      if (admissionError) return { error: `registry returned malformed package metadata (${admissionError})`, status: "malformed-metadata", provenance: url, requests };
       if (cacheDir && cachePath) {
         await mkdir(cacheDir, { recursive: true });
         await writeFile(cachePath, `${JSON.stringify({ schemaVersion: 2, coordinate, observedAt: new Date().toISOString(), sourceUrl: url, body: selected })}\n`, { mode: 0o600 });

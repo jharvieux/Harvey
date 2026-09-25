@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readNamesSafe } from "../fs-walk.js";
 import type { DependencyMetadataEvidence } from "../findings.js";
 import { parsePackageLock, parsePnpmLock, parseYarnLock, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
@@ -422,6 +423,69 @@ describe("checkLicenseCompliance", () => {
     });
   });
 
+  it.each([
+    ["a contradictory package name", { name: "other-package", version: "1.0.0", license: "GPL-3.0", scripts: { install: "wrong.js" } }, "name"],
+    ["a contradictory package version", { version: "2.0.0", license: "GPL-3.0", scripts: { install: "wrong.js" } }, "version"],
+    ["a null scripts block", { license: "MIT", scripts: null }, "scripts"],
+    ["an array scripts block", { license: "MIT", scripts: [] }, "scripts"],
+    ["a non-string install script", { license: "MIT", scripts: { install: 123 } }, "scripts.install"],
+    ["a null legacy license entry", { licenses: [null], scripts: {} }, "licenses[0]"],
+  ] as const)("keeps valid siblings when registry metadata contains %s", async (_label, malformed, detail) => {
+    const fetchImpl = vi.fn(async (url: string) => new Response(JSON.stringify(url.includes("good")
+      ? { name: "good", version: "1.0.0", license: "MIT", scripts: {} }
+      : malformed), { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(scope([
+      { name: "good", version: "1.0.0", direct: true },
+      { name: "subject", version: "1.0.0", direct: true },
+    ]), { fetchImpl, emitAssessment: true });
+    const evidence = findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence;
+    expect(evidence).toMatchObject({ population: 2, processed: 2, complete: false });
+    expect(evidence?.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ coordinate: "good@1.0.0", status: "registry", license: "MIT", installScriptAssessment: "absent" }),
+      expect.objectContaining({ coordinate: "subject@1.0.0", status: "malformed-metadata", installScriptAssessment: "unsupported", detail: expect.stringContaining(detail) }),
+    ]));
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-INSTALL-SCRIPT-METADATA-subject@1.0.0");
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-COPYLEFT-subject@1.0.0");
+  });
+
+  it("accepts matching explicit registry identity fields", async () => {
+    const findings = await checkLicenseCompliance(scope([{ name: "subject", version: "1.0.0", direct: true }]), {
+      fetchImpl: packument({ name: "subject", version: "1.0.0", license: "MIT", scripts: {} }), emitAssessment: true,
+    });
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence).toMatchObject({
+      complete: true,
+      outcomes: [expect.objectContaining({ coordinate: "subject@1.0.0", status: "registry", license: "MIT", installScriptAssessment: "absent" })],
+    });
+  });
+
+  it("rejects a contradictory exact-version identity in the packument fallback", async () => {
+    const fetchImpl = vi.fn(async (url: string) => url.endsWith("/1.0.0")
+      ? new Response("", { status: 404 })
+      : new Response(JSON.stringify({ versions: { "1.0.0": { version: "2.0.0", license: "GPL-3.0", scripts: { install: "wrong.js" } } } }), { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(scope([{ name: "subject", version: "1.0.0", direct: true }]), { fetchImpl, emitAssessment: true });
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence).toMatchObject({
+      complete: false,
+      outcomes: [expect.objectContaining({ coordinate: "subject@1.0.0", status: "malformed-metadata", installScriptAssessment: "unsupported", detail: expect.stringContaining("version") })],
+    });
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-INSTALL-SCRIPT-METADATA-subject@1.0.0");
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-COPYLEFT-subject@1.0.0");
+  });
+
+  it("normalizes repeated local identities while keeping distinct local paths addressable", async () => {
+    const shared = { name: "@local/shared", direct: true, localMetadata: { manifest: "packages/first/package.json", private: true, license: "MIT", hasInstallScript: false } } satisfies LicenseCandidate;
+    const findings = await checkLicenseCompliance(scope([
+      shared,
+      { ...shared },
+      { name: "@local/shared", direct: true, localMetadata: { manifest: "packages/second/package.json", private: true, license: "GPL-3.0", hasInstallScript: true } },
+    ]), { emitAssessment: true });
+    const evidence = findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence;
+    expect(evidence).toMatchObject({ population: 2, processed: 2, complete: true });
+    expect(evidence?.outcomes.map((outcome) => outcome.coordinate).sort()).toEqual([
+      "@local/shared@local:packages/first/package.json",
+      "@local/shared@local:packages/second/package.json",
+    ]);
+  });
+
   it("uses registry script metadata when present and says unsupported when that source omits scripts", async () => {
     const present = await checkLicenseCompliance(scope([{ name: "builder", version: "1.0.0", direct: true }]), { fetchImpl: packument({ license: "MIT", scripts: { postinstall: "node build.js" } }), emitAssessment: true });
     expect(present.map((finding) => finding.id)).toContain("SUP-INSTALL-SCRIPT-METADATA-builder@1.0.0");
@@ -482,7 +546,7 @@ describe("checkLicenseCompliance", () => {
     try {
       const firstFetch = packument({ license: "MIT", scripts: {} });
       await checkLicenseCompliance(scope([{ name: "cached", version: "1.0.0", direct: true }]), { fetchImpl: firstFetch, cacheDir, emitAssessment: true });
-      const cachePath = join(cacheDir, readdirSync(cacheDir)[0]!);
+      const cachePath = join(cacheDir, readNamesSafe(cacheDir)[0]!);
       const cached = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
       writeFileSync(cachePath, JSON.stringify({ ...cached, observedAt: "1970-01-01T00:00:00.000Z" }));
       const refreshedFetch = packument({ license: "GPL-3.0", scripts: {} });
@@ -497,6 +561,20 @@ describe("checkLicenseCompliance", () => {
       const resumed = await checkLicenseCompliance(scope([{ name: "cached", version: "1.0.0", direct: true }]), { fetchImpl: resumedFetch, cacheDir, emitAssessment: true });
       expect(resumedFetch).not.toHaveBeenCalled();
       expect(resumed.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes[0]?.provenance).toContain("https://registry.npmjs.org/cached/1.0.0");
+    } finally { rmSync(cacheDir, { recursive: true, force: true }); }
+  });
+
+  it("refetches a fresh cache receipt whose nested metadata is malformed", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-metadata-malformed-cache-"));
+    try {
+      await checkLicenseCompliance(scope([{ name: "cached", version: "1.0.0", direct: true }]), { fetchImpl: packument({ license: "MIT", scripts: {} }), cacheDir, emitAssessment: true });
+      const cachePath = join(cacheDir, readNamesSafe(cacheDir)[0]!);
+      const cached = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
+      writeFileSync(cachePath, JSON.stringify({ ...cached, body: { license: "MIT", scripts: null } }));
+      const refetch = packument({ name: "cached", version: "1.0.0", license: "GPL-3.0", scripts: {} });
+      const findings = await checkLicenseCompliance(scope([{ name: "cached", version: "1.0.0", direct: true }]), { fetchImpl: refetch, cacheDir, emitAssessment: true });
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(findings.map((finding) => finding.id)).toContain("SUP-LICENSE-COPYLEFT-cached@1.0.0");
     } finally { rmSync(cacheDir, { recursive: true, force: true }); }
   });
 

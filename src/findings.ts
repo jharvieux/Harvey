@@ -152,6 +152,7 @@ export type DependencyMetadataOutcomeStatus =
   | "registry-not-found"
   | "registry-access-denied"
   | "network-denied"
+  | "malformed-metadata"
   | "unsupported-install-script"
   | "unresolved-identity";
 
@@ -484,8 +485,8 @@ function validateDependencyMetadataEvidence(value: unknown, at: string, errors: 
   if (Number.isSafeInteger(value.population) && Number.isSafeInteger(value.processed) && (value.processed as number) > (value.population as number)) errors.push(`${at}.processed: must not exceed population`);
   if (Number.isSafeInteger(value.population) && value.outcomes.length > (value.population as number)) errors.push(`${at}.outcomes: exceeds population`);
   if (value.complete === true && Number.isSafeInteger(value.population) && value.outcomes.length !== value.population) errors.push(`${at}.complete: requires one outcome per population member`);
-  const statuses = new Set<DependencyMetadataOutcomeStatus>(["local-manifest", "lockfile", "registry", "cache", "missing-local-license", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied", "unsupported-install-script", "unresolved-identity"]);
-  const incompleteStatuses = new Set<DependencyMetadataOutcomeStatus>(["registry-not-found", "registry-access-denied", "network-denied", "unresolved-identity"]);
+  const statuses = new Set<DependencyMetadataOutcomeStatus>(["local-manifest", "lockfile", "registry", "cache", "missing-local-license", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata", "unsupported-install-script", "unresolved-identity"]);
+  const incompleteStatuses = new Set<DependencyMetadataOutcomeStatus>(["registry-not-found", "registry-access-denied", "network-denied", "malformed-metadata", "unresolved-identity"]);
   const coordinates = new Set<string>();
   value.outcomes.forEach((outcome: unknown, index: number) => {
     const where = `${at}.outcomes[${index}]`;

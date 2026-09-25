@@ -917,7 +917,10 @@ export function licenseScope(dir: string): LicenseScope {
           const local = typeof specifier === "string" ? localDeclaration(manifest.label, name, specifier, installation) : undefined;
           if (local) {
             localWorkspaceNames.add(name);
-            unresolved.set(`ordinary\u0000${manifest.label}\u0000${name}`, { name, direct: true, localMetadata: local.metadata });
+            // A root and one or more workspace consumers can all declare the same owned package.
+            // The metadata population is the proved package manifest, not the number of incoming
+            // declarations, so bind repeated references to one stable local identity.
+            unresolved.set(`local\u0000${local.metadata.manifest}`, { name, direct: true, localMetadata: local.metadata });
             continue;
           }
           if (typeof specifier === "string" && (/^(?:workspace|file|link|portal):/.test(specifier) || installation?.localPath)) {
