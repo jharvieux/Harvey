@@ -25118,7 +25118,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 289,
+        "line": 291,
         "path": ".github/workflows/conservation.yml"
       },
       "freshness": {
@@ -25266,7 +25266,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 139,
+        "line": 141,
         "path": ".github/workflows/conservation.yml"
       },
       "freshness": {
@@ -25303,7 +25303,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 184,
+        "line": 186,
         "path": ".github/workflows/conservation.yml"
       },
       "freshness": {
@@ -364247,8 +364247,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "b9e100d331ce33f10b03fa0f2dd3c3db94388480",
-    "commitPayload": "dHJlZSBhMTUyOTdiNjVhMDlkZTUyMzNlOWM4NDhiOGQyODlkMzE0ZTg5OWFhCnBhcmVudCBjZDU1NTczYzM0ZmE1ODIzMjVhOWMwMjFhN2MwYjdhMjc0ODRhMTJjCnBhcmVudCA3MTBkYjJiMTZiNTZmOGNlZDM3ODVhM2M2YTk2ZDFjYWIxMGQ1OTM2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0NDM4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0NDM4IC0wNTAwCgpNZXJnZSByZW1vdGUtdHJhY2tpbmcgYnJhbmNoICdvcmlnaW4vbWFpbicgaW50byBmZWF0dXJlL3N3ZWVwLTIwODYtY2FwYWNpdHktY29udHJvbHMKCiMgQ29uZmxpY3RzOgojCXNyYy9lbnZpcm9ubWVudC1kZXBlbmRlbmN5LWludmVudG9yeS5qc29uCg==",
+    "commit": "27288449bd5ea5ed080198d3546c5e8957c8ad23",
+    "commitPayload": "dHJlZSA1ZWM0YmY0YTljOWI1MDBhZjUxM2VlMmE2OTNmOWZiYjY1ZjI4N2EwCnBhcmVudCA1ODUzNDVkODMyMjkzYTM0NTIzNjUwZDg1NmVkNThhODMwMWI3YmVjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIwMjI4IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIwMjI4IC0wNTAwCgpBbGxvdyBtZWFzdXJlZCBjb25zZXJ2YXRpb24gY2hlY2tzIHRvIGZpbmlzaCAoIzIxODgpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364257,13 +364257,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "4caff13c53b685e1258e1c1363d74723407bfca8",
+        "gitOid": "3ffd91eab2aa7cbf82ba1516ba930ae6fe0ad081",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "0c61365f432339ebc7999df76d0a6bdaa2f10ac33e0cf262a626079dd295b404",
-    "tree": "a15297b65a09de5233e9c848b8d289d314e899aa"
+    "populationSha256": "10427362f50c76ff04f428aab174f8aad1e58d4f43c3119ee74eda2d6f59ad63",
+    "tree": "5ec4bf4a9c9b500af513ee2a693f9fbb65f287a0"
   },
   "venues": [
     {
@@ -364672,11 +364672,11 @@
       "sha256": "b8dc88c4a2d17a8e86e8597253a8c2a63994aeff0fe72f5567b0549f92a6f9bd"
     },
     {
-      "bytes": 23932,
+      "bytes": 24083,
       "disposition": "authoritative-adapter",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "83ae380e236df68feec0a4a0d66e7eef984309c8",
+      "gitOid": "defe47f9a3f9e46ed655a08063ee1da95ef6ff3f",
       "id": ".github/workflows/conservation.yml",
       "kind": "workflow",
       "literalCount": 0,
@@ -364684,7 +364684,7 @@
       "owner": "workflow/action declaration; #1909 runtime receipts",
       "path": ".github/workflows/conservation.yml",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "0c3286892e533b141fd3f1f05f081df1c3927fc3667e16622daf1a1d3ea8734e"
+      "sha256": "1b5acd2deff83ddcfe1fce549940f91a07dd8dd25c8812fad7446d6ca09a05fb"
     },
     {
       "bytes": 58662,
