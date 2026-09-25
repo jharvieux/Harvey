@@ -33,6 +33,13 @@ interface VitalsAvailability {
   aiProvenance: VitalsSignalAvailability;
 }
 
+interface VitalsMeasuredPopulations {
+  historyComparableFiles: number;
+  knowledgeCandidateFiles: number;
+  knowledgeFilesWithAuthorship: number;
+  aiFilesInWindow: number;
+}
+
 export interface VitalsHistoryBinding {
   sourceRevision?: string;
   sourceDirty: boolean;
@@ -46,6 +53,7 @@ export interface VitalsHistoryBinding {
     reason?: string;
   };
   cacheKey: string;
+  populations?: VitalsMeasuredPopulations;
 }
 
 export interface PreparedVitalsRun {
@@ -55,6 +63,7 @@ export interface PreparedVitalsRun {
   binding: VitalsHistoryBinding;
   markHistoryFailed(reason: string): void;
   removeScratchHistory(): void;
+  measurePopulations(report: VitalsReport): VitalsMeasuredPopulations;
   publishHistory(report: VitalsReport): "published" | "retained";
   cleanup(): void;
 }
@@ -68,6 +77,19 @@ const SQLITE_BACKUP = [
   "src.backup(dst)",
   "dst.close()",
   "src.close()",
+].join("\n");
+
+const PRIOR_HISTORY_FILES = [
+  "import json, sqlite3, sys",
+  "from datetime import datetime",
+  "scope = None if sys.argv[2] == '__NULL__' else sys.argv[2]",
+  "conn = sqlite3.connect(sys.argv[1])",
+  "conn.row_factory = sqlite3.Row",
+  "today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()",
+  "row = conn.execute('SELECT snapshot_id FROM health_snapshots WHERE timestamp < ? AND (scope IS ? OR scope = ?) ORDER BY timestamp DESC LIMIT 1', (today, scope, scope)).fetchone()",
+  "files = [] if row is None else [r['file_path'] for r in conn.execute('SELECT file_path FROM file_snapshots WHERE snapshot_id = ?', (row['snapshot_id'],)).fetchall()]",
+  "print(json.dumps(files))",
+  "conn.close()",
 ].join("\n");
 
 function backupSqlite(source: string, destination: string): void {
@@ -100,13 +122,47 @@ function backupSqlite(source: string, destination: string): void {
   }
 }
 
+const noGitLocks = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+
 const gitText = (cwd: string, args: string[]): string | undefined => {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: noGitLocks }).trim();
   } catch {
     return undefined;
   }
 };
+
+function priorHistoryFiles(dbPath: string, scope: string): string[] {
+  if (!existsSync(dbPath)) return [];
+  try {
+    const raw = execFileSync("python3", ["-c", PRIOR_HISTORY_FILES, dbPath, scope || "__NULL__"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) && parsed.every((value) => typeof value === "string") ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function knowledgePopulations(repoRoot: string, report: VitalsReport): Pick<VitalsMeasuredPopulations, "knowledgeCandidateFiles" | "knowledgeFilesWithAuthorship"> {
+  const candidates = Object.keys(report.file_health ?? {}).slice(0, 50);
+  if (!candidates.length) return { knowledgeCandidateFiles: 0, knowledgeFilesWithAuthorship: 0 };
+  try {
+    const raw = execFileSync("git", ["log", "--format=", "--name-only", "--no-merges", "--no-renames", "--since=2.years.ago", "--", ...candidates], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: noGitLocks,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const observed = new Set(raw.split("\n").map((line) => line.trim()).filter(Boolean));
+    return { knowledgeCandidateFiles: candidates.length, knowledgeFilesWithAuthorship: candidates.filter((path) => observed.has(path)).length };
+  } catch {
+    return { knowledgeCandidateFiles: candidates.length, knowledgeFilesWithAuthorship: 0 };
+  }
+}
 
 function copyCurrentCheckout(sourceRoot: string, scratchRoot: string): void {
   cpSync(sourceRoot, scratchRoot, {
@@ -141,6 +197,18 @@ export function prepareVitalsRun(input: {
   const cacheRoot = resolve(input.cacheRoot ?? process.env.HARVEY_VITALS_HISTORY_DIR ?? join(homedir(), ".cache", "harvey", "vitals-history"));
   const cacheDbPath = join(cacheRoot, cacheKey, "store.db");
 
+  // Publication is part of the live M3 prerequisite, not a best-effort epilogue after Vitals has
+  // already run. Prove the exact cache directory writable before creating the analysis scratch.
+  try {
+    const cacheDir = dirname(cacheDbPath);
+    mkdirSync(cacheDir, { recursive: true });
+    const probe = join(cacheDir, `.harvey-write-probe-${process.pid}-${Date.now()}`);
+    writeFileSync(probe, "ok", { flag: "wx" });
+    rmSync(probe);
+  } catch (error) {
+    throw new Error(`Vitals history cache preflight failed for ${cacheDbPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   // macOS exposes $TMPDIR through /var -> /private/var. Vitals compares its handed target path
   // literally with git's resolved toplevel, so hand it the canonical path from the start.
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "harvey-vitals-")));
@@ -150,8 +218,13 @@ export function prepareVitalsRun(input: {
       execFileSync("git", ["clone", "--quiet", "--no-hardlinks", sourceRoot, scratchRepo], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        env: noGitLocks,
       });
       copyCurrentCheckout(sourceRoot, scratchRepo);
+      // Overlaying additions/modifications onto a HEAD clone is insufficient: a tracked file
+      // deleted in the live checkout otherwise survives from HEAD and is audited as current code.
+      const deleted = gitText(sourceRoot, ["ls-files", "--deleted", "-z"]);
+      for (const path of deleted?.split("\0").filter(Boolean) ?? []) rmSync(join(scratchRepo, path), { recursive: true, force: true });
     } else {
       mkdirSync(scratchRepo, { recursive: true });
       copyCurrentCheckout(sourceRoot, scratchRepo);
@@ -189,6 +262,7 @@ export function prepareVitalsRun(input: {
       };
     }
   }
+  const priorFiles = history.status === "usable" ? priorHistoryFiles(scratchDb, targetRelative) : [];
 
   let cleaned = false;
   const binding: VitalsHistoryBinding = {
@@ -214,6 +288,17 @@ export function prepareVitalsRun(input: {
       rmSync(`${scratchDb}-wal`, { force: true });
       rmSync(`${scratchDb}-shm`, { force: true });
     },
+    measurePopulations(report) {
+      const currentFiles = new Set(Object.keys(report.file_health ?? {}));
+      const knowledge = knowledgePopulations(scratchRepo, report);
+      const populations: VitalsMeasuredPopulations = {
+        historyComparableFiles: priorFiles.filter((path) => currentFiles.has(path)).length,
+        ...knowledge,
+        aiFilesInWindow: report.provenance?.ai_files?.length ?? 0,
+      };
+      binding.populations = populations;
+      return populations;
+    },
     publishHistory(report) {
       const currentUnits = report.file_health ? Object.keys(report.file_health).length : (report.files_analyzed ?? 0);
       if (currentUnits <= 0 || !existsSync(scratchDb)) return "retained";
@@ -231,7 +316,7 @@ export function prepareVitalsRun(input: {
   };
 }
 
-export function vitalsAvailability(report: VitalsReport, binding?: VitalsHistoryBinding, reduced = false): VitalsAvailability {
+export function vitalsAvailability(report: VitalsReport, binding?: VitalsHistoryBinding, reduced = false, measured?: VitalsMeasuredPopulations): VitalsAvailability {
   const scope = vitalsScope(report);
   const currentUnits = scope.scored ?? report.files_analyzed ?? 0;
   const historyFailure = binding?.history.status === "failed" ? binding.history.reason : undefined;
@@ -241,19 +326,25 @@ export function vitalsAvailability(report: VitalsReport, binding?: VitalsHistory
       : currentUnits > 0
         ? { status: "examined", unitsExamined: currentUnits }
         : { status: "failed", unitsExamined: 0, reason: "Vitals reported no files for current health" },
-    historyTrend: report.trends
-      ? { status: "examined", unitsExamined: currentUnits }
+    historyTrend: report.trends && (measured?.historyComparableFiles ?? 0) > 0
+      ? { status: "examined", unitsExamined: measured!.historyComparableFiles }
       : {
           status: historyFailure ? "failed" : "not-assessed",
           unitsExamined: 0,
-          reason: historyFailure ?? (binding?.history.status === "missing" ? binding.history.reason : "no comparable prior snapshot was available"),
+          reason: historyFailure ?? (binding?.history.status === "missing"
+            ? binding.history.reason
+            : report.trends && measured
+              ? "the prior snapshot and current file-health population have no comparable files"
+              : "no measured comparable prior snapshot population was available"),
         },
-    knowledgeRisk: !reduced && report.mode !== "complexity-only" && scope.knowledgePopulation !== undefined
-      ? { status: "examined", unitsExamined: Math.min(50, scope.knowledgePopulation) }
-      : { status: "not-assessed", unitsExamined: 0, reason: "full Git history knowledge-risk analysis was unavailable" },
-    aiProvenance: report.provenance?.has_data
-      ? { status: "examined", unitsExamined: report.provenance.summary?.unique_files ?? report.provenance.ai_files?.length ?? 0 }
-      : { status: "not-assessed", unitsExamined: 0, reason: "no Vitals AI provenance history was available" },
+    knowledgeRisk: !reduced && report.mode !== "complexity-only" && (measured?.knowledgeFilesWithAuthorship ?? 0) > 0
+      ? { status: "examined", unitsExamined: measured!.knowledgeFilesWithAuthorship }
+      : { status: "not-assessed", unitsExamined: 0, reason: measured?.knowledgeCandidateFiles
+        ? `none of ${measured.knowledgeCandidateFiles} knowledge-risk candidate file(s) had authorship inside Vitals' 730-day window`
+        : "full Git history knowledge-risk population was unavailable" },
+    aiProvenance: (measured?.aiFilesInWindow ?? report.provenance?.ai_files?.length ?? 0) > 0
+      ? { status: "examined", unitsExamined: measured?.aiFilesInWindow ?? report.provenance!.ai_files!.length }
+      : { status: "not-assessed", unitsExamined: 0, reason: "no Vitals AI provenance files were present inside the 30-day window" },
   };
 }
 

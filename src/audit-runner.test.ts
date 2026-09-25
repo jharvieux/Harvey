@@ -1101,6 +1101,23 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
     expect(m3?.reason).toMatch(/vitals/);
   });
 
+  it("does not let a retained prior pass supersede a current empty live capture", () => {
+    const now = Date.parse("2026-09-25T12:00:00Z");
+    const m3 = status(AUDIT_RUNNERS, {
+      now,
+      artifactsDir: "/artifacts",
+      exec: (_command, argv) => argv.join(" ").includes("hotspot-scan.ts")
+        ? { ok: true, output: "M3 hotspot table — /target (0 rows, worst first)\n⚠ M3 EMPTY CAPTURE\nCurrent signal availability: currentHealth=failed/0, historyTrend=not-assessed/0, knowledgeRisk=not-assessed/0, aiProvenance=not-assessed/0" }
+        : cleanRun(argv),
+      readArtifact: (path) => path.endsWith("M3.pass.json")
+        ? { module: "M3", target: "/target", pass: "vitals", generatedAt: new Date(now).toISOString(), rankedCount: 3 }
+        : undefined,
+    }, "M3");
+    expect(m3?.status).toBe("requires-live-run");
+    expect(m3?.reason).toMatch(/current live Vitals capture ranked 0 files/);
+    expect(m3?.reason).toContain("knowledgeRisk=not-assessed/0");
+  });
+
   // #515: M3 surfaces its top-K ranking so runAudit can hand it to the assembler for cross-module
   // enrichment. The whole path: probe reads the M3 artifact's topK → runAudit result.hotspots.
   it("surfaces the captured top-K hotspot ranking on the run result", () => {

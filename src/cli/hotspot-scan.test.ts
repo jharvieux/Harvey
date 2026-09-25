@@ -8,7 +8,7 @@
 // The fake also answers the `version` subcommand (#808) so the CLI's version assertion passes.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,7 @@ JSON
 
 const FAKE_VITALS_HISTORY = `#!/bin/bash
 if [ "$1" = "version" ]; then echo "Vitals v0.2.0"; exit 0; fi
+if [ -n "$VITALS_REPORT_MARKER" ]; then touch "$VITALS_REPORT_MARKER"; fi
 if [ -f ".emit-empty" ]; then
   python3 -c 'import sqlite3; c=sqlite3.connect(".vitals/store.db"); c.execute("create table if not exists failed_capture(value text)"); c.commit(); c.close()'
   echo '{"mode":"full","hotspots":[],"coupling":[],"knowledge_risk":[],"provenance":{"has_data":false},"trends":null,"file_health":{},"files_analyzed":0}'
@@ -139,7 +140,7 @@ describe("hotspot-scan isolates Vitals history from the client checkout (#2135)"
       mkdirSync(join(target, ".vitals"));
       const db = join(target, ".vitals", "store.db");
       if (history === "old-history") {
-        execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table old_history(value text)'); c.execute(\"insert into old_history values ('preserved')\"); c.commit(); c.close()", db]);
+        execFileSync("python3", ["-c", "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute('create table old_history(value text)'); c.execute(\"insert into old_history values ('preserved')\"); c.execute('create table health_snapshots (snapshot_id integer primary key, timestamp real, scope text)'); c.execute('create table file_snapshots (snapshot_id integer, file_path text)'); c.execute('insert into health_snapshots values (1, ?, null)', (time.time()-86400,)); c.execute(\"insert into file_snapshots values (1, 'src/a.ts')\"); c.commit(); c.close()", db]);
       } else {
         writeFileSync(db, history);
       }
@@ -204,7 +205,7 @@ describe("hotspot-scan isolates Vitals history from the client checkout (#2135)"
   it("does not let an empty failed capture supersede a successful history cache", () => {
     const { target, bin, cache } = setup();
     const outPath = join(cache, "M3.json");
-    const run = () => execFileSync("node_modules/.bin/tsx", [CLI, target, "--out", outPath, "--history-cache", cache], {
+    const run = () => execFileSync("node_modules/.bin/tsx", [CLI, target, "--out", outPath, "--history-cache", cache, "--artifacts-dir", cache], {
       cwd: REPO_ROOT,
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
@@ -214,8 +215,28 @@ describe("hotspot-scan isolates Vitals history from the client checkout (#2135)"
     const first = JSON.parse(readFileSync(outPath, "utf8")) as M3Artifact;
     const cachePath = join(cache, first.historyBinding.cacheKey, "store.db");
     const successfulHistory = readFileSync(cachePath);
+    const successfulArtifact = readFileSync(outPath);
+    const successfulPass = readFileSync(join(cache, "M3.pass.json"));
     writeFileSync(join(target, ".emit-empty"), "");
-    expect(run()).toContain("Vitals history cache: retained");
+    const stdout = run();
+    expect(stdout).toContain("Vitals history cache: retained");
+    expect(stdout).toContain("M3 EMPTY CAPTURE");
+    expect(stdout).toContain("currentHealth=failed/0");
     expect(readFileSync(cachePath)).toEqual(successfulHistory);
+    expect(readFileSync(outPath)).toEqual(successfulArtifact);
+    expect(readFileSync(join(cache, "M3.pass.json"))).toEqual(successfulPass);
+  });
+
+  it("fails cache writability preflight before invoking the Vitals report", () => {
+    const { target, bin, cache } = setup();
+    const marker = join(target, "report-ran.marker");
+    chmodSync(cache, 0o555);
+    expect(() => execFileSync("node_modules/.bin/tsx", [CLI, target, "--out", join(target, "M3.json"), "--history-cache", cache], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, VITALS_REPORT_MARKER: marker },
+      stdio: ["ignore", "pipe", "pipe"],
+    })).toThrow(/cache preflight|permission denied|EACCES/i);
+    expect(existsSync(marker)).toBe(false);
   });
 });

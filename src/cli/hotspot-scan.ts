@@ -36,7 +36,7 @@
 
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { homedir } from "node:os";
@@ -283,6 +283,10 @@ function loadReport(): LoadedReport {
     raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", prepared.targetDir], { cwd: prepared.targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
+    if (e.message?.startsWith("Vitals history cache preflight failed")) {
+      console.error(`✗ ${e.message}`);
+      process.exit(1);
+    }
     if (prepared && prepared.binding.history.status === "usable") {
       const firstFailure = String(e.stderr || e.message || "Vitals subprocess failed").trim().split("\n").pop()!;
       prepared.markHistoryFailed(`Vitals rejected the preserved prior history: ${firstFailure}`);
@@ -325,7 +329,8 @@ const unranked = isUnranked(report);
 const ranked = rankHotspots(report);
 const top = unranked ? [] : topKFiles(report, topK);
 const findings = toFactFindings(report);
-const availability = vitalsAvailability(report, binding, reduced);
+const measuredPopulations = prepared?.measurePopulations(report);
+const availability = vitalsAvailability(report, binding, reduced, measuredPopulations);
 findings.push(vitalsAvailabilityFinding(availability));
 // #1075 point 3 disclosed vitals' own caps but with no denominators ("capped at the first 50 source
 // files"), so a reader could not tell 50-of-52 from 50-of-1792. #1290 replaces the hedge with the
@@ -413,7 +418,12 @@ if (hotspotsOutPath) {
   );
 }
 
-if (outPath) {
+const usableCapture = availability.currentHealth.status === "examined" && ranked.length > 0;
+const availabilitySummary = Object.entries(availability)
+  .map(([signal, result]) => `${signal}=${result.status}/${result.unitsExamined}`)
+  .join(", ");
+
+if (outPath && usableCapture) {
   const partialReasons: string[] = [];
   if (reduced) partialReasons.push("vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only, no coupling/knowledge-risk/AI-provenance");
   if (unranked) partialReasons.push(`ranking unranked — ${report.mode === "complexity-only" ? "vitals ran in complexity-only mode (no git history in the target)" : "every hotspot row scored risk_score 0.0"}; the table is filesystem-walk order and was excluded from cross-module hotspot enrichment/cross-reference`);
@@ -433,15 +443,26 @@ if (outPath) {
     ...(unranked ? { unranked: true } : {}),
     ...(partialReasons.length ? { partialReason: partialReasons.join(" | ") } : {}),
   };
-  writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  const stagedOut = `${outPath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(stagedOut, `${JSON.stringify(artifact, null, 2)}\n`);
+    renameSync(stagedOut, outPath);
+  } finally {
+    rmSync(stagedOut, { force: true });
+  }
   console.log(`\nM3 artifact → ${outPath} — merge \`findings\` (and \`crossReferenced.findings\`) into the engagement findings.json for report-template/`);
+} else if (outPath) {
+  console.log(`\n⚠ M3 EMPTY CAPTURE: ${ranked.length} current files ranked; retained any existing M3 artifact at ${outPath}`);
+  console.log(`  Current signal availability: ${availabilitySummary}`);
 }
 
-if (artifactsDirPath) {
+if (artifactsDirPath && usableCapture) {
   const tier = reduced ? "reduced" : unranked ? "unranked" : "full";
   const passArtifact = buildM3PassArtifact({ targetDir, findings, hotspots: top, rankedCount: ranked.length, tier, generatedAt: new Date().toISOString() });
   const path = writePassArtifact(artifactsDirPath, passArtifact);
   console.log(`\nM3 pass artifact → ${path} (run-audit --artifacts-dir ${artifactsDirPath} derives M3 ran from it)`);
+} else if (artifactsDirPath) {
+  console.log(`\n⚠ M3 EMPTY CAPTURE: retained any existing M3 pass artifact in ${artifactsDirPath}`);
 }
 
 prepared?.cleanup();

@@ -864,7 +864,7 @@ const m3: ModuleRunner = {
         kind: "examined",
         detail: ran.detail,
         findings: ran.findings ?? [],
-        unitsExamined: 1,
+        unitsExamined: artifact.rankedCount ?? artifact.hotspots?.length ?? 1,
         scope: "recorded M3 vitals pass artifact",
         ...(artifact.hotspots?.length ? { hotspots: artifact.hotspots } : {}),
       };
@@ -903,6 +903,15 @@ const m3: ModuleRunner = {
     // #530: surface the pass artifact's top-K ranking so the cross-module enrichment (#515) fires
     // in the common vitals-off-PATH flow too, not only when M3 was captured in-process.
     const pass = findFreshPass(ctx, "M3");
+    if (ok && ranked === 0 && /M3 hotspot table/.test(output)) {
+      const currentAvailability = output.match(/Current signal availability: ([^\n]+)/)?.[1];
+      return {
+        kind: "not-assessed",
+        reason: withRejectedPass(`the current live Vitals capture ranked 0 files under ${ctx.targetDir}; retained prior artifacts cannot supersede this measured empty attempt${currentAvailability ? `; ${currentAvailability}` : ""}`, pass.fresh ? undefined : pass.reason),
+        provenance: "MEASURED",
+        falsifier: command,
+      };
+    }
     if (pass.fresh) return fromPass(pass.artifact);
     const base = !ok
       ? `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}`

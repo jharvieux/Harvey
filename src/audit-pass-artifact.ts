@@ -37,6 +37,8 @@ export interface RecordedPass {
   // produced. Surfaced by the m3 probe so the cross-module enrichment (#515) also fires when M3 ran
   // via a pass artifact (vitals off PATH during run-audit), not only the in-process capture path.
   hotspots?: string[];
+  /** Number of current source files that the M3 capture ranked. Zero cannot prove M3 ran. */
+  rankedCount?: number;
   /** A measured M8 table travels with the pass, not only with a fresh mutation invocation. */
   testQuality?: TestQuality;
   /** Actual executions that produced this pass. Absence is legacy evidence, never effectiveness liveness. */
@@ -103,6 +105,9 @@ export function findFreshPass(ctx: PassArtifactSource, module: AuditModule): Pas
   if (raw.target !== ctx.targetDir) {
     return { fresh: false, reason: `pass artifact at ${path} covers target ${raw.target ?? "<none>"}, not the audited target ${ctx.targetDir} — not evidence THIS target's ${module} ran` };
   }
+  if (module === "M3" && raw.rankedCount === 0) {
+    return { fresh: false, reason: `pass artifact at ${path} ranked 0 files — an empty capture cannot prove M3 ran` };
+  }
   const ts = raw.generatedAt ? Date.parse(raw.generatedAt) : NaN;
   if (Number.isNaN(ts)) {
     return { fresh: false, reason: `pass artifact at ${path} has no valid generatedAt timestamp — cannot judge freshness` };
@@ -156,6 +161,7 @@ export function buildPassArtifact(parts: {
   findings?: Finding[];
   hotspotFocus?: boolean;
   hotspots?: string[];
+  rankedCount?: number;
   testQuality?: TestQuality;
   producerExecutionReceipts?: readonly ProducerExecutionReceipt[];
 }): PassArtifact {
@@ -177,6 +183,7 @@ export function buildPassArtifact(parts: {
     ...(parts.findings?.length ? { findings: parts.findings } : {}),
     ...(parts.hotspotFocus !== undefined ? { hotspotFocus: parts.hotspotFocus } : {}),
     ...(parts.hotspots?.length ? { hotspots: parts.hotspots } : {}),
+    ...(parts.rankedCount !== undefined ? { rankedCount: parts.rankedCount } : {}),
     ...(parts.testQuality ? { testQuality: parts.testQuality } : {}),
     ...(producerExecutionReceipts?.length ? { producerExecutionReceipts } : {}),
   };
@@ -217,6 +224,9 @@ export function mergePassArtifact(existing: PassArtifact | undefined, incoming: 
 // Write the artifact to <dir>/<module>.pass.json, creating the dir if needed. Returns the path.
 // The counterpart to findFreshPass: what a pass calls so the orchestrator can later derive `ran`.
 export function writePassArtifact(dir: string, artifact: PassArtifact): string {
+  if (artifact.module === "M3" && artifact.rankedCount === 0) {
+    throw new Error("refusing to record an M3 pass that ranked 0 files");
+  }
   mkdirSync(dir, { recursive: true });
   const path = join(dir, passArtifactName(artifact.module));
   let existing: PassArtifact | undefined;
