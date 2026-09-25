@@ -527,3 +527,17 @@ describe("parseClassifiableColumns (#851/#852 — CREATE + ALTER ADD, recognized
     expect(parseClassifiableColumns(sql).unknownType).toHaveLength(0);
   });
 });
+
+
+describe("PostgreSQL migration identifier spellings (#2129)", () => {
+  it("does not collapse quoted uppercase schemas into bare lower-case schemas", () => {
+    expect(parseLiveTableNames('CREATE TABLE PUBLIC.same_name (\n id uuid\n);\nCREATE TABLE "PUBLIC".same_name (\n id uuid\n);')).toEqual([
+      { schema: "public", table: "same_name" }, { schema: "PUBLIC", table: "same_name" },
+    ]);
+  });
+  it("folds bare case, accepts dollars and preserves quoted case", () => {
+    expect(parseLiveTableNames('CREATE TABLE PUBLIC.Missing_Table (\n id uuid\n);\nCREATE TABLE tenant$archive.maintenance_heartbeats (\n id uuid\n);\nCREATE TABLE "ExactSchema"."ExactTable" (\n id uuid\n);')).toEqual([
+      { schema: "public", table: "missing_table" }, { schema: "tenant$archive", table: "maintenance_heartbeats" }, { schema: "ExactSchema", table: "ExactTable" },
+    ]);
+  });
+});

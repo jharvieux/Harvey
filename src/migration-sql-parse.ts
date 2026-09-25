@@ -62,12 +62,12 @@ const SQL_TYPE_SET = new Set(SQL_TYPES);
 // and lets them contain characters a bare \w+ can't. IDENT matches either shape: group 1 is a
 // quoted identifier's raw (still-escaped) text, group 2 is a bare one. identText below is what
 // resolves a capture pair to the real name — never read group 1 or 2 directly.
-const IDENT = `(?:"((?:[^"]|"")*)"|(\\w+))`;
+const IDENT = `(?:"((?:[^"]|"")*)"|([a-zA-Z_][a-zA-Z0-9_$]*))`;
 // A double `""` inside a quoted identifier is Postgres's escape for a literal `"` (SQL standard,
 // same rule as '' inside a string literal) — unescape it, and never touch case: quoted identifiers
 // are case-sensitive by design, unlike bare ones which Postgres folds to lowercase itself.
 function identText(quoted: string | undefined, bare: string | undefined): string {
-  return quoted !== undefined ? quoted.replace(/""/g, '"') : bare!;
+  return quoted !== undefined ? quoted.replace(/""/g, '"') : bare!.toLowerCase();
 }
 
 const COLUMN_LINE = new RegExp(`^\\s*${IDENT}\\s+(${SQL_TYPES.join("|")})\\b`, "i");
@@ -146,7 +146,7 @@ export function parseLiveTableNames(sql: string): { schema: string; table: strin
   for (const m of sql.matchAll(DROP_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "drop" });
   events.sort((a, b) => a.pos - b.pos);
   const last = new Map<string, (typeof events)[number]>();
-  for (const e of events) last.set(`${e.schema}.${e.table}`.toLowerCase(), e);
+  for (const e of events) last.set(JSON.stringify([e.schema, e.table]), e);
   return [...last.values()].filter((e) => e.op === "create").map(({ schema, table }) => ({ schema, table }));
 }
 

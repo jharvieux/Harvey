@@ -69,7 +69,7 @@ export interface MigrationFile {
 // migration that enables RLS and a later one that disables it leaves the table legitimately open —
 // reporting that as drift would flag the repo's own stated intent.
 const RLS_TOGGLE =
-  /\balter\s+table\s+(?:only\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s+(enable|disable)\s+row\s+level\s+security/gi;
+  /\balter\s+table\s+(?:only\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s+(enable|disable)\s+row\s+level\s+security/gi;
 
 // Any `create table` the migration set contains, by name only — deliberately more permissive than
 // parseLiveTableNames, which shares migration-sql-parse's CREATE_TABLE and therefore requires the
@@ -82,7 +82,7 @@ const RLS_TOGGLE =
 //     fact right there in their migration file — a false POSITIVE, which is not. It uses this set,
 //     which only ever needs the name.
 const CREATE_TABLE_NAME =
-  /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?/gi;
+  /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?/gi;
 
 // Every table name the migrations create, regardless of whether the body could be read.
 function mentionedTables(migrations: MigrationFile[]): Set<string> {

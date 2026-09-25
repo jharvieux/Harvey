@@ -73,6 +73,26 @@ globalThis.fetch = async (url, init) => {
     expect(rows.find((row) => row.id === "SB-DRIFT-00")?.evidence).toContain("2/2 authorized schemas (public, extensions)");
   });
 
+  it("folds bare uppercase schemas and keeps dollar-bearing authorized schemas in both populations", async () => {
+    const f = fixture();
+    writeFileSync(join(f.dir, "001.sql"), "CREATE TABLE PUBLIC.missing_table (\n id uuid\n);\nCREATE TABLE tenant$archive.maintenance_heartbeats (\n id uuid\n);");
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const path = String(url);
+      if (path.includes("/advisors/")) return Response.json({ lints: [] });
+      if (path.endsWith("/config/auth")) return Response.json({});
+      if (path.endsWith("/postgrest")) return Response.json({ db_schema: "public" });
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      const schema = query.includes("'tenant$archive'") ? "tenant$archive" : "public";
+      if (query.includes("catalogAccessible")) return Response.json([{ schema, catalogAccessible: true }]);
+      if (query.includes("extensionOwned")) return Response.json(schema === "public" ? [] : [{ schema, name: "maintenance_heartbeats", rlsEnabled: true, extensionOwned: false }]);
+      if (query.includes("nspname = 'cron'")) return Response.json([{ exists: false }]);
+      return Response.json([]);
+    });
+    const rows = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl, migrationsDir: f.dir, driftSchemas: ["public", "tenant$archive"] });
+    expect(rows.filter(row => row.id.startsWith("SB-DRIFT-")).map(row => row.id)).toEqual(["SB-DRIFT-00", "SB-DRIFT-TABLE-MISSING-public-missing_table"]);
+    expect(rows.find(row => row.id === "SB-DRIFT-00")?.evidence).toContain("1 live relations, 2 migration relations");
+  });
+
   it("defaults both sides to public and discloses unqueried migration schemas", async () => {
     const f = fixture();
     const findings = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir });
