@@ -938,7 +938,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it.each(["MIT", "GPL-3.0"])("discloses a Yarn alias selector without using its key as a registry coordinate under %s", async (license) => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '"alias@npm:@actual/pkg@^2.0.0":\n  version "2.0.0"\n  resolved "https://registry.npmjs.org/@actual/pkg/-/pkg-2.0.0.tgz"\n');
-    const fetchImpl = vi.fn(async (_url: string | URL | Request) => new Response(JSON.stringify({ name: "@actual/pkg", license }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(fetchImpl.mock.calls).toHaveLength(1);
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
@@ -982,7 +982,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it("uses Berry's canonical resolution for an npm alias", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '__metadata:\n  version: 8\n"alias@npm:@actual/pkg@^2.0.0":\n  version: 2.0.0\n  resolution: "@actual/pkg@npm:2.0.0"\n');
-    const fetchImpl = vi.fn(async (_url: string | URL | Request) => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0"]);
@@ -1037,7 +1037,7 @@ describe("npm alias provenance (#2046 B2)", () => {
   it("keeps pnpm's canonical package key while disclosing unproved alias reach", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages:\n  '@actual/pkg@2.0.0':\n    resolution: {integrity: sha512-x==}\n");
-    const fetchImpl = vi.fn(async (_url: string | URL | Request) => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: "@actual/pkg", license: "GPL-3.0" }), { status: 200 }));
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://registry.npmjs.org/%40actual%2Fpkg/2.0.0");
     expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0", "SUP-LICENSE-00"]);
