@@ -364025,8 +364025,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "ebbfef874fdaa73204c508e65d044955e5a3a0e5",
-    "commitPayload": "dHJlZSAwMWZjYTkzNzgxODg5Y2QzMWIzZWYyYmFiMTNkMzUyOGVjZTJmOWM1CnBhcmVudCBiZmE1MGY2NTNiNzQ2NGEzN2Y2MzAyNjJkNjIwYWIyZWQ0ZWVmYTU4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3MjAwIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3MjAwIC0wNTAwCgpUcmFjayBwcm9wZXJ0eSB3cml0ZXMgYWNyb3NzIHJlYWNoYWJsZSBwcm9kdWNlciBjb25zdW1lcnMgKCMyMTg0KQo=",
+    "commit": "329318a2c6270de512619043b684e4b4164bea64",
+    "commitPayload": "dHJlZSA1MTVjMmMzYjM2OTJiNTI3ZTU4MWI4ZDJhMGQ3YjI0ZTkzZWFlYzc2CnBhcmVudCA2ZTNkMDFkN2ZkMWI1NjE3YjJhMjViOTgzZTllYWIwOTRhMGJiYWVlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3NTc5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk3NTc5IC0wNTAwCgpLZWVwIGRyaWZ0IHJlc3VsdCB0eXBlcyBpbnRlcm5hbCAoIzIwNzkpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364035,13 +364035,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "e51b91b52b3e681fd25f747e3ba7effc11893fa3",
+        "gitOid": "ef0be5a26c3b6954433f47ffea138d9c32f0cf64",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "6e9bc2759c73ccd4e7eef5e59b02386be2c1ca3f82c6fd7b0499352c49f3af03",
-    "tree": "01fca93781889cd31b3ef2bab13d3528ece2f9c5"
+    "populationSha256": "daf5d82b76459e1ebd0043704c9175aa704d2d1e816e5d0e12eb4ee89b606443",
+    "tree": "515c2c3b3692b527e581b8d2a0d7b24e93eaec76"
   },
   "venues": [
     {
@@ -382270,11 +382270,11 @@
       "sha256": "cc5f6f3b7ffa39fef5661cda7f3518d7fb5048737704fd8d42b9833f23ec8a83"
     },
     {
-      "bytes": 14926,
+      "bytes": 14905,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "17daad011e0a2bc94c6cc77560d0ab96ecf67e4f",
+      "gitOid": "eac2d44c053285d64f6c7831cb9565adbfbf2886",
       "id": "src/dry-run-drift.ts",
       "kind": "source",
       "literalCount": 103,
@@ -382282,7 +382282,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/dry-run-drift.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cca8d138394024787045400dfd25b57a53a965140b346e698bba3e0122f57779"
+      "sha256": "7f7c3f3fa5d7df739421a45a5f03dfe4f3aad07e2f9caa229fe712588051b355"
     },
     {
       "bytes": 41859,
