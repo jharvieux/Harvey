@@ -1285,8 +1285,10 @@ export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: reado
 export function withOffTreeScratch(config: Record<string, unknown>, paths: { tempDir: string; reportFile: string; incrementalFile: string }): Record<string, unknown> {
   return {
     ...config,
+    reporters: [...new Set([...(Array.isArray(config.reporters) ? config.reporters : ["progress", "html"]), "json"])],
     // Spread the target's own jsonReporter first so any other key it set survives the redirect.
     jsonReporter: { ...((config.jsonReporter as Record<string, unknown> | undefined) ?? {}), fileName: paths.reportFile },
+    htmlReporter: { ...((config.htmlReporter as Record<string, unknown> | undefined) ?? {}), fileName: resolve(dirname(paths.reportFile), "index.html") },
     tempDirName: paths.tempDir,
     incrementalFile: paths.incrementalFile,
   };

@@ -826,6 +826,14 @@ describe("TS7 tsconfig-preprocessor bypass (#773)", () => {
     expect(patched.jsonReporter).toEqual({ fileName: "/s/r.json", someFutureOption: true });
   });
 
+  it("captures JSON alongside an HTML-only configuration without changing that configuration", () => {
+    const original = { reporters: ["html"], htmlReporter: { fileName: "existing/index.html", title: "Client" } };
+    const patched = withOffTreeScratch(original, { tempDir: "/s/t", reportFile: "/s/reports/mutation.json", incrementalFile: "/s/i.json" });
+    expect(patched.reporters).toEqual(["html", "json"]);
+    expect(patched.htmlReporter).toEqual({ fileName: "/s/reports/index.html", title: "Client" });
+    expect(original).toEqual({ reporters: ["html"], htmlReporter: { fileName: "existing/index.html", title: "Client" } });
+  });
+
   it("withOffTreeScratch redirects a config that declared none of the three (Stryker's cwd-relative defaults would apply)", () => {
     const patched = withOffTreeScratch({ testRunner: "jest" }, { tempDir: "/s/t", reportFile: "/s/r.json", incrementalFile: "/s/i.json" });
     expect(patched.tempDirName).toBe("/s/t");
