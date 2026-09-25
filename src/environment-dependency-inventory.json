@@ -304145,7 +304145,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 163,
+        "line": 166,
         "path": "src/scan/mechanical-engine-registry.ts"
       },
       "freshness": {
@@ -306032,7 +306032,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 127,
+        "line": 130,
         "path": "src/scan/mechanical-wiring.test.ts"
       },
       "freshness": {
@@ -306069,7 +306069,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 136,
+        "line": 139,
         "path": "src/scan/mechanical-wiring.test.ts"
       },
       "freshness": {
@@ -306143,7 +306143,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 162,
+        "line": 165,
         "path": "src/scan/mechanical-wiring.test.ts"
       },
       "freshness": {
@@ -373362,8 +373362,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "793f25dfbbebf73f4e162309722bb649dd0aaf27",
-    "commitPayload": "dHJlZSA1NTA5OGVkNGQ4Yjk4ODZiNjlkNGI0MzViZjZhN2M3ODZhYzM1MzA5CnBhcmVudCAwZDVhNzNjODc1ODVlMDcxMTM3ZjE3ZWI1YTY1MmFkNzZjZTI4YmVjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzU1NTU5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzU1NTc3IC0wNTAwCgpBbGlnbiBmcmVzaCBhc3NpZ25tZW50cyB3aXRoIGJvdW5kIHByb2R1Y2VyIGlkZW50aXRpZXMgKCMyMTM2KQo=",
+    "commit": "5b396b809759d609d40f3556be1e51b6b76c143b",
+    "commitPayload": "dHJlZSBmZjQ1MjBkN2JiMmMxMTRiMGIwYTFjNTQ0NDUzN2U5OWJhZWJmM2ZjCnBhcmVudCBjZjAyNWE3MDAwYzM5NzM5ODVmYjA5ODc3NDZiN2YwYTQ0MTk3YWFlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzU2ODg0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzU2OTQ2IC0wNTAwCgpDbGFzc2lmeSBkZXBlbmRlbmN5IHJlY2VpcHQgaWRlbnRpdHkgaGVscGVyICgjMjE0MSkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -373372,13 +373372,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "41c2e280a725597d48becd1db0fc319ffbe4fe11",
+        "gitOid": "960b889ed65c4454c7f2ab6e1e88f25f296ac01b",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "3aaae4c34c046886d9cbc9a1ac5d7530b3e9c8c5e0316f670a060b819be8b2c6",
-    "tree": "55098ed4d8b9886b69d4b435bf6a7c786ac35309"
+    "populationSha256": "24a652f55987fcbd5e95efe5d44d90a2c758055017b955afdc50f780a3079719",
+    "tree": "ff4520d7bb2c114b0b0a1c5444537e99baebf3fc"
   },
   "venues": [
     {
@@ -381602,19 +381602,19 @@
       "sha256": "fa725802039bb495cb16aa7741b6f834bbcebd740c6ce724fc1a536601a7dd2c"
     },
     {
-      "bytes": 22382,
+      "bytes": 22374,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "2b900d946504f6aea27a9144a3bf58a3688c0353",
+      "gitOid": "ff54624c340d1972113ec592abfa0ba23ce19fb7",
       "id": "src/cli/run-audit-replay.test.ts",
       "kind": "source",
-      "literalCount": 402,
-      "literalSha256": "3976106d1ad824c30fba163c0168caa2caa72cede666ef6a50587856986c0e9f",
+      "literalCount": 401,
+      "literalSha256": "b5e6cf3d41a520cf07b0b80c0ee057a4d02508c2694176a4fa02f12cb6701913",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/run-audit-replay.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "a0e62a4d70a43123a66d640b00109441b2e7e72893387731d9f57c1f7d528976"
+      "sha256": "afafaa211091e0c61d66d6eb4c490d4bcbe91ef0956246e35ee61016141bf4cc"
     },
     {
       "bytes": 25751,
@@ -399632,19 +399632,19 @@
       "sha256": "42c32a439a1420364027ff8367f23c0244d02ab601752fdd331051734d0d11f1"
     },
     {
-      "bytes": 41113,
+      "bytes": 41340,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "73013d7ce08c841033829d432fa681be6e467c6b",
+      "gitOid": "c8649d185dc438b3781be290a170eeb8f65e293b",
       "id": "src/scan/mechanical-engine-registry.ts",
       "kind": "source",
-      "literalCount": 240,
-      "literalSha256": "2cc41d793ea1e7d99abafaf7da0a0c308405897b7540e339a6cfaf2ea5436270",
+      "literalCount": 241,
+      "literalSha256": "49ead1fcc3f8f853bf399affb18dbb1934d4840db1631503b9a82eba197d1448",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/mechanical-engine-registry.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "a8ea888fa712f9c8d09c01f1ecc2cc7b42473bb61f9ede59e8c735bed4f839a4"
+      "sha256": "02ef98aa729e67ed5256a613465184653a847f88060d178166a944ee465899be"
     },
     {
       "bytes": 4048,
@@ -399797,19 +399797,19 @@
       "sha256": "f690e3f640e6b0e179b7fa285309de47523f8de476baf75ac290730bba2a0677"
     },
     {
-      "bytes": 21706,
+      "bytes": 21926,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "ff0d05adc0f6035d84be24a6687e8b218056d57f",
+      "gitOid": "16fe5529e0230d6c749ad72ac6ae2bdd5de30a75",
       "id": "src/scan/mechanical-wiring.test.ts",
       "kind": "source",
-      "literalCount": 307,
-      "literalSha256": "d88fc14f8f89468596aba5b0fa54a172eda78f8fd5062c6576aeb6e1cd541249",
+      "literalCount": 310,
+      "literalSha256": "7c37550a57306c04646aa5933a403e3bc7ccedb28af560160a58ab910d131517",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/mechanical-wiring.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ef0962c40e9dda5208e8a41a0f8c6031869f2571fc18a2c317bafff6824536d3"
+      "sha256": "6ef993dcf65a28fee03435fbcc89a9389f064a59a2025c2bcd3cdb07e9385be1"
     },
     {
       "bytes": 47731,
