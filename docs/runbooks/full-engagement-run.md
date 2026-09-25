@@ -155,7 +155,7 @@ pnpm record-pass --module M6 --target <target-dir> --pass verdict --out <artifac
 ```
 
 `--target` must equal the exact path string `run-audit` will be given (`docs/design/
-audit-pass-artifacts.md`); a mismatched or stale (>30 days) artifact is rejected, not silently
+audit-pass-artifacts.md`); a mismatched, stale (>30 days), or far-future (>5 minutes ahead of the evaluation clock) artifact is rejected, not silently
 accepted.
 
 ## 4. Dynamic M2 — stand up Harvey's own two-tenant stack
