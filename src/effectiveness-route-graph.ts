@@ -463,15 +463,70 @@ function expressionSymbol(
   ) ?? symbol;
 }
 
-function mutableLocalAlias(checker: ts.TypeChecker, expression: ts.Expression): string | undefined {
+function propertyWasAssigned(checker: ts.TypeChecker, symbol: ts.Symbol): boolean {
+  const key = symbolKey(checker, symbol);
+  if (!key) return true;
+  const sources = new Set((symbol.declarations ?? []).map((declaration) => declaration.getSourceFile()));
+  for (const source of sources) {
+    let assigned = false;
+    const visit = (node: ts.Node): void => {
+      if (assigned) return;
+      if (ts.isBinaryExpression(node)
+        && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+        && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const left = transparentExpressionOperand(node.left) ?? node.left;
+        const candidate = ts.isPropertyAccessExpression(left)
+          ? checker.getSymbolAtLocation(left.name)
+          : ts.isElementAccessExpression(left) && left.argumentExpression && ts.isStringLiteralLike(left.argumentExpression)
+            ? checker.getTypeAtLocation(left.expression).getProperty(left.argumentExpression.text)
+            : undefined;
+        assigned = symbolKey(checker, candidate) === key;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (assigned) return true;
+  }
+  return false;
+}
+
+function localAliasAmbiguity(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+  remainingAliasHops = MAX_LOCAL_ALIAS_HOPS,
+): string | undefined {
   const operand = transparentExpressionOperand(expression);
-  if (operand) return mutableLocalAlias(checker, operand);
+  if (operand) return localAliasAmbiguity(checker, operand, seen, remainingAliasHops);
+  if (ts.isPropertyAccessExpression(expression)) {
+    const property = canonicalSymbol(checker, checker.getSymbolAtLocation(expression.name));
+    if (property && propertyWasAssigned(checker, property)) return `mutable property alias ${expression.name.text}`;
+    const ownerAmbiguity = localAliasAmbiguity(checker, expression.expression, seen, remainingAliasHops);
+    if (ownerAmbiguity) return ownerAmbiguity;
+    const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
+    return initializer ? localAliasAmbiguity(checker, initializer, seen, remainingAliasHops) : undefined;
+  }
+  if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
+    const property = canonicalSymbol(checker, checker.getTypeAtLocation(expression.expression).getProperty(expression.argumentExpression.text));
+    if (property && propertyWasAssigned(checker, property)) return `mutable property alias ${expression.argumentExpression.text}`;
+    const ownerAmbiguity = localAliasAmbiguity(checker, expression.expression, seen, remainingAliasHops);
+    if (ownerAmbiguity) return ownerAmbiguity;
+    const initializer = property?.declarations?.find(ts.isPropertyAssignment)?.initializer;
+    return initializer ? localAliasAmbiguity(checker, initializer, seen, remainingAliasHops) : undefined;
+  }
   if (!ts.isIdentifier(expression)) return undefined;
   const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
-  const declarations = (symbol?.declarations ?? []).filter(ts.isVariableDeclaration);
-  return declarations.length === 1 && declarations[0]!.initializer && !isConstVariable(declarations[0]!)
-    ? expression.text
-    : undefined;
+  if (!symbol || seen.has(symbol)) return undefined;
+  const declarations = (symbol.declarations ?? []).filter(ts.isVariableDeclaration);
+  if (declarations.length !== 1 || !declarations[0]!.initializer) return undefined;
+  if (!isConstVariable(declarations[0]!)) return `mutable local alias ${expression.text}`;
+  if (remainingAliasHops === 0) return `local alias ${expression.text} exceeds the ${MAX_LOCAL_ALIAS_HOPS}-hop resolution limit`;
+  return localAliasAmbiguity(
+    checker,
+    declarations[0]!.initializer,
+    new Set([...seen, symbol]),
+    remainingAliasHops - 1,
+  );
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {
@@ -675,11 +730,17 @@ function routeGraphForReachability(
         && node.name.text === "id"
         && ts.isStringLiteralLike(node.initializer)) corpusIds.add(node.initializer.text);
       if (ts.isCallExpression(node)) {
-        const ambiguousAlias = mutableLocalAlias(checker, node.expression);
+        const ambiguousAlias = localAliasAmbiguity(checker, node.expression);
         const signature = checker.getResolvedSignature(node);
         const identity = symbolIdentity(root, checker, expressionSymbol(checker, node.expression))
           ?? (signature?.declaration ? symbolIdentity(root, checker, checker.getSymbolAtLocation((signature.declaration as ts.NamedDeclaration).name ?? signature.declaration)) : undefined);
-        if (identity) {
+        const findingBearing = typeContainsFinding(checker, checker.getTypeAtLocation(node));
+        if (ambiguousAlias
+          && options.detectUnknown !== false
+          && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
+          && findingBearing) {
+          unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing call has ambiguous producer identity`);
+        } else if (identity) {
           const target = `${identity.file}#${identity.symbol}`;
           const id = `call:${consumerFile}->${target}`;
           const implementation = implementationByIdentity.get(target);
@@ -691,12 +752,10 @@ function routeGraphForReachability(
               .sort(byText)[0] ?? consumerFile;
             const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
             live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "call" }]);
-          } else if (options.detectUnknown !== false && !identity.file.startsWith("node_modules/") && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile)) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
-            unresolvedCandidates.push(ambiguousAlias
-              ? { message: `${consumerFile}#${ambiguousAlias}: finding-bearing call uses a mutable local alias, so one producer identity cannot be proven`, consumerFile }
-              : { message: `${consumerFile}#${identity.symbol}: finding-bearing call target ${target} is unregistered`, consumerFile, targetFile: identity.file });
+          } else if (options.detectUnknown !== false && !identity.file.startsWith("node_modules/") && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile)) && findingBearing) {
+            unresolvedCandidates.push({ message: `${consumerFile}#${identity.symbol}: finding-bearing call target ${target} is unregistered`, consumerFile, targetFile: identity.file });
           }
-        } else if (options.detectUnknown !== false && rootIds.has(consumerFile) && typeContainsFinding(checker, checker.getTypeAtLocation(node))) {
+        } else if (options.detectUnknown !== false && rootIds.has(consumerFile) && findingBearing) {
           unresolvedCandidates.push({ message: `${consumerFile}: finding-bearing dispatch has no resolvable declaration`, consumerFile });
         }
       }

@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
@@ -56,9 +55,9 @@ describe("schema-v3 route graph", () => {
     expect(discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]).routes).toEqual([]);
   });
 
-  it("preserves producer identity through direct, import and bounded local aliases", async () => {
+  it("preserves producer identity through direct, import and bounded local aliases with an execution oracle", () => {
     const root = fixture("export {};\n");
-    writeFileSync(join(root, "src", "producer.mjs"), "export function produce() { return [{ id: 'executed', taxonomy: 'test', severity: 'Low', location: 'fixture' }]; }\n");
+    writeFileSync(join(root, "src", "producer.mjs"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{ id: 'executed', taxonomy: 'test', severity: 'Low', location: 'fixture' }]; }\n");
     const cases = {
       direct: "import { produce } from './producer.mjs'; export const findings = produce();\n",
       "import-alias": "import { produce as alias } from './producer.mjs'; export const findings = alias();\n",
@@ -73,8 +72,35 @@ describe("schema-v3 route graph", () => {
       const graph = discoverEffectivenessRouteGraph(root, [aliasImplementation], [`src/${name}.mjs`]);
       expect(graph.routes, name).toHaveLength(1);
       expect(graph.routes[0]?.implementationId, name).toBe("src/producer.mjs#produce");
-      const executed = await import(`${pathToFileURL(file).href}?case=${name}`) as { findings: { id: string }[] };
-      expect(executed.findings.map((finding) => finding.id), name).toEqual(["executed"]);
+      expect(runNode(root, [`src/${name}.mjs`]), name).toEqual({ status: 0, executed: true });
+    }
+  });
+
+  it("discloses mutable, over-limit and reassigned-property aliases without guessing routes", () => {
+    const cases = {
+      "const through mutable": {
+        source: "import { produce } from './producer.ts'; let first = produce; const alias = first; alias();\n",
+        executed: true,
+        diagnostic: "mutable local alias first",
+      },
+      "over alias limit": {
+        source: "import { produce } from './producer.ts'; const a0=produce; const a1=a0; const a2=a1; const a3=a2; const a4=a3; const a5=a4; const a6=a5; const a7=a6; const a8=a7; a8();\n",
+        executed: true,
+        diagnostic: "exceeds the 8-hop resolution limit",
+      },
+      "reassigned property": {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; const alias=obj.run; alias();\n",
+        executed: false,
+        diagnostic: "mutable property alias run",
+      },
+    };
+    for (const [name, testCase] of Object.entries(cases)) {
+      const root = fixture(testCase.source);
+      writeFileSync(join(root, "src", "producer.ts"), "export interface Finding { id:string; taxonomy:string; severity:string; location:string }\nexport function produce(): Finding[] { console.log('PRODUCER_EXECUTED'); return [{id:'x',taxonomy:'x',severity:'Low',location:'x'}]; }\n");
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(runNode(root, ["src/root.ts"]).executed, name).toBe(testCase.executed);
+      expect(graph.routes, name).toEqual([]);
+      expect(graph.unresolvedFindingDispatches.join("\n"), name).toContain(testCase.diagnostic);
     }
   });
 
