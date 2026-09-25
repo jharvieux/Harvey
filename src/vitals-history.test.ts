@@ -15,7 +15,7 @@ afterEach(() => {
 const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
 describe("prepareVitalsRun source boundary", () => {
-  it.each(["unstaged", "staged", "rename", "directory", "spaced", "cached", "recreated"])("preserves the live checkout after %s deletion without refreshing the client index", mode => {
+  it.each(["unstaged", "staged", "rename", "directory", "spaced", "cached", "recreated", "rename-recreated"])("preserves the live checkout after %s deletion without refreshing the client index", mode => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-vitals-source-"));
     const cache = mkdtempSync(join(tmpdir(), "harvey-vitals-cache-"));
     roots.push(repo, cache);
@@ -30,7 +30,10 @@ describe("prepareVitalsRun source boundary", () => {
     writeFileSync(join(repo, "src", "unchanged.ts"), "export const unchanged = true;\n");
     execFileSync("git", ["add", "."], { cwd: repo });
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo });
-    if (mode === "rename") execFileSync("git", ["mv", deletedPath, "src/moved.ts"], { cwd: repo });
+    if (mode === "rename" || mode === "rename-recreated") {
+      execFileSync("git", ["mv", deletedPath, "src/moved.ts"], { cwd: repo });
+      if (mode === "rename-recreated") writeFileSync(join(repo, deletedPath), "export const recreated = true;\n");
+    }
     else if (mode === "cached") execFileSync("git", ["rm", "--cached", "--", deletedPath], { cwd: repo });
     else if (mode === "recreated") {
       execFileSync("git", ["rm", "--", deletedPath], { cwd: repo });
@@ -48,9 +51,9 @@ describe("prepareVitalsRun source boundary", () => {
 
     const prepared = prepareVitalsRun({ targetDir: repo, cacheRoot: cache, toolVersion: "0.2.0" });
     try {
-      if (mode === "cached" || mode === "recreated") expect(readFileSync(join(prepared.targetDir, deletedPath), "utf8")).toBe(readFileSync(join(repo, deletedPath), "utf8"));
+      if (mode === "cached" || mode === "recreated" || mode === "rename-recreated") expect(readFileSync(join(prepared.targetDir, deletedPath), "utf8")).toBe(readFileSync(join(repo, deletedPath), "utf8"));
       else expect(() => readFileSync(join(prepared.targetDir, deletedPath))).toThrow();
-      if (mode === "rename") expect(readFileSync(join(prepared.targetDir, "src/moved.ts"), "utf8")).toContain("deleted");
+      if (mode === "rename" || mode === "rename-recreated") expect(readFileSync(join(prepared.targetDir, "src/moved.ts"), "utf8")).toContain("deleted");
       expect(readFileSync(join(prepared.targetDir, "src", "modified.ts"), "utf8")).toContain("= 2");
       expect(readFileSync(join(prepared.targetDir, "src", "added.ts"), "utf8")).toContain("added");
       expect(digest(join(repo, ".git", "index"))).toBe(before);
