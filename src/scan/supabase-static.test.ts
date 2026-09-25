@@ -1283,3 +1283,16 @@ describe("M1-SQL-SCOPE-00 — SQL the static pass did not read is counted, not s
     expect(checkUnreadSqlSurfaces(dir)).toEqual([]);
   });
 });
+
+it("retains the true-policy review after same-file policy-name reuse", () => {
+  const root = mkdtempSync(join(tmpdir(), "harvey-policy-reuse-"));
+  const parts = ["create table public.a(id uuid); create policy p on public.a using (true);", "alter policy p on public.a rename to q;", "create policy p on public.a using (false);"];
+  try {
+    for (const name of ["same", "split"]) mkdirSync(join(root, name, "supabase/migrations"), { recursive: true });
+    writeFileSync(join(root, "same/supabase/migrations/001.sql"), parts.join("\n"));
+    parts.forEach((sql, i) => writeFileSync(join(root, `split/supabase/migrations/00${i}.sql`), sql));
+    const together = checkMigrationPolicySemantics(join(root, "same")); const split = checkMigrationPolicySemantics(join(root, "split"));
+    expect(together.map(row => row.id)).toEqual(split.map(row => row.id));
+    expect(together.some(row => row.id === "SB-RLS-USING-TRUE-UNASSESSED" && row.evidence.includes("a (q)"))).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

@@ -307,3 +307,17 @@ describe("readDriftPassEvidence", () => {
     expect(readDriftPassEvidence(empty, "/repo", NOW)).toBeUndefined();
   });
 });
+
+describe("final lifecycle identities in the shipping drift comparison", () => {
+  it.each([
+    ["alter table public.a rename to b;", "public", "b"],
+    ["alter table public.a set schema tenant;", "tenant", "a"],
+    ["alter table public.a rename to b; alter table public.b set schema tenant;", "tenant", "b"],
+  ])("does not label rebuilt renamed/moved tables unmanaged: %s", (transition, schema, name) => {
+    const migrations = migration(`create table public.a(id uuid); create policy p on public.a using (true); alter table public.a enable row level security; ${transition}`);
+    const findings = checkMigrationDrift([{ schema, name, rlsEnabled: true, extensionOwned: false }], [{ schema, table: name, name: "p" }], migrations, undefined, { schemas: [{ schema: "public", status: "queried" }, { schema: "tenant", status: "queried" }], queriesAttempted: 2, queriesCompleted: 2 });
+    expect(findings.map(row => row.id)).toEqual(["SB-DRIFT-00"]);
+    const missing = checkMigrationDrift([], [], migrations, undefined, { schemas: [{ schema, status: "queried" }], queriesAttempted: 1, queriesCompleted: 1 });
+    expect(missing.some(row => row.id.startsWith("SB-DRIFT-TABLE-MISSING"))).toBe(true);
+  });
+});

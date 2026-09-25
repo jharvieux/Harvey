@@ -572,3 +572,17 @@ describe("PostgreSQL migration identifier spellings (#2129)", () => {
     ]);
   });
 });
+
+it("binds reused policy names to each CREATE occurrence before renaming", () => {
+  const parts = ["create table public.a(id uuid); create policy p on public.a using (true);", "alter policy p on public.a rename to q;", "create policy p on public.a using (false);"];
+  const together = parseLivePolicies([{ file: "001.sql", sql: parts.join("\n") }]);
+  const split = parseLivePolicies(parts.map((sql, i) => ({ file: `${i}.sql`, sql })));
+  const bodies = (rows: typeof together) => rows.policies.map(({ schema, table, name, qual }) => ({ schema, table, name, qual })).sort((a, b) => a.name.localeCompare(b.name));
+  expect(bodies(together)).toEqual(bodies(split));
+  expect(bodies(together)).toEqual([{ schema: "public", table: "a", name: "p", qual: "false" }, { schema: "public", table: "a", name: "q", qual: "true" }]);
+});
+
+it("keeps punctuation in quoted policy identities out of statement boundaries", () => {
+  const result = parseLivePolicies([{ file: "001.sql", sql: 'create policy "p;)" on "a;b" using ("x)y" = 1);' }]);
+  expect(result.unparsed).toEqual([]); expect(result.policies[0]).toMatchObject({ name: "p;)", table: "a;b", qual: '"x)y" = 1' });
+});

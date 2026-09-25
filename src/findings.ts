@@ -3,7 +3,7 @@
 
 import { completenessStatement, deriveCompleteness, headlineClaimsCompletion } from "./audit-completeness.js";
 import { assessmentErrors, baselineIntegrityErrors, conservationIntegrityErrors, contentIdentity, populationSummary } from "../report-template/dispositions.mjs";
-import { residualScopeErrors, type ResidualScopeInventory } from "./residual-scope.js";
+import { residualScopeDisclosures, residualScopeErrors, type ResidualScopeInventory } from "./residual-scope.js";
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
@@ -624,7 +624,16 @@ export function validateFindings(data: unknown): ValidationResult {
   if (isRecord(data.meta) && data.meta.auditContext !== undefined) validateAuditContext(data.meta.auditContext, "meta.auditContext", errors);
   if (data.baseline !== undefined) validateBaseline(data.baseline, errors, data.findings);
   if (data.testQuality !== undefined) validateTestQuality(data.testQuality, errors);
-  if (data.residualScope !== undefined) errors.push(...residualScopeErrors(data.residualScope));
+  if (data.residualScope !== undefined) {
+    errors.push(...residualScopeErrors(data.residualScope));
+    if (isRecord(data.residualScope) && isRecord(data.residualScope.target) && isRecord(data.meta) && data.residualScope.target.revision !== data.meta.commit) errors.push("residualScope.target.revision: must match meta.commit");
+    if (isRecord(data.residualScope) && Array.isArray(data.residualScope.rows) && Array.isArray(data.findings)) {
+      const ids = new Set(data.findings.filter(isRecord).map(finding => finding.id));
+      for (const row of data.residualScope.rows.filter(isRecord)) if (Array.isArray(row.sourceFindingIds) && row.sourceFindingIds.some(id => !ids.has(id))) errors.push("residualScope.sourceFindingIds: every source identity must refer to a retained finding");
+      const covered = new Set(data.residualScope.rows.filter(isRecord).flatMap(row => Array.isArray(row.sourceFindingIds) ? row.sourceFindingIds : []));
+      for (const finding of residualScopeDisclosures(data.findings)) if (!covered.has(finding.id)) errors.push(`residualScope.sourceFindingIds: missing disposition for ${finding.id}`);
+    }
+  }
   if (data.legalTerms !== undefined && (!isRecord(data.legalTerms) || typeof data.legalTerms.text !== "string" || data.legalTerms.text.trim() === "")) {
     errors.push("legalTerms.text: expected non-empty string — an empty terms block would render as approved-but-blank");
   }

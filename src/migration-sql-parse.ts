@@ -655,18 +655,17 @@ interface ParsedPolicySet {
 // truncate it. Returns the inner text, or null if the parens never balance.
 function readBalanced(sql: string, open: number): string | null {
   let depth = 0;
-  let inString = false;
+  let quote: string | undefined;
   for (let i = open; i < sql.length; i++) {
     const c = sql[i];
-    if (inString) {
-      // '' is an escaped quote inside a literal, not a terminator.
-      if (c === "'") {
-        if (sql[i + 1] === "'") i++;
-        else inString = false;
+    if (quote) {
+      if (c === quote) {
+        if (sql[i + 1] === quote) i++;
+        else quote = undefined;
       }
       continue;
     }
-    if (c === "'") inString = true;
+    if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {
       depth--;
@@ -680,22 +679,68 @@ function readBalanced(sql: string, open: number): string | null {
 // function body or literal doesn't end it). Returns null if unterminated.
 function statementText(sql: string, start: number): string | null {
   let depth = 0;
-  let inString = false;
+  let quote: string | undefined;
+  let dollar: string | undefined;
+  let commentDepth = 0;
   for (let i = start; i < sql.length; i++) {
     const c = sql[i];
-    if (inString) {
-      if (c === "'") {
-        if (sql[i + 1] === "'") i++;
-        else inString = false;
+    if (commentDepth) {
+      if (sql.startsWith("/*", i)) { commentDepth++; i++; }
+      else if (sql.startsWith("*/", i)) { commentDepth--; i++; }
+      continue;
+    }
+    if (dollar) {
+      if (sql.startsWith(dollar, i)) { i += dollar.length - 1; dollar = undefined; }
+      continue;
+    }
+    if (quote) {
+      if (c === quote) {
+        if (sql[i + 1] === quote) i++;
+        else quote = undefined;
       }
       continue;
     }
-    if (c === "'") inString = true;
+    if (sql.startsWith("/*", i)) { commentDepth++; i++; continue; }
+    if (sql.startsWith("--", i)) { while (i < sql.length && sql[i] !== "\n") i++; continue; }
+    if (c === "$") {
+      const tag = /^\$(?:[a-zA-Z_][a-zA-Z0-9_]*)?\$/.exec(sql.slice(i))?.[0];
+      if (tag) { dollar = tag; i += tag.length - 1; continue; }
+    }
+    if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
-    else if (c === ")") depth--;
+    else if (c === ")") { if (--depth < 0) return null; }
     else if (c === ";" && depth === 0) return sql.slice(start, i);
   }
   return null;
+}
+
+/** Structural bounds for the supported static identity reader, not PostgreSQL syntax validation. */
+export function schemaSqlParseFailures(sql: string): { line: number; reason: string }[] {
+  const clean = stripLineComments(sql);
+  const failures: { line: number; reason: string }[] = [];
+  let offset = 0;
+  while (offset < clean.length) {
+    const tail = clean.slice(offset);
+    if (!tail.replace(/\/\*[\s\S]*?\*\//g, "").trim()) break;
+    const line = clean.slice(0, offset).split("\n").length;
+    const statement = statementText(clean, offset);
+    if (statement === null) {
+      failures.push({ line, reason: "Unterminated statement, quote, comment or unbalanced parentheses; static schema identity parsing is unresolved." });
+      break;
+    }
+    const header = statement.replace(/\/\*[\s\S]*?\*\//g, " ").trim();
+    if (/^create\s+(?:unlogged\s+|temporary\s+|temp\s+)?table\b/i.test(header)) {
+      const match = new RegExp(`^${CREATE_TABLE_NAME.source}`, "i").exec(header);
+      if (!match || !/^\s*\(/.test(header.slice(match[0].length))) failures.push({ line, reason: "CREATE TABLE is outside the supported named parenthesized declaration shape; its structure was not established." });
+    }
+    if (/^create\s+policy\b/i.test(header)) {
+      const parsed = parsePolicies(`${header};`);
+      if (!parsed.policies.length || parsed.unparsed.length) failures.push({ line, reason: parsed.unparsed[0]?.reason ?? "CREATE POLICY is outside the supported identity/clause shape." });
+    }
+    if (/^(?:do|execute)\b/i.test(header)) failures.push({ line, reason: "Procedural or dynamic SQL may change schema state; the static lifecycle reader does not execute it." });
+    offset += statement.length + 1;
+  }
+  return failures;
 }
 
 const FOR_CMD = /\bfor\s+(all|select|insert|update|delete)\b/i;
@@ -794,12 +839,6 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
 
   for (const { file, sql } of migrations) {
     const clean = stripLineComments(sql);
-    const { policies, unparsed } = parsePolicies(sql);
-    // Index this file's creates by identity. Within a file the LAST create of an identity is the
-    // one that survives (an earlier one is dropped+recreated, or is an illegal duplicate), and it
-    // is exactly the clause set that must be live — so last-in-source (= map insertion order) wins.
-    const parsedByKey = new Map<string, ParsedPolicy>(policies.map((p) => [key(p.schema, p.table, p.name), p]));
-    const unparsedByKey = new Map<string, UnparsedPolicy>(unparsed.map((u) => [key(u.schema, u.table, u.name), u]));
 
     type Local = { pos: number; op: "create"; schema: string; table: string; name: string }
       | { pos: number; op: "drop"; schema: string; table: string; name: string }
@@ -827,7 +866,12 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
         continue;
       }
       const line = clean.slice(0, e.pos).split("\n").length;
-      events.push({ seq: seq++, k, op: "create", rec: { schema: e.schema, table: e.table, name: e.name, file, line, parsed: parsedByKey.get(k), unparsed: unparsedByKey.get(k) } });
+      // Bind the body to this occurrence before a later rename can reuse its original name.
+      const statement = statementText(clean, e.pos);
+      const parsed = statement === null
+        ? { policies: [], unparsed: [{ schema: e.schema, table: e.table, name: e.name, reason: "statement has no terminating ';' — could not read its clauses" }] }
+        : parsePolicies(`${statement};`);
+      events.push({ seq: seq++, k, op: "create", rec: { schema: e.schema, table: e.table, name: e.name, file, line, parsed: parsed.policies[0], unparsed: parsed.unparsed[0] } });
     }
   }
 

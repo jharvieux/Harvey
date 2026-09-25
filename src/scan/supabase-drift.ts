@@ -72,7 +72,7 @@ const policyKey = (schema: string, table: string, name: string): string => JSON.
 const idPart = (name: string): string => name.replace(/[%.-]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 
 function mentionedTables(migrations: MigrationFile[], schemas: Set<string>): Set<string> {
-  return new Set(migrations.flatMap(({ sql }) => parseMentionedTableNames(sql))
+  return new Set([...migrations.flatMap(({ sql }) => parseMentionedTableNames(sql)), ...parseLiveTableNames(migrations.map(({ sql }) => sql).join("\n"))]
     .filter(t => schemas.has(t.schema)).map(t => key(t.schema, t.table)));
 }
 
@@ -187,6 +187,7 @@ export function checkMigrationDrift(
 
   const scopedLiveTables = liveTables.filter((t) => inScope(t.schema));
   const referencedTables = [
+    ...allExpectedTables,
     ...migrations.flatMap(m => parseMentionedTableNames(m.sql)),
     ...migrations.flatMap(m => parseRlsToggles(m.sql)),
     ...parsedPolicies.policies, ...parsedPolicies.unparsed,
