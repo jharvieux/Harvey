@@ -11,6 +11,7 @@ import "../__tests__/mutation-runner-validity.js";
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -937,9 +938,9 @@ describe("mutation-scan report-path auto-discovery (#820, child process)", () =>
 });
 
 describe("mutation reporter capture provenance (#2137)", () => {
-  async function execute(target: string, output: string) {
+  async function execute(target: string, output: string, options: { args?: string[]; env?: Record<string, string>; omitOutput?: boolean } = {}) {
     return await new Promise<{ status: number; stderr: string }>((resolveRun, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", CLI, target, "--out", output], { cwd: REPO_ROOT });
+      const child = spawn(process.execPath, ["--import", "tsx", CLI, target, ...(options.omitOutput ? [] : ["--out", output]), ...(options.args ?? [])], { cwd: REPO_ROOT, env: { ...process.env, ...options.env } });
       let stderr = "";
       child.stdout.resume();
       child.stderr.on("data", chunk => { stderr += String(chunk); });
@@ -1019,10 +1020,107 @@ process.exit(0);`));
     symlinkSync(redirected, `${output}.stryker`);
     const result = await execute(repo, output);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("resolves inside the target checkout");
+    expect(result.stderr).toContain("resolves inside protected source root");
     expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe("export const add = (a: number, b: number) => a + b;\n");
     expect(readdirSync(redirected)).toEqual([]);
+  });
+
+  it.each(["tsconfig.json", "package.json", "test-data.json", "reports/mutation/index.html"])("rejects stamp-preserving changes to retained input %s", async file => {
+    const { repo, output } = prepared("healthy");
+    const input = join(repo, file);
+    if (!existsSync(input)) writeFileSync(input, '{"value":"before"}');
+    const original = readFileSync(input, "utf8");
+    const replacement = original.replace(/[a-z]/, letter => letter === "a" ? "b" : "a");
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(input)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("invariant violated");
+    expect(result.stderr).toContain(file);
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each(["selected config", "external tsconfig"] as const)("rejects stamp-preserving changes to %s outside the target", async mode => {
+    const { repo, output } = prepared("healthy");
+    const external = join(dirname(repo), `${mode.replace(" ", "-")}-${Date.now()}.json`);
+    dirs.push(external);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    let args: string[];
+    if (mode === "selected config") {
+      writeFileSync(external, readFileSync(join(repo, "stryker.config.json"), "utf8"));
+      args = ["--config", external];
+    } else {
+      writeFileSync(external, '{"compilerOptions":{"target":"ES2020"}}');
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ extends: relative(repo, external) }));
+      mkdirSync(join(repo, "node_modules/typescript"), { recursive: true });
+      writeFileSync(join(repo, "node_modules/typescript/package.json"), '{"version":"7.0.2"}');
+      args = [];
+    }
+    const original = readFileSync(external, "utf8");
+    const replacement = original.replace(mode === "selected config" ? "perTest" : "ES2020", mode === "selected config" ? "offTest" : "ES2022");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(external)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+    const result = await execute(repo, output, { args });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("consumed input is no longer byte-identical");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(JSON.parse(readFileSync(receiptPath!, "utf8")).outcome).toMatchObject({ state: "exited", exitCode: 0 });
+  });
+
+  it("rejects an incremental-file alias before starting the producer", async () => {
+    const { repo, output } = prepared("healthy");
+    const storage = `${output}.stryker`;
+    mkdirSync(storage);
+    const incremental = join(storage, `incremental-${createHash("sha256").update(repo).digest("hex").slice(0, 16)}.json`);
+    symlinkSync(join(repo, "reports/mutation/index.html"), incremental);
+    const result = await execute(repo, output, { args: ["--incremental"] });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("incremental report destination");
+    expect(result.stderr).not.toContain("M8 upstream execution receipt");
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it.each(["symlink", "directory"] as const)("uses a safe alternate receipt when the preferred command receipt is a %s", async mode => {
+    const { repo, output } = prepared("healthy");
+    const bin = join(repo, "node_modules/.bin/stryker");
+    const receipt = 'path.join(path.dirname(process.argv[3]), "command-receipt.json")';
+    const effect = mode === "directory"
+      ? `fs.mkdirSync(${receipt});`
+      : `fs.symlinkSync(${JSON.stringify(join(repo, "reports/mutation/index.html"))}, ${receipt});`;
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `${effect} process.exit(0);`));
+    const result = await execute(repo, output);
+    expect(result.status).toBe(0);
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(receiptPath).toBeTruthy();
+    expect(receiptPath).not.toMatch(/\/target\/command-receipt\.json$/);
+    const saved = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    expect(saved.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it("rejects a temporary allocation root inside the target before starting the producer", async () => {
+    const { repo, output } = prepared("healthy");
+    const unsafeTmp = join(repo, "capture-store");
+    mkdirSync(unsafeTmp);
+    const result = await execute(repo, output, { env: { TMPDIR: unsafeTmp }, omitOutput: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("temporary allocation root");
+    expect(result.stderr).not.toContain("M8 upstream execution receipt");
+    expect(readdirSync(unsafeTmp).filter(name => !name.startsWith("tsx-"))).toEqual([]);
+  });
+
+  it.each(["existing", "dangling", "late"] as const)("refuses the %s final export alias into the client", async mode => {
+    const { repo, output } = prepared("healthy");
+    const destination = join(repo, "reports/mutation", mode === "dangling" ? "not-yet-present.html" : "index.html");
+    if (mode === "late") {
+      const bin = join(repo, "node_modules/.bin/stryker");
+      writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `fs.symlinkSync(${JSON.stringify(destination)}, ${JSON.stringify(output)}); process.exit(0);`));
+    } else symlinkSync(destination, output);
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/output destination.*aliases.*target checkout/);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    if (mode === "dangling") expect(existsSync(destination)).toBe(false);
   });
 
   it("retains a successful command receipt when the declared report is a directory", async () => {
