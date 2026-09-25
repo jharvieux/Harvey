@@ -147,6 +147,53 @@ describe("schema-v3 route graph", () => {
     }
   });
 
+  it("distinguishes native container methods from producer aliases while disclosing overridden methods", () => {
+    for (const member of [".filter", '["filter"]']) {
+      for (const override of [false, true]) {
+        const root = fixture("import './consumer.ts';");
+        writeFileSync(join(root, "src", "consumer.ts"), `import { produce } from './producer.ts'; let findings = produce(); const index = 0; findings[index] = findings[0]; ${override ? 'findings.filter = () => [];' : ''} findings${member}(item => item.id);`);
+        writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; }");
+        expect(runNode(root, ["src/root.ts"])).toEqual({ status: 0, executed: true });
+        for (const detectUnknown of [true, false]) {
+          const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], { detectUnknown });
+          expect(graph.routes).toHaveLength(1);
+          if (override) expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias filter");
+          else expect(graph.unresolvedFindingDispatches).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("tracks imported property reassignment in the reachable consumer before aliases or callbacks", () => {
+    for (const callback of [false, true]) {
+      for (const reassigned of [false, true]) {
+        const root = fixture("import './consumer.ts';");
+        writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; } export const registry = {run: produce};");
+        writeFileSync(join(root, "src", "consumer.ts"), `import {registry} from './producer.ts'; ${reassigned ? 'registry.run = () => [];' : ''} ${callback ? 'function invoke(fn) { fn(); } invoke(registry.run);' : 'const alias = registry.run; alias();'}`);
+        expect(runNode(root, ["src/root.ts"])).toEqual({status: 0, executed: !reassigned});
+        for (const detectUnknown of [true, false]) {
+          const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], {detectUnknown});
+          expect(graph.routes).toHaveLength(reassigned ? 0 : 1);
+          if (reassigned) expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias run");
+          else expect(graph.unresolvedFindingDispatches).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("discloses constant and unresolved string-key writes to imported producer properties", () => {
+    for (const key of ['"run"', "key", '["r", "un"].join("")']) {
+      const root = fixture(`import {registry} from './producer.ts'; const key = "run"; registry[${key}] = () => []; const alias = registry.run; alias();`);
+      writeFileSync(join(root, "src", "producer.ts"), "export function produce() { console.log('PRODUCER_EXECUTED'); return [{id:'one',taxonomy:'test',severity:'Low',location:'fixture'}]; } export const registry = {run: produce};");
+      expect(runNode(root, ["src/root.ts"])).toEqual({status: 0, executed: false});
+      for (const detectUnknown of [true, false]) {
+        const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"], {detectUnknown});
+        expect(graph.routes).toEqual([]);
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("mutable property alias run");
+      }
+    }
+  });
+
   it("does not invent routes for unused, unrelated, shadowed or mutable aliases", () => {
     const cases = {
       unused: "import { produce } from './producer.js'; const alias = produce; void alias;\n",
