@@ -103,7 +103,7 @@ describe("schema-v3 route graph", () => {
       expect(graph.unresolvedFindingDispatches.join("\n"), name).toContain(testCase.diagnostic);
       const venueGraph = discoverEffectivenessVenueRouteGraphs(root, [implementation], ["src/root.ts"])[0]!;
       expect(venueGraph.routes, `${name}: venue`).toEqual([]);
-      expect(venueGraph.unresolvedFindingDispatches, `${name}: venue reporting disabled`).toEqual([]);
+      expect(venueGraph.unresolvedFindingDispatches.join("\n"), `${name}: venue ambiguity disclosed`).toContain(testCase.diagnostic);
     }
   });
 
@@ -117,6 +117,7 @@ describe("schema-v3 route graph", () => {
     for (const detectUnknown of [true, false]) {
       const graph = discoverEffectivenessRouteGraph(reachableRoot, [implementation], ["src/root.ts"], { detectUnknown });
       expect(graph.routes, `reachable reassigned call, detectUnknown=${detectUnknown}`).toEqual([]);
+      expect(graph.unresolvedFindingDispatches.join("\n")).toContain("ambiguous producer identity");
     }
 
     const callbacks = {
@@ -141,7 +142,7 @@ describe("schema-v3 route graph", () => {
       expect(venueGraph.routes, `${name}: venue`).toHaveLength(testCase.routes);
       if (name === "reassigned") {
         expect(graph.unresolvedFindingDispatches.join("\n")).toContain("finding-bearing registry reference has ambiguous producer identity");
-        expect(venueGraph.unresolvedFindingDispatches).toEqual([]);
+        expect(venueGraph.unresolvedFindingDispatches.join("\n")).toContain("finding-bearing registry reference has ambiguous producer identity");
       }
     }
   });

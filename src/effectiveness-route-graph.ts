@@ -741,12 +741,9 @@ function routeGraphForReachability(
           ?? (signature?.declaration ? symbolIdentity(root, checker, checker.getSymbolAtLocation((signature.declaration as ts.NamedDeclaration).name ?? signature.declaration)) : undefined);
         const findingBearing = typeContainsFinding(checker, checker.getTypeAtLocation(node));
         if (ambiguousAlias) {
-          // Unknown-producer reporting is optional for venue graphs. A known ambiguous alias is
-          // excluded from registered-route evidence in every mode; the toggle controls only the
-          // diagnostic attached to that exclusion.
-          if (options.detectUnknown !== false
-            && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
-            && findingBearing) {
+          // Known alias ambiguity needs an exclusion reason in every reachable consumer, including
+          // venue graphs that suppress diagnostics for otherwise unregistered producers.
+          if (findingBearing) {
             unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing call has ambiguous producer identity`);
           }
         } else if (identity) {
@@ -773,9 +770,7 @@ function routeGraphForReachability(
           || (ts.isNewExpression(node.parent) && node.parent.arguments?.includes(node) === true))) {
         const ambiguousAlias = localAliasAmbiguity(checker, node);
         if (ambiguousAlias) {
-          if (options.detectUnknown !== false
-            && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
-            && callableReturnsFinding(checker, node)) {
+          if (callableReturnsFinding(checker, node)) {
             unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing registry reference has ambiguous producer identity`);
           }
         } else {
