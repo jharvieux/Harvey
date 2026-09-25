@@ -166,7 +166,7 @@ describe("run-audit assembly capability boundary", () => {
     } finally {
       writeFileSync(source, original);
     }
-  }, 60_000);
+  });
   it("refuses to re-sign unbound legacy passes as fresh retained execution before invoking scanners", async () => {
     const result = await run(["--retain-artifacts", join(root, "laundered"), "--artifacts-dir", join(root, "legacy")], {}, false);
     expect(result.code).toBe(2);

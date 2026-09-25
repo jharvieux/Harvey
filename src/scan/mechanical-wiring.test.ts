@@ -97,6 +97,9 @@ describe("#1851 complete mechanical producer ownership", () => {
   it("validates every phase registry and derives the complete operator scope from it", () => {
     expect(MECHANICAL_REGISTRY.length).toBeGreaterThan(MECHANICAL_DETECTORS.length);
     expect(validateMechanicalEngineRegistry(repoRoot)).toEqual([]);
+    expect(discoverMechanicalRegistryImplementations(repoRoot)).not.toContainEqual({
+      file: "src/sbom.ts", exportName: "licenseCandidateIdentity", registryFile: "src/scan/mechanical-dependency-registry.ts",
+    });
     expect(operatorMechanicalScopeRows().map((row) => [row.phase, row.id, row.taxonomies])).toEqual(
       MECHANICAL_REGISTRY.map((entry) => [entry.phase, entry.id, entry.taxonomies]),
     );
