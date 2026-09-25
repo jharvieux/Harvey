@@ -311,7 +311,7 @@ describe("runSupabaseScan", () => {
       for (const name of ["handler", "shared", "implementation"]) {
         writeFileSync(
           join(webhookDir, `${name}.ts`),
-          readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts`, import.meta.url), "utf8"),
+          readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts.txt`, import.meta.url), "utf8"),
         );
       }
       writeFileSync(join(webhookDir, "index.ts"), readFileSync(join(webhookDir, "handler.ts"), "utf8"));
@@ -321,9 +321,29 @@ describe("runSupabaseScan", () => {
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
       expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(false);
 
-      writeFileSync(join(webhookDir, "implementation.ts"), readFileSync(new URL("./__fixtures__/source-precision/webhook-no-verification/implementation.ts", import.meta.url), "utf8"));
+      writeFileSync(join(webhookDir, "implementation.ts"), readFileSync(new URL("./__fixtures__/source-precision/webhook-no-verification/implementation.ts.txt", import.meta.url), "utf8"));
       const broken = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir });
       expect(broken.find((f) => f.taxonomy === "Unsigned/unverified webhook handler")?.precisionTier).toBe("review");
+    });
+
+    it.each(["wrong-arguments", "conditional-verification", "caller-effect", "fake-verifier"])("delivers an unresolved %s webhook finding through the shipping producer (#2130)", async (variant) => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-fns-proof-"));
+      const functionsDir = join(dir, "supabase", "functions");
+      const webhookDir = join(functionsDir, "stripe-webhook");
+      mkdirSync(webhookDir, { recursive: true });
+      let handler = readFileSync(new URL("./__fixtures__/source-precision/webhook-valid/handler.ts.txt", import.meta.url), "utf8").replace("./shared.js", "./implementation.ts");
+      let implementation = readFileSync(new URL("./__fixtures__/source-precision/webhook-valid/implementation.ts.txt", import.meta.url), "utf8");
+      if (variant === "wrong-arguments") implementation = implementation.replace("verifyStripeSignature(params.rawBody, params.signatureHeader, params.secret)", 'verifyStripeSignature("other-body", "other-header", "other-secret")');
+      if (variant === "conditional-verification") implementation = implementation.replace("  const valid =", "  if (Math.random() > 0.5) {\n  const valid =").replace("  await params.grantEntitlement", "  }\n  await params.grantEntitlement");
+      if (variant === "caller-effect") handler = handler.replace("  return processWebhook", '  await database.entitlements.upsert({ userId: "unverified" });\n  return processWebhook');
+      if (variant === "fake-verifier") implementation = implementation.replace("  return diff === 0", "  return true");
+      writeFileSync(join(webhookDir, "index.ts"), handler);
+      writeFileSync(join(webhookDir, "implementation.ts"), implementation);
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = (await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir })).filter((finding) => finding.taxonomy === "Unsigned/unverified webhook handler");
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.precisionTier).toBe("review");
+      expect(findings[0]!.evidence).toContain("does not provably guard");
     });
   });
 

@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// BENIGN TWIN (#2130): an operator hook receives the trusted repository root and reads one fixed
-// filename. This hidden tooling path is not a remotely callable library entry point.
-export function readMemory(root) {
+// Proven fixed local source (#2130): no exported argument reaches this path.
+const root = dirname(fileURLToPath(import.meta.url));
+export function readMemory() {
   return readFileSync(join(root, "MEMORY.md"), "utf8");
 }

@@ -1,11 +1,12 @@
-import { processWebhook } from "./shared.js";
+import { processWebhook } from "./implementation.js";
 
 declare const database: { entitlements: { upsert(payload: { userId: string }): Promise<void> } };
 
 export async function handle(req: Request) {
   const rawBody = await req.text();
   const signatureHeader = req.headers.get("Stripe-Signature");
-  const secret = "fixture-secret-from-env";
+  const secret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+  if (!secret) throw new Error("Missing webhook secret");
   return processWebhook({
     rawBody,
     signatureHeader,

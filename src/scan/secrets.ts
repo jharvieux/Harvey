@@ -27,7 +27,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 import { isTestSourcePath } from "../detectors/load-sources.js";
 import { statSafe } from "../fs-walk.js";
@@ -140,6 +140,9 @@ export interface GitleaksResult {
   Description?: string;
   File: string;
   StartLine?: number;
+  StartColumn?: number;
+  EndLine?: number;
+  EndColumn?: number;
   Commit?: string;
   Match?: string;
   Secret?: string;
@@ -213,30 +216,144 @@ function gitleaksSortKey(r: GitleaksResult): string {
   return `${r.File} ${String(r.StartLine ?? 0).padStart(10, "0")} ${r.RuleID} ${r.Match ?? r.Secret ?? ""}`;
 }
 
+// The only supported encoding helper is the complete pure byte-to-base64 algorithm
+// used by AoP's generated-key fixture. Names alone (e.g. encode(pkcs8)) prove nothing.
+const BYTE_ENCODER_BODY = `function base64UrlFromBytes(bytes) {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+}`;
+
+function keyProofShape(source: string): string {
+  const emitted = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+  const file = ts.createSourceFile("proof.js", emitted, ts.ScriptTarget.Latest, true);
+  const fn = file.statements.find(ts.isFunctionDeclaration);
+  const serialize = (node: ts.Node): unknown => {
+    if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isRegularExpressionLiteral(node)
+      || ts.isNumericLiteral(node)) return [node.kind, node.text];
+    const children: unknown[] = [];
+    ts.forEachChild(node, (child) => { children.push(serialize(child)); });
+    return [node.kind, children];
+  };
+  return fn?.body ? JSON.stringify([fn.parameters.map(serialize), serialize(fn.body)]) : "";
+}
+const BYTE_ENCODER_SHAPE = keyProofShape(BYTE_ENCODER_BODY);
+
+function credentialBindingContains(node: ts.Node, names: ReadonlySet<string>): boolean {
+  if (ts.isIdentifier(node)) return names.has(node.text);
+  return ts.forEachChild(node, (child) => credentialBindingContains(child, names)) ?? false;
+}
+
+function isProvedByteEncoder(sf: ts.SourceFile, name: string): boolean {
+  let source = sf;
+  let localName = name;
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.moduleSpecifier.text.startsWith(".")
+      || !stmt.importClause?.namedBindings || !ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+    const binding = stmt.importClause.namedBindings.elements.find((item) => item.name.text === name);
+    if (!binding) continue;
+    const path = resolve(dirname(sf.fileName), stmt.moduleSpecifier.text);
+    const stem = path.replace(/\.js$/, "");
+    const target = [path, `${stem}.ts`, `${stem}.js`].find((candidate) => statSafe(candidate)?.isFile());
+    if (!target) return false;
+    source = ts.createSourceFile(target, readFileSync(target, "utf8"), ts.ScriptTarget.Latest, true);
+    localName = binding.propertyName?.text ?? binding.name.text;
+  }
+  const functions = source.statements.filter((stmt): stmt is ts.FunctionDeclaration => ts.isFunctionDeclaration(stmt) && stmt.name?.text === localName);
+  const fn = functions.length === 1 ? functions[0] : undefined;
+  if (source !== sf && sf.statements.some((stmt) => ts.isFunctionDeclaration(stmt) && stmt.name?.text === name)) return false;
+  const primitives = new Set(["String", "btoa"]);
+  let override = false;
+  const inspect = (node: ts.Node) => {
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isImportSpecifier(node)
+      || ts.isImportClause(node) || ts.isNamespaceImport(node)) && node.name && credentialBindingContains(node.name, primitives)) override = true;
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      && credentialBindingContains(node.left, primitives)) override = true;
+    ts.forEachChild(node, inspect);
+  };
+  inspect(source);
+  return Boolean(!override && fn?.body && keyProofShape(fn.getText(source)) === BYTE_ENCODER_SHAPE);
+}
+
 function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undefined {
-  if (r.RuleID !== "private-key" || !r.StartLine || !existsSync(r.File)) return undefined;
-  const displayPath = relativizeScanScope(r.File);
-  if (!isTestSourcePath(displayPath)) return undefined;
+  // History findings must never be explained by a different working-tree revision.
+  if (r.RuleID !== "private-key" || r.Commit || !r.StartLine || !r.Match || !existsSync(r.File)) return undefined;
+  if (!isTestSourcePath(relativizeScanScope(r.File))) return undefined;
   const text = readFileSync(r.File, "utf8");
   const sf = ts.createSourceFile(r.File, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const lineStart = sf.getPositionOfLineAndCharacter(Math.max(0, r.StartLine - 1), 0);
-  let enclosing: ts.FunctionLikeDeclaration | undefined;
+  const matches: ts.TemplateExpression[] = [];
   const visit = (node: ts.Node) => {
-    if (lineStart >= node.getStart(sf) && lineStart <= node.getEnd()) {
-      if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) enclosing = node;
-      ts.forEachChild(node, visit);
+    if (ts.isTemplateExpression(node) && node.getText(sf).slice(1, -1) === r.Match) {
+      const position = sf.getLineAndCharacterOfPosition(node.getStart(sf) + 1);
+      // Gitleaks group columns differ from the PEM start by one in the real 8.30.1
+      // output. Full Match + line + unique AST span binds identity without that offset.
+      if (position.line + 1 === r.StartLine) matches.push(node);
     }
+    ts.forEachChild(node, visit);
   };
   visit(sf);
-  if (!enclosing?.body) return undefined;
-  const body = enclosing.body.getText(sf);
-  if (!/crypto\.subtle\.generateKey\s*\(\s*\{[^}]*name\s*:\s*["']ECDSA["'][^}]*namedCurve\s*:\s*["']P-256["']/s.test(body)) return undefined;
-  const exported = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+crypto\.subtle\.exportKey\s*\(\s*["']pkcs8["']\s*,\s*([A-Za-z_$][\w$]*)\.privateKey\s*\)/s.exec(body);
-  if (!exported) return undefined;
-  const pkcs8 = exported[1]!;
-  const pem = new RegExp(`BEGIN PRIVATE KEY[\\s\\S]*\\$\\{[^}]*\\b${pkcs8}\\b[^}]*\\}[\\s\\S]*END PRIVATE KEY`).test(body);
-  if (!pem) return undefined;
-  return `the matched PEM is assembled inside one test function from crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${exported[2]}.privateKey) -> ${pkcs8}`;
+  if (matches.length !== 1) return undefined;
+  const pem = matches[0]!;
+  if (pem.head.text !== "-----BEGIN PRIVATE KEY-----\n" || pem.templateSpans.length !== 1
+    || pem.templateSpans[0]!.literal.text !== "\n-----END PRIVATE KEY-----") return undefined;
+  if (!ts.isVariableDeclaration(pem.parent) || pem.parent.initializer !== pem) return undefined;
+  const statement = pem.parent.parent.parent;
+  if (!ts.isVariableStatement(statement) || !ts.isBlock(statement.parent)) return undefined;
+  const block = statement.parent;
+  if (!ts.isArrowFunction(block.parent) && !ts.isFunctionExpression(block.parent) && !ts.isFunctionDeclaration(block.parent)) return undefined;
+  const index = block.statements.indexOf(statement);
+  const constant = (node: ts.Statement | undefined): ts.VariableDeclaration | undefined => {
+    if (!node || !ts.isVariableStatement(node) || !(node.declarationList.flags & ts.NodeFlags.Const)
+      || node.declarationList.declarations.length !== 1) return undefined;
+    const declaration = node.declarationList.declarations[0]!;
+    return ts.isIdentifier(declaration.name) ? declaration : undefined;
+  };
+  const generated = constant(block.statements[index - 2]);
+  const exported = constant(block.statements[index - 1]);
+  if (!generated?.initializer || !exported?.initializer || !constant(statement)) return undefined;
+  const awaitedCall = (expr: ts.Expression): ts.CallExpression | undefined =>
+    ts.isAwaitExpression(expr) && ts.isCallExpression(expr.expression) ? expr.expression : undefined;
+  const generateCall = awaitedCall(generated.initializer);
+  const exportCall = awaitedCall(exported.initializer);
+  if (!generateCall || !exportCall || generateCall.expression.getText(sf) !== "crypto.subtle.generateKey"
+    || exportCall.expression.getText(sf) !== "crypto.subtle.exportKey" || generateCall.arguments.length !== 3 || exportCall.arguments.length !== 2) return undefined;
+  const algorithm = generateCall.arguments[0]!;
+  if (!ts.isObjectLiteralExpression(algorithm) || algorithm.properties.length !== 2
+    || !algorithm.properties.every((prop) => ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)
+      && ts.isStringLiteral(prop.initializer) && ((prop.name.text === "name" && prop.initializer.text === "ECDSA")
+        || (prop.name.text === "namedCurve" && prop.initializer.text === "P-256")))) return undefined;
+  if (generateCall.arguments[1]!.kind !== ts.SyntaxKind.TrueKeyword) return undefined;
+  const usages = generateCall.arguments[2]!;
+  if (!ts.isArrayLiteralExpression(usages) || usages.elements.length !== 2
+    || usages.elements.some((item, i) => !ts.isStringLiteral(item) || item.text !== ["sign", "verify"][i])) return undefined;
+  const key = exportCall.arguments[1]!;
+  if (!ts.isStringLiteral(exportCall.arguments[0]!) || exportCall.arguments[0].text !== "pkcs8"
+    || !ts.isPropertyAccessExpression(key) || !ts.isIdentifier(key.expression) || key.name.text !== "privateKey"
+    || key.expression.text !== generated.name.getText(sf)) return undefined;
+  const pkcs8 = exported.name.getText(sf);
+  // Adjacent immutable bindings prevent unrelated generation, reassignment, aliases and
+  // intervening calls from being mistaken for the exported key's source.
+  const interpolation = pem.templateSpans[0]!.expression;
+  const expected = `function interpolate() { return base64UrlFromBytes(new Uint8Array(${pkcs8})).replace(/-/g, '+').replace(/_/g, '/'); }`;
+  if (keyProofShape(`function interpolate() { return ${interpolation.getText(sf)}; }`) !== keyProofShape(expected)
+    || !isProvedByteEncoder(sf, "base64UrlFromBytes")) return undefined;
+  // Shadowing/mutation of the platform functions or proven helper invalidates the certificate.
+  const protectedNames = new Set(["crypto", "Uint8Array", "String", "btoa", "base64UrlFromBytes"]);
+  let shadowed = false;
+  const check = (node: ts.Node) => {
+    if (ts.isImportSpecifier(node) && node.name.text === "base64UrlFromBytes") return; // resolved above
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) && node.name && credentialBindingContains(node.name, protectedNames)) shadowed = true;
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      let target: ts.Expression = node.left;
+      while (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) target = target.expression;
+      if (ts.isIdentifier(target) && protectedNames.has(target.text)) shadowed = true;
+    }
+    ts.forEachChild(node, check);
+  };
+  check(sf);
+  if (shadowed) return undefined;
+  return `the exact matched PEM interpolation is bound to crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${generated.name.getText(sf)}.privateKey) -> ${pkcs8}, followed by a source-proved byte encoder in the same test function`;
 }
 
 // #1078 — the two suppressions that used to happen inside the gitleaks config, where they left no
@@ -339,7 +456,8 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
       const generatedPrivateKeyFixture = generatedPrivateKeyFixtureProvenance(r);
-      const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey && !generatedPrivateKeyFixture;
+      const unresolvedKeyTemplate = r.RuleID === "private-key" && !generatedPrivateKeyFixture && (r.Match ?? "").includes("${");
+      const high = !unresolvedKeyTemplate && HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey && !generatedPrivateKeyFixture;
       // #934: doc/example context only reclassifies a hit that would otherwise be a graded
       // Critical — review-tier matches are already out of the free grade and keep their tier.
       const docContext = high && isDocExamplePath(r.File);
@@ -357,7 +475,9 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
           ? `${evidence} Down-ranked from Critical: this file also carries a test/example SAML IdP marker (ENTITY_ID / *.example.com) in a CI workflow — treat as a test fixture, confirm before escalating.`
           : docContext
             ? `${evidence} Reclassified from Critical (#934): the file sits in documentation/example-deployment content (docs, contrib, an example/sample file, or a *.dev.yml compose), where a credential-format match is overwhelmingly a shipped placeholder/default, not an application secret.`
-            : evidence,
+            : unresolvedKeyTemplate
+              ? `${evidence} The matched source contains template interpolation, but its exact generated-key provenance was not proved; retain exposure review and confirm whether any committed credential contributes to the value.`
+              : evidence,
         impact: generatedPrivateKeyFixture
           ? "A private-key-shaped value generated at test runtime from an ephemeral keypair, not a committed deployable credential. Confirm the dataflow remains generated and nonproduction."
           : docContext
