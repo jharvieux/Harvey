@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { validateFindings } from '../src/findings.ts';
 const engine = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = resolve(process.argv[2] ?? '/private/tmp/harvey-stryker-ts7-runtime');
 assert(existsSync(join(runtime, 'node_modules/@stryker-mutator/core/package.json')), 'Provide a provisioned local Stryker/Vitest runtime');
-const root = mkdtempSync(join(tmpdir(), 'harvey-workspace-acceptance-'));
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'harvey-workspace-acceptance-')));
 const put = (base, path, value) => { const full = join(base, path); mkdirSync(dirname(full), {recursive:true}); writeFileSync(full, typeof value === 'string' ? value : JSON.stringify(value)); };
 const tree = (path, base = path) => readEntriesSafe(path).entries.filter(e=>e.name!=='node_modules').flatMap(e => e.isDirectory ? tree(join(path,e.name),base) : [[join(path,e.name).slice(base.length), createHash('sha256').update(readFileSync(join(path,e.name))).digest('hex')]]);
 
@@ -97,6 +97,59 @@ assert(overridePlan.moduleRecord.note.includes('Requested --compare-run is not a
 assert.equal(readFileSync(prior,'utf8'),'{}');
 assert.deepEqual(overridePlan.mutationWorkspacePlan.workspaces.find(row=>row.id==='workspace:apps/main').selectedSources,['apps/main/src/subject.ts']);
 assert.deepEqual(overridePlan.mutationWorkspacePlan.workspaces.find(row=>row.id==='workspace:apps/rag').unselectedSources,['apps/rag/src/subject.ts']);
-const evidence={root,engine,versions:Object.fromEntries(['vitest','@stryker-mutator/core','typescript'].map(name=>[name,JSON.parse(readFileSync(join(runtime,'node_modules',name,'package.json'),'utf8')).version])),atc:atc.path,aop:aop.path,zeroRelated:zero.path,mixed:mixed.path,alternate:alternate.path};
+const configurationControls=[];
+for(const variant of ['relative-root','absolute-root','dir-local','dir-root','config-test-dir','dynamic-test-dir','explicit-package','alternate-build']) {
+ const target=fixture(`aop-config-${variant}`,['apps/rag']);
+ const local=join(target,'apps/rag'),configPath=join(local,'stryker.config.json');
+ const config=JSON.parse(readFileSync(configPath,'utf8'));
+ let vitest="export default {test:{include:['test/**/*.test.ts']}};\n";
+ if(variant==='relative-root')vitest="export default {root:'.',test:{include:['test/**/*.test.ts']}};\n";
+ if(variant==='absolute-root')vitest="import {fileURLToPath} from 'node:url'; export default {root:fileURLToPath(new URL('.',import.meta.url)),test:{include:['test/**/*.test.ts']}};\n";
+ const directory=variant.startsWith('dir-')||variant.endsWith('test-dir');
+ if(directory) {
+  vitest=`export default {test:{include:['**/*.test.ts']${variant.endsWith('test-dir')?",dir:'test/unit'":''}}};\n`;
+  if(variant==='dynamic-test-dir')vitest="export default ()=>({test:{include:['**/*.test.ts'],dir:'test/unit'}});\n";
+  put(target,'apps/rag/test/unit/subject.test.ts',"import {test,expect} from 'vitest'; import {subject} from '../../src/subject'; test('unit',()=>expect(subject(2,3)).toBe(5));\n");
+  put(target,'apps/rag/test/integration/subject.test.ts',"import {test,expect} from 'vitest'; import {subject} from '../../src/subject'; test('integration',()=>expect(subject(3,4)).toBe(7));\n");
+  if(!variant.endsWith('test-dir'))config.vitest.dir=variant==='dir-root'?'apps/rag/test/unit':'test/unit';
+ }
+ put(target,'apps/rag/vitest.config.ts',vitest);
+ if(variant==='dir-root') {
+  rmSync(configPath);config.vitest.configFile='apps/rag/vitest.config.ts';config.mutate=['apps/rag/src/**/*.ts'];put(target,'stryker.config.json',config);
+ } else put(target,'apps/rag/stryker.config.json',config);
+ if(variant==='alternate-build')put(target,'apps/rag/stryker.blocked.config.json',{...config,buildCommand:'node -e "process.exit(23)"'});
+ const nativePath=join(root,`${variant}.native.json`);
+ const nativeArgv=[join(runtime,'node_modules/vitest/vitest.mjs'),'related','--run','--config',join(local,'vitest.config.ts'),'--reporter=json','--outputFile',nativePath,...(config.vitest.dir?['--dir',config.vitest.dir]:[]),join(local,'src/subject.ts')];
+ const nativeCwd=variant==='dir-root'?target:local;
+ const native=spawnSync(process.execPath,nativeArgv,{cwd:nativeCwd,encoding:'utf8'});
+ put(root,`${variant}.native.stdout`,native.stdout??'');put(root,`${variant}.native.stderr`,native.stderr??'');
+ assert.equal(native.status,0,native.stderr);
+ const nativeResult=JSON.parse(readFileSync(nativePath,'utf8'));assert.equal(nativeResult.numPassedTests,1,'Original native configuration must select exactly the intended related unit test');
+ const execution=run(`configuration-${variant}`,target,variant==='explicit-package'?['--config',configPath]:[]);
+ const rows=execution.artifact.workspaces.filter(row=>row.id.startsWith('workspace:apps/rag'));
+ if(variant==='dynamic-test-dir') {
+  assert.equal(rows.length,1);assert.equal(rows[0].state,'discovery-failed');
+  assert(rows[0].reason.includes('outside native related discovery'));
+  assert.equal(execution.artifact.workspaceCoverage.complete,false);assert(!execution.artifact.summary,'An unproved test population cannot contribute a mutation score');
+ } else if(variant==='alternate-build') {
+  assert.deepEqual(rows.map(row=>row.state).sort(),['complete','discovery-failed']);
+  assert(rows.find(row=>row.state==='discovery-failed').reason.includes('buildCommand'));
+  assert.equal(execution.artifact.workspaceCoverage.complete,false,'An unadapted build contract cannot borrow its sibling result');
+ } else {assert.equal(rows.length,1);assert.equal(rows[0].state,'complete',rows[0].reason);assert.equal(execution.artifact.workspaceCoverage.complete,true);}
+ const complete=rows.find(row=>row.state==='complete');
+ if(complete) {
+  assert.equal(complete.relatedTests.length,1);assert.equal(complete.testCount,nativeResult.numPassedTests);
+  assert.equal(Object.keys(complete.artifact.rawReport.testFiles).length,1,'Stryker must observe the same native test population');
+ }
+ configurationControls.push({variant,artifact:execution.path,native:{argv:nativeArgv,cwd:nativeCwd,exitCode:native.status,path:nativePath,passed:nativeResult.numPassedTests},states:rows.map(row=>({id:row.id,state:row.state,testCount:row.testCount,relatedTests:row.relatedTests}))});
+ rmSync(target,{recursive:true,force:true});
+}
+const emptySource=fixture('aop-explicit-empty',['apps/rag']);
+const emptyConfig=join(emptySource,'apps/rag/stryker.empty.json');put(emptySource,'apps/rag/stryker.empty.json',{testRunner:'vitest',mutate:['missing/**/*.ts']});
+const empty=run('explicit-zero-match',emptySource,['--config',emptyConfig]);
+assert.equal(empty.artifact.workspaceCoverage.complete,false);assert.equal(empty.artifact.workspaceCoverage.reported,0);
+assert(empty.artifact.mutationWorkspacePlan.gaps.some(reason=>reason.includes('Explicit mutation configuration')&&reason.includes('zero source files')));
+assert(empty.artifact.findings.some(row=>row.evidence.includes('apps/rag/stryker.empty.json')&&row.evidence.includes('zero source files')),'The unresolved configuration origin must reach the finding population');
+const evidence={root,engine,versions:Object.fromEntries(['vitest','@stryker-mutator/core','typescript'].map(name=>[name,JSON.parse(readFileSync(join(runtime,'node_modules',name,'package.json'),'utf8')).version])),atc:atc.path,aop:aop.path,zeroRelated:zero.path,mixed:mixed.path,alternate:alternate.path,configurationControls,explicitZeroMatch:empty.path};
 put(root,'acceptance.json',evidence);console.log(JSON.stringify(evidence,null,2));
 for(const name of ['atc-source','aop-source','zero-source','mixed-source','override-source','alternate-source'])rmSync(join(root,name),{recursive:true,force:true});

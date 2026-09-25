@@ -730,29 +730,9 @@ if (!reportPath && !stubCheck && !detectOnly && !args.includes("--single-workspa
   registerProtectedInput(selectionPath);
   const selection: unknown = selectionPath ? JSON.parse(readFileSync(resolve(selectionPath), "utf8")) : undefined;
   if (selection !== undefined && (!Array.isArray(selection) || selection.some(path => typeof path !== "string"))) throw new Error("--mutation-selection must name a JSON array of repository-relative production paths");
-  const plan = planMutationWorkspaces(targetDir, { selection: selection as string[] | undefined });
+  const plan = planMutationWorkspaces(targetDir, { selection: selection as string[] | undefined, configPath });
   if (plan.workspaces.length > 1 || args.includes("--workspaces") || args.includes("--plan")) {
     if (compareRunPath) plan.gaps.push("Requested --compare-run is not assessed for independent workspace invocations: match each retained original workspace receipt before comparing mutation stability. The prior artifact remains a protected input.");
-    if (configPath) {
-      const override = readStaticConfigObject(resolve(configPath));
-      const mutate = Array.isArray(override.value?.mutate) && override.value.mutate.every(value => typeof value === "string") ? override.value.mutate as string[] : undefined;
-      const selected = verifyMutationScope([], mutate, plan.files.map(file => file.path));
-      const paths = new Set(selected.files?.map(file => file.path) ?? []);
-      if (!override.value || !selected.files) plan.gaps.push(`Explicit mutation configuration cannot be reconciled: ${override.error ?? selected.note}`);
-      for (const workspace of plan.workspaces) {
-        workspace.selectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => paths.has(path) && (!Array.isArray(selection) || selection.includes(path)));
-        workspace.unselectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => !workspace.selectedSources.includes(path));
-        if (override.value) {
-          workspace.configuration = override.value;
-          workspace.selectedConfiguration = resolve(configPath);
-          workspace.invocationDirectory = ".";
-          workspace.configurationDirectory = ".";
-          if (typeof override.value.testRunner === "string") workspace.runner = override.value.testRunner;
-          const runner = override.value[workspace.runner] as { configFile?: unknown } | undefined;
-          if (typeof runner?.configFile === "string") workspace.runnerConfig = runner.configFile;
-        }
-      }
-    }
     for (const workspace of plan.workspaces) for (const config of workspace.strykerConfigurations) registerProtectedInput(join(targetDir, config.path));
     const pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), [...protectedInputPaths]);
     const storage = allocateMutationWorkspaceStorage(join(scratchRoot(), "workspaces-"));

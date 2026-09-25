@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 import { productSourceInventoryForTarget, readStaticConfigObject } from "./source-inventory.js";
 import { discoverWorkspaceInventory, type WorkspaceInventoryV1 } from "./workspaces.js";
@@ -50,7 +50,7 @@ export interface MutationWorkspace {
 }
 
 /** Static scope is a census; native runner discovery supplies the actual related-test population. */
-export function planMutationWorkspaces(rootInput: string, options: { selection?: readonly string[] } = {}): MutationWorkspacePlan {
+export function planMutationWorkspaces(rootInput: string, options: { selection?: readonly string[]; configPath?: string } = {}): MutationWorkspacePlan {
   const root = realpathSync(rootInput);
   const inventory = discoverWorkspaceInventory(root);
   const sourceInventory = productSourceInventoryForTarget(root);
@@ -106,7 +106,9 @@ export function planMutationWorkspaces(rootInput: string, options: { selection?:
       const runner = typeof config.value?.testRunner === "string" ? config.value.testRunner : localRunner?.runner ?? detectTestRunner(rootManifest)?.runner ?? "unknown";
       const settings = { ...(config.value?.[runner] as Record<string, unknown> | undefined ?? {}) };
       if (typeof settings.configFile === "string") settings.configFile = posix(join(config.directory, settings.configFile));
-      const key = config.error ? config.file.path : JSON.stringify({ runner, directory: config.directory, settings });
+      // Only source selection is unioned; every other declared execution input keeps its own contract.
+      const contract = { ...config.value, mutate: undefined, testRunner: runner, [runner]: settings };
+      const key = config.error ? config.file.path : JSON.stringify({ directory: config.directory, contract });
       groups.set(key, [...(groups.get(key) ?? []), config]);
     }
     if (!groups.size) groups.set("default", []);
@@ -144,6 +146,40 @@ export function planMutationWorkspaces(rootInput: string, options: { selection?:
       };
     });
   });
+  if (options.configPath) {
+    const explicitPath = existsSync(options.configPath) ? realpathSync(options.configPath) : resolve(options.configPath);
+    const chosen = configs.find(config => resolve(root, config.file.path) === explicitPath);
+    if (chosen) {
+      if (chosen.error || !chosen.sources.length) gaps.push(`Explicit mutation configuration ${chosen.file.path} cannot be reconciled relative to ${chosen.directory}: ${chosen.error ?? "configured mutate globs matched zero source files"}`);
+      for (const workspace of workspaces) {
+        const ownsConfiguration = workspace.strykerConfigurations.some(config => config.path === chosen.file.path);
+        workspace.selectedSources = ownsConfiguration ? workspace.selectedSources.filter(path => chosen.sources.includes(path)) : [];
+        if (ownsConfiguration) workspace.selectedConfiguration = chosen.file.path;
+      }
+    } else {
+      const override = readStaticConfigObject(resolve(options.configPath));
+      const mutate = Array.isArray(override.value?.mutate) && override.value.mutate.every(value => typeof value === "string") ? override.value.mutate as string[] : undefined;
+      const scope = verifyMutationScope([], mutate, allSource.map(file => file.path));
+      const error = !override.value || !scope.files?.length ? `Explicit mutation configuration ${options.configPath} cannot be reconciled relative to the repository root: ${override.error ?? scope.note}` : undefined;
+      if (error) gaps.push(error);
+      const paths = new Set(scope.files?.map(file => file.path) ?? []);
+      for (const workspace of workspaces) {
+        workspace.selectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => paths.has(path) && (!options.selection || options.selection.includes(path)));
+        if (error) workspace.gaps.push(error);
+        if (override.value) {
+          workspace.configuration = structuredClone(override.value);
+          workspace.selectedConfiguration = resolve(options.configPath);
+          workspace.invocationDirectory = ".";
+          workspace.configurationDirectory = ".";
+          if (typeof override.value.testRunner === "string") workspace.runner = override.value.testRunner;
+          const runner = override.value[workspace.runner] as { configFile?: unknown } | undefined;
+          if (typeof runner?.configFile === "string") workspace.runnerConfig = runner.configFile;
+        }
+      }
+    }
+    for (const workspace of workspaces) workspace.unselectedSources = [...new Set([...workspace.productionSources, ...workspace.configuredSources])].filter(path => !workspace.selectedSources.includes(path));
+    if (!workspaces.some(workspace => workspace.selectedSources.length)) gaps.push(`Explicit mutation configuration ${options.configPath} selects zero planned production sources; this is unresolved configuration scope, not a completed mutation run`);
+  }
   gaps.push(...configs.filter(config => config.error && !workspaces.some(workspace => workspace.strykerConfigurations.some(row => row.path === config.file.path))).map(config => `${config.file.path}: ${config.error}`));
   for (const path of options.selection ?? []) if (!workspaces.some(workspace => workspace.selectedSources.includes(path))) gaps.push(`Requested production source was not assigned to a workspace: ${path}`);
   return { schemaVersion: 1, root, inventory, files, sourceSha256: createHash("sha256").update(JSON.stringify(files)).digest("hex"), gaps, workspaces };

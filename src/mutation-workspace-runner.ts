@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 import { copyFilteredSourceTree } from "./source-copy.js";
+import { readStaticConfigObject } from "./source-inventory.js";
 import { mutationWorkspaceFinding, type MutationWorkspace, type MutationWorkspacePlan } from "./mutation-workspace.js";
 import { detectDryRunFailure, detectTestEnv, noTestSuiteFinding, summarizeMutationReport, toReportRows, type StrykerReport } from "./mutation-scan.js";
 import { createCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
@@ -111,7 +112,10 @@ function vitestConfig(copy: string, workspace: MutationWorkspace): string {
   const imported = configPath ? `import original from ${JSON.stringify(`./${posix(relative(cwd, configPath))}`)};` : "const original = {};";
   const root = configPath ? dirname(configPath) : join(copy, workspace.directory);
   const sources = workspace.selectedSources.map(source => `./${posix(relative(cwd, join(copy, source)))}`);
-  writeFileSync(path, `${imported}\nimport { resolve } from 'node:path';\nexport default async env => {\n const config = await (typeof original === 'function' ? original(env) : original);\n return {...config, root: config.root ?? resolve(__dirname, ${JSON.stringify(`./${posix(relative(cwd, root))}/`)}), test: {...config.test, related: ${JSON.stringify(sources)}.map(path => resolve(__dirname, path)), passWithNoTests: false, coverage: {...config.test?.coverage, enabled: false}}};\n};\n`);
+  const invocation = posix(relative(cwd, join(copy, workspace.configurationDirectory)));
+  const runnerOptions = workspace.configuration.vitest as { dir?: unknown } | undefined;
+  if (runnerOptions?.dir !== undefined && typeof runnerOptions.dir !== "string") throw new Error("Vitest dir must be a statically declared directory string");
+  writeFileSync(path, `${imported}\nimport { resolve } from 'node:path';\nexport default async env => {\n const config = await (typeof original === 'function' ? original(env) : original);\n const originalCwd = resolve(__dirname, ${JSON.stringify(invocation)});\n const root = config.root === undefined ? resolve(__dirname, ${JSON.stringify(`./${posix(relative(cwd, root))}/`)}) : resolve(originalCwd, config.root);\n const directory = ${JSON.stringify(runnerOptions?.dir)} ?? config.test?.dir;\n return {...config, root, test: {...config.test, ...(directory === undefined ? {} : {dir: resolve(originalCwd, directory)}), related: ${JSON.stringify(sources)}.map(path => resolve(__dirname, path)), passWithNoTests: false, coverage: {...config.test?.coverage, enabled: false}}};\n};\n`);
   return path;
 }
 
@@ -150,6 +154,10 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       nativeConfig = vitestConfig(copy, workspace);
       writeFileSync(join(storage, "effective-vitest.ts.txt"), readFileSync(nativeConfig));
       config.vitest = { ...(config.vitest as object ?? {}), configFile: posix(relative(cwd, nativeConfig)), related: true };
+      const originalConfig = workspace.runnerConfig ? readStaticConfigObject(join(copy, workspace.runnerConfig)).value : undefined;
+      const directory = (config.vitest as { dir?: unknown }).dir ?? (originalConfig?.test as { dir?: unknown } | undefined)?.dir;
+      // Stryker supplies its own dir option; preserve the native directory relative to its sandbox.
+      if (typeof directory === "string") (config.vitest as { dir?: string }).dir = posix(relative(cwd, resolve(copy, workspace.configurationDirectory, directory))) || ".";
       const vitest = versions.find(row => row.name === "vitest")!;
       if (!vitest.directory) return stop("discovery-failed", "Vitest is not installed in the workspace or its ancestors; native related-test discovery did not run");
       const bin = join(vitest.directory, "vitest.mjs");
@@ -197,6 +205,8 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
     result.reportedSources = Object.keys(raw.files).map(normalized).filter(path => workspace.selectedSources.includes(path));
     const missingTests = result.relatedTests.filter(path => !observedTests.map(normalized).includes(path));
     if (missingTests.length) return stop("discovery-failed", `Stryker omitted native related test files: ${missingTests.join(", ")}`);
+    const extraTests = observedTests.map(normalized).filter(path => !result.relatedTests.includes(path));
+    if (extraTests.length) return stop("discovery-failed", `Stryker executed test files outside native related discovery: ${extraTests.join(", ")}; the runner configuration populations are not equivalent`);
     const reason = (artifact.moduleRecord as { note?: string } | undefined)?.note;
     if (reason) return stop("runner-invalid", reason);
     if (workspace.runner !== "vitest") return stop("runner-invalid", "Stryker executed the supported runner and retained its test/report population; independent native related-test baseline verification is supported for Vitest only. Other runner populations remain explicitly unverified");

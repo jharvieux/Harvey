@@ -77,6 +77,41 @@ describe("mutation workspace execution plan", () => {
     expect(rows.map(row => row.runnerConfig).sort()).toEqual(["apps/rag/vitest.config.ts", "apps/rag/vitest.integration.config.ts"]);
     expect(rows.flatMap(row => row.configuredSources)).toContain("apps/rag/src/remaining.ts");
   });
+  it.each([
+    { buildCommand: "node prepare.js" }, { files: ["src", "test"] }, { coverageAnalysis: "all" },
+    { ignoreStatic: false }, { mutator: { excludedMutations: ["StringLiteral"] } }, { plugins: ["custom-runner"] },
+  ])("preserves a distinct declared execution contract %j", difference => {
+    const root = twoApps(); const base = JSON.parse(readFileSync(join(root, "stryker.rag.config.json"), "utf8"));
+    writeFileSync(join(root, "stryker.rag.alternate.json"), JSON.stringify({ ...base, ...difference }));
+    const rows = planMutationWorkspaces(root).workspaces.filter(row => row.directory === "apps/rag");
+    expect(rows).toHaveLength(2); expect(rows.flatMap(row => row.strykerConfigurations)).toHaveLength(2);
+  });
+  it("coalesces equivalent execution contracts while retaining both source populations", () => {
+    const root = twoApps(); const base = JSON.parse(readFileSync(join(root, "stryker.rag.config.json"), "utf8"));
+    writeFileSync(join(root, "stryker.rag.other.json"), JSON.stringify({ ...base, mutate: ["apps/rag/src/remaining.ts"] }));
+    const rows = planMutationWorkspaces(root).workspaces.filter(row => row.directory === "apps/rag");
+    expect(rows).toHaveLength(1); expect(rows[0]!.strykerConfigurations).toHaveLength(2);
+    expect(rows[0]!.selectedSources).toEqual(["apps/rag/src/rag.ts", "apps/rag/src/remaining.ts"]);
+  });
+  it("preserves the package invocation context of an explicitly selected discovered config", () => {
+    const root = twoApps(); const configPath = join(root, "apps/rag/stryker.config.json");
+    writeFileSync(configPath, JSON.stringify({ testRunner: "vitest", mutate: ["src/rag.ts"], vitest: { configFile: "vitest.config.ts" } }));
+    const plan = planMutationWorkspaces(root, { configPath });
+    const selected = plan.workspaces.filter(row => row.selectedSources.length);
+    expect(selected).toHaveLength(1); expect(selected[0]).toMatchObject({ configurationDirectory: "apps/rag", runnerConfig: "apps/rag/vitest.config.ts", selectedSources: ["apps/rag/src/rag.ts"] });
+    expect(plan.gaps).toEqual([]);
+  });
+  it.each([true, false])("discloses zero-match explicit configuration scope (discovered: %s)", discovered => {
+    const root = twoApps(); const configPath = discovered ? join(root, "apps/rag/stryker.empty.json") : join(fixture({}), "override.json");
+    writeFileSync(configPath, JSON.stringify({ testRunner: "vitest", mutate: ["absent/*.ts"] }));
+    const plan = planMutationWorkspaces(root, { configPath });
+    expect(plan.gaps.join(" ")).toContain("zero source files");
+    expect(plan.gaps.join(" ")).toContain("Explicit mutation configuration");
+    const output = runMutationWorkspaces(plan, { storage: "/unused", cliPath: "/unused" });
+    expect(output.workspaceCoverage).toMatchObject({ complete: false, reported: 0 });
+    expect(output.moduleRecord).toMatchObject({ note: expect.stringContaining("zero source files") });
+    expect(output).not.toHaveProperty("summary");
+  });
   it("rejects source selectors which silently reach no planned production file", () => {
     expect(planMutationWorkspaces(twoApps(), { selection: ["missing.ts"] }).gaps).toContain("Requested production source was not assigned to a workspace: missing.ts");
   });
