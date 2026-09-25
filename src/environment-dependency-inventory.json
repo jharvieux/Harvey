@@ -95977,7 +95977,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 29,
+        "line": 31,
         "path": "src/capacity-runner.test.ts"
       },
       "freshness": {
@@ -364284,8 +364284,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "931e44a045a9f0c2165ff91f8d739a2279bd9c53",
-    "commitPayload": "dHJlZSA5NjdkN2M2YzUxODRjNzc4ODA5NGJmMmNmNDZmNmI1MTg1NjI1NjY2CnBhcmVudCA3MTBkYjJiMTZiNTZmOGNlZDM3ODVhM2M2YTk2ZDFjYWIxMGQ1OTM2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE2MDg5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE2MDg5IC0wNTAwCgpWZXJpZnkgZGVjbGFyZWQgcmVkaXJlY3QgZGVzdGluYXRpb25zIHRocm91Z2ggdHJhbnNwb3J0ICMyMTIwCg==",
+    "commit": "e09f4d396ff513a72da6533dc8162dfde01c26b6",
+    "commitPayload": "dHJlZSA0ZjFhYzkxYWJmN2NmNWE1N2Q1NDVjNDQ0ZDVjYTVhMzc1YjBlNDIxCnBhcmVudCA0MmE1YjQ4NDQ2MmMxZTM5MDIyMTNmMTk1ODIxZjk1NjBlN2VmODRiCnBhcmVudCA1ODUzNDVkODMyMjkzYTM0NTIzNjUwZDg1NmVkNThhODMwMWI3YmVjCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE4MzQwIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE4MzQwIC0wNTAwCgpJbnRlZ3JhdGUgY2FwYWNpdHkgbWFpbiBmb3IgcmVkaXJlY3QgY2hlY2tzICgjMjEyMCkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364294,13 +364294,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "561a8be20967d5ccdf14975ef25053c045076f6c",
+        "gitOid": "37f3a6e9af03ed48b66f8df31275396ac3f688c4",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "fe47a80b08a25897d261dffe930d278c4b87b5b499943539ec86a17760823ea9",
-    "tree": "967d7c6c5184c7788094bf2cf46f6b5185625666"
+    "populationSha256": "fb60eb21fb4e210ae39df1a9cec289474815dfa4e19a87318d5a9b5af58e1aca",
+    "tree": "4f1ac91abf7cf5a57d545c444d5ca5a375b0e421"
   },
   "venues": [
     {
@@ -370649,19 +370649,19 @@
       "sha256": "e4ec00dc715ac06107e9a643790bb209767b0d0dffc67cbee1184dedf43d6b0a"
     },
     {
-      "bytes": 11425,
+      "bytes": 16613,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "00f50146aed4526e1b001aca13c43160222bbd19",
+      "gitOid": "5129a0c9481ab9140e25e8c33b0a65eacecfda49",
       "id": "src/capacity-runner.test.ts",
       "kind": "source",
-      "literalCount": 197,
-      "literalSha256": "1ef1797d12b4b764bb00b09d350efa7f9810624ede6a30d043331f0163275d82",
+      "literalCount": 300,
+      "literalSha256": "31d3fab3afde2519707589f68f62d42234ca4b47cfe6893c63cc473b43ce2085",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/capacity-runner.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "dc524c1f48a6f6a54da97fa1a82cf2055bffb4aad1c234d4300b34b5b4bf10d9"
+      "sha256": "c4a505f785cfcb9956f176eeebbd6cb2a2e185b57131c099ef803e2aba4c2980"
     },
     {
       "bytes": 11809,
