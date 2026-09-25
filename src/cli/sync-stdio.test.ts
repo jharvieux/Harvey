@@ -233,4 +233,31 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
       rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
+
+  it("discovers transparent calls and nonzero update semantics through the real CLI", () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), "harvey-sync-stdio-operators-"));
+    try {
+      const cases = [
+        ["power-zero.ts", "process.exitCode **= 0;", 1],
+        ["postfix.ts", "process.exitCode = 0; process.exitCode++;", 1],
+        ["prefix.ts", "process.exitCode = 0; ++process.exitCode;", 1],
+        ["postfix-minus.ts", "process.exitCode = 2; process.exitCode--;", 1],
+        ["call-parens.ts", "(process.exit)(3);", 3],
+        ["owner-parens.ts", "(process).exit(3);", 3],
+        ["asserted-call.ts", "(process.exit as typeof process.exit)(3);", 3],
+        ["satisfies-call.ts", "(process.exit satisfies typeof process.exit)(3);", 3],
+        ["non-null-call.ts", "process.exit!(3);", 3],
+        ["bracket-parens.ts", '(process)[("exit")](3);', 3],
+      ] as const;
+      for (const [name, source, status] of cases) {
+        const path = join(fixtureDir, name);
+        writeFileSync(path, source);
+        const actual = spawnSync(process.execPath, ["--import", "tsx", path], { cwd: REPO_ROOT, encoding: "utf8" });
+        expect(actual.status, `${name}: ${actual.stderr}`).toBe(status);
+      }
+      const verdict = spawnSync(process.execPath, ["--import", "tsx", VERIFY_SYNC_STDIO, fixtureDir], { cwd: REPO_ROOT, encoding: "utf8" });
+      expect(verdict.status, verdict.stderr).toBe(1);
+      for (const [name] of cases) expect(verdict.stderr).toContain(name);
+    } finally { rmSync(fixtureDir, { recursive: true, force: true }); }
+  });
 });

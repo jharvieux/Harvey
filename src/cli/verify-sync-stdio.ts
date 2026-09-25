@@ -6,16 +6,22 @@ import ts from "typescript";
 
 export const SYNC_STDIO_IMPORT = "./sync-stdio.js";
 
+function operand(node: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)
+    || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) node = node.expression;
+  return node;
+}
+
 function isProcessProperty(node: ts.Expression, property: string): boolean {
+  node = operand(node);
   if (ts.isPropertyAccessExpression(node)) {
-    return ts.isIdentifier(node.expression) && node.expression.text === "process" && node.name.text === property;
+    const owner = operand(node.expression);
+    return ts.isIdentifier(owner) && owner.text === "process" && node.name.text === property;
   }
-  return ts.isElementAccessExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === "process"
-    && node.argumentExpression !== undefined
-    && ts.isStringLiteralLike(node.argumentExpression)
-    && node.argumentExpression.text === property;
+  if (!ts.isElementAccessExpression(node) || !node.argumentExpression) return false;
+  const owner = operand(node.expression);
+  const key = operand(node.argumentExpression);
+  return ts.isIdentifier(owner) && owner.text === "process" && ts.isStringLiteralLike(key) && key.text === property;
 }
 
 function isLiteralZero(node: ts.Expression | undefined): boolean {
@@ -40,7 +46,12 @@ export function hasNonzeroExit(source: string, file = "cli.ts"): boolean {
       && isAssignmentOperator(node.operatorToken.kind)
       && isProcessProperty(node.left, "exitCode")
     ) {
-      exits = !isLiteralZero(node.right);
+      // A zero RHS does not imply a zero result: undefined **= 0 evaluates to 1, for example.
+      exits = node.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !isLiteralZero(node.right);
+    } else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+      && isProcessProperty(node.operand, "exitCode")) {
+      exits = true;
     }
     ts.forEachChild(node, visit);
   };
