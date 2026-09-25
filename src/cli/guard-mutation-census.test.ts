@@ -209,8 +209,8 @@ function freshProject(mode: "blocked" | "measurable" | "main-fails" | "no-report
     copyFileSync(join(ROOT, file), join(dir, destination));
   };
   for (const file of ["package.json", "pnpm-lock.yaml", "vitest.config.ts", "stryker.guards.config.json"]) copy(file);
-  // Follow the shipping entry point's local import closure so a new runtime dependency
-  // cannot turn every orchestration control into a module-resolution failure.
+  // Discover the shipping runtime closure so isolated fixtures keep exercising
+  // orchestration as the entry point gains imports.
   const copied = new Set<string>();
   const packages = new Set(["tsx", "typescript", "vitest", "@stryker-mutator/core", "@stryker-mutator/vitest-runner"]);
   const copyClosure = (file: string): void => {
