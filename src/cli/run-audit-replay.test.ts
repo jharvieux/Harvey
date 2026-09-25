@@ -14,6 +14,18 @@ let delivery: { code: number | null; stdout: string; stderr: string };
 const children: Promise<GuardCommandResult>[] = [];
 const teardown = new AbortController();
 const meta: ReportMeta = { client: "CLI replay", subtitle: "evidence", date: "2026-09-24", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 5, tenantIsolation: "Unverified", authModel: "fixture", headline: "Scoped receipts", scope: "ten modules", methodology: "replay", outOfScope: "missing surfaces" };
+const tripwirePreload = `
+const cp = require('node:child_process');
+const trip = (kind) => () => { throw new Error('REPLAY TRIPWIRE: ' + kind); };
+for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) cp[name] = trip('child process ' + name);
+for (const module of ['node:http', 'node:https']) for (const name of ['request', 'get']) require(module)[name] = trip('network ' + name);
+for (const name of ['connect', 'createConnection']) require('node:net')[name] = trip('network ' + name);
+require('node:tls').connect = trip('TLS');
+globalThis.fetch = trip('model/network fetch');
+require('node:module').syncBuiltinESMExports();
+if (process.env.REPLAY_TRIP_CHILD) cp.spawnSync('mutation-scan', []);
+if (process.env.REPLAY_TRIP_NETWORK) globalThis.fetch('https://example.invalid/model');
+`;
 
 async function run(extra: string[], env: Record<string, string> = {}, assemble = true, assemblyBundle = bundle): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = runGuardCommand({
@@ -31,18 +43,7 @@ async function run(extra: string[], env: Record<string, string> = {}, assemble =
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "harvey-replay-cli-")); target = join(root, "source"); bundle = join(root, "bundle"); preload = join(root, "tripwire.cjs");
   mkdirSync(target); writeFileSync(join(target, "sample.ts"), "export const value = 1;\n");
-  writeFileSync(preload, `
-const cp = require('node:child_process');
-const trip = (kind) => () => { throw new Error('REPLAY TRIPWIRE: ' + kind); };
-for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) cp[name] = trip('child process ' + name);
-for (const module of ['node:http', 'node:https']) for (const name of ['request', 'get']) require(module)[name] = trip('network ' + name);
-for (const name of ['connect', 'createConnection']) require('node:net')[name] = trip('network ' + name);
-require('node:tls').connect = trip('TLS');
-globalThis.fetch = trip('model/network fetch');
-require('node:module').syncBuiltinESMExports();
-if (process.env.REPLAY_TRIP_CHILD) cp.spawnSync('mutation-scan', []);
-if (process.env.REPLAY_TRIP_NETWORK) globalThis.fetch('https://example.invalid/model');
-`);
+  writeFileSync(preload, tripwirePreload);
   const raw = join(root, "raw.json"); writeFileSync(raw, '{"owningRun":"unchanged"}\n');
   const sbom = join(root, "sbom.json"); writeFileSync(sbom, '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}\n');
   const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module) => {
@@ -72,100 +73,176 @@ afterAll(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-describe("run-audit assembly capability boundary", () => {
-  it("distinguishes receipt scope expansion from actual producer changes in every export", async () => {
-    const initial = JSON.parse(readFileSync(join(root, "findings.json"), "utf8")) as FindingsDocument;
-    type Mode = "same" | "expanded" | "reversed" | "new-version" | "two-versions" | "swapped" | "two-reversed" | "partial";
-    async function capture(name: string, mode: Mode, prior?: string) {
-      const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module) => ({
-        scope: { module, workspace: ".", tier: "source", surface: "module", wholeModule: true },
-        generatedAt: new Date().toISOString(), producer: { name: module, version: (mode === "new-version" || mode === "swapped") && module === "M7" ? "2" : "1" },
-        rawArtifacts: [join(root, "raw.json")],
-        result: { kind: "examined", unitsExamined: 1, scope: "owned files", detail: "Bound source scope",
-          findings: [structuredClone(initial.findings.find((finding) => finding.id === `${module}-CLI`)!)],
-          ...(module === "M10" ? { dataMap: {} } : {}),
-        },
-      }));
-      if (mode === "expanded" || mode === "reversed" || mode === "two-versions" || mode === "swapped" || mode === "two-reversed") {
-        const additional = structuredClone(passes[6]!);
-        additional.scope.workspace = "another-workspace";
-        if (mode === "two-versions" || mode === "two-reversed") additional.producer.version = "2";
-        if (mode === "swapped") additional.producer.version = "1";
-        if ("kind" in additional.result && additional.result.kind === "examined") {
-          additional.result.findings[0]!.id = "M7-ANOTHER";
-          additional.result.findings[0]!.location = "another-workspace/sample.ts:1";
-        }
-        passes.push(additional);
+type ScopeMatrixMode = "same" | "expanded" | "reversed" | "new-version" | "two-versions" | "swapped" | "two-reversed" | "partial";
+
+function createScopeMatrixFixture() {
+  const caseRoot = mkdtempSync(join(tmpdir(), "harvey-replay-scope-"));
+  const caseTarget = join(caseRoot, "source");
+  const casePreload = join(caseRoot, "tripwire.cjs");
+  const raw = join(caseRoot, "raw.json");
+  const caseChildren: Promise<GuardCommandResult>[] = [];
+  const caseTeardown = new AbortController();
+  const initial = JSON.parse(readFileSync(join(root, "findings.json"), "utf8")) as FindingsDocument;
+  mkdirSync(caseTarget);
+  writeFileSync(join(caseTarget, "sample.ts"), "export const value = 1;\n");
+  writeFileSync(casePreload, tripwirePreload);
+  writeFileSync(raw, '{"owningRun":"scope-matrix"}\n');
+
+  async function capture(name: string, mode: ScopeMatrixMode, prior?: string) {
+    const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module) => ({
+      scope: { module, workspace: ".", tier: "source", surface: "module", wholeModule: true },
+      generatedAt: new Date().toISOString(), producer: { name: module, version: (mode === "new-version" || mode === "swapped") && module === "M7" ? "2" : "1" },
+      rawArtifacts: [raw],
+      result: { kind: "examined", unitsExamined: 1, scope: "owned files", detail: "Bound source scope",
+        findings: [structuredClone(initial.findings.find((finding) => finding.id === `${module}-CLI`)!)],
+        ...(module === "M10" ? { dataMap: {} } : {}),
+      },
+    }));
+    if (mode === "expanded" || mode === "reversed" || mode === "two-versions" || mode === "swapped" || mode === "two-reversed") {
+      const additional = structuredClone(passes[6]!);
+      additional.scope.workspace = "another-workspace";
+      if (mode === "two-versions" || mode === "two-reversed") additional.producer.version = "2";
+      if (mode === "swapped") additional.producer.version = "1";
+      if ("kind" in additional.result && additional.result.kind === "examined") {
+        additional.result.findings[0]!.id = "M7-ANOTHER";
+        additional.result.findings[0]!.location = "another-workspace/sample.ts:1";
       }
-      if (mode === "reversed" || mode === "two-reversed") passes.reverse();
-      if (mode === "partial") passes[7]!.result = {
-        kind: "not-assessed", reason: "Native mutation evidence unavailable", provenance: "TRIED",
-        falsifier: "Run the native mutation producer", findings: [],
-      };
-      const retained = join(root, `${name}-bundle`);
-      writeAuditReplayBundle(retained, {
-        binding: createAuditReplayBinding(target, { fixture: "scope-classification" }),
-        scopes: passes.map((pass) => pass.scope), passes,
-        meta: { ...meta, auditContext: { ...initial.auditContext!, engagementId: name, kind: "client-audit" } },
-      });
-      const path = join(root, `${name}.json`), html = join(root, `${name}.html`), sarif = join(root, `${name}.sarif`);
-      const result = await run(["--findings-out", path, "--html-out", html, "--sarif-out", sarif,
-        ...(prior ? ["--baseline", prior] : [])], {}, true, retained);
-      expect(result.code, result.stderr).toBe(0);
-      const document = JSON.parse(readFileSync(path, "utf8")) as FindingsDocument;
-      const exported = JSON.parse(readFileSync(sarif, "utf8"));
-      expect(exported.runs[0].properties.harveyAuditContext).toEqual(document.auditContext);
-      if (prior) {
-        expect(exported.runs[0].properties.harveyBaseline).toEqual(document.baseline);
-        for (const reason of document.baseline!.comparison!.limitations) expect(readFileSync(html, "utf8")).toContain(reason);
-      }
-      return { document, path };
+      passes.push(additional);
     }
-    const prior = await capture("scope-prior", "same");
-    const same = await capture("scope-same", "same", prior.path);
-    expect(same.document.baseline?.comparison?.kind).toBe("same-source");
-    const expanded = await capture("scope-expanded", "expanded", prior.path);
-    expect(expanded.document.baseline?.comparison?.kind).toBe("scope-change");
-    expect(expanded.document.auditContext?.producerVersions).toEqual(prior.document.auditContext?.producerVersions);
-    expect(expanded.document.auditContext!.assessedScope).toHaveLength(prior.document.auditContext!.assessedScope.length + 1);
-    expect(expanded.document.baseline?.counts).toMatchObject({ new: 0, resolved: 0 });
-    const reversed = await capture("scope-reversed", "reversed", prior.path);
-    expect(JSON.stringify(reversed.document.auditContext?.producerVersions)).toBe(JSON.stringify(expanded.document.auditContext?.producerVersions));
-    expect(reversed.document.baseline?.comparison?.kind).toBe("scope-change");
-    for (const mode of ["new-version", "two-versions"] as const) {
-      const changed = await capture(`scope-${mode}`, mode, prior.path);
-      expect(changed.document.baseline?.comparison?.kind).toBe("tool-change");
-      expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "2"])]).toBe("2");
-      if (mode === "two-versions") expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "1"])]).toBe("1");
+    if (mode === "reversed" || mode === "two-reversed") passes.reverse();
+    if (mode === "partial") passes[7]!.result = {
+      kind: "not-assessed", reason: "Native mutation evidence unavailable", provenance: "TRIED",
+      falsifier: "Run the native mutation producer", findings: [],
+    };
+    const retained = join(caseRoot, `${name}-bundle`);
+    writeAuditReplayBundle(retained, {
+      binding: createAuditReplayBinding(caseTarget, { fixture: "scope-classification" }),
+      scopes: passes.map((pass) => pass.scope), passes,
+      meta: { ...meta, auditContext: { ...initial.auditContext!, engagementId: name, kind: "client-audit" } },
+    });
+    const path = join(caseRoot, `${name}.json`), html = join(caseRoot, `${name}.html`), sarif = join(caseRoot, `${name}.sarif`);
+    const child = runGuardCommand({
+      command: ["/usr/bin/env", process.execPath, "--require", casePreload, "--import", "tsx", "src/cli/run-audit.ts", caseTarget, "--assemble", retained,
+        "--findings-out", path, "--html-out", html, "--sarif-out", sarif, ...(prior ? ["--baseline", prior] : [])],
+      cwd: repo, bundleDir: caseRoot, outputPrefix: `child-${caseChildren.length}`, timeoutMs: 20_000,
+      killGraceMs: 1_000, signal: caseTeardown.signal,
+    });
+    caseChildren.push(child);
+    const receipt = await child;
+    expect(receipt.state, JSON.stringify(receipt)).toBe("exited");
+    expect(receipt.terminationAcknowledged).toBe(true);
+    const stderr = readFileSync(join(caseRoot, receipt.stderr.path), "utf8");
+    expect(receipt.exitCode, stderr).toBe(0);
+    const document = JSON.parse(readFileSync(path, "utf8")) as FindingsDocument;
+    const exported = JSON.parse(readFileSync(sarif, "utf8"));
+    expect(exported.runs[0].properties.harveyAuditContext).toEqual(document.auditContext);
+    if (prior) {
+      expect(exported.runs[0].properties.harveyBaseline).toEqual(document.baseline);
+      for (const reason of document.baseline!.comparison!.limitations) expect(readFileSync(html, "utf8")).toContain(reason);
     }
-    const two = await capture("assignment-prior", "two-versions");
-    const swapped = await capture("assignment-swapped", "swapped", two.path);
-    expect(swapped.document.auditContext?.producerVersions).toEqual(two.document.auditContext?.producerVersions);
-    expect(swapped.document.auditContext?.assessedScope).toEqual(two.document.auditContext?.assessedScope);
-    expect(swapped.document.baseline?.comparison?.kind).toBe("tool-change");
-    const twoReversed = await capture("assignment-reversed", "two-reversed", two.path);
-    expect(twoReversed.document.baseline?.comparison?.kind).toBe("same-source");
-    expect(twoReversed.document.auditContext?.producerAssignments).toEqual(two.document.auditContext?.producerAssignments);
-    const legacy = structuredClone(two.document);
-    delete legacy.auditContext!.producerAssignments;
-    const legacyPath = join(root, "assignment-unknown.json");
-    writeFileSync(legacyPath, JSON.stringify(legacy));
-    expect((await capture("assignment-unknown-current", "two-versions", legacyPath)).document.baseline?.comparison?.kind).toBe("incompatible");
-    const partial = await capture("scope-partial", "partial", prior.path);
-    expect(partial.document.baseline?.comparison?.kind).toBe("scope-change");
-    expect(partial.document.auditContext?.scopeComplete).toBe(false);
-    const unknown = structuredClone(prior.document);
-    delete unknown.auditContext;
-    const unknownPath = join(root, "scope-unknown.json");
-    writeFileSync(unknownPath, JSON.stringify(unknown));
-    expect((await capture("scope-unknown-current", "same", unknownPath)).document.baseline?.comparison?.kind).toBe("incompatible");
-    const source = join(target, "sample.ts"), original = readFileSync(source, "utf8");
+    return { document, path };
+  }
+
+  async function close(): Promise<void> {
+    caseTeardown.abort();
+    const receipts = await Promise.allSettled(caseChildren);
     try {
-      writeFileSync(source, `${original}export const changed = true;\n`);
-      expect((await capture("scope-source-change", "same", prior.path)).document.baseline?.comparison?.kind).toBe("source-change");
+      expect(receipts.every((receipt) => receipt.status === "fulfilled" && receipt.value.terminationAcknowledged), "Every scope-matrix child must close before its fixture is removed").toBe(true);
     } finally {
-      writeFileSync(source, original);
+      rmSync(caseRoot, { recursive: true, force: true });
     }
+  }
+
+  return { capture, close, target: caseTarget };
+}
+
+describe("run-audit assembly capability boundary", () => {
+  it("keeps identical source and producer receipts comparable in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const prior = await fixture.capture("scope-prior", "same");
+      const same = await fixture.capture("scope-same", "same", prior.path);
+      expect(same.document.baseline?.comparison?.kind).toBe("same-source");
+    } finally { await fixture.close(); }
+  });
+
+  it("classifies scope expansion independently of receipt order in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const prior = await fixture.capture("scope-prior", "same");
+      const expanded = await fixture.capture("scope-expanded", "expanded", prior.path);
+      expect(expanded.document.baseline?.comparison?.kind).toBe("scope-change");
+      expect(expanded.document.auditContext?.producerVersions).toEqual(prior.document.auditContext?.producerVersions);
+      expect(expanded.document.auditContext!.assessedScope).toHaveLength(prior.document.auditContext!.assessedScope.length + 1);
+      expect(expanded.document.baseline?.counts).toMatchObject({ new: 0, resolved: 0 });
+      const reversed = await fixture.capture("scope-reversed", "reversed", prior.path);
+      expect(JSON.stringify(reversed.document.auditContext?.producerVersions)).toBe(JSON.stringify(expanded.document.auditContext?.producerVersions));
+      expect(reversed.document.baseline?.comparison?.kind).toBe("scope-change");
+    } finally { await fixture.close(); }
+  });
+
+  it("classifies one or two changed producer versions in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const prior = await fixture.capture("scope-prior", "same");
+      for (const mode of ["new-version", "two-versions"] as const) {
+        const changed = await fixture.capture(`scope-${mode}`, mode, prior.path);
+        expect(changed.document.baseline?.comparison?.kind).toBe("tool-change");
+        expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "2"])]).toBe("2");
+        if (mode === "two-versions") expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "1"])]).toBe("1");
+      }
+    } finally { await fixture.close(); }
+  });
+
+  it("binds producer assignments independently of assignment and receipt order", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const two = await fixture.capture("assignment-prior", "two-versions");
+      const swapped = await fixture.capture("assignment-swapped", "swapped", two.path);
+      expect(swapped.document.auditContext?.producerVersions).toEqual(two.document.auditContext?.producerVersions);
+      expect(swapped.document.auditContext?.assessedScope).toEqual(two.document.auditContext?.assessedScope);
+      expect(swapped.document.baseline?.comparison?.kind).toBe("tool-change");
+      const reversed = await fixture.capture("assignment-reversed", "two-reversed", two.path);
+      expect(reversed.document.baseline?.comparison?.kind).toBe("same-source");
+      expect(reversed.document.auditContext?.producerAssignments).toEqual(two.document.auditContext?.producerAssignments);
+    } finally { await fixture.close(); }
+  });
+
+  it("rejects a baseline without producer assignments in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const two = await fixture.capture("assignment-prior", "two-versions");
+      const legacy = structuredClone(two.document);
+      delete legacy.auditContext!.producerAssignments;
+      const legacyPath = join(two.path, "..", "assignment-unknown.json");
+      writeFileSync(legacyPath, JSON.stringify(legacy));
+      expect((await fixture.capture("assignment-unknown-current", "two-versions", legacyPath)).document.baseline?.comparison?.kind).toBe("incompatible");
+    } finally { await fixture.close(); }
+  });
+
+  it("distinguishes partial current scope and unbound prior scope in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const prior = await fixture.capture("scope-prior", "same");
+      const partial = await fixture.capture("scope-partial", "partial", prior.path);
+      expect(partial.document.baseline?.comparison?.kind).toBe("scope-change");
+      expect(partial.document.auditContext?.scopeComplete).toBe(false);
+      const unknown = structuredClone(prior.document);
+      delete unknown.auditContext;
+      const unknownPath = join(prior.path, "..", "scope-unknown.json");
+      writeFileSync(unknownPath, JSON.stringify(unknown));
+      expect((await fixture.capture("scope-unknown-current", "same", unknownPath)).document.baseline?.comparison?.kind).toBe("incompatible");
+    } finally { await fixture.close(); }
+  });
+
+  it("binds source changes to an isolated target in every export", async () => {
+    const fixture = createScopeMatrixFixture();
+    try {
+      const prior = await fixture.capture("scope-prior", "same");
+      const source = join(fixture.target, "sample.ts");
+      writeFileSync(source, `${readFileSync(source, "utf8")}export const changed = true;\n`);
+      expect((await fixture.capture("scope-source-change", "same", prior.path)).document.baseline?.comparison?.kind).toBe("source-change");
+    } finally { await fixture.close(); }
   });
   it("refuses to re-sign unbound legacy passes as fresh retained execution before invoking scanners", async () => {
     const result = await run(["--retain-artifacts", join(root, "laundered"), "--artifacts-dir", join(root, "legacy")], {}, false);
