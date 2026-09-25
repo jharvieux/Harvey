@@ -227,7 +227,9 @@ export function prepareVitalsRun(input: {
       // diff-index avoids porcelain diff refreshing cached stat data in the client index.
       const deleted = gitText(sourceRoot, ["diff-index", "--name-only", "--no-renames", "--diff-filter=D", "-z", "HEAD", "--"]);
       if (deleted === undefined) throw new Error("Could not resolve HEAD-to-checkout deletions for the Vitals snapshot");
-      for (const path of deleted?.split("\0").filter(Boolean) ?? []) rmSync(join(scratchRepo, path), { recursive: true, force: true });
+      for (const path of deleted.split("\0").filter(Boolean)) {
+        if (!existsSync(join(sourceRoot, path))) rmSync(join(scratchRepo, path), { recursive: true, force: true });
+      }
     } else {
       mkdirSync(scratchRepo, { recursive: true });
       copyCurrentCheckout(sourceRoot, scratchRepo);
