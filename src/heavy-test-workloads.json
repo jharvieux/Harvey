@@ -170,6 +170,10 @@
       "testFile": "src/cli/mutation-scan.test.ts",
       "weightSeconds": 47,
       "paths": [
+        "src/mutation-workspace.ts",
+        "src/mutation-workspace-runner.ts",
+        "src/mutation-workspace.test.ts",
+        "tools/mutation-workspace-acceptance.mjs",
         "src/cli/mutation-scan.ts",
         "src/cli/mutation-scan.test.ts",
         "src/mutation-scan.ts",
@@ -309,6 +313,8 @@
         "src/local-verify.ts",
         "src/migration-sql-parse.ts",
         "src/mutation-scan.ts",
+        "src/mutation-workspace.ts",
+        "src/mutation-workspace-runner.ts",
         "src/package-manager.ts",
         "src/pentest/",
         "src/perf-scan.ts",
@@ -386,6 +392,8 @@
         "src/local-verify.ts",
         "src/migration-sql-parse.ts",
         "src/mutation-scan.ts",
+        "src/mutation-workspace.ts",
+        "src/mutation-workspace-runner.ts",
         "src/package-manager.ts",
         "src/pentest/",
         "src/perf-scan.ts",
@@ -501,29 +509,113 @@
       }
     ],
     "workloads": [
-      { "id": "run-audit", "observedSeconds": 445.163, "jobId": 107681478818 },
-      { "id": "fix-calibration-acceptance", "observedSeconds": 59.406, "jobId": 107681479189 },
-      { "id": "quick-scan", "observedSeconds": 182.113, "jobId": 107681478865 },
-      { "id": "quick-scan-inventory", "observedSeconds": 520.652, "jobId": 107681479189 },
-      { "id": "quick-scan-workspace", "observedSeconds": 461.319, "jobId": 107681478865 },
-      { "id": "quick-scan-python", "observedSeconds": 338.557, "jobId": 107681478865 },
-      { "id": "quick-scan-data-evidence", "observedSeconds": 225.447, "jobId": 107681479189 },
-      { "id": "fix-detector-rerun", "observedSeconds": 49.349, "jobId": 107681478865 },
-      { "id": "mutation-scan", "observedSeconds": 46.761, "jobId": 107681479189 },
-      { "id": "quality-scan", "observedSeconds": 255.855, "jobId": 107681479189 },
-      { "id": "lighthouse-scan", "observedSeconds": 18.747, "jobId": 107681478865 },
-      { "id": "validate-calibration", "observedSeconds": 198.968, "jobId": 107681479189 },
-      { "id": "fix-execute", "observedSeconds": 20.108, "jobId": 107681478865 },
-      { "id": "corpus-scanner-cross-process", "observedSeconds": 175.704, "jobId": 107681479189 },
-      { "id": "effectiveness-registry", "observedSeconds": 112.649, "jobId": 107681478865 },
-      { "id": "effectiveness-delivery", "observedSeconds": 68.881, "jobId": 107681478865 },
-      { "id": "corpus-cache-preflight", "observedSeconds": 213.918, "jobId": 107681478865 }
+      {
+        "id": "run-audit",
+        "observedSeconds": 445.163,
+        "jobId": 107681478818
+      },
+      {
+        "id": "fix-calibration-acceptance",
+        "observedSeconds": 59.406,
+        "jobId": 107681479189
+      },
+      {
+        "id": "quick-scan",
+        "observedSeconds": 182.113,
+        "jobId": 107681478865
+      },
+      {
+        "id": "quick-scan-inventory",
+        "observedSeconds": 520.652,
+        "jobId": 107681479189
+      },
+      {
+        "id": "quick-scan-workspace",
+        "observedSeconds": 461.319,
+        "jobId": 107681478865
+      },
+      {
+        "id": "quick-scan-python",
+        "observedSeconds": 338.557,
+        "jobId": 107681478865
+      },
+      {
+        "id": "quick-scan-data-evidence",
+        "observedSeconds": 225.447,
+        "jobId": 107681479189
+      },
+      {
+        "id": "fix-detector-rerun",
+        "observedSeconds": 49.349,
+        "jobId": 107681478865
+      },
+      {
+        "id": "mutation-scan",
+        "observedSeconds": 46.761,
+        "jobId": 107681479189
+      },
+      {
+        "id": "quality-scan",
+        "observedSeconds": 255.855,
+        "jobId": 107681479189
+      },
+      {
+        "id": "lighthouse-scan",
+        "observedSeconds": 18.747,
+        "jobId": 107681478865
+      },
+      {
+        "id": "validate-calibration",
+        "observedSeconds": 198.968,
+        "jobId": 107681479189
+      },
+      {
+        "id": "fix-execute",
+        "observedSeconds": 20.108,
+        "jobId": 107681478865
+      },
+      {
+        "id": "corpus-scanner-cross-process",
+        "observedSeconds": 175.704,
+        "jobId": 107681479189
+      },
+      {
+        "id": "effectiveness-registry",
+        "observedSeconds": 112.649,
+        "jobId": 107681478865
+      },
+      {
+        "id": "effectiveness-delivery",
+        "observedSeconds": 68.881,
+        "jobId": 107681478865
+      },
+      {
+        "id": "corpus-cache-preflight",
+        "observedSeconds": 213.918,
+        "jobId": 107681478865
+      }
     ],
     "gates": [
-      { "id": "calibration", "observedSeconds": 85.255, "jobId": 107681478818 },
-      { "id": "source-recall", "observedSeconds": 80.611, "jobId": 107681478818 },
-      { "id": "m2-coverage", "observedSeconds": 1.331, "jobId": 107681478818 },
-      { "id": "shared-source-match", "observedSeconds": 4.62, "jobId": 107681478818 }
+      {
+        "id": "calibration",
+        "observedSeconds": 85.255,
+        "jobId": 107681478818
+      },
+      {
+        "id": "source-recall",
+        "observedSeconds": 80.611,
+        "jobId": 107681478818
+      },
+      {
+        "id": "m2-coverage",
+        "observedSeconds": 1.331,
+        "jobId": 107681478818
+      },
+      {
+        "id": "shared-source-match",
+        "observedSeconds": 4.62,
+        "jobId": 107681478818
+      }
     ]
   }
 }

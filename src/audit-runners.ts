@@ -271,13 +271,14 @@ const M7_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
 ]);
 
 const M8_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
+  binding({ id: "disclosure:mutation-workspace-plan", modules: ["M8"], tiers: ["connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-workspace.ts", "mutationWorkspaceFinding")], findingFamilies: [family("M8", "M8-WORKSPACE-*", "M8 — Workspace mutation coverage", "coverage-disclosure")] }),
   binding({ id: "mutation:surviving-mutants", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "survivingMutantFindings")], findingFamilies: [family("M8", "M8-MUT-*", "M8 — Denial/boundary path untested")] }),
   binding({ id: "mutation:vacuous-tests", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "vacuousTestFindings")], findingFamilies: [family("M8", "M8-VACUOUS-*", "M8 — Vacuous test*")] }),
   binding({ id: "mutation:no-coverage", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noCoverageFindings")], findingFamilies: [family("M8", "M8-NOCOV-*", "M8 — Module has no mutation test coverage")] }),
   binding({ id: "mutation:stub-survival", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/stub-check.ts", "stubSurvivalFindings")], findingFamilies: [family("M8", "M8-STUB-*", "M8 — Survives implementation deletion")] }),
-  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite")] }),
-  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)")] }),
-  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")] }),
+  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite"), family("M8", "M8-00-*", "M8 — No automated test suite")] }),
+  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)"), family("M8", "M8-03-*", "M8 — Suite fails unmutated dry run (env-fragile tests)")] }),
+  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure"), family("M8", "M8-04-*", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")] }),
 ]);
 
 const M10_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
@@ -1433,7 +1434,8 @@ const m8: ModuleRunner = {
     if (!measured) {
       return {
         kind: "not-assessed",
-        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${trimOut(output)}`,
+        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${verdict.kind === "partial" ? verdict.note : trimOut(output)}`,
+        findings,
         provenance: "MEASURED",
         falsifier: `${staticCmd} && ${command}`,
       };

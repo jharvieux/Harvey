@@ -15,6 +15,8 @@ import { assembleEngagementDocument } from "./audit-report.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
 import { MAX_PASS_FUTURE_SKEW_MS } from "./audit-pass-artifact.js";
 import { renderReport } from "../report-template/render.mjs";
+import { runMutationWorkspaces } from "./mutation-workspace-runner.js";
+import { mutationWorkspaceFinding, planMutationWorkspaces } from "./mutation-workspace.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -762,6 +764,50 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/Scoped mutation run/);
     expect(m8?.reason).toMatch(/263 file/);
+  });
+
+  it("M8 delivers a failed workspace beside a measured sibling with the partial reason rendered", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "mutation-workspace-delivery-"));
+    mkdirSync(join(directory, "apps/rag/src"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ workspaces: ["apps/rag"] }));
+    writeFileSync(join(directory, "apps/rag/package.json"), JSON.stringify({ name: "rag" }));
+    writeFileSync(join(directory, "apps/rag/src/unit.ts"), "export const unit = 1");
+    const workspace = planMutationWorkspaces(directory).workspaces.find(row => row.directory === "apps/rag")!;
+    const finding = mutationWorkspaceFinding(workspace, "discovery-failed", "Zero related tests; the configured production source remains unassessed");
+    const artifact = { summary: { overall: { totalMutants: 5, mutationScore: 80 } }, findings: [finding], moduleRecord: { status: "partial", note: "Main measured; RAG discovery-failed: zero related tests" } };
+    const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial" });
+    expect(result.findings).toContainEqual(finding);
+    const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
+    expect(validateFindings(document)).toEqual({ ok: true, errors: [] });
+    try {
+      const htmlPath = join(directory, "report.html");
+      await renderReport(document, { htmlPath });
+      const html = readFileSync(htmlPath, "utf8");
+      expect(html).toContain("the configured production source remains unassessed");
+      expect(html).toContain("RAG discovery-failed: zero related tests");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+    expect(conservationLedger(result.findings, document.findings).unaccounted).toBe(0);
+  });
+
+  it("M8 preserves zero-measurement workspace disclosures without fabricating test quality", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "mutation-workspace-unavailable-"));
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "unavailable", devDependencies: { vitest: "3.2.6" } }));
+    writeFileSync(join(directory, "source.ts"), "export const source = 1");
+    const artifact = runMutationWorkspaces(planMutationWorkspaces(directory), { storage: "/unused", cliPath: "/unused", planOnly: true });
+    const context = ctx({ targetDir: directory, captureDir: "/capture", readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, readFindings: () => [], exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: false, output: "Source test-intent producer unavailable" } });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining("Plan-only invocation") });
+    expect(result.findingsByModule.M8).toEqual(artifact.findings);
+    expect(result.testQuality).toBeUndefined();
+    const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
+    expect(validateFindings(document)).toEqual({ ok: true, errors: [] });
+    try {
+      const htmlPath = join(directory, "report.html"); await renderReport(document, { htmlPath });
+      expect(readFileSync(htmlPath, "utf8")).toContain("Plan-only invocation");
+      expect(conservationLedger(result.findings, document.findings).ok).toBe(true);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   // #1309: the branch #504's own tests skipped — verifyMutationScope returning `verified: false`
