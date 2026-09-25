@@ -12,7 +12,7 @@ const HEALTHY: SmokeInput = {
     { path: "/", status: 200 },
     { path: "/pricing", status: 200 },
   ],
-  redirects: [{ path: "/intake", status: 307 }],
+  redirects: [{ path: "/intake", status: 307, destination: "/#scan", location: "/#scan", finalStatus: 200 }],
   readiness: { status: 200, configured: true, sandboxSender: false },
   validation: { status: 400 },
 };
@@ -84,7 +84,7 @@ describe("evaluateSmoke", () => {
   it("fails when a declared redirect 404s — the exact symptom #1308 was filed for", () => {
     // /intake 404ed in production for days while the sitemap, the route probes and the readiness
     // probe were all green, because a redirect source appears in none of them.
-    const deadRedirect: SmokeInput = { ...HEALTHY, redirects: [{ path: "/intake", status: 404 }] };
+    const deadRedirect: SmokeInput = { ...HEALTHY, redirects: [{ path: "/intake", status: 404, destination: "/#scan", location: null }] };
     expect(smokeFailed(evaluateSmoke(deadRedirect))).toBe(true);
     expect(check(deadRedirect, "declared redirects").detail).toContain("/intake → 404");
   });
@@ -92,7 +92,7 @@ describe("evaluateSmoke", () => {
   it("fails when a redirect stops redirecting and answers 200 instead", () => {
     // Not pedantry: a 200 at a redirect source means something else has taken the path over, and
     // the destination the repo declares is no longer where a visitor lands.
-    const swallowed: SmokeInput = { ...HEALTHY, redirects: [{ path: "/intake", status: 200 }] };
+    const swallowed: SmokeInput = { ...HEALTHY, redirects: [{ path: "/intake", status: 200, destination: "/#scan", location: null }] };
     expect(smokeFailed(evaluateSmoke(swallowed))).toBe(true);
     expect(check(swallowed, "declared redirects").detail).toContain("/intake → 200");
   });
