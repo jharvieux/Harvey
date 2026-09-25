@@ -6,13 +6,13 @@ import { isDirectorySafe } from "./fs-walk.js";
 
 const ENTRYPOINTS = ["src/cli/dry-run.ts"] as const;
 
-export interface DryRunDependencyClosure {
+interface DryRunDependencyClosure {
   files: Set<string>;
   trees: Set<string>;
   unresolved: string[];
 }
 
-export interface RelevanceDecision {
+interface RelevanceDecision {
   relevant: boolean;
   reason: "producer-dependency" | "producer-data" | "unknown" | "proved-unrelated-docs";
   matches: string[];
@@ -234,7 +234,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "undefined";
 }
 
-export interface FamilyComparison {
+interface FamilyComparison {
   ok: boolean;
   members: readonly string[];
   differences: string[];
