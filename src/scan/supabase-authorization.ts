@@ -18,6 +18,7 @@ interface Definer {
 }
 export interface TableAuthorization {
   schema: string; name: string; detail: string; exposure: boolean;
+  columns: { name: string; principals: { role: string; read: "all" | "none" | "conditional"; reason: string }[] }[];
 }
 
 // Read one catalog snapshot. PostgreSQL resolves PUBLIC and inherited ACL/policy roles;
@@ -142,7 +143,15 @@ function tableAssessment(rows: Access[], exposedSchemas?: readonly string[]): { 
   const detail = `owner=${owner}; RLS=${rls}; FORCE=${forced}. ${explanations.join(" ")} `
     + (exposedSchemas === undefined ? "API schema reachability was not established." : `API-exposed schema=${exposedSchemas.includes(schema)}.`)
     + " service_role is a separate privileged server principal; these facts do not show its credential is available to a client.";
-  const table = { schema, name, detail, exposure };
+  const columns = rows[0]!.columns.map((column) => ({ name: column.name, principals: rows
+    .filter((row) => row.role === "anon" || row.role === "authenticated")
+    .map((row) => {
+      const read = commandAccess(row, "SELECT");
+      const granted = row.grants.SELECT || row.columns.some((entry) => entry.name === column.name && entry.select);
+      return { role: row.role, read: granted ? read.state : "none" as const,
+        reason: granted ? read.reason : "no effective SELECT grant on this column" };
+    }) }));
+  const table = { schema, name, detail, exposure, columns };
   return { table, finding: mechanicalFinding({
     id: `SB-AUTHZ-${identity(schema)}-${identity(name)}`, location: qualified,
     title: exposure ? `Client role can read ${qualified} without a row restriction` : `Effective authorization inventory for ${qualified}`,
@@ -173,7 +182,9 @@ export async function loadEffectiveAuthorization(query: (sql: string) => Promise
     }
     if (groups.size !== data.tableCount || data.definers.length !== data.definerCount
       || [...groups.values()].some((rows) => rows.length !== roles.length || new Set(rows.map((r) => r.role)).size !== rows.length
-        || rows.some((r) => !roles.includes(r.role) || r.owner !== rows[0]!.owner || r.rls !== rows[0]!.rls || r.forced !== rows[0]!.forced))) throw new Error("incomplete principal matrix");
+        || rows.some((r) => !roles.includes(r.role) || r.owner !== rows[0]!.owner || r.rls !== rows[0]!.rls || r.forced !== rows[0]!.forced
+          || new Set(r.columns.map((c) => c.name)).size !== r.columns.length
+          || JSON.stringify(r.columns.map((c) => c.name).sort()) !== JSON.stringify(rows[0]!.columns.map((c) => c.name).sort())))) throw new Error("incomplete principal matrix");
     const assessed = [...groups.values()].map((rows) => tableAssessment(rows, exposedSchemas));
     const findings = assessed.map((entry) => entry.finding);
     for (const fn of data.definers) {

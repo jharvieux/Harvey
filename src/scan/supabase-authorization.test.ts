@@ -12,6 +12,7 @@ import { conservationLedger } from "../conservation-ledger.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
 import { runSupabaseScan } from "./supabase.js";
+import { loadEffectiveAuthorization } from "./supabase-authorization.js";
 
 const fixtureUrl = new URL("./__fixtures__/supabase/effective-authorization.sql", import.meta.url);
 const snapshotUrl = new URL("./__fixtures__/supabase/effective-authorization-catalog.json", import.meta.url);
@@ -53,6 +54,26 @@ describe("effective database authorization through the connected producer (#2138
     expect(denied.evidence).toContain("anon: SELECT=none");
     expect(denied.evidence).toContain("RLS deny-by-default");
     expect(denied.evidence).toContain("service_role: SELECT=all");
+  });
+
+  it("returns exact selected-client column reads without borrowing a sibling grant", async () => {
+    const snapshot = JSON.parse(readFileSync(snapshotUrl, "utf8")).authorization;
+    const result = await loadEffectiveAuthorization(async () => [{ authorization: snapshot }], ["public"]);
+    const columns = result.tables.find((t) => t.name === "column_open")!.columns;
+    expect(columns.find((c) => c.name === "secret")!.principals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "anon", read: "all" }), expect.objectContaining({ role: "authenticated", read: "none" }),
+    ]));
+    expect(columns.find((c) => c.name === "id")!.principals.every((p) => p.read === "none")).toBe(true);
+    expect(result.tables.find((t) => t.name === "column_rls")!.columns.find((c) => c.name === "secret")!.principals[0]!.read).toBe("conditional");
+  });
+
+  it.each(["missing", "duplicate"])("rejects %s columns in a principal matrix", async (kind) => {
+    const snapshot = JSON.parse(readFileSync(snapshotUrl, "utf8")).authorization;
+    const row = snapshot.tables.find((t: { name: string; role: string }) => t.name === "column_open" && t.role === "anon");
+    if (kind === "missing") row.columns.pop(); else row.columns[1] = row.columns[0];
+    const result = await loadEffectiveAuthorization(async () => [{ authorization: snapshot }], ["public"]);
+    expect(result.tables).toEqual([]);
+    expect(result.findings[0]!.title).toContain("not assessed");
   });
 
   it("keeps column access row-bound and accounts for restrictive policy composition", async () => {
