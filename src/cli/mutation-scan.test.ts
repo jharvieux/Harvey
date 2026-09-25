@@ -11,7 +11,7 @@ import "../__tests__/mutation-runner-validity.js";
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -948,7 +948,7 @@ describe("mutation reporter capture provenance (#2137)", () => {
     });
   }
 
-  function prepared(mode: "healthy" | "missing" | "foreign" | "stale" | "source-change") {
+  function prepared(mode: "healthy" | "missing" | "foreign" | "stale" | "source-change" | "config-stamp-preserved" | "directory-report") {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", reporters: ["html"], htmlReporter: { fileName: "reports/mutation/index.html" } }));
     mkdirSync(join(repo, "reports/mutation"), { recursive: true });
@@ -960,6 +960,8 @@ describe("mutation reporter capture provenance (#2137)", () => {
       : mode === "foreign" ? 'fs.unlinkSync(outPath); fs.symlinkSync(path.join(process.cwd(), "foreign.json"), outPath);'
       : mode === "stale" ? 'fs.utimesSync(outPath, new Date(0), new Date(0));'
       : mode === "source-change" ? 'fs.appendFileSync(path.join(process.cwd(), "src/add.ts"), "// unexpected change");'
+      : mode === "config-stamp-preserved" ? 'const configPath = path.join(process.cwd(), "stryker.config.json"); const stamp = fs.statSync(configPath); fs.writeFileSync(configPath, fs.readFileSync(configPath, "utf8").replace("perTest", "offTest")); fs.utimesSync(configPath, stamp.atime, stamp.mtime);'
+      : mode === "directory-report" ? 'fs.unlinkSync(outPath); fs.mkdirSync(outPath);'
       : '';
     writeFileSync(bin, readFileSync(bin, "utf8").replace('process.exit(0);', `
 if (!cfg.reporters.includes("json")) throw new Error("JSON capture disabled");
@@ -996,6 +998,45 @@ process.exit(0);`));
     expect(existsSync(receipt.artifacts[0]!.path)).toBe(true);
     expect(JSON.parse(readFileSync(receipt.artifacts[0]!.path, "utf8")).files["src/add.ts"].mutants).toHaveLength(1);
     if (mode === "source-change") expect(result.stderr).toMatch(/invariant violated/);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it("detects a same-size config mutation even when the producer restores its mtime", async () => {
+    const { repo, output } = prepared("config-stamp-preserved");
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/invariant violated: stryker\.config\.json/);
+    expect(readFileSync(join(repo, "stryker.config.json"), "utf8")).toContain("offTest");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    expect(receipt.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+  });
+
+  it("rejects a pre-existing engagement capture symlink before Stryker can write through it", async () => {
+    const { repo, output } = prepared("healthy");
+    const redirected = join(repo, "capture-redirect");
+    mkdirSync(redirected);
+    symlinkSync(redirected, `${output}.stryker`);
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("resolves inside the target checkout");
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe("export const add = (a: number, b: number) => a + b;\n");
+    expect(readdirSync(redirected)).toEqual([]);
+  });
+
+  it("retains a successful command receipt when the declared report is a directory", async () => {
+    const { repo, output } = prepared("directory-report");
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/foreign to the invocation capture/);
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(receiptPath).toBeTruthy();
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    assertCommandExecutionReceipt(receipt);
+    expect(receipt.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(receipt.artifacts).toEqual([]);
+    expect(receipt.artifactFailures).toEqual([expect.objectContaining({ role: "report", reason: "unreadable", errorCode: "EISDIR" })]);
     expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
   });
 });

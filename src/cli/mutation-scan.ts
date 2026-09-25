@@ -211,14 +211,35 @@ let rootScopedComparison: { root: string; appRelative: string; report: StrykerRe
 function receiptArtifactBesideOutput(suffix: string): string | undefined {
   if (!outPath) return undefined;
   const output = resolve(outPath);
-  let ancestor = dirname(output);
-  while (!existsSync(ancestor)) ancestor = dirname(ancestor);
-  const physicalOutput = resolve(realpathSync(ancestor), relative(ancestor, output));
+  const physicalOutput = physicalDestination(output);
   const rel = relative(realpathSync(targetDir), physicalOutput);
   // The CLI's existing pristine assertion runs before writing --out. Receipt sidecars must follow
   // the stronger rule and never add extra files to the audited checkout at all.
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return `${output}.${suffix}`;
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    const candidate = `${output}.${suffix}`;
+    const candidateRel = relative(realpathSync(targetDir), physicalDestination(candidate));
+    if (candidateRel === "" || (!candidateRel.startsWith(`..${sep}`) && candidateRel !== ".." && !isAbsolute(candidateRel))) {
+      throw new Error(`#1285 invariant violated: retained capture destination ${candidate} resolves inside the target checkout`);
+    }
+    return candidate;
+  }
   return undefined;
+}
+
+// Resolve an existing destination (including a symlink) or project a not-yet-created path from
+// its nearest existing ancestor. This check has to happen before mkdir/mkdtemp: validating only
+// the eventual report path lets a pre-existing engagement sidecar symlink redirect the capture
+// setup itself into the client checkout.
+function physicalDestination(destination: string): string {
+  const absolute = resolve(destination);
+  if (existsSync(absolute)) return realpathSync(absolute);
+  let ancestor = dirname(absolute);
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  return resolve(realpathSync(ancestor), relative(ancestor, absolute));
 }
 
 function warnIfNotPerTest(cfgPath: string): void {
@@ -405,8 +426,9 @@ const PRISTINE_WALK_EXCLUDED_DIR = /^(node_modules|\.git)$/;
 
 // Path → a cheap identity stamp ("dir", or size:mtime for a file). Size+mtime rather than a content
 // hash: the walk already stats each entry, and a tree the size of inbox-zero's apps/web would
-// otherwise be read end-to-end twice per run. Source files get a real byte comparison on top
-// (assertTreePristine below), so the stamp is the second line, not the only one.
+// otherwise be read end-to-end twice per run. Source files and the effective target-owned config
+// get a real byte comparison on top (assertTreePristine below), so the stamp is the second line,
+// not the only one.
 function snapshotTreePaths(root: string): Map<string, string> {
   const paths = new Map<string, string>();
   const walk = (dir: string) => {
@@ -426,10 +448,17 @@ interface PristineSnapshot {
   root: string;
   paths: Map<string, string>;
   sources: SourceInput[];
+  protectedFiles: SourceInput[];
 }
 
-function snapshotPristine(root: string, sources: SourceInput[]): PristineSnapshot {
-  return { root, paths: snapshotTreePaths(root), sources };
+function snapshotPristine(root: string, sources: SourceInput[], protectedPaths: string[] = []): PristineSnapshot {
+  const protectedFiles = protectedPaths.flatMap((path) => {
+    const absolute = resolve(path);
+    const rel = relative(root, absolute);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !existsSync(absolute)) return [];
+    return [{ path: rel.split(sep).join("/"), text: readFileSync(absolute, "utf8") }];
+  });
+  return { root, paths: snapshotTreePaths(root), sources, protectedFiles };
 }
 
 // #600's acceptance check, widened by #1285 from --stub-check to every Stryker rung and from
@@ -437,7 +466,7 @@ function snapshotPristine(root: string, sources: SourceInput[]): PristineSnapsho
 // wrote into a client's checkout and then reported success is the silent-omission shape this
 // repo's coverage guard exists to prevent, and a wrong-but-loud exit is the lesser harm.
 function assertTreePristine(before: PristineSnapshot, issueRef: string): void {
-  for (const s of before.sources) {
+  for (const s of [...before.sources, ...before.protectedFiles]) {
     const now = readFileSync(join(before.root, ...s.path.split("/")), "utf8");
     if (now !== s.text) throw new Error(`${issueRef} invariant violated: ${s.path} in ${before.root} changed during the run — the target checkout is no longer pristine`);
   }
@@ -993,11 +1022,18 @@ function finalizeStrykerReceipt(report?: StrykerReport, measurements?: CommandEx
   const execution = strykerExecution;
   const source = originalStrykerReportPath ?? execution.expectedReportPath;
   let artifact = source;
-  const retained = receiptArtifactBesideOutput(`raw-stryker-${execution.invocationId}.json`);
-  if (retained && existsSync(source)) {
-    mkdirSync(dirname(retained), { recursive: true });
-    writeFileSync(retained, readFileSync(source));
-    artifact = retained;
+  // A malformed producer artifact must not erase proof that the producer completed. Retain a
+  // readable report when possible; otherwise bind the declared path and let the receipt record an
+  // explicit artifactFailure (directory/EISDIR, missing file, etc.) alongside the exited outcome.
+  try {
+    const retained = receiptArtifactBesideOutput(`raw-stryker-${execution.invocationId}.json`);
+    if (retained && existsSync(source)) {
+      mkdirSync(dirname(retained), { recursive: true });
+      writeFileSync(retained, readFileSync(source));
+      artifact = retained;
+    }
+  } catch {
+    artifact = source;
   }
   return createCommandExecutionReceipt({
     invocationId: execution.invocationId,
@@ -1430,7 +1466,9 @@ if (reportPath) {
   const runCwd = (isIncompatibleTypeScript7(readStrykerTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
   mutationInvocationRoot = runCwd;
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, HTML/JSON reports and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
-  pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
+  // The target-owned config is executable input even though it is not product source. Preserve
+  // its bytes explicitly so a producer cannot hide a same-size edit by restoring the mtime.
+  pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir), effectiveConfigPath ? [effectiveConfigPath] : []);
   const run = runStryker(redirect.cfgPath, runCwd);
   strykerExecution = run.execution;
   strykerPhases = run.phases;
