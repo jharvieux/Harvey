@@ -88,6 +88,8 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "jscpd": "^4.0.5",
     "knip": "^5.61.0",
+    "next-auth-v4": "npm:next-auth@4.24.15",
+    "next-auth-v5": "npm:next-auth@5.0.0-beta.32",
     "playwright": "^1.53.0",
     "postgres": "^3.4.5",
     "tsx": "^4.20.0",
