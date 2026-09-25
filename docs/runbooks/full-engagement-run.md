@@ -459,3 +459,13 @@ Older items closed and reflected above rather than listed as a gap: #502 (M3→M
 per-workspace + timeout), #506 (monorepo target enumeration), #507 (M3 vitals plugin-location
 discovery), #509 (report completeness derived from the coverage ledger), #513 (M8 Stryker config
 scaffolding + gated install).
+
+### M10 catalog and protection inputs
+
+M10 uses an explicit authorized product-schema allowlist. `--schemas public,private` or `PII_PRODUCT_SCHEMAS=public,private` selects catalog names/types to classify; omitted configuration explicitly selects public and reports other discovered schemas as unexamined. No production row sampling is requested or enabled by these options.
+
+The deployed API schema list is separate. Supply `--exposed-schemas public,private` or `PII_EXPOSED_SCHEMAS` from effective deployment configuration. Without an explicit list, M10 reads the connection's `pgrst.db_schemas` setting when available. Both sources carry a provenance label; external PostgREST reload/configuration state requires separate review. Schema exposure, column grants and readable rows are separate observations.
+
+Optional source-reference evidence uses `--source-root <checkout> --encryption-boundaries <manifest.json>`. The manifest is an array of non-secret references: `[{"schema":"private","table":"patient","column":"ssn","path":"src/encrypt.ts","sha256":"<64 lowercase hex characters>","line":12}]`. Files must resolve within the authorized checkout and match both the supplied digest and line bounds. This establishes reference integrity only; complete encryption behavior, write/read coverage, decrypting views/RPCs and key-management evidence remain explicit review requirements.
+
+The [shared prerequisite contract](engagement-prerequisites.md) is generated from the same records used in M10 reports and the existing website access matrix. Regenerate it with `node --import tsx tools/render-engagement-requirements.mjs > docs/runbooks/engagement-prerequisites.md`.

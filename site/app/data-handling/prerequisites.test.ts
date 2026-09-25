@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AUDIT_PREREQUISITES } from "../../../src/audit-prerequisites";
 import DataHandling from "./page";
+import { ENGAGEMENT_REQUIREMENTS } from "../../../src/engagement-requirements";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,6 +20,12 @@ describe("public audit prerequisite delivery", () => {
       expect(html).toContain(`id="requirement-${row.id}"`);
       for (const value of [row.capability, row.requestedInput, row.accessBoundary, row.ifUnavailable, row.verification]) {
         const escaped = renderToStaticMarkup(React.createElement("span", null, value)).slice(6, -7);
+        expect(html).toContain(escaped);
+      }
+    }
+    for (const detail of ENGAGEMENT_REQUIREMENTS) {
+      for (const text of [...detail.metadata, ...detail.access, detail.limitation, detail.falsifier, detail.nextStep]) {
+        const escaped = renderToStaticMarkup(React.createElement("span", null, text)).slice(6, -7);
         expect(html).toContain(escaped);
       }
     }
