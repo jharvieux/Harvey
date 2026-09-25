@@ -9,8 +9,8 @@ export class PartialTrackerWriteError extends Error {
   }
 }
 
-// Pagination URLs carry the caller's credentials. Only a continuation of the same
-// endpoint is eligible; a server-supplied next link cannot widen that authority.
+// Restrict continuation URLs to the original endpoint to keep caller credentials
+// inside the scope authorized for the first request.
 function trackerNextLink(response: Response, currentUrl: string): string | undefined {
   const header = response.headers.get("link");
   if (!header) return undefined;

@@ -184,7 +184,7 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
         return ok({ number: n, html_url: `https://github.com/o/r/issues/${n}`, body: "" });
       }
       if (method === "GET" && /\/issues\/\d+$/.test(u)) return ok({ number: 41, html_url: "", body: "epic body" });
-      if (method === "GET" && u.includes("/search/issues?")) return ok({ items: [] }); // no prior run to recover (#50)
+      if (method === "GET" && u.includes("/search/issues?")) return ok({ items: [], total_count: 0, incomplete_results: false }); // no prior run to recover (#50)
       if (method === "PATCH" && /\/issues\/\d+$/.test(u)) return ok({});
       if (method === "PUT" && /\/labels$/.test(u)) return ok([]);
       if (method === "POST" && /\/labels$/.test(u)) return ok([]);
