@@ -327,6 +327,8 @@ describe("runSupabaseScan", () => {
     });
 
     it.each([
+      ["exported class entry", "export class Unsafe { static async handle() { await database.entitlements.upsert({ userId: 'forged' }); } }", true],
+      ["exported interface", "export interface PublicShape { handle: string }", false],
       ["direct unsafe export", "export async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); }", true],
       ["local unsafe alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe };", true],
       ["local unsafe default alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe as default };", true],
