@@ -12,6 +12,15 @@ they don't have one. Never through the intake form, never by plain email.
 
 ## Provisioning (engagement open)
 
+The versioned, non-secret prerequisite matrix in
+`src/audit-prerequisites.ts` is rendered directly on the website's
+`/data-handling#audit-prerequisites` page. Use its stable requirement IDs
+when recording dependency metadata, database catalog, platform configuration
+or application-protection gaps. It specifies the requested input, access
+boundary, unavailable outcome and verification step. Record actual grants
+and coverage separately; a requirement row is not proof that access was granted.
+Never put credentials or client-specific connection details in this matrix.
+
 Request these in order — each depends on confirming the previous one, and
 none should be requested before the engagement is actually scoped and
 quoted.
