@@ -157,6 +157,7 @@ function findingCard(f) {
     <div class="kv"><b>Disposition</b> ${esc(f.assessment.reason)} Review: ${esc(f.assessment.reviewStatus)}. Source: ${esc(f.assessment.sourceScope)} / ${esc(f.assessment.evidenceKind)}. Scanner confidence: ${esc(f.confidence)}.</div>
     ${f.assessment.review ? `<div class="kv"><b>Review evidence</b> ${esc(f.assessment.review.reviewer)}: ${esc(f.assessment.review.evidence.join("; "))}</div>` : ""}
     ${f.assessment.supersededBy ? `<div class="kv"><b>Replaced by</b> ${esc(f.assessment.supersededBy.artifact)} — ${esc(f.assessment.supersededBy.reason)}</div>` : ""}
+    ${f.note ? `<div class="kv"><b>Note</b> ${esc(f.note)}</div>` : ""}
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
     ${suggestedFixBlock(f)}

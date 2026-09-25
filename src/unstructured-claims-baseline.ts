@@ -914,7 +914,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// Drop the authz cases → that class cannot be assessed and records requires-live-run.",
   ],
   "src/pentest/business-logic.ts": [
-    "// response is \"cannot observe\" ⇒ requires-live-run, never a guessed verdict.",
     "// accepted request. Returns null when the path is absent — the caller treats \"cannot observe\" as",
   ],
   "src/pentest/calibration-fixture.ts": [

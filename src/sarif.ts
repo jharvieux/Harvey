@@ -223,7 +223,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
       level,
       // The location string is repeated in the message so a finding whose location cannot be a
       // file region still says where it is, rather than reading as an unlocated repo-wide alert.
-      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}\n\nDisposition: ${f.assessment.disposition}. ${f.assessment.reason}` },
+      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}${f.note ? `\n\nNote: ${f.note}` : ""}\n\nDisposition: ${f.assessment.disposition}. ${f.assessment.reason}` },
       ...(parsed
         ? {
             locations: [{
@@ -249,6 +249,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         location: f.location,
         ...(f.dependencyRangeEvidence ? { dependencyRangeEvidence: f.dependencyRangeEvidence } : {}),
         ...(f.dependencyMetadataEvidence ? { dependencyMetadataEvidence: f.dependencyMetadataEvidence } : {}),
+        ...(f.note ? { note: f.note } : {}),
         ...(f.precisionTier ? { precisionTier: f.precisionTier } : {}),
         ...(f.baselineStatus ? { baselineStatus: f.baselineStatus } : {}),
         ...(f.baselineReason ? { baselineReason: f.baselineReason } : {}),
