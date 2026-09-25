@@ -364136,8 +364136,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "78c4081dd87d690086446c6972a075f4973f871d",
-    "commitPayload": "dHJlZSBhN2ZjZmFiM2U1OGU3MzA3ZWM0M2I4Yzc0YmMzZTMzOGVjMTVmN2FlCnBhcmVudCBiYzA1Y2VmNDVjNGEyZTM0YjhjNTUyMWU3Y2FjYTFlOTE5NDM1YTJhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA0Mzk0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA0Mzk0IC0wNTAwCgpQdWJsaXNoIHNoYXJlZCBhdWRpdCBhY2Nlc3MgcmVxdWlyZW1lbnRzIGZvciAjMjE0MSBhbmQgIzIxMzQK",
+    "commit": "173d68b0e657ca2d2426d72804dfcf3b2fd30d06",
+    "commitPayload": "dHJlZSBjYjMxYjU0ZTMxMDFmMmViMzc0OGZmZjgzZDBjMDE0MTZkNzRhYmVkCnBhcmVudCA2MDc5OTgxYzk2ZjZhYWFhNTAwYjJmMjcyM2U0Y2QwMWFmMTJhNTYyCnBhcmVudCBlNmE3NjgxNjdhYTdkMTVmZDFhZDM0ZjQxOTQ0M2U5ZTkyOGYyODU2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3MTk5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3MTk5IC0wNTAwCgpNZXJnZSByZW1vdGUtdHJhY2tpbmcgYnJhbmNoICdvcmlnaW4vbWFpbicgaW50byBmZWF0dXJlL3N3ZWVwLTIxMTMtdHJhY2tlci1yZXRyaWVzCgojIENvbmZsaWN0czoKIwlzcmMvZW52aXJvbm1lbnQtZGVwZW5kZW5jeS1pbnZlbnRvcnkuanNvbgo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364146,13 +364146,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "e218a9017a9117f1f83f052592cdcd3fecdf39da",
+        "gitOid": "9e3e2a1b7e99590898c149d24e02bfa80bce4f76",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "83fe9970361283123a82bd3ab6457a1133529f66e9b4a2aff5472a9d2b237dd5",
-    "tree": "a7fcfab3e58e7307ec43b8c74bc3e338ec15f7ae"
+    "populationSha256": "eca278fef5776b9e7ecaec8bcaa24c14996a8c259f2f1d44b12d94fd5b28ffde",
+    "tree": "cb31b54e3101f2eb3748fff83d0c01416d74abed"
   },
   "venues": [
     {
@@ -391861,19 +391861,19 @@
       "sha256": "396a2c93f88212eda31139c4cac1b3dc8aa0e2edd44149cace1148aa40dc3926"
     },
     {
-      "bytes": 3192,
+      "bytes": 6318,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "1052f6baa8bd56708cbab07476c40922c832381a",
+      "gitOid": "53c14441c0e4c60d7b9c1358682e7aab8a01756e",
       "id": "src/trackers/rate-limit.test.ts",
       "kind": "source",
-      "literalCount": 77,
-      "literalSha256": "afaeab6ebd528decdbc6ab79b2fd8f79dab6cc8e6284acb853f47cdd7255c3bb",
+      "literalCount": 148,
+      "literalSha256": "6b2469f1ef1077edecad2ea33cf2b34161c0fd98cb035ac0cc5683bdb311e49f",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/trackers/rate-limit.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ef6c6adbdcf1729633dd03abfd443f6fccc5670f18e49df31d49d9900a48e1be"
+      "sha256": "8af66beb8d30b3cf9cadd147dcb53c945431b9c01697e02e20ef876772732e7d"
     },
     {
       "bytes": 2835,
