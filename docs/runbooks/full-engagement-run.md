@@ -314,6 +314,13 @@ pnpm mutation-scan <app-2-path> --hotspots hotspots.txt --out M8-app2.json --ins
                                                                                          # installed
 ```
 
+Retain each output JSON and its raw Stryker sidecar outside the scanned source directory. To
+compare repeated mutation results, run the same source, selection and tool versions again with
+`--compare-run <retained-first-M8.json>` and a separate `--out` path. The comparison validates
+both command receipts and reports every changed mutant status. A mismatch or unstable result
+remains partial; a single invocation explicitly leaves stability unassessed. Keep both raw
+sidecars with the artifacts so offline receipt validation remains possible.
+
 Run once per app — not once for the whole monorepo. A target that ships its own Stryker config
 runs under it; one that doesn't gets a config scaffolded for its detected runner
 (vitest/jest/mocha, #513). Missing Stryker packages install with `--no-save` **only** under

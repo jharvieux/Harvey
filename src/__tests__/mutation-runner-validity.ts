@@ -4,6 +4,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { runAudit, type RunContext } from "../audit-runner.js";
+import { assembleEngagementDocument } from "../audit-report.js";
+import { renderReport } from "../../report-template/render.mjs";
+import type { ReportMeta } from "../findings.js";
 import type { MutationRunnerValidity, StrykerReport } from "../mutation-scan.js";
 import { assertCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 
@@ -33,7 +38,7 @@ function runVitest(dir: string, suffix: string) {
 }
 
 describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
-  it("distinguishes assertion kill, completed survivor, no coverage and a zero-test import failure", () => {
+  it("distinguishes assertion kill, completed survivor, no coverage and a zero-test import failure", async () => {
     const dir = copyFixture();
     const baseline = runVitest(dir, "baseline");
     expect(baseline.run.status).toBe(0);
@@ -47,6 +52,7 @@ describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
     expect(cli.error).toBeUndefined();
     expect(cli.status).toBe(0);
     const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as {
+      moduleRecord: {status: string; note?: string};
       rawReport: StrykerReport;
       effectiveReport: StrykerReport;
       runnerValidity: MutationRunnerValidity;
@@ -94,6 +100,28 @@ describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
     });
     expect(artifact.effectiveReport.files["src/subject.ts"]!.mutants.find((mutant) => mutant.id === importFailure.id)).toMatchObject({ status: "RuntimeError", testsCompleted: 0 });
     expect(artifact.summary.overall).toMatchObject({ killed: 1, survived: 1, noCoverage: 1, runtimeErrors: 1 });
+    expect(artifact.moduleRecord.status).toBe("partial");
+    const context: RunContext = {
+      targetDir: dir, env: {connected: false, dynamic: false, llm: false}, captureDir: dirname(artifactPath),
+      exists: existsSync, readFindings: () => [], readArtifact: () => artifact,
+      exec: (_command, args) => args.includes("mutation-scan")
+        ? {ok: true, output: cli.stdout, receipt: artifact.executionReceipt}
+        : {ok: false, output: "This fixture measures the installed mutation runner only"},
+    };
+    const runners = AUDIT_RUNNERS.map(runner => runner.module === "M8" ? runner : {
+      ...runner, run: () => ({kind: "not-assessed" as const, reason: "Outside this installed-runner fixture", provenance: "TRIED" as const, falsifier: "pnpm audit"}),
+    });
+    const delivered = runAudit(runners, context);
+    const meta: ReportMeta = {client: "Synthetic", subtitle: "Runner validity", date: "2026-09-25", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Installed runner", scope: "Synthetic mutants", methodology: "M8", outOfScope: "Other modules"};
+    const document = assembleEngagementDocument(delivered.recorded, context.env, delivered.findings, meta, undefined, undefined, delivered.testQuality);
+    expect(delivered.recorded.find(row => row.module === "M8")).toMatchObject({status: "partial", reason: expect.stringContaining("uncheckable")});
+    expect(document.testQuality).toMatchObject({wholeRepo: false, scopeNote: expect.stringContaining("uncheckable")});
+    const htmlPath = join(dirname(artifactPath), "runner-report.html");
+    await renderReport(document, {htmlPath});
+    const html = readFileSync(htmlPath, "utf8");
+    expect(html).toContain("uncheckable");
+    expect(html).toContain("positive completed-test counts");
+
     // Negative control: if the old raw `Survived` classification were restored to scoring, this
     // exact count would be 2 and the integration assertion above would fail.
     expect(report.files["src/subject.ts"]!.mutants.filter((mutant) => mutant.status === "Survived")).toHaveLength(2);
