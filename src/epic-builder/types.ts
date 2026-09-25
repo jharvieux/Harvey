@@ -4,16 +4,19 @@
 // setLabels / setEstimate / attachBrief — not the aspirational TrackerAdapter sketched in §8.1
 // (which had init/findByMarker/marker args that the shipped adapters never grew). See publish.ts.
 
-export type SessionState =
-  | "intake"
-  | "clarify"
-  | "epic-draft"
-  | "epic-review"
-  | "stories-fan-out"
-  | "stories-review"
-  | "publish"
-  | "summary"
-  | "done";
+export const SESSION_STATES = [
+  "intake",
+  "clarify",
+  "epic-draft",
+  "epic-review",
+  "stories-fan-out",
+  "stories-review",
+  "publish",
+  "summary",
+  "done",
+] as const;
+
+export type SessionState = (typeof SESSION_STATES)[number];
 
 type ArtifactStatus = "draft" | "in-review" | "accepted" | "skipped";
 

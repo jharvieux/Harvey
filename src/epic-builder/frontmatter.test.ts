@@ -39,6 +39,19 @@ describe("frontmatter", () => {
     expect(parseFrontmatter(raw)).toEqual({ data: {}, body: raw });
   });
 
+  it("rejects missing, unterminated, malformed, and duplicate builder frontmatter", () => {
+    expect(() => parseFrontmatter("# no frontmatter", { required: true })).toThrow(/frontmatter is required/);
+    expect(() => parseFrontmatter("---\ntitle: x", { required: true })).toThrow(/unterminated/);
+    expect(() => parseFrontmatter("---\ntitle x\n---\nbody", { required: true })).toThrow(/malformed/);
+    expect(() => parseFrontmatter("---\ntitle: first\ntitle: second\n---\nbody", { required: true })).toThrow(/duplicate.*title/);
+    expect(() => parseFrontmatter("---\npublished:\n  ref: one\n  ref: two\n---\nbody", { required: true })).toThrow(/duplicate.*published.ref/);
+  });
+
+  it("retains contract-valid empty body, empty array, empty optional scalar, and comments", () => {
+    expect(parseFrontmatter("---\ndependsOn: []\nnote: \"\"\n# optional comment\n---\n", { required: true }))
+      .toEqual({ data: { dependsOn: [], note: "" }, body: "" });
+  });
+
   it("preserves values containing colons and hashes via quoting", () => {
     const data: FrontmatterData = { url: "https://x.test/a#b", ref: "owner/repo#1" };
     const parsed = parseFrontmatter(serializeFrontmatter(data, "x"));

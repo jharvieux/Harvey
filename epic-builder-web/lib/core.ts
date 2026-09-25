@@ -9,6 +9,7 @@ import type { Templates } from "../../src/epic-builder/session.js";
 import {
   acceptEpic,
   acceptStory,
+  assertArtifactReviewable,
   draftEpic,
   fanOutStories,
   recordDirectEdit,
@@ -23,6 +24,7 @@ import {
   readDraft,
   readFileRaw,
   saveSession,
+  validateStoryManifest,
   workspaceDir,
   workspaceExists,
   writeDraft,
@@ -63,7 +65,7 @@ function dirFor(deps: CoreDeps, slug: string): string {
 // The artifact the current state wants a decision on: the epic in epic-review, else the first story
 // still awaiting review. null in non-review states (fan-out, publish, done).
 function currentTarget(session: DraftSession): string | null {
-  if (session.state === "epic-draft" || session.state === "epic-review") return "epic.md";
+  if (session.state === "epic-review") return "epic.md";
   if (session.state === "stories-review") {
     const next = session.stories.find((s) => s.status === "draft" || s.status === "in-review");
     return next ? next.file : null;
@@ -102,8 +104,8 @@ export async function startSession(
   deps: CoreDeps,
   prompt: string,
 ): Promise<{ slug: string; questions: ClarifyQuestion[] }> {
-  const { session } = createWorkspace(deps.cwd, prompt);
   const questions = await deps.model.clarify({ prompt, round: 1, priorQA: "" }, "standard");
+  const { session } = createWorkspace(deps.cwd, prompt);
   return { slug: session.slug, questions };
 }
 
@@ -113,12 +115,14 @@ export async function startSession(
 export async function submitClarify(deps: CoreDeps, slug: string, answers: string): Promise<ViewState> {
   const dir = dirFor(deps, slug);
   const session = loadSession(dir);
-  let answered = false;
-  await runClarify(dir, session, deps.model, async () => {
-    if (answered) return "defaults";
-    answered = true;
-    return answers.trim() || "defaults";
-  });
+  if (session.state === "intake" || session.state === "clarify") {
+    let answered = false;
+    await runClarify(dir, session, deps.model, async () => {
+      if (answered) return "defaults";
+      answered = true;
+      return answers.trim() || "defaults";
+    });
+  }
   await draftEpic(dir, session, deps.model, deps.templates);
   return view(dir, session);
 }
@@ -159,12 +163,14 @@ export async function reviewAction(deps: CoreDeps, slug: string, input: ReviewIn
       return view(dir, session);
     }
     case "edit": {
+      assertArtifactReviewable(session, input.target);
       writeBody(dir, input.target, input.body);
       recordDirectEdit(dir, session, input.target);
       return view(dir, session);
     }
     case "revise":
     case "comment": {
+      assertArtifactReviewable(session, input.target);
       if (input.body !== undefined) writeBody(dir, input.target, input.body);
       const instruction = input.action === "revise" ? input.instruction : undefined;
       const result = await reviseArtifact(dir, session, deps.model, input.target, instruction, async () => true);
@@ -184,7 +190,7 @@ export async function previewManifest(deps: CoreDeps, slug: string): Promise<Sto
   const session = loadSession(dir);
   const epicBody = readDraft(dir, "epic.md").body;
   const intake = readFileRaw(dir, "intake.md");
-  return deps.model.storyManifest({ epicBody, intake }, "standard");
+  return validateStoryManifest(await deps.model.storyManifest({ epicBody, intake }, "standard"), "previewed");
 }
 
 export async function fanOut(deps: CoreDeps, slug: string, keep?: number[]): Promise<ViewState> {

@@ -14,57 +14,88 @@ export interface ParsedDoc {
 
 const FENCE = "---";
 
-export function parseFrontmatter(raw: string): ParsedDoc {
+export function parseFrontmatter(
+  raw: string,
+  options: { /** Builder-owned drafts require frontmatter; templates and imported Markdown may omit it. */ required?: boolean } = {},
+): ParsedDoc {
   const normalized = raw.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith(`${FENCE}\n`)) return { data: {}, body: raw };
-  const end = normalized.indexOf(`\n${FENCE}`, FENCE.length + 1);
-  if (end === -1) return { data: {}, body: raw };
-
-  const block = normalized.slice(FENCE.length + 1, end);
-  const body = normalized.slice(end + 1 + FENCE.length + 1); // skip "\n---\n"
-  return { data: parseBlock(block), body };
+  const lines = normalized.split("\n");
+  if (lines[0] !== FENCE) {
+    if (options.required) throw new Error("frontmatter is required for builder drafts");
+    return { data: {}, body: raw };
+  }
+  const end = lines.findIndex((line, index) => index > 0 && line === FENCE);
+  if (end === -1) throw new Error("unterminated frontmatter block");
+  return {
+    data: parseBlock(lines.slice(1, end), options.required === true),
+    body: lines.slice(end + 1).join("\n"),
+  };
 }
 
-function parseBlock(block: string): FrontmatterData {
+function parseBlock(lines: string[], strict: boolean): FrontmatterData {
   const data: FrontmatterData = {};
   let nestKey: string | null = null;
-  for (const line of block.split("\n")) {
+  const nestedKeys = new Map<string, Set<string>>();
+  for (const line of lines) {
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
     const indented = /^\s/.test(line);
     const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    const rawVal = line.slice(colon + 1).trim();
-
-    if (indented && nestKey) {
-      const nested = data[nestKey];
-      if (nested && typeof nested === "object" && !Array.isArray(nested)) nested[key] = unquote(rawVal);
+    if (colon === -1) {
+      if (strict) throw new Error(`malformed frontmatter line: ${line}`);
       continue;
     }
+    const key = line.slice(0, colon).trim();
+    const rawVal = line.slice(colon + 1).trim();
+    if (key === "") throw new Error(`malformed frontmatter line: ${line}`);
+
+    if (indented) {
+      if (!nestKey) {
+        if (strict) throw new Error(`unexpected nested frontmatter field: ${key}`);
+        continue;
+      }
+      const nested = data[nestKey];
+      const seen = nestedKeys.get(nestKey)!;
+      if (seen.has(key)) throw new Error(`duplicate frontmatter field: ${nestKey}.${key}`);
+      seen.add(key);
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) nested[key] = parseString(rawVal, strict);
+      continue;
+    }
+    if (Object.hasOwn(data, key)) throw new Error(`duplicate frontmatter field: ${key}`);
     if (rawVal === "") {
       data[key] = {};
       nestKey = key;
+      nestedKeys.set(key, new Set());
       continue;
     }
     nestKey = null;
-    data[key] = parseScalar(rawVal);
+    data[key] = parseScalar(rawVal, strict);
   }
   return data;
 }
 
-function parseScalar(raw: string): FrontmatterValue {
-  if (raw.startsWith("[") && raw.endsWith("]")) {
+function parseScalar(raw: string, strict: boolean): FrontmatterValue {
+  if (raw.startsWith("[") || raw.endsWith("]")) {
+    if (!(raw.startsWith("[") && raw.endsWith("]"))) {
+      if (strict) throw new Error(`malformed frontmatter array: ${raw}`);
+      return parseString(raw, false);
+    }
     const inner = raw.slice(1, -1).trim();
     if (inner === "") return [];
-    return inner.split(",").map((s) => unquote(s.trim()));
+    return inner.split(",").map((s) => parseString(s.trim(), strict));
   }
   if (raw === "true") return true;
   if (raw === "false") return false;
   if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
-  return unquote(raw);
+  return parseString(raw, strict);
 }
 
-function unquote(s: string): string {
+function parseString(s: string, strict: boolean): string {
+  const doubleQuoted = s.startsWith('"') || s.endsWith('"');
+  const singleQuoted = s.startsWith("'") || s.endsWith("'");
+  if (strict && ((doubleQuoted && !(s.startsWith('"') && s.endsWith('"')))
+      || (singleQuoted && !(s.startsWith("'") && s.endsWith("'"))))) {
+    throw new Error(`unterminated frontmatter string: ${s}`);
+  }
   if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
     return s.slice(1, -1);
   }

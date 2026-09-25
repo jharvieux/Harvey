@@ -18,6 +18,7 @@ import type {
   ReviseInput,
   StoryManifestEntry,
 } from "../../src/epic-builder/types.js";
+import { listWorkspaces, readDraft, workspaceDir } from "../../src/epic-builder/workspace.js";
 import { fanOut, getState, NoopTracker, previewManifest, reviewAction, runPublish, startSession, submitClarify, type CoreDeps, type ViewState } from "../lib/core.js";
 
 const TOKEN = "SECRET-PAT-do-not-leak-0xC0FFEE";
@@ -160,5 +161,56 @@ describe("epic-builder web flow", () => {
     const again = await runPublish(deps, slug, false);
     expect(again.created).toBe(0);
     expect(again.skipped).toBe(3);
+  });
+
+  it("recovers model failures from durable checkpoints without publishing or overwriting accepted work", async () => {
+    const trackerFactory = vi.fn(deps.makeTracker);
+    const guardedDeps = { ...deps, makeTracker: trackerFactory };
+    const { slug } = await startSession(guardedDeps, "Recover an interrupted epic session");
+
+    let clarifyAttempts = 0;
+    const clarifyFailsOnce = Object.assign(Object.create(guardedDeps.model) as ModelClient, {
+      async clarify(input: { round: number }) {
+        clarifyAttempts++;
+        if (clarifyAttempts === 1) throw new Error("clarify model unavailable");
+        return guardedDeps.model.clarify({ prompt: "x", round: input.round, priorQA: "" }, "standard");
+      },
+    });
+    await expect(submitClarify({ ...guardedDeps, model: clarifyFailsOnce }, slug, "defaults"))
+      .rejects.toThrow("clarify model unavailable");
+    expect(getState(guardedDeps, slug).state).toBe("clarify");
+
+    const draftFails = Object.assign(Object.create(guardedDeps.model) as ModelClient, {
+      async draftEpic() { throw new Error("draft model unavailable"); },
+    });
+    await expect(submitClarify({ ...guardedDeps, model: draftFails }, slug, "defaults"))
+      .rejects.toThrow("draft model unavailable");
+    expect(getState(guardedDeps, slug).state).toBe("epic-draft");
+
+    let state = await submitClarify(guardedDeps, slug, "defaults");
+    expect(state.state).toBe("epic-review");
+    const dir = workspaceDir(guardedDeps.cwd, slug);
+    const acceptedBody = readDraft(dir, "epic.md").body;
+    state = await reviewAction(guardedDeps, slug, { action: "accept", target: "epic.md" });
+    expect(state.state).toBe("stories-fan-out");
+    await expect(reviewAction(guardedDeps, slug, { action: "edit", target: "epic.md", body: "# overwritten" }))
+      .rejects.toThrow(/not reviewable/);
+    expect(readDraft(dir, "epic.md").body).toBe(acceptedBody);
+
+    const malformedManifest = Object.assign(Object.create(guardedDeps.model) as ModelClient, {
+      async storyManifest() { return [{ title: "", scope: "scope", sizing: "M" }] as StoryManifestEntry[]; },
+    });
+    await expect(fanOut({ ...guardedDeps, model: malformedManifest }, slug)).rejects.toThrow(/manifest entry/);
+    expect(getState(guardedDeps, slug).state).toBe("stories-fan-out");
+    expect(trackerFactory).not.toHaveBeenCalled();
+  });
+
+  it("does not create a successful-looking workspace when the initial model call fails", async () => {
+    const unavailable = Object.assign(Object.create(deps.model) as ModelClient, {
+      async clarify() { throw new Error("initial model unavailable"); },
+    });
+    await expect(startSession({ ...deps, model: unavailable }, "An epic that cannot be clarified"))
+      .rejects.toThrow("initial model unavailable");
+    expect(listWorkspaces(deps.cwd)).toEqual([]);
   });
 });
