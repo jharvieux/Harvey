@@ -545,6 +545,34 @@ export function parsePackageLock(text: string): ParsedLock {
 // `resolution: {integrity: …}` is the same SRI hash package-lock records (#1079).
 export function parsePnpmLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
+  const installations = new Map<string, DependencyInstallation>();
+  try {
+    const lock: unknown = parseYaml(text);
+    if (isRecord(lock)) {
+      const importers = isRecord(lock.importers) ? lock.importers : { ".": lock };
+      for (const [importerPath, rawImporter] of Object.entries(importers)) {
+        if (!isRecord(rawImporter)) continue;
+        const ownerDir = importerPath === "." ? "" : importerPath.replace(/^\.\//, "");
+        for (const section of RANGE_SECTIONS) {
+          const dependencies = rawImporter[section];
+          if (!isRecord(dependencies)) continue;
+          for (const [name, rawDependency] of Object.entries(dependencies)) {
+            if (!validPackageName(name)) continue;
+            const selected = isRecord(rawDependency) ? rawDependency.version : rawDependency;
+            if (typeof selected !== "string" || !selected.startsWith("link:")) continue;
+            const target = selected.slice("link:".length);
+            if (!target || posix.isAbsolute(target)) continue;
+            const localPath = posix.normalize(posix.join(ownerDir, target));
+            if (localPath.startsWith("../")) continue;
+            const path = posix.join(ownerDir, "node_modules", name);
+            installations.set(path, { path, localPath });
+          }
+        }
+      }
+    }
+  } catch {
+    // The range parser records malformed YAML in completeness; no link is proved here.
+  }
   let inPackages = false;
   let unmatched = 0;
   let current: SbomComponent | undefined;
@@ -575,7 +603,7 @@ export function parsePnpmLock(text: string): ParsedLock {
       unmatched++;
     }
   }
-  return { components: [...out.values()], installations: [], licenseOrigins: [...out.values()].map((component) => ({ component, explicitName: true })), unresolvedLockAliases: [], unmatched, ranges: pnpmRanges(text) };
+  return { components: [...out.values()], installations: [...installations.values()], licenseOrigins: [...out.values()].map((component) => ({ component, explicitName: true })), unresolvedLockAliases: [], unmatched, ranges: pnpmRanges(text) };
 }
 
 // yarn.lock — both the v1 format (`braces@^2.3.1:` / `  version "2.3.2"`) and Berry's
@@ -709,7 +737,7 @@ export function collectDependencies(dir: string): DependencySource {
       parseError = (err as Error).message;
     }
     const rangeScopes = [ranges, ...unselectedRangeSources(dir, file)];
-    if (components.length > 0) {
+    if (components.length > 0 || installations.length > 0) {
       // #1079: a parser that resolved SOME entries and skipped others is exactly the
       // partial-presented-as-whole case. Say how many were missed rather than calling it complete
       // because the array was non-empty.
@@ -792,6 +820,12 @@ export interface LicenseCandidate {
     license?: string;
     hasInstallScript: boolean;
   };
+}
+
+/** Stable receipt identity for one metadata candidate, including proved local provenance. */
+export function licenseCandidateIdentity(candidate: LicenseCandidate): string {
+  if (candidate.localMetadata) return `${candidate.name}@local:${candidate.localMetadata.manifest}`;
+  return `${candidate.name}@${candidate.version ?? "unresolved"}`;
 }
 
 export interface LicenseScope {
@@ -914,8 +948,9 @@ export function licenseScope(dir: string): LicenseScope {
           // Ordinary declarations retain their existing name-based reach.
           ordinaryDeclaredNames.add(name);
           const matches = componentsByName.get(name) ?? [];
-          const installation = npmTree ? visibleInstallation(installations, manifest.label, name) : undefined;
-          const local = typeof specifier === "string" ? localDeclaration(manifest.label, name, specifier, installation) : undefined;
+          const selectedInstallation = visibleInstallation(installations, manifest.label, name);
+          const installation = npmTree ? selectedInstallation : undefined;
+          const local = typeof specifier === "string" ? localDeclaration(manifest.label, name, specifier, selectedInstallation) : undefined;
           if (local) {
             localWorkspaceNames.add(name);
             // A root and one or more workspace consumers can all declare the same owned package.
@@ -924,7 +959,7 @@ export function licenseScope(dir: string): LicenseScope {
             unresolved.set(`local\u0000${local.metadata.manifest}`, { name, direct: true, localMetadata: local.metadata });
             continue;
           }
-          if (typeof specifier === "string" && (/^(?:workspace|file|link|portal):/.test(specifier) || installation?.localPath)) {
+          if (typeof specifier === "string" && (/^(?:workspace|file|link|portal):/.test(specifier) || selectedInstallation?.localPath)) {
             localWorkspaceNames.add(name);
             unresolved.set(`ordinary\u0000${manifest.label}\u0000${name}`, aliasCandidate(name, specifier, true, manifest.label));
             continue;

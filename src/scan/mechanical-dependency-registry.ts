@@ -1,7 +1,7 @@
 import type { Finding } from "../findings.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dependencyRangeEdge, licenseScope } from "../sbom.js";
+import { dependencyRangeEdge, licenseCandidateIdentity, licenseScope } from "../sbom.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, runOsvScanner, type OsvScanResult, type OsvAssessment, type OsvExecutionReceipt, inventoryOsvInputs, validateOsvAssessment } from "./dependencies.js";
 import {
@@ -123,6 +123,10 @@ function dependencyExaminedUnits(producer: string, selected: readonly unknown[])
       return semanticExaminedUnits(producer, "declared-dependency", [`${value.manifest}#${value.name}`]);
     }
     if ("name" in value && typeof value.name === "string") {
+      if ("localMetadata" in value && value.localMetadata && typeof value.localMetadata === "object" &&
+          "manifest" in value.localMetadata && typeof value.localMetadata.manifest === "string") {
+        return semanticExaminedUnits(producer, "resolved-dependency", [licenseCandidateIdentity(value as Parameters<typeof licenseCandidateIdentity>[0])]);
+      }
       const version = "version" in value && typeof value.version === "string" ? value.version : "unresolved";
       return semanticExaminedUnits(producer, "resolved-dependency", [`${value.name}@${version}`]);
     }

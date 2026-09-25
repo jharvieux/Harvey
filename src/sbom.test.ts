@@ -401,6 +401,42 @@ describe("licenseScope (#1213)", () => {
     }]);
   });
 
+  it("binds a pnpm importer link to the exact local manifest for an ordinary range", async () => {
+    mkdirSync(join(dir, "packages/config"), { recursive: true });
+    mkdirSync(join(dir, "packages/dev"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
+    writeFileSync(join(dir, "packages/config/package.json"), JSON.stringify({ name: "@local/config", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "packages/dev/package.json"), JSON.stringify({ name: "@local/dev", dependencies: { "@local/config": "*" } }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), [
+      "lockfileVersion: '9.0'",
+      "importers:",
+      "  packages/dev:",
+      "    dependencies:",
+      "      '@local/config':",
+      "        specifier: '*'",
+      "        version: link:../config",
+      "packages: {}",
+      "",
+    ].join("\n"));
+
+    const scope = licenseScope(dir);
+    expect(scope.candidates.filter((candidate) => candidate.name === "@local/config")).toEqual([{
+      name: "@local/config",
+      direct: true,
+      localMetadata: { manifest: "packages/config/package.json", private: true, license: "MIT", hasInstallScript: false },
+    }]);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ name: "@local/config", license: "GPL-3.0" }))) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(scope, { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({
+      coordinate: "@local/config",
+      status: "local-manifest",
+      provenance: "packages/config/package.json#license/scripts",
+      license: "MIT",
+    }));
+    expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-COPYLEFT-@local/config");
+  });
+
   it("deduplicates repeated declarations of the same proved local manifest", () => {
     mkdirSync(join(dir, "packages/private"), { recursive: true });
     mkdirSync(join(dir, "packages/consumer"), { recursive: true });

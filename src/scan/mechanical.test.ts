@@ -353,6 +353,31 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
       rmSync(container, { recursive: true, force: true });
     }
   });
+
+  it("gives same-name local packages path-bound identities in every metadata-backed receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-mechanical-local-identities-"));
+    try {
+      for (const path of ["packages/first", "packages/second", "packages/consumer"]) mkdirSync(join(root, path), { recursive: true });
+      const pkg = { name: "root", private: true, workspaces: ["packages/*"], dependencies: { "@local/shared": "file:packages/first" } };
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(root, "packages/first/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "MIT" }));
+      writeFileSync(join(root, "packages/second/package.json"), JSON.stringify({ name: "@local/shared", private: true, license: "Apache-2.0" }));
+      writeFileSync(join(root, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: { "@local/shared": "file:../second" } }));
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline fixture" }, skipNetworkChecks: true }, "supply");
+        for (const detector of ["curated-dependency-cves", "resolved-install-scripts", "dependency-license", "supply-chain-scope"]) {
+          const record = result.records.find((candidate) => candidate.detector === detector)!;
+          const local = record.examinedUnitIdentities.filter((unit) => unit.kind === "resolved-dependency" && unit.identity.startsWith("@local/shared@local:"));
+          expect(local.map((unit) => unit.identity).sort(), detector).toEqual([
+            "@local/shared@local:packages/first/package.json",
+            "@local/shared@local:packages/second/package.json",
+          ]);
+          expect(new Set(record.examinedUnitIdentities.map((unit) => `${unit.kind}\0${unit.identity}`)).size, detector).toBe(record.examinedUnitIdentities.length);
+        }
+      } finally { context.dispose(); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 describe("npm lockfile range edges (#1774)", () => {
