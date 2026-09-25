@@ -73,6 +73,7 @@ it.each(["valid", "valid-without-source", "unbound", "tree", "configuration", "r
   const original = join(f.root, "original");
   writeAuditReplayBundle(original, { binding, scopes: [pass.scope], passes: [pass] });
   const originalReplay = replayAuditBundle(original, target);
+  if (kind === "valid-without-source") expect(originalReplay.evidence.current[0]!.rawArtifacts[0]!.sourcePath).toBeUndefined();
   const recipe = { target, expectedRevision: binding.target.revision, effectiveConfig, scopes: [pass.scope], passes: [kind === "unbound" ? { ...pass, resultFile: raw } : { bundle: original, receiptId: originalReplay.evidence.current[0]!.id }] };
   if (kind === "tree") writeFileSync(source, "changed source at the same revision");
   if (kind === "configuration") recipe.effectiveConfig = { mutate: ["different/**/*.ts"] };
