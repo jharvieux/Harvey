@@ -170,15 +170,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 196,
-        "candidateRows": 65,
+        "candidateRows": 66,
         "dependencyClass": "source-revision",
         "dynamic": 4,
         "emptyReason": null,
         "pinned": 186,
         "recorded": 9,
-        "rows": 261,
-        "unresolved": 66,
-        "whollyUnbound": 66
+        "rows": 262,
+        "unresolved": 67,
+        "whollyUnbound": 67
       },
       {
         "accepted": 0,
@@ -209,13 +209,13 @@
     ],
     "environmentAssertions": 1121,
     "integrityAssertions": 21,
-    "noAssertions": 7438,
+    "noAssertions": 7439,
     "opaqueVenues": 3,
     "residualRows": 2708,
-    "rows": 8590,
+    "rows": 8591,
     "schemaAssertions": 10,
     "venues": 2708,
-    "vocabularyCandidates": 3636
+    "vocabularyCandidates": 3637
   },
   "reconciliations": [
     {
@@ -183762,6 +183762,43 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "source-revision",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 198,
+        "path": "src/residual-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/residual-scope.test.ts#content-hint:source-revision:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/residual-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "tool",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
@@ -183914,7 +183951,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 179,
+        "line": 182,
         "path": "src/residual-scope.ts"
       },
       "freshness": {
@@ -184025,7 +184062,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 126,
+        "line": 127,
         "path": "src/residual-scope.ts"
       },
       "freshness": {
@@ -367223,8 +367260,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "fdf0ab704d0a4e070c7f8dac0563a4c60c03ca2a",
-    "commitPayload": "dHJlZSBjMTk0YjRiYWZmNjExY2U2ZmFhNGFmMzg5YWJhMTFjY2ZkMzQyZTU0CnBhcmVudCAwZjJmMTBmYTIwYjY3NWE3NmQ1ZWU0MGE4MWY5M2RlNmYzNjQ1ZTkzCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQ0NDk3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQ0NDk3IC0wNTAwCgpQcmVzZXJ2ZSBleHBsaWNpdCByZXNpZHVhbCBzY29wZSBkaXNjbG9zdXJlcyAoIzIxNDIpCg==",
+    "commit": "7c4fdce657273b9dd784eae8f7e39588d1dd4c64",
+    "commitPayload": "dHJlZSAwZTBkNjkwN2MwYjE1ZjdiYzc5YzM4NDU5ODY5OThhNmMyMWZlNDIwCnBhcmVudCA4NjRlZjc3OGMwNWY1MjUyYmRiYzVmODg0YTExYTgyNjM0ODZlZjFkCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQ1MjQ5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQ1MjQ5IC0wNTAwCgpEaXN0aW5ndWlzaCBmcmVzaCBWaXRhbHMgZXZpZGVuY2UgaW4gY2xpZW50IHJlcG9ydHMgKCMyMTQyKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -367233,13 +367270,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "a8ed9f37426c971a26d1d89dd87b0c941a452826",
+        "gitOid": "9ebca33b460afaba82c1cde1436146c3f97bdb72",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "18debd7149e405aad5421139066ed1b540adf43528c8eb81ed5deef6a3868c26",
-    "tree": "c194b4baff611ce6faa4af389aba11ccfd342e54"
+    "populationSha256": "0f24109274147c74f7e8905abc6571ed949ff802428c72ffee1ff7df405d6b13",
+    "tree": "0e0d6907c0b15f7bc79c3845986998a6c21fe420"
   },
   "venues": [
     {
@@ -389623,34 +389660,34 @@
       "sha256": "370a825f75596ffe36b0920e6b75729c17375bc3d1f54c2140b608097f45501b"
     },
     {
-      "bytes": 21057,
+      "bytes": 21298,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "825d2ce17aca305339c76eb88d2bba9c7cdf91af",
+      "gitOid": "524848bcfc1c890b6e332257b514f55ebe86501d",
       "id": "src/residual-scope.test.ts",
       "kind": "source",
-      "literalCount": 370,
-      "literalSha256": "15e99a7385e7cff5e8226dd7fbd61f0734c96adb09c1c788198b7764ea1675fd",
+      "literalCount": 373,
+      "literalSha256": "fef7a059fb1a2202376998437bd598e52bff8fc040b82eb334a70b6139fc20e8",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/residual-scope.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "c2b264b0dba62f9f930e0133a5945d2d098e71bed5e318f0fe56796ed5e2052f"
+      "sha256": "6234ac22f21bba7ee3699cab620aeab702b753498fc89f843ab9ca55f0afc5f9"
     },
     {
-      "bytes": 32607,
+      "bytes": 32946,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "86386255d08a5f3b3af612630040259647b50c28",
+      "gitOid": "774b935e9aaee8edbf80ba77af6b11abc9512776",
       "id": "src/residual-scope.ts",
       "kind": "source",
-      "literalCount": 309,
-      "literalSha256": "1282c08664ae3344f1586691f4de76379f769db3cb4cc23e768105c8566afc63",
+      "literalCount": 312,
+      "literalSha256": "5ff0b3a8a5e281bd4d2bf9040129952c17d9bd38f65e6d06bc13be46dc4776f7",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/residual-scope.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "63669e867d0e3584a6a4b44aa900a29d4dc86997518408b89799a048ee27da8d"
+      "sha256": "20ef60161f320d60bca65e87ec9a747ee6b07156519a424bc5cc05454c40b707"
     },
     {
       "bytes": 1775,
