@@ -42,4 +42,4 @@ export function classifyPrismaSchema(schema: string): { columns: ColumnInfo[]; d
 export function gatherProtectionFacts(
   sql: { unsafe: (query: string, parameters?: string[]) => Promise<Record<string, unknown>[]> },
   options?: import("../src/pii-protection-review-catalog.js").ProtectionCatalogOptions,
-): Promise<import("../src/pii-protection-review-catalog.js").ProtectionCatalog>;
+): ReturnType<typeof import("../src/pii-protection-review-catalog.js").loadProtectionCatalog>;

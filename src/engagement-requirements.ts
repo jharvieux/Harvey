@@ -1,7 +1,7 @@
 /** Non-secret intake contract shared by metadata and database assessment consumers. */
 export const ENGAGEMENT_REQUIREMENTS_VERSION = "harvey-engagement-requirements/1";
 
-export interface EngagementRequirement {
+interface EngagementRequirement {
   id: string;
   modules: readonly string[];
   capability: string;

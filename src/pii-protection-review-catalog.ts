@@ -4,21 +4,21 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { loadEffectiveAuthorization } from "./scan/supabase-authorization.js";
 import type { ExposureFacts } from "./pii-protection-review.js";
 
-export interface InventoryColumn {
+interface InventoryColumn {
   table_schema: string;
   table_name: string;
   column_name: string;
   data_type: string;
   relation_kind: string;
 }
-export interface SchemaInventory {
+interface SchemaInventory {
   schema: string;
   status: "examined" | "not-selected" | "unavailable";
   relations: number | null;
   columns: number | null;
   reason: string;
 }
-export interface ProtectionCatalog {
+interface ProtectionCatalog {
   columns: InventoryColumn[];
   schemas: SchemaInventory[];
   facts: ExposureFacts;
