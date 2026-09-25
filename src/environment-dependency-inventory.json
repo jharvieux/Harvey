@@ -48,7 +48,7 @@
     "authoritativeRecords": 2246,
     "authoritativeUnresolved": 1526,
     "authoritativeVenues": 108,
-    "candidateVenues": 2592,
+    "candidateVenues": 2595,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 246,
-        "candidateRows": 852,
+        "candidateRows": 854,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1098,
-        "unresolved": 1092,
-        "whollyUnbound": 1093
+        "rows": 1100,
+        "unresolved": 1094,
+        "whollyUnbound": 1095
       },
       {
         "accepted": 0,
@@ -92,15 +92,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 31,
-        "candidateRows": 773,
+        "candidateRows": 774,
         "dependencyClass": "database",
         "dynamic": 8,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 1,
-        "rows": 804,
-        "unresolved": 796,
-        "whollyUnbound": 803
+        "rows": 805,
+        "unresolved": 797,
+        "whollyUnbound": 804
       },
       {
         "accepted": 0,
@@ -131,15 +131,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 18,
-        "candidateRows": 77,
+        "candidateRows": 78,
         "dependencyClass": "locale",
         "dynamic": 18,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 18,
-        "rows": 95,
-        "unresolved": 77,
-        "whollyUnbound": 77
+        "rows": 96,
+        "unresolved": 78,
+        "whollyUnbound": 78
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2703,
+        "candidateRows": 2706,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3819,
-        "unresolved": 3819,
-        "whollyUnbound": 3819
+        "rows": 3822,
+        "unresolved": 3822,
+        "whollyUnbound": 3822
       }
     ],
     "environmentAssertions": 1121,
     "integrityAssertions": 21,
-    "noAssertions": 7414,
+    "noAssertions": 7421,
     "opaqueVenues": 3,
-    "residualRows": 2703,
-    "rows": 8566,
+    "residualRows": 2706,
+    "rows": 8573,
     "schemaAssertions": 10,
-    "venues": 2703,
-    "vocabularyCandidates": 3617
+    "venues": 2706,
+    "vocabularyCandidates": 3621
   },
   "reconciliations": [
     {
@@ -78694,7 +78694,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 48,
+        "line": 54,
         "path": "pnpm-lock.yaml"
       },
       "freshness": {
@@ -78731,7 +78731,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 498,
+        "line": 522,
         "path": "pnpm-lock.yaml"
       },
       "freshness": {
@@ -78768,7 +78768,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 2976,
+        "line": 46,
         "path": "pnpm-lock.yaml"
       },
       "freshness": {
@@ -78805,7 +78805,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 308,
+        "line": 332,
         "path": "pnpm-lock.yaml"
       },
       "freshness": {
@@ -91399,6 +91399,154 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/__tests__/mutation-runner-validity.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "database",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 12,
+        "path": "src/__tests__/pentest-boundary-postgres.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__tests__/pentest-boundary-postgres.test.ts#content-hint:database:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__tests__/pentest-boundary-postgres.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "locale",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 40,
+        "path": "src/__tests__/pentest-boundary-postgres.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__tests__/pentest-boundary-postgres.test.ts#content-hint:locale:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__tests__/pentest-boundary-postgres.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/__tests__/pentest-boundary-postgres.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__tests__/pentest-boundary-postgres.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__tests__/pentest-boundary-postgres.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/__tests__/pentest-boundary-postgres.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/__tests__/pentest-boundary-postgres.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/__tests__/pentest-boundary-postgres.test.ts"
     },
     {
       "assertionVenue": null,
@@ -172617,6 +172765,43 @@
     },
     {
       "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/pentest/client.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/pentest/client.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/pentest/client.test.ts"
+    },
+    {
+      "assertionVenue": null,
       "classification": "vocabulary-candidate",
       "consumer": {
         "location": null,
@@ -175111,6 +175296,80 @@
       "evidence": {
         "anchor": "content-hint",
         "line": 1,
+        "path": "src/pentest/next-auth-session.integration.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/pentest/next-auth-session.integration.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/pentest/next-auth-session.integration.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/pentest/next-auth-session.integration.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/pentest/next-auth-session.integration.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/pentest/next-auth-session.integration.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
         "path": "src/pentest/next-auth-session.test.ts"
       },
       "freshness": {
@@ -176886,7 +177145,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 83,
+        "line": 84,
         "path": "src/pentest/realtime-channel-probe.ts"
       },
       "freshness": {
@@ -177256,7 +177515,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 261,
+        "line": 326,
         "path": "src/pentest/realtime-transport.ts"
       },
       "freshness": {
@@ -366335,8 +366594,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "16ab034cc9100cdbee24742ca067044a0928cba5",
-    "commitPayload": "dHJlZSAwN2Y4NzQ0YWRiZGI4YTg0MDEyZjViODNjYTI2YjhkNjAwMTFhZWQ3CnBhcmVudCAxNmI0YTgzNmQzZjI5NGVjMTBlNGQ2MjNiMDUyNmI3OWNmM2E1NTc0CnBhcmVudCBlMTZhZTFhZmVmNWRmMTU2Y2E5OGU1MzE5YzAxNDU4NWNiNTRiMGRmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM5OTM5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzM5OTM5IC0wNTAwCgpNZXJnZSBjb21taXQgJ2UxNmFlMWFmZWY1ZGYxNTZjYTk4ZTUzMTljMDE0NTg1Y2I1NGIwZGYnIGludG8gZmVhdHVyZS9zd2VlcC0yMDc2LWR1cmFibGUtZWZmZWN0cwoKIyBDb25mbGljdHM6CiMJc3JjL2Vudmlyb25tZW50LWRlcGVuZGVuY3ktaW52ZW50b3J5Lmpzb24K",
+    "commit": "5d120753e539e18ee990cc073ef0083ebe5986e7",
+    "commitPayload": "dHJlZSA2OTk2YzRlM2FhZDUwMmU0NzZmMWI2NjkyMjc5NmE3OTgyMzc5ZjRkCnBhcmVudCA0ZDI0ZmZhNmE0OWRlNDRmNDI1YWEwNDg5NTQzYjY1NTUyOTliZDJkCnBhcmVudCBmZjM3ODlhZmVjNjRhNThiOTQwYWQyZGZhNTY1MmY3MGVmZTQwNzhhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQxMjU2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzQxMjU2IC0wNTAwCgpNZXJnZSBjb21taXQgJ2ZmMzc4OWFmZWM2NGE1OGI5NDBhZDJkZmE1NjUyZjcwZWZlNDA3OGEnIGludG8gZmVhdHVyZS9zd2VlcC0yMDc2LWR1cmFibGUtZWZmZWN0cwoKIyBDb25mbGljdHM6CiMJc3JjL2Vudmlyb25tZW50LWRlcGVuZGVuY3ktaW52ZW50b3J5Lmpzb24K",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -366345,13 +366604,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "5770683319bdf0942f1a56c1196fb44c3994ff28",
+        "gitOid": "1c0477885e60e1aa94529710ece24733a2cb7874",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "894622bb28c16a9634b4e4ca08e0b1f934a24eafc3c653021f16635afbba66ba",
-    "tree": "07f8744adbdb8a84012f5b83ca26b8d60011aed7"
+    "populationSha256": "034488513b3baa66cfcb9791a25b9a6a7845446e85703638437dfadb175b0bc0",
+    "tree": "6996c4e3aad502e476f1b66922796a7982379f4d"
   },
   "venues": [
     {
@@ -370555,11 +370814,11 @@
       "sha256": "14c2bf513d9f4f9b5d059752c04f6e75daf669f1c3338294d2895fb8efa7bf5c"
     },
     {
-      "bytes": 5023,
+      "bytes": 5119,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "a85a67f7c12815e870c47f8cecf354b576247153",
+      "gitOid": "6deb173c015b3b9ce0937ff890dd7b54eb76d003",
       "id": "package.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -370567,14 +370826,14 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "package.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "c2862decdcad72e827cd887edd0e7a6b89abb49c63793d40b1c2e5df7440ae10"
+      "sha256": "98c9e408f9850fedb7b2e26022018822e56fb7bd3bfcdfb73f2d5defca3d1d64"
     },
     {
-      "bytes": 269431,
+      "bytes": 276661,
       "disposition": "conservative-candidate",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "bb97b9761ef2948e99d41ab870ab0ce65ebe1ef9",
+      "gitOid": "f047fcd9ff2ac38621006dd8a89fc6dcb08e99aa",
       "id": "pnpm-lock.yaml",
       "kind": "structured-data",
       "literalCount": 0,
@@ -370582,7 +370841,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "pnpm-lock.yaml",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "bf48a699c70b13e7d70c2102aaadb52429fc10046b057657ac2f2e10494170fa"
+      "sha256": "f37e0894ca8b5f133da7d874b13e93e1bb58aab1457ab560fca099e1184ffe85"
     },
     {
       "bytes": 845,
@@ -372203,6 +372462,21 @@
       "path": "src/__tests__/mutation-runner-validity.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
       "sha256": "f0f8ca35da27d9fb52424f97a7065263aee2c5d4e653a4f73d4fb51448d323bd"
+    },
+    {
+      "bytes": 6774,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "3a8f09fcc12447957167d8d597a57ef0f0728696",
+      "id": "src/__tests__/pentest-boundary-postgres.test.ts",
+      "kind": "source",
+      "literalCount": 110,
+      "literalSha256": "29b4e6b27e26f3b2eec2c0db65e26f6048754185ec2e6f590aa01490b7fa6cd0",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/__tests__/pentest-boundary-postgres.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "49a8841ad0e069b3e8deb73feb3814695b1a015c6b234e07510a8a77bcaf384c"
     },
     {
       "bytes": 4921,
@@ -386995,11 +387269,26 @@
       "sha256": "dc8ae31a08407544a35acbc8e428bcdb17a8c410b8ed28182c0135a4b3a3152d"
     },
     {
-      "bytes": 1698,
+      "bytes": 3473,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "ad906abe184375027ab4210d3fd2227983b44e18",
+      "gitOid": "26be4d8ac24a10a77c78ef2a4d5778769f590afe",
+      "id": "src/pentest/client.test.ts",
+      "kind": "source",
+      "literalCount": 89,
+      "literalSha256": "68cdd9158e4523370ba12357c50df4fa889f85c9df9b19d58f302802ba2a68db",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/pentest/client.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "5f37a3e68a84b7977bcbfe11a8a9c03f46ef79be0b9879fe193d1ba58de42d92"
+    },
+    {
+      "bytes": 1739,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "0fc8eb1731509d2244abae00e9a78f85c661ae84",
       "id": "src/pentest/client.ts",
       "kind": "source",
       "literalCount": 7,
@@ -387007,22 +387296,22 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/client.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "cc7d1a512ea12452a812a12bcd2fde8433e8c1d34487fa62130cbc8a63457a47"
+      "sha256": "fed5c5fead9e091db8995cba6c997380bdb10abc1d73208b7c113a3a49239a95"
     },
     {
-      "bytes": 7548,
+      "bytes": 7773,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "d7f75f32bbbdbc8502d1e7a79acc5e514130bb9b",
+      "gitOid": "1d3f9c5cefdbf7c93209b1a37e36be9e27a61c3d",
       "id": "src/pentest/custom-auth.test.ts",
       "kind": "source",
-      "literalCount": 91,
-      "literalSha256": "1cdc265d8f121f1ba35c3c8a18426a692c3d5b4b398df2aa9a50a41e3ac16ebe",
+      "literalCount": 96,
+      "literalSha256": "b8c62399d4605b18adefefefcdfaf8eb8dd2024d5ad61e2c0416eefd6df55b57",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/custom-auth.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "64291e32fac70c7f4c4abd3d30fdb370c20b178493d5f3da91d00865d2986744"
+      "sha256": "a149001231019ce12a48101d48188fb8acd0169f845db75f43338fdf21d3c8c0"
     },
     {
       "bytes": 9232,
@@ -387400,6 +387689,21 @@
       "sha256": "9d64572a49f6d85e6d5f33460515d68c0671cfb86df97b4e7a6092b7cf6c2d2a"
     },
     {
+      "bytes": 3708,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "a0ac2ffb3fac6a75ea54102c9ada19762a2fba12",
+      "id": "src/pentest/next-auth-session.integration.test.ts",
+      "kind": "source",
+      "literalCount": 33,
+      "literalSha256": "c1b54e429ecd58a848bfc8e4dd361962b147059745f95ae1883d2d6138f08f15",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/pentest/next-auth-session.integration.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "15fcb9aff4b3de8256650b1fa0dd373185b0677da5f84cdbad56792a59ede3d4"
+    },
+    {
       "bytes": 3348,
       "disposition": "conservative-candidate",
       "format": "source",
@@ -387760,19 +388064,19 @@
       "sha256": "9bb27c6f200dbc323d4cf8d25566958bd54825d52c95d94bee1a2edc7559bb06"
     },
     {
-      "bytes": 17588,
+      "bytes": 18651,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "c381de656ac48b4c1368af023cff2b813fe52c74",
+      "gitOid": "333ad7f3d35676ecc12c00ccf3dd3a7dd1e41c22",
       "id": "src/pentest/realtime-channel-probe.ts",
       "kind": "source",
-      "literalCount": 59,
-      "literalSha256": "dbba3e7f1529a19038e6d0f1550e48c2784e165e4294fbc3fbe860f8aee65711",
+      "literalCount": 62,
+      "literalSha256": "206cf95b0c7fde367261512841f08c2b80d0754b325d17e8c08df64dc7325252",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/realtime-channel-probe.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "18338f24b1199cb91b7d043de0df13594c21af025877d5dfc91db07990e0ceca"
+      "sha256": "e03716b45f27b818690a9bff297c41d528fc2b7881d992bbe70511b453f2e73e"
     },
     {
       "bytes": 12805,
@@ -387790,11 +388094,11 @@
       "sha256": "e61caefa12023cb3e4a5529fae001530307e16b09be9634f1b30a99a3570c0d7"
     },
     {
-      "bytes": 16584,
+      "bytes": 16923,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "ab4d6dd5d719b9fdff9d1455fa7e381711e8c9a6",
+      "gitOid": "f680c305c26a70f1c584e4a825c53303c4021650",
       "id": "src/pentest/realtime-probe.ts",
       "kind": "source",
       "literalCount": 44,
@@ -387802,37 +388106,37 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/realtime-probe.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f75695f8398c3dd618497b701ab3e098c3eacdc8d53e7e3a7fa40938ed21d30e"
+      "sha256": "5599443d5b75f80064b0d8e4ea7854b93f842481a8f8ec60a35faeb2d5438c73"
     },
     {
-      "bytes": 7793,
+      "bytes": 25309,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "c203d4e3c9f1177d0cf053def1431662cd807d89",
+      "gitOid": "317f88ee259b60afa0e05745f658a8812d1b142c",
       "id": "src/pentest/realtime-transport.test.ts",
       "kind": "source",
-      "literalCount": 50,
-      "literalSha256": "0b6614fbe4f438a22533ddd1a6b1f06e04c091941d6f1ece464c4b7f1f8a97f5",
+      "literalCount": 341,
+      "literalSha256": "890f696ee4ca971c3c994f59b691809e01eb81def84e4c5e50fcc9dde15f17e0",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/realtime-transport.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "65671dcdf87cfe6c81d6d2468f8e1d45f166f8e788dcd3a9addda4c9bc77b553"
+      "sha256": "a10704b16bc9397c862dc453424210a896258cc9b2e9a627a8f32502a29370d5"
     },
     {
-      "bytes": 15199,
+      "bytes": 19070,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "1acb7aaefaafe457c72e8cfc6779baa5296dbd11",
+      "gitOid": "0caaec85c0a61c17496d9c203123e1af8b978aa7",
       "id": "src/pentest/realtime-transport.ts",
       "kind": "source",
-      "literalCount": 75,
-      "literalSha256": "233602727e29a03c12b6947cf95c2d6338ad38e0b16021761b21918bd8d5060b",
+      "literalCount": 114,
+      "literalSha256": "3245eb266748299dec40065cab54d4721376cad046c772f139969f871c27de62",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/pentest/realtime-transport.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "b1ec1005a7ab4b0ab048c15e437bf4c70fb259fed662d00e65f702993c46bbdf"
+      "sha256": "409d9eb55b568f2b794c4bcf2df35180944d2f0e45013723a5f72059ea16f179"
     },
     {
       "bytes": 13577,
