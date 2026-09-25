@@ -35,6 +35,15 @@ export interface PublishedRef {
   contentHash: string; // sha256 of body at publish time
 }
 
+export interface PublicationProgress {
+  state: "pending" | "complete";
+  metadata?: "complete";
+  briefUrl?: string;
+  // Absent is the legacy state: briefUrl was written only after attachBrief completed. New
+  // two-write adapters record pending after upload and complete only after the ticket relation.
+  briefAttachment?: "pending" | "complete";
+}
+
 export interface DraftSession {
   version: 1;
   slug: string;

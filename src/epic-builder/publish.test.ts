@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "../trackers/types.js";
+import { LinearTracker } from "../trackers/linear.js";
 import { GitHubTracker } from "../trackers/github.js";
+import { PartialAttachmentWriteError } from "../trackers/recovery.js";
 import { NoopTracker, publish } from "./publish.js";
 import type { DraftSession } from "./types.js";
 import { createWorkspace, readDraft, writeDraft, writeFile } from "./workspace.js";
@@ -37,11 +39,15 @@ class FakeTracker implements Tracker {
   async setLabels(id: string, labels: string[]): Promise<void> {
     this.labels.push({ id, labels });
   }
+  async completeStory(id: string, _input: ItemInput, labels: string[]): Promise<void> {
+    await this.setLabels(id, labels);
+  }
   async setEstimate(): Promise<void> {}
   async attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef> {
     this.briefs.push(briefMarkdown);
     return { url: `https://tracker.test/brief/${id}` };
   }
+  completeAttachment?: (id: string, attached: AttachedRef) => Promise<void>;
   async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
     this.updates.push({ id, patch });
   }
@@ -107,7 +113,7 @@ describe("publish orchestrator", () => {
     // body via updateStory (#50) — frontmatter alone wouldn't be visible on the tracker item.
     expect(tracker.updates).toHaveLength(2);
     const endpointUpdate = tracker.updates.find((u) => u.id === "S2");
-    expect(endpointUpdate?.patch.body).toContain("📄 Implementation brief: https://tracker.test/brief/S2");
+    expect(endpointUpdate?.patch.appendBody).toContain("📄 Implementation brief: https://tracker.test/brief/S2");
     // The local record is written so a re-run is idempotent (design §8.2).
     expect(readDraft(dir, "epic.md").data.published).toMatchObject({ ref: "E1" });
   });
@@ -178,13 +184,13 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
       const method = init?.method ?? "GET";
       calls.push({ method, url: u });
       const ok = (data: unknown) =>
-        ({ ok: true, status: 200, json: async () => data, text: async () => "" }) as unknown as Response;
+        Response.json(data);
       if (method === "POST" && u.endsWith("/issues")) {
         const n = ++issueNo;
         return ok({ number: n, html_url: `https://github.com/o/r/issues/${n}`, body: "" });
       }
       if (method === "GET" && /\/issues\/\d+$/.test(u)) return ok({ number: 41, html_url: "", body: "epic body" });
-      if (method === "GET" && u.includes("/search/issues?")) return ok({ items: [] }); // no prior run to recover (#50)
+      if (method === "GET" && u.includes("/search/issues?")) return ok({ items: [], total_count: 0, incomplete_results: false }); // no prior run to recover (#50)
       if (method === "PATCH" && /\/issues\/\d+$/.test(u)) return ok({});
       if (method === "PUT" && /\/labels$/.test(u)) return ok([]);
       if (method === "POST" && /\/labels$/.test(u)) return ok([]);
@@ -208,5 +214,149 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
     expect(calls.filter((c) => c.method === "PUT" && c.url.includes("/contents/"))).toHaveLength(2);
     // The persisted story now links to its committed brief.
     expect(readDraft(dir, "stories/01-endpoint.md").data.brief).toContain("github.com/o/r/blob");
+  });
+});
+
+describe("publication stages survive post-create failures (#2113)", () => {
+  it("persists a completed upload receipt and resumes only its pending relation", async () => {
+    const { dir, session } = seedWorkspace();
+    session.stories = session.stories.slice(0, 1);
+    const tracker = new FakeTracker();
+    const url = "https://tracker.test/upload/already-complete";
+    let uploads = 0;
+    let relations = 0;
+    tracker.attachBrief = async () => {
+      uploads++;
+      throw new PartialAttachmentWriteError({ url }, "fixture relation", new Error("controlled relation failure"));
+    };
+    tracker.completeAttachment = async (_id, attached) => {
+      expect(attached).toEqual({ url });
+      relations++;
+    };
+
+    await expect(publish(dir, session, tracker)).rejects.toMatchObject({
+      name: "PartialTrackerWriteError",
+      stage: "brief attachment relation",
+      attachedRef: { url },
+    });
+    const pending = readDraft(dir, "stories/01-endpoint.md").data;
+    expect(pending.publication).toMatchObject({ state: "pending", briefUrl: url, briefAttachment: "pending" });
+    expect(pending.brief).toBe(url);
+
+    await publish(dir, session, tracker);
+    expect(uploads).toBe(1);
+    expect(relations).toBe(1);
+    expect(readDraft(dir, "stories/01-endpoint.md").data.publication).toMatchObject({
+      state: "complete",
+      briefUrl: url,
+      briefAttachment: "complete",
+    });
+  });
+
+  it.each(["", "javascript:alert(1)"])("keeps an invalid attachment reference %s pending", async url => {
+    const { dir, session } = seedWorkspace();
+    const tracker = new FakeTracker();
+    tracker.attachBrief = async () => ({ url });
+    await expect(publish(dir, session, tracker)).rejects.toMatchObject({ ref: { id: "S2" }, stage: "brief attachment" });
+    expect(readDraft(dir, "stories/01-endpoint.md").data.publication).toMatchObject({ state: "pending" });
+    expect(readDraft(dir, "stories/01-endpoint.md").data.brief).toBeUndefined();
+  });
+
+  it.each(["epic-label", "story-link", "story-label", "brief-attach", "brief-body-update"])("resumes %s without losing completed work or client edits", async mode => {
+    const { dir, session } = seedWorkspace();
+    session.stories = session.stories.slice(0, 1);
+    const issues = new Map<number, { number: number; html_url: string; repository_url: string; body: string; labels: string[] }>();
+    const attachments: string[] = [];
+    let failed = false;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const u = new URL(String(url));
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      if (u.pathname === "/search/issues") {
+        const marker = u.searchParams.get("q")?.match(/<!-- .*? -->/)?.[0] ?? "";
+        const items = [...issues.values()].filter(issue => issue.body.includes(marker));
+        return Response.json({ items, total_count: items.length, incomplete_results: false });
+      }
+      if (u.pathname === "/repos/o/r/issues" && method === "POST") {
+        const id = issues.size + 1;
+        const issue = { number: id, html_url: `https://github.com/o/r/issues/${id}`, repository_url: "https://api.github.com/repos/o/r", body: String(body.body), labels: [] as string[] };
+        issues.set(id, issue);
+        return Response.json(issue);
+      }
+      if (u.pathname.includes("/contents/") && method === "PUT") {
+        if (mode === "brief-attach" && !failed) { failed = true; return new Response("fixture attachment failure", { status: 500 }); }
+        attachments.push(String(body.content));
+        return Response.json({ content: { html_url: "https://github.com/o/r/blob/main/briefs/issue-2.md" } });
+      }
+      const match = u.pathname.match(/^\/repos\/o\/r\/issues\/(\d+)(\/labels)?$/);
+      if (!match) throw new Error(`unexpected fixture request ${method} ${u}`);
+      const id = Number(match[1]);
+      const issue = issues.get(id)!;
+      if (method === "GET") return Response.json(issue);
+      if (!failed && ((mode === "epic-label" && id === 1 && match[2]) || (mode === "story-label" && id === 2 && match[2]) || (mode === "story-link" && id === 1 && method === "PATCH") || (mode === "brief-body-update" && id === 2 && method === "PATCH"))) {
+        failed = true;
+        return new Response("fixture post-create failure", { status: 500 });
+      }
+      if (match[2]) issue.labels = body.labels as string[];
+      else Object.assign(issue, body);
+      return Response.json(issue);
+    };
+    const tracker = () => new GitHubTracker({ token: "publisher-fixture-token", owner: "o", repo: "r", fetchImpl });
+    await expect(publish(dir, session, tracker())).rejects.toMatchObject({ name: "PartialTrackerWriteError", ref: { id: mode === "epic-label" ? "1" : "2" } });
+    const pendingFile = mode === "epic-label" ? "epic.md" : "stories/01-endpoint.md";
+    expect(readDraft(dir, pendingFile).data.published).toMatchObject({ ref: mode === "epic-label" ? "1" : "2" });
+    expect(readDraft(dir, pendingFile).data.publication).toMatchObject({ state: "pending" });
+    if (mode === "brief-body-update") expect(readDraft(dir, pendingFile).data.brief).toContain("issue-2.md");
+    for (const issue of issues.values()) { issue.body += "\nClient annotation"; issue.labels.push("client-label"); }
+    await publish(dir, session, tracker());
+    expect(issues.size).toBe(2);
+    expect(attachments).toHaveLength(1);
+    expect(issues.get(1)?.body).toContain("- [ ] #2 ");
+    expect(issues.get(1)?.body).toContain("Client annotation");
+    expect(issues.get(1)?.labels).toEqual(expect.arrayContaining(["epic", "client-label"]));
+    expect(issues.get(2)?.labels).toEqual(expect.arrayContaining(["story", "size:M"]));
+    if (mode !== "epic-label") {
+      expect(issues.get(2)?.body).toContain("Client annotation");
+      expect(issues.get(2)?.labels).toContain("client-label");
+    }
+    expect(issues.get(2)?.body).toContain("📄 Implementation brief: https://github.com/o/r/blob/main/briefs/issue-2.md");
+    expect(readDraft(dir, "stories/01-endpoint.md").data.publication).toMatchObject({ state: "complete" });
+    await publish(dir, session, tracker());
+    expect(issues.size).toBe(2);
+    expect(attachments).toHaveLength(1);
+  });
+});
+
+
+describe("publisher retains actual Linear completion state", () => {
+  it("does not treat success:false as a completed publication on retry", async () => {
+    const { dir, session } = seedWorkspace();
+    session.stories = [];
+    let created = 0;
+    let failed = false;
+    let labelIds = ["client-label"];
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("issues(filter:")) return Response.json({ data: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } });
+      if (query.includes("issueCreate(")) {
+        created++;
+        return Response.json({ data: { issueCreate: { success: true, issue: { id: "1", url: "https://linear.app/fixture/issue/1" } } } });
+      }
+      if (query.includes("issue(id:")) return Response.json({ data: { issue: { labels: { nodes: labelIds.map(id => ({ id })), pageInfo: { hasNextPage: false } } } } });
+      if (query.includes("labels(first:")) return Response.json({ data: { team: { labels: { nodes: [{ id: "epic-label", name: "epic" }] } } } });
+      if (query.includes("issueUpdate(")) {
+        if (!failed) { failed = true; return Response.json({ data: { issueUpdate: { success: false } } }); }
+        labelIds = variables.input.labelIds;
+        return Response.json({ data: { issueUpdate: { success: true } } });
+      }
+      throw new Error(`Unexpected Linear fixture query ${query}`);
+    };
+    const tracker = () => new LinearTracker({ apiKey: "fixture-token", teamId: "T", fetchImpl });
+    await expect(publish(dir, session, tracker())).rejects.toMatchObject({ ref: { id: "1" } });
+    expect(readDraft(dir, "epic.md").data.publication).toMatchObject({ state: "pending" });
+    await publish(dir, session, tracker());
+    expect(created).toBe(1);
+    expect(labelIds).toEqual(["client-label", "epic-label"]);
+    expect(readDraft(dir, "epic.md").data.publication).toMatchObject({ state: "complete" });
   });
 });
