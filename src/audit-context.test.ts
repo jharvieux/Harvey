@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { AUDIT_MODULES } from "./audit-coverage.js";
 import { auditContextDigest, beginFreshAuditContext } from "./audit-context.js";
 import { diffAgainstBaseline } from "./audit-diff.js";
 import { assembleEngagementDocument } from "./audit-report.js";
-import type { AuditContext, ReportMeta } from "./findings.js";
+import { validateFindings, type AuditContext, type ReportMeta } from "./findings.js";
 import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
@@ -35,6 +35,8 @@ describe("fresh audit execution context", () => {
     expect(a.engagementId).not.toBe(b.engagementId);
     expect(a.target).toEqual(b.target);
     expect(a.scopeComplete).toBe(true);
+    const reference = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
+    expect(validateFindings({ ...reference, auditContext: a }).errors).toEqual([]);
     expect(kind(a, b).kind).toBe("same-source");
     expect(kind(a, a).kind).toBe("same-run-checkpoint");
     writeFileSync(join(options.target, "app.ts"), "export const n = 2;");

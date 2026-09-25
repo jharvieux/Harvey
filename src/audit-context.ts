@@ -148,7 +148,7 @@ export function beginFreshAuditContext(options: {
       const producerAssignments: Record<string, string[]> = {};
       let assignmentsComplete = true;
       for (const row of observations) {
-        const identities = [JSON.stringify([`audit-runner:${row.module}`, engineBefore.contentSha256]), JSON.stringify(["node", process.version])];
+        const identities = [JSON.stringify(["engine", engineBefore.contentSha256]), JSON.stringify(["node", process.version])];
         const moduleProducers = producers.filter((producer) => producer.module === row.module);
         if (observations.filter((candidate) => candidate.module === row.module).length === 1) {
           identities.push(...moduleProducers.map((producer) => JSON.stringify([producer.producerId, producer.implementationId])));
