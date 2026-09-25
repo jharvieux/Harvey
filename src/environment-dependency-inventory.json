@@ -364432,8 +364432,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "602cf45b51674ff7f352408fb3739980856ac804",
-    "commitPayload": "dHJlZSBmYjNjMDNiMDQ0NDliN2YzMmM1MDE0NjI2ODZmNDVkNWE0NmM5YzIxCnBhcmVudCBlMWQ3ODEyZDNkMzU3YzEzZGI4MWQ4OWQwYTc5MzAxNjg0NTI0ZTkwCnBhcmVudCA3MTBkYjJiMTZiNTZmOGNlZDM3ODVhM2M2YTk2ZDFjYWIxMGQ1OTM2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0MzU5IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE0MzU5IC0wNTAwCgpNZXJnZSByZW1vdGUtdHJhY2tpbmcgYnJhbmNoICdvcmlnaW4vbWFpbicgaW50byBmZWF0dXJlL3N3ZWVwLTIxMTMtdHJhY2tlci1pZGVudGl0eQoKIyBDb25mbGljdHM6CiMJc3JjL2Vudmlyb25tZW50LWRlcGVuZGVuY3ktaW52ZW50b3J5Lmpzb24K",
+    "commit": "7cb2169d86db5d3ea81c6e1ddd074eac9a23da0c",
+    "commitPayload": "dHJlZSBiZTYwNjRiYTk2MzBjMDU2MTNkNTEwZGRjNzQ0ZDAxMTg3MDNmNmQ5CnBhcmVudCBhNzRhYzQ3MGQ4Zjk4ZjQwNDIwYjM2MTI5OTc5MTc3YmIzODlhZmQ1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NzQxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzE1NzQxIC0wNTAwCgpBbGlnbiB0cmFja2VyIGludGVncmF0aW9uIGZpeHR1cmUgd2l0aCByZWNvdmVyeSBjb250cmFjdCAjMjExMwo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364442,13 +364442,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "6ed74f09bb49c666aaf80de70899d1e3dd9d3a2d",
+        "gitOid": "936a747f4551b9274802dddbb39be4e406047488",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "d0ddfebfdec122138d27953d9a600c36cc9dabdb5905cfeb172e855f1008c5e9",
-    "tree": "fb3c03b04449b7f32c501462686f45d5a46c9c21"
+    "populationSha256": "f875973d5b748140e01c8760cbdf7895ef7ddfa0c09651bc4d8f1a331de70709",
+    "tree": "be6064ba9630c05613d510ddc744d0118703f6d9"
   },
   "venues": [
     {
@@ -383022,19 +383022,19 @@
       "sha256": "b40cd247d8750dcd3234fe131651655c6931cf7eaaabbb4871dbd776cff1b387"
     },
     {
-      "bytes": 10776,
+      "bytes": 10819,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "abb50445bde749f67276154e1c599f34204c9152",
+      "gitOid": "b0a48fd8980ee12194785b4adfdda601eb83ae41",
       "id": "src/epic-builder/publish.test.ts",
       "kind": "source",
-      "literalCount": 125,
-      "literalSha256": "61393757517edba8f75d75e84daea4846af98260059a2cae542d5eb23137d5c7",
+      "literalCount": 127,
+      "literalSha256": "b56ce649ffde05a70225c95f626cf03cd31a32dec054cb7064b0df9c60dc93bb",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/epic-builder/publish.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "729a7a62707ddc1e9c8a97ad46666601fe4a61ee0913e948146d05784f1efda6"
+      "sha256": "6841f517c45379e249756da2609fa1f0a1d539cb2c14ce204bf3ccd8f2590885"
     },
     {
       "bytes": 9186,
@@ -392232,11 +392232,11 @@
       "sha256": "021c1cea8aab7df919c10042b9690d9039b4ffb7e6d15313afd6b53765fbf0d6"
     },
     {
-      "bytes": 3430,
+      "bytes": 3401,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9f3639e4a51a9677e99995ac946c23910c4d5bfa",
+      "gitOid": "f1a01d42fae48eb09986b8a5bc49a1b932de404a",
       "id": "src/trackers/recovery.ts",
       "kind": "source",
       "literalCount": 35,
@@ -392244,7 +392244,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/trackers/recovery.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "1e2731817fb318771e3fb46ed7ef4825bcc005307208424010671c124634e6f7"
+      "sha256": "82bca929295f38a52153d85f5bf847a1c2acc4615dadd4c9faebd99fe2316fe2"
     },
     {
       "bytes": 1200,
