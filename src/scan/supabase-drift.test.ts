@@ -160,7 +160,7 @@ describe("expectedRlsEnabled", () => {
       { file: "2.sql", sql: "alter table b disable row level security;" },
       { file: "3.sql", sql: "alter table public.c enable row level security;" },
     ];
-    expect([...expectedRlsEnabled(migrations)].sort()).toEqual(["public.a", "public.c"]);
+    expect([...expectedRlsEnabled(migrations)].sort()).toEqual([JSON.stringify(["public", "a"]), JSON.stringify(["public", "c"])]);
   });
 });
 

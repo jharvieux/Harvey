@@ -34,7 +34,7 @@ import { isDirectorySafe, readNamesSafe } from "../fs-walk.js";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
-import { parseLivePolicies, parseLiveTableNames } from "../migration-sql-parse.js";
+import { parseLivePolicies, parseLiveTableNames, parseMentionedTableNames, parseRlsToggles } from "../migration-sql-parse.js";
 import { findFreshPass, passSlotCensus } from "../audit-pass-artifact.js";
 
 // One live table as the drift queries return it. `extensionOwned` marks a table pg_depend attributes
@@ -65,46 +65,26 @@ export interface MigrationFile {
   sql: string;
 }
 
-// `alter table [only] [schema.]table enable|disable row level security`. Order-aware below, because a
-// migration that enables RLS and a later one that disables it leaves the table legitimately open —
-// reporting that as drift would flag the repo's own stated intent.
-const RLS_TOGGLE =
-  /\balter\s+table\s+(?:only\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s+(enable|disable)\s+row\s+level\s+security/gi;
+// Keys encode components independently: dots and quoted case are part of a PostgreSQL name.
+const key = (schema: string, table: string): string => JSON.stringify([schema, table]);
+const policyKey = (schema: string, table: string, name: string): string => JSON.stringify([schema, table, name]);
+// Escape structural delimiters in finding IDs without changing ordinary identifiers.
+const idPart = (name: string): string => name.replace(/[%.-]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 
-// Any `create table` the migration set contains, by name only — deliberately more permissive than
-// parseLiveTableNames, which shares migration-sql-parse's CREATE_TABLE and therefore requires the
-// column body to end with `);` on its own line. MEASURED 2026-07-28: a single-line
-// `create table quotes (id uuid, tenant_id uuid);` is NOT matched by that regex. The two directions
-// of the table diff need different answers to that, and getting it wrong is asymmetric:
-//   - "in the migrations, missing from prod" uses the strict fold, so an unreadable CREATE simply
-//     produces no expectation and the row is not emitted — a false NEGATIVE, which is safe.
-//   - "in prod, not in the migrations" would ACCUSE the client of hand-creating a table that is in
-//     fact right there in their migration file — a false POSITIVE, which is not. It uses this set,
-//     which only ever needs the name.
-const CREATE_TABLE_NAME =
-  /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_$]*)"?\s*\.\s*)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?/gi;
-
-// Every table name the migrations create, regardless of whether the body could be read.
-function mentionedTables(migrations: MigrationFile[]): Set<string> {
-  const out = new Set<string>();
-  for (const { sql } of migrations) {
-    for (const m of sql.matchAll(CREATE_TABLE_NAME)) out.add(key(m[1] ?? "public", m[2]!));
-  }
-  return out;
+function mentionedTables(migrations: MigrationFile[], schemas: Set<string>): Set<string> {
+  return new Set(migrations.flatMap(({ sql }) => parseMentionedTableNames(sql))
+    .filter(t => schemas.has(t.schema)).map(t => key(t.schema, t.table)));
 }
 
-const key = (schema: string, table: string): string => `${schema}.${table}`.toLowerCase();
-const policyKey = (schema: string, table: string, name: string): string => `${schema}.${table}.${name}`.toLowerCase();
-
-// Tables whose migration end-state has RLS ENABLED. Last toggle per table wins.
-export function expectedRlsEnabled(migrations: MigrationFile[]): Set<string> {
-  const last = new Map<string, "enable" | "disable">();
+// Last explicit toggle wins; identifier folding happens in the shared SQL reader only.
+export function expectedRlsEnabled(migrations: MigrationFile[], schemas?: Set<string>): Set<string> {
+  const last = new Map<string, boolean>();
   for (const { sql } of migrations) {
-    for (const m of sql.matchAll(RLS_TOGGLE)) {
-      last.set(key(m[1] ?? "public", m[2]!), m[3]!.toLowerCase() as "enable" | "disable");
+    for (const t of parseRlsToggles(sql)) {
+      if (!schemas || schemas.has(t.schema)) last.set(key(t.schema, t.table), t.enabled);
     }
   }
-  return new Set([...last.entries()].filter(([, op]) => op === "enable").map(([k]) => k));
+  return new Set([...last.entries()].filter(([, enabled]) => enabled).map(([k]) => k));
 }
 
 function readMigrationFiles(dir: string): MigrationFile[] {
@@ -198,24 +178,30 @@ export function checkMigrationDrift(
 
   const allExpectedTables = parseLiveTableNames(concatenated);
   const expectedTables = new Set(allExpectedTables.filter((t) => inScope(t.schema)).map((t) => key(t.schema, t.table)));
-  const namedInMigrations = mentionedTables(migrations);
-  const expectedRls = expectedRlsEnabled(migrations);
+  const namedInMigrations = mentionedTables(migrations, comparedSchemas);
+  const expectedRls = expectedRlsEnabled(migrations, comparedSchemas);
   const parsedPolicies = parseLivePolicies(migrations);
   // A policy the parser could not READ is still a policy the migrations CREATE. Counting only the
   // parsed set would report every unreadable-but-present policy as one someone added by hand, so the
   // unparsed identities join the expectation — the identity is all this comparison needs.
   const expectedPolicies = new Set([
-    ...parsedPolicies.policies.map((p) => policyKey(p.schema, p.table, p.name)),
-    ...parsedPolicies.unparsed.map((p) => policyKey(p.schema, p.table, p.name)),
+    ...parsedPolicies.policies.filter(p => inScope(p.schema)).map((p) => policyKey(p.schema, p.table, p.name)),
+    ...parsedPolicies.unparsed.filter(p => inScope(p.schema)).map((p) => policyKey(p.schema, p.table, p.name)),
   ]);
 
   const scopedLiveTables = liveTables.filter((t) => inScope(t.schema));
-  const migrationSchemas = new Set(allExpectedTables.map((t) => t.schema));
+  const referencedTables = [
+    ...migrations.flatMap(m => parseMentionedTableNames(m.sql)),
+    ...migrations.flatMap(m => parseRlsToggles(m.sql)),
+    ...parsedPolicies.policies, ...parsedPolicies.unparsed,
+  ];
+  const migrationSchemas = new Set(referencedTables.map(t => t.schema));
+  const unassessedReferences = new Set(referencedTables.filter(t => !inScope(t.schema)).map(t => key(t.schema, t.table)));
   const unassessed = [
     ...scope.schemas.filter((s) => s.status === "unassessed").map((s) => `${s.schema}: ${s.reason ?? "catalog access not established"}`),
     ...[...migrationSchemas].filter((schema) => !scope.schemas.some((s) => s.schema === schema)).map((schema) => `${schema}: not queried (outside the authorized comparison scope)`),
   ];
-  const scopeDetail = `EXAMINED: ${comparedSchemas.size}/${scope.schemas.length} authorized schemas (${[...comparedSchemas].join(", ") || "none"}); ${scopedLiveTables.length} live relations, ${expectedTables.size} migration relations, ${livePolicies.filter((p) => inScope(p.schema)).length} live policies. Catalog queries completed ${scope.queriesCompleted}/${scope.queriesAttempted}. UNASSESSED RELATIONS: ${allExpectedTables.length - expectedTables.size} migration-declared; live relation counts remain unknown in unqueried or inaccessible schemas. UNASSESSED SCHEMAS: ${unassessed.join("; ") || "none in the supplied scope"}. Unqueried or inaccessible schemas are never classified as missing from production. Re-run with authorized catalog access and --drift-schemas listing these schemas to resolve the unassessed scope.`;
+  const scopeDetail = `EXAMINED: ${comparedSchemas.size}/${scope.schemas.length} authorized schemas (${[...comparedSchemas].join(", ") || "none"}); ${scopedLiveTables.length} live relations, ${expectedTables.size} migration relations, ${livePolicies.filter((p) => inScope(p.schema)).length} live policies. Catalog queries completed ${scope.queriesCompleted}/${scope.queriesAttempted}. UNASSESSED RELATIONS: ${allExpectedTables.length - expectedTables.size} migration-declared; live relation counts remain unknown in unqueried or inaccessible schemas. UNASSESSED REFERENCED RELATIONS: ${unassessedReferences.size}. UNASSESSED SCHEMAS: ${unassessed.join("; ") || "none in the supplied scope"}. Unqueried or inaccessible schemas are never classified as missing from production. Re-run with authorized catalog access and --drift-schemas listing these schemas to resolve the unassessed scope.`;
   findings.push(driftScopeFinding(migrations.length, comparedSchemas.size === 0 ? "No authorized schema had a complete accessible catalog response." : undefined, scopeDetail));
   const liveTableKeys = new Set(scopedLiveTables.map((t) => key(t.schema, t.name)));
 
@@ -226,7 +212,7 @@ export function checkMigrationDrift(
     if (expectedRls.has(k) && !t.rlsEnabled) {
       findings.push(
         mechanicalFinding({
-          id: `SB-DRIFT-RLS-${t.schema}-${t.name}`,
+          id: `SB-DRIFT-RLS-${idPart(t.schema)}-${idPart(t.name)}`,
           title: `RLS is enabled by the migrations but DISABLED on the deployed ${t.schema}.${t.name}`,
           severity: "Critical",
           category: "Supabase config",
@@ -243,7 +229,7 @@ export function checkMigrationDrift(
     if (!namedInMigrations.has(k) && !t.extensionOwned) {
       findings.push(
         mechanicalFinding({
-          id: `SB-DRIFT-TABLE-UNMANAGED-${t.schema}-${t.name}`,
+          id: `SB-DRIFT-TABLE-UNMANAGED-${idPart(t.schema)}-${idPart(t.name)}`,
           title: `${t.schema}.${t.name} exists on the deployed database but is not created by any migration`,
           severity: "Medium",
           category: "Supabase config",
@@ -260,16 +246,17 @@ export function checkMigrationDrift(
 
   for (const k of expectedTables) {
     if (liveTableKeys.has(k)) continue;
-    const [schema, table] = k.split(".");
+    const [schema, table] = JSON.parse(k) as [string, string];
+    const display = `${schema}.${table}`;
     findings.push(
       mechanicalFinding({
-        id: `SB-DRIFT-TABLE-MISSING-${schema}-${table}`,
-        title: `${k} is created by the migrations but is absent from the deployed database`,
+        id: `SB-DRIFT-TABLE-MISSING-${idPart(schema)}-${idPart(table)}`,
+        title: `${display} is created by the migrations but is absent from the deployed database`,
         severity: "Medium",
         category: "Supabase config",
         taxonomy: "Prod-vs-migration drift — migration not applied",
-        location: k,
-        evidence: `The committed migrations end with ${k} created and not dropped. The complete queried catalog for its compared schema does not contain it.`,
+        location: display,
+        evidence: `The committed migrations end with ${display} created and not dropped. The complete queried catalog for its compared schema does not contain it.`,
         impact: `The deployed database is behind the committed migration history, or the table was dropped by hand. Code paths that use it are broken in production while passing every check that reads the repo.`,
         fix: `Confirm which migrations have actually been applied to this project (\`supabase migration list\`) and apply the outstanding ones.`,
         precisionTier: "review",
@@ -282,13 +269,13 @@ export function checkMigrationDrift(
   for (const k of expectedPolicies) {
     // A policy on a table that is itself missing is already reported as the missing table; a second
     // row per policy on it would bury the one finding that explains all of them.
-    const table = k.split(".").slice(0, 2).join(".");
-    if (!liveTableKeys.has(table)) continue;
+    const [schema, tableName, name] = JSON.parse(k) as [string, string, string];
+    if (!liveTableKeys.has(key(schema, tableName))) continue;
     if (livePolicyKeys.has(k)) continue;
-    const name = k.split(".").slice(2).join(".");
+    const table = `${schema}.${tableName}`;
     findings.push(
       mechanicalFinding({
-        id: `SB-DRIFT-POLICY-MISSING-${table}-${name}`,
+        id: `SB-DRIFT-POLICY-MISSING-${idPart(schema)}.${idPart(tableName)}-${idPart(name)}`,
         title: `RLS policy "${name}" on ${table} is created by the migrations but is absent from the deployed database`,
         severity: "High",
         category: "Supabase config",
@@ -310,7 +297,7 @@ export function checkMigrationDrift(
     if (!namedInMigrations.has(key(p.schema, p.table))) continue;
     findings.push(
       mechanicalFinding({
-        id: `SB-DRIFT-POLICY-UNMANAGED-${p.schema}.${p.table}-${p.name}`,
+        id: `SB-DRIFT-POLICY-UNMANAGED-${idPart(p.schema)}.${idPart(p.table)}-${idPart(p.name)}`,
         title: `RLS policy "${p.name}" on ${p.schema}.${p.table} exists on the deployed database but is not created by any migration`,
         severity: "High",
         category: "Supabase config",

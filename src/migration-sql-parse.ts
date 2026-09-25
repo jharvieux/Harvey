@@ -14,15 +14,26 @@
 // the platform/CLI's own system migrations, not the app's). Callers must treat exposedTo/grants
 // derived here as an explicit assumption, not a verified fact — see dry-run.ts's usage.
 
-// Strips `-- ...` line comments before any regex runs. Naive (doesn't special-case "--" inside
-// a string literal) but sufficient here — one migration in this repo has a comment that literally
-// narrates a SQL statement it deliberately omits ("-- ... alter table ... enable row level
-// security ..."), and without stripping, that comment text itself would match ENABLE_RLS below.
+// Strip line comments while preserving quoted identifiers, string values and line positions.
 function stripLineComments(sql: string): string {
-  return sql
-    .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
-    .join("\n");
+  let quote: '\'' | '"' | undefined;
+  let out = "";
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i]!;
+    if (quote) {
+      out += c;
+      if (c === quote) {
+        if (sql[i + 1] === quote) out += sql[++i];
+        else quote = undefined;
+      }
+    } else if (c === "'" || c === '"') {
+      quote = c; out += c;
+    } else if (c === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") { out += " "; i++; }
+      if (i < sql.length) out += "\n";
+    } else out += c;
+  }
+  return out;
 }
 
 interface ParsedColumn {
@@ -128,6 +139,23 @@ export function parseTableNames(sql: string): { schema: string; table: string }[
 // `DROP TABLE [IF EXISTS] [schema.]table` — group 1/2 schema, 3/4 table. A comma-separated multi-table
 // drop matches only the first table (rare in Supabase migrations; a disclosed limitation).
 const DROP_TABLE = new RegExp(`\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?(?:${IDENT}\\.)?${IDENT}`, "gi");
+
+// Drift's unmanaged-table direction needs the identity even when a column body is unreadable.
+const CREATE_TABLE_NAME = new RegExp(`\\bcreate\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
+const RLS_TOGGLE = new RegExp(`\\balter\\s+table\\s+(?:only\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+(enable|disable)\\s+row\\s+level\\s+security`, "gi");
+
+function tableIdentity(m: RegExpMatchArray): { schema: string; table: string } {
+  return { schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public", table: identText(m[3], m[4]) };
+}
+
+export function parseMentionedTableNames(sql: string): { schema: string; table: string }[] {
+  return [...stripLineComments(sql).matchAll(CREATE_TABLE_NAME)].map(tableIdentity);
+}
+
+export function parseRlsToggles(sql: string): { schema: string; table: string; enabled: boolean }[] {
+  return [...stripLineComments(sql).matchAll(RLS_TOGGLE)].map(m => ({ ...tableIdentity(m), enabled: m[5]!.toLowerCase() === "enable" }));
+}
+
 
 // Tables that still EXIST at the end of the migration history: created and not subsequently dropped.
 // The two-tenant seed must not INSERT into a table a later migration DROPped (ATC drops pending_rag_sync
@@ -514,11 +542,10 @@ export function parseDefinerFunctions(sql: string): ParsedDefinerFunction[] {
   }));
 }
 
-const ENABLE_RLS = /alter table\s+(?:(\w+)\.)?(\w+)\s+enable row level security/gi;
-const CREATE_POLICY = /create policy\s+(?:"([^"]+)"|(\w+))\s+on\s+(?:(\w+)\.)?(\w+)/gi;
+const CREATE_POLICY = new RegExp(`\\bcreate\\s+policy\\s+${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
 // `drop policy [if exists] <name> on [schema.]<table>` — the statement a later migration uses to
 // remove (or, paired with a fresh CREATE POLICY of the same name, replace) an earlier policy (#937).
-const DROP_POLICY = /drop\s+policy\s+(?:if\s+exists\s+)?(?:"([^"]+)"|(\w+))\s+on\s+(?:(\w+)\.)?(\w+)/gi;
+const DROP_POLICY = new RegExp(`\\bdrop\\s+policy\\s+(?:if\\s+exists\\s+)?${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
 
 // A policy parsed out of migration SQL, shaped to feed rls-policy-review.ts's reviewPolicy()
 // unchanged — that reviewer takes a policy struct and doesn't care whether the clauses came from
@@ -635,9 +662,9 @@ export function parsePolicies(sql: string): ParsedPolicySet {
   const unparsed: UnparsedPolicy[] = [];
 
   for (const m of clean.matchAll(CREATE_POLICY)) {
-    const name = (m[1] ?? m[2])!;
-    const schema = m[3] ?? "public";
-    const table = m[4]!;
+    const name = identText(m[1], m[2]);
+    const schema = m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public";
+    const table = identText(m[5], m[6]);
     const stmt = statementText(clean, m.index);
     if (stmt === null) {
       unparsed.push({ schema, table, name, reason: "statement has no terminating ';' — could not read its clauses" });
@@ -688,7 +715,7 @@ interface LivePolicySet {
 }
 
 export function parseLivePolicies(migrations: { file: string; sql: string }[]): LivePolicySet {
-  const key = (schema: string, table: string, name: string): string => `${schema}.${table}.${name}`.toLowerCase();
+  const key = (schema: string, table: string, name: string): string => JSON.stringify([schema, table, name]);
   interface CreateRec { schema: string; table: string; name: string; file: string; line: number; parsed?: ParsedPolicy; unparsed?: UnparsedPolicy }
   interface Event { seq: number; k: string; op: "create" | "drop"; rec?: CreateRec }
   const events: Event[] = [];
@@ -704,8 +731,8 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
     const unparsedByKey = new Map<string, UnparsedPolicy>(unparsed.map((u) => [key(u.schema, u.table, u.name), u]));
 
     const local: { pos: number; op: "create" | "drop"; schema: string; table: string; name: string }[] = [];
-    for (const m of clean.matchAll(CREATE_POLICY)) local.push({ pos: m.index!, op: "create", name: (m[1] ?? m[2])!, schema: m[3] ?? "public", table: m[4]! });
-    for (const m of clean.matchAll(DROP_POLICY)) local.push({ pos: m.index!, op: "drop", name: (m[1] ?? m[2])!, schema: m[3] ?? "public", table: m[4]! });
+    for (const m of clean.matchAll(CREATE_POLICY)) local.push({ pos: m.index!, op: "create", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
+    for (const m of clean.matchAll(DROP_POLICY)) local.push({ pos: m.index!, op: "drop", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
     local.sort((a, b) => a.pos - b.pos);
 
     for (const e of local) {
@@ -740,12 +767,13 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
 export function parseRlsState(schemaSql: string, rlsSql: string): ParsedRlsTable[] {
   const tables = parseTableNames(schemaSql);
   const cleanRlsSql = stripLineComments(rlsSql);
-  const enabled = new Set([...cleanRlsSql.matchAll(ENABLE_RLS)].map((m) => `${m[1] ?? "public"}.${m[2]}`));
-  const policied = new Set([...cleanRlsSql.matchAll(CREATE_POLICY)].map((m) => `${m[3] ?? "public"}.${m[4]}`));
+  const enabled = new Map(parseRlsToggles(cleanRlsSql).map(t => [JSON.stringify([t.schema, t.table]), t.enabled]));
+  const policySet = parsePolicies(cleanRlsSql);
+  const policied = new Set([...policySet.policies, ...policySet.unparsed].map(p => JSON.stringify([p.schema, p.table])));
   return tables.map(({ schema, table }) => ({
     schema,
     table,
-    rlsEnabled: enabled.has(`${schema}.${table}`),
-    hasPolicy: policied.has(`${schema}.${table}`),
+    rlsEnabled: enabled.get(JSON.stringify([schema, table])) === true,
+    hasPolicy: policied.has(JSON.stringify([schema, table])),
   }));
 }

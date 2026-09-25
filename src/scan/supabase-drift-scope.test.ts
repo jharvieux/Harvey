@@ -93,6 +93,65 @@ globalThis.fetch = async (url, init) => {
     expect(rows.find(row => row.id === "SB-DRIFT-00")?.evidence).toContain("1 live relations, 2 migration relations");
   });
 
+  it("preserves quoted identities, dollar policy names and exact schema scope through CLI and HTML", () => {
+    const f = fixture();
+    writeFileSync(join(f.dir, "001.sql"), [
+      'CREATE TABLE "PUBLIC".same_name (\n id uuid\n);',
+      'ALTER TABLE "PUBLIC".same_name ENABLE ROW LEVEL SECURITY;',
+      'CREATE TABLE public."Same_Name" (\n id uuid\n);',
+      'CREATE TABLE tenant$archive.events (\n id uuid\n);',
+      'CREATE POLICY READ$ALLOWED ON tenant$archive.events USING (true);',
+      'CREATE POLICY "Case.Policy" ON tenant$archive.events USING (true);',
+      'CREATE POLICY "case.policy" ON tenant$archive.events USING (true);',
+      'DROP POLICY "case.policy" ON tenant$archive.events;',
+      'CREATE TABLE public."a.b" (\n id uuid\n);',
+      'CREATE TABLE public."a.c" (\n id uuid\n);',
+      'CREATE TABLE public."a--b" (\n id uuid\n); -- real comment',
+      'CREATE POLICY p ON policy_only.events USING (true);',
+      'ALTER TABLE rls_only.events ENABLE ROW LEVEL SECURITY;',
+      'CREATE TABLE public."escaped""name" (\n id uuid\n);',
+    ].join("\n"));
+    const loader = join(f.dir, "identity-fetch.mjs");
+    const out = join(f.dir, "identity-findings.json");
+    writeFileSync(loader, `
+      globalThis.fetch = async (url, init) => {
+        if (url.includes('/advisors/')) return Response.json({lints: []});
+        if (url.endsWith('/config/auth')) return Response.json({});
+        if (url.endsWith('/postgrest')) return Response.json({db_schema: 'public'});
+        const {query} = JSON.parse(init.body);
+        const schema = query.includes("'tenant$archive'") ? 'tenant$archive' : 'public';
+        if (query.includes('catalogAccessible')) return Response.json([{schema, catalogAccessible: true}]);
+        if (query.includes('extensionOwned')) return Response.json([{schema, name: schema === 'public' ? 'same_name' : 'events', rlsEnabled: false, extensionOwned: false}]);
+        if (query.includes('policyname')) return Response.json(schema === 'public' ? [] : [{schema, table: 'events', name: 'read$allowed'}]);
+        if (query.includes("nspname = 'cron'")) return Response.json([{exists: false}]);
+        return Response.json([]);
+      };
+    `);
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+    const run = spawnSync(process.execPath, ["--import", loader, "--import", "tsx", "src/cli/scan.ts", "--supabase", "synthetic", "--migrations", f.dir, "--drift-schemas", "public,tenant$archive", "--out", out], {
+      cwd: root, encoding: "utf8", env: {...process.env, SUPABASE_ACCESS_TOKEN: "synthetic-fixture-token"},
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const findings = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument["findings"];
+    const drift = findings.filter(row => row.id.startsWith("SB-DRIFT-"));
+    expect(drift.map(row => row.id)).toEqual([
+      "SB-DRIFT-00", "SB-DRIFT-TABLE-UNMANAGED-public-same_name",
+      "SB-DRIFT-TABLE-MISSING-public-Same_Name", "SB-DRIFT-TABLE-MISSING-public-a%2Eb",
+      "SB-DRIFT-TABLE-MISSING-public-a%2Ec", "SB-DRIFT-TABLE-MISSING-public-a%2D%2Db",
+      'SB-DRIFT-TABLE-MISSING-public-escaped"name',
+      "SB-DRIFT-POLICY-MISSING-tenant$archive.events-Case%2EPolicy",
+    ]);
+    expect(drift[0]!.evidence).toContain("2 live relations, 6 migration relations");
+    expect(drift[0]!.evidence).toContain("PUBLIC: not queried");
+    expect(drift[0]!.evidence).toContain("policy_only: not queried");
+    expect(drift[0]!.evidence).toContain("rls_only: not queried");
+    expect(drift[0]!.evidence).toContain("UNASSESSED REFERENCED RELATIONS: 3");
+    expect(drift[0]!.evidence).toContain("UNASSESSED RELATIONS: 1 migration-declared");
+    const meta: ReportMeta = { client: "Synthetic", subtitle: "Scope", date: "2026-09-25", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not verified", authModel: "Supabase", headline: "Schema identities", scope: "Synthetic catalog", methodology: "M1", outOfScope: "Production rows" };
+    const html = buildHtml({meta, findings});
+    for (const row of drift) expect(html).toContain(esc(row.evidence));
+  });
+
   it("defaults both sides to public and discloses unqueried migration schemas", async () => {
     const f = fixture();
     const findings = await runSupabaseScan({ projectRef: "synthetic", managementApiToken: "fixture-token", fetchImpl: f.fetchImpl, migrationsDir: f.dir });
