@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
 import {
   applyReportedMutation,
   coveredScopeLine,
+  compareMutationRuns,
   detectDryRunFailure,
   detectNoTestSuite,
   detectRootWorkspaceTestSuite,
@@ -51,6 +53,25 @@ import {
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
+
+describe("bound mutation status comparison", () => {
+  const report = { files: { "a.ts": { mutants: [{ id: "1", mutatorName: "BooleanLiteral", status: "Killed" as const, replacement: "false", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } };
+  const receipt = (invocationId: string, key?: "sourceSha256" | "selectionSha256" | "toolchainSha256") => createCommandExecutionReceipt({
+    invocationId, command: { executable: "stryker", argv: ["run"], cwd: "/target" }, target: { identity: "target", value: "snapshot" }, toolchain: [{ name: "StrykerJS", version: "9.6.1" }], configuration: { identity: "selection", value: "a.ts" }, startedAt: "2026-09-24T00:00:00Z", finishedAt: "2026-09-24T00:00:01Z", outcome: { state: "exited", exitCode: 0, signal: null }, comparisonIdentity: { sourceSha256: "a".repeat(64), selectionSha256: "b".repeat(64), toolchainSha256: "c".repeat(64), ...(key ? { [key]: "d".repeat(64) } : {}) },
+  });
+  it.each(["sourceSha256", "selectionSha256", "toolchainSha256"] as const)("rejects a %s mismatch", (key) => {
+    expect(() => compareMutationRuns({ rawReport: report, executionReceipt: receipt("current") }, { rawReport: report, executionReceipt: receipt("previous", key) })).toThrow(new RegExp(key));
+  });
+  it("requires distinct receipts, keeps timeout variation and states absent comparison honestly", () => {
+    expect(compareMutationRuns({ rawReport: report }).status).toBe("not-assessed");
+    expect(() => compareMutationRuns({ rawReport: report, executionReceipt: receipt("same") }, { rawReport: report, executionReceipt: receipt("same") })).toThrow(/distinct/);
+    const changed = structuredClone(report) as StrykerReport;
+    changed.files["a.ts"]!.mutants[0]!.status = "Timeout";
+    const comparison = compareMutationRuns({ rawReport: changed, executionReceipt: receipt("current") }, { rawReport: report, executionReceipt: receipt("previous") });
+    expect(comparison).toMatchObject({ status: "unstable", comparedMutants: 1, changes: [{ previous: "Killed", current: "Timeout" }] });
+    expect(comparison.reason).toContain("Repeat these mutants under the same timeout policy");
+  });
+});
 
 describe("completed-test mutation validity (#2089)", () => {
   const reportWith = (mutants: StrykerMutant[]): StrykerReport => ({
@@ -1330,6 +1351,15 @@ describe("testQualityFromArtifact (#1045)", () => {
     const unverified = { ...artifact, scope: { verified: false, scoped: false, note: "configured mutate scope not statically readable" } };
     expect(testQualityFromArtifact(unverified)!.wholeRepo).toBe(false);
     expect(testQualityFromArtifact({ ...artifact, scope: undefined })!.wholeRepo).toBe(false);
+  });
+
+  it("carries zero-completed runner uncertainty into the delivered score scope", () => {
+    const invalid = { ...artifact, runnerValidity: { schemaVersion: 1, status: "uncheckable", issues: [{ reason: "Runner reported Survived with 0 completed tests; suite could not load." }] } };
+    const result = testQualityFromArtifact(invalid)!;
+    expect(result.wholeRepo).toBe(false);
+    expect(result.scopeNote).toContain("uncheckable");
+    expect(result.scopeNote).toContain("suite could not load");
+    expect(result.scopeNote).toContain("rerun the affected mutants");
   });
 
   it("discloses a missing line-coverage verdict as partial rather than assuming it ran (#819)", () => {

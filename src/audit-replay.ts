@@ -19,7 +19,7 @@ export interface AuditEvidenceScope {
   wholeModule: boolean;
 }
 
-interface FileReceipt { path: string; sha256: string }
+interface FileReceipt { path: string; sha256: string; sourcePath?: string }
 interface TreeIdentity { path: string; revision: string; sha256: string }
 export interface AuditReplayBinding {
   target: TreeIdentity;
@@ -72,7 +72,7 @@ const engineRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const digest = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
 const canonical = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  if (value !== null && typeof value === "object") return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 };
 const objectDigest = (value: unknown): string => digest(canonical(value));
@@ -162,12 +162,19 @@ function writeRaw(dir: string, source: string): FileReceipt {
   const path = `raw/${sha256}`;
   mkdirSync(join(dir, "raw"), { recursive: true });
   writeFileSync(join(dir, path), bytes);
-  return { path, sha256 };
+  return { path, sha256, sourcePath: resolve(source) };
 }
 
 interface RawArtifactBytes { ref: FileReceipt; bytes: Buffer }
 
-function commandReceiptsInArtifact(bytes: Buffer): CommandExecutionReceipt[] | undefined {
+interface CommandReceiptCatalog {
+  module: AuditModule;
+  reports: ProbeReport[];
+  commandExecution: { kind: "command" } | { kind: "in-process"; reason: string };
+  receipts: CommandExecutionReceipt[];
+}
+
+function commandReceiptsInArtifact(bytes: Buffer): CommandReceiptCatalog | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(bytes.toString("utf8"));
@@ -175,37 +182,72 @@ function commandReceiptsInArtifact(bytes: Buffer): CommandExecutionReceipt[] | u
     return undefined;
   }
   if (!parsed || typeof parsed !== "object" || !("commandExecutionReceipts" in parsed)) return undefined;
-  const receipts = (parsed as { commandExecutionReceipts?: unknown }).commandExecutionReceipts;
+  const catalog = parsed as Record<string, unknown>;
+  const receipts = catalog.commandExecutionReceipts;
   if (!Array.isArray(receipts)) throw new Error("Owning-run commandExecutionReceipts must be an array");
-  return receipts.map((receipt) => {
+  if (!AUDIT_MODULES.includes(catalog.module as AuditModule) || !Array.isArray(catalog.reports)) throw new Error("Owning-run catalog needs its module and derived reports");
+  const commandExecution = catalog.commandExecution as CommandReceiptCatalog["commandExecution"] | undefined;
+  if (receipts.length === 0 && (commandExecution?.kind !== "in-process" || !commandExecution.reason?.trim())) throw new Error("Empty command receipt catalog needs explicit in-process execution provenance");
+  if (receipts.length > 0 && commandExecution?.kind === "in-process") throw new Error("In-process provenance cannot contain command executions");
+  for (const report of catalog.reports) assertResult(report as ProbeReport);
+  const validated = receipts.map((receipt) => {
     assertCommandExecutionReceipt(receipt);
     return receipt;
   });
+  return { module: catalog.module as AuditModule, reports: catalog.reports as ProbeReport[], commandExecution: commandExecution ?? { kind: "command" }, receipts: validated };
+}
+
+function nestedCommandReceipts(bytes: Buffer): CommandExecutionReceipt[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(bytes.toString("utf8")); } catch { return []; }
+  const receipts: CommandExecutionReceipt[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "executionReceipt" || (key === "receipt" && item && typeof item === "object" && "invocationId" in item)) {
+        assertCommandExecutionReceipt(item);
+        receipts.push(item);
+      } else if (key !== "commandExecutionReceipts") visit(item);
+    }
+  };
+  visit(parsed);
+  return receipts;
 }
 
 /** Bind nested invocation receipts to the exact raw files copied into this accepted pass. */
-function assertCommandReceiptBindings(raw: readonly RawArtifactBytes[]): void {
+function assertCommandReceiptBindings(pass: Pick<AuditEvidenceInput, "scope" | "producer" | "result">, raw: readonly RawArtifactBytes[]): void {
+  const nestedReceipts = raw.flatMap((artifact) => nestedCommandReceipts(artifact.bytes));
   const owners = raw.flatMap((artifact) => {
-    const receipts = commandReceiptsInArtifact(artifact.bytes);
-    return receipts === undefined ? [] : [{ artifact, receipts }];
+    const catalog = commandReceiptsInArtifact(artifact.bytes);
+    return catalog === undefined ? [] : [{ artifact, ...catalog }];
   });
   if (owners.length > 1) throw new Error("Accepted pass contains multiple owning-run command receipt catalogs");
-  if (owners.length === 0) return; // Explicit legacy/manual evidence has no command-attempt catalog.
+  if (owners.length === 0) {
+    if (pass.producer.name.startsWith("audit-runner:") || pass.scope.tier === "orchestrated" || nestedReceipts.length) throw new Error("Orchestrated pass is missing its owning-run command receipt catalog");
+    return; // Interactive/manual evidence does not assert an orchestrated command attempt.
+  }
   const owner = owners[0]!;
+  if (owner.module !== pass.scope.module) throw new Error("Accepted pass is bound to another module's owning-run catalog");
+  const reports = owner.reports.filter((report) => (report.instance ?? ".") === pass.scope.workspace);
+  if (reports.length !== 1 || objectDigest(reports[0]) !== objectDigest(pass.result)) throw new Error("Accepted pass result differs from its owning-run derived report");
+  if (owner.commandExecution.kind === "in-process" && raw.length !== 1) throw new Error("In-process provenance cannot claim additional command artifacts");
   const invocationIds = new Set<string>();
   const artifactOwners = new Map<string, string>();
-  for (const receipt of owner.receipts) {
+  const receipts = [...owner.receipts, ...nestedReceipts];
+  for (const receipt of receipts) {
     if (invocationIds.has(receipt.invocationId)) throw new Error(`Accepted pass repeats command invocation ${receipt.invocationId}`);
     invocationIds.add(receipt.invocationId);
     for (const artifact of receipt.artifacts) {
       if (artifact.sha256 === owner.artifact.ref.sha256) throw new Error(`Command receipt ${receipt.invocationId} creates a digest cycle through its owning-run catalog`);
-      const matches = raw.filter((candidate) => candidate.ref.sha256 === artifact.sha256 && candidate.bytes.byteLength === artifact.bytes);
+      const matches = raw.filter((candidate) => candidate.ref.sourcePath === artifact.path && candidate.ref.sha256 === artifact.sha256 && candidate.bytes.byteLength === artifact.bytes);
       if (matches.length !== 1) throw new Error(`Command receipt ${receipt.invocationId} report ${artifact.path} is missing or mixed with another run`);
-      const prior = artifactOwners.get(artifact.sha256);
+      const prior = artifactOwners.get(artifact.path);
       if (prior && prior !== receipt.invocationId) throw new Error(`Accepted report digest is ambiguously owned by invocations ${prior} and ${receipt.invocationId}`);
-      artifactOwners.set(artifact.sha256, receipt.invocationId);
+      artifactOwners.set(artifact.path, receipt.invocationId);
     }
   }
+  for (const artifact of raw) if (artifact !== owner.artifact && !artifactOwners.has(artifact.ref.sourcePath ?? "")) throw new Error("Accepted command pass contains an artifact without an owning invocation");
 }
 
 /** Create a portable bundle only after execution has stopped; raw owning-run outputs stay intact. */
@@ -232,7 +274,7 @@ export function writeAuditReplayBundle(dir: string, input: {
     if (!input.scopes.some((scope) => scopeKey(scope) === scopeKey(pass.scope) && scope.wholeModule === pass.scope.wholeModule)) throw new Error("Pass scope is not in the bound evidence plan");
     if (!pass.producer.name?.trim() || !pass.producer.version?.trim() || !pass.rawArtifacts.length) throw new Error("Pass needs a producer version and raw owning-run artifacts");
     const rawInputs = pass.rawArtifacts.map((path) => ({ ref: writeRaw(output, path), bytes: readFileSync(path) }));
-    assertCommandReceiptBindings(rawInputs);
+    assertCommandReceiptBindings(pass, rawInputs);
     const rawArtifacts = rawInputs.map(({ ref }) => ref);
     const body = { ...pass, rawArtifacts, bindingSha256: objectDigest(input.binding) };
     const id = objectDigest(body);
@@ -286,7 +328,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
     if (!receipt.producer.name?.trim() || !receipt.producer.version?.trim() || !receipt.rawArtifacts.length) throw new Error("Pass lacks producer identity or raw evidence");
     if (!manifest.scopes.some((scope) => scopeKey(scope) === scopeKey(receipt.scope) && scope.wholeModule === receipt.scope.wholeModule)) throw new Error("Unexpected pass scope");
     const raw = receipt.rawArtifacts.map((artifact) => ({ ref: artifact, bytes: readRaw(dir, artifact) }));
-    assertCommandReceiptBindings(raw);
+    assertCommandReceiptBindings(receipt, raw);
     return receipt;
   });
   if (new Set(receipts.map((receipt) => receipt.id)).size !== receipts.length) throw new Error("Replay repeats an owning-run receipt");

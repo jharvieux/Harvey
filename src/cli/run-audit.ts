@@ -240,10 +240,14 @@ const replayBinding = retainDir ? createAuditReplayBinding(targetDir, { env, sch
 const retainedPasses: AuditEvidenceInput[] = [];
 let commandReceipts: CommandExecutionReceipt[] = [];
 
-const commandArtifacts = (argv: readonly string[]): { role: "report"; path: string }[] => {
+const commandArtifacts = (argv: readonly string[], cwd = process.cwd()): { role: "report"; path: string }[] => {
   const artifacts: { role: "report"; path: string }[] = [];
-  for (let i = 0; i < argv.length - 1; i += 1) {
-    if (["--out", "--findings-out", "--sarif-out", "--sbom-out"].includes(argv[i]!)) artifacts.push({ role: "report", path: resolve(argv[i + 1]!) });
+  for (let i = 0; i < argv.length; i += 1) {
+    const [flag, inline] = argv[i]!.split(/=(.*)/s);
+    if (["--out", "--findings-out", "--sarif-out", "--sbom-out"].includes(flag!)) {
+      const path = inline ?? argv[i + 1];
+      if (path) artifacts.push({ role: "report", path: resolve(cwd, path) });
+    }
   }
   return artifacts;
 };
@@ -259,7 +263,7 @@ const ctx: RunContext = {
         target: { identity: "audit-target", value: { path: targetDir, revision: replayBinding?.target.revision ?? null, treeSha256: replayBinding?.target.sha256 ?? null } },
         toolchain: [{ name: command, version: replayBinding?.engine.sha256 ?? process.version }],
         configuration: { identity: "audit-command-effective-input", value: { argv, env, options: options?.env ? Object.keys(options.env).sort() : [] } },
-        artifacts: [...(options?.receipt?.artifacts ?? []), ...commandArtifacts(argv)],
+        artifacts: [...(options?.receipt?.artifacts ?? []), ...commandArtifacts(argv, options?.cwd)],
       },
     });
     if (retainDir) {
@@ -294,7 +298,8 @@ const ctx: RunContext = {
   isGitRepoRoot,
   ...(retainDir ? { retainModuleResult: ((module, reports) => {
     const raw = join(captureDir!, `${module}-owning-run.json`);
-    writeFileSync(raw, `${JSON.stringify({ module, reports, commandExecutionReceipts: commandReceipts }, null, 2)}\n`);
+    const commandExecution = commandReceipts.length > 0 ? { kind: "command" } : { kind: "in-process", reason: "This module completed without invoking a child command." };
+    writeFileSync(raw, `${JSON.stringify({ module, reports, commandExecution, commandExecutionReceipts: commandReceipts }, null, 2)}\n`);
     commandReceipts = [];
     const artifacts = [raw, ...readEntriesLstatSafe(captureDir!).filter(({ name }) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map(({ path }) => path)];
     for (const result of reports) retainedPasses.push({ scope: { module, workspace: result.instance ?? ".", tier: "orchestrated", surface: "module", wholeModule: true }, generatedAt: new Date().toISOString(), producer: { name: `audit-runner:${module}`, version: replayBinding!.engine.sha256 }, result, rawArtifacts: artifacts });

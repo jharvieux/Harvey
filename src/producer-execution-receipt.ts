@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { statSafe } from "./fs-walk.js";
 import type { SemgrepExecutionPlanReceipt } from "./scan/semgrep-family-cache.js";
 import { assertSuccessfulSemgrepExecutionReceipt } from "./scan/semgrep-family-cache.js";
 
 export const PRODUCER_EXECUTION_RECEIPT_SCHEMA = 3 as const;
-export const COMMAND_EXECUTION_RECEIPT_SCHEMA = 1 as const;
+export const COMMAND_EXECUTION_RECEIPT_SCHEMA = 2 as const;
 
 export type CommandTerminalState =
   | "policy-denied"
@@ -22,6 +23,13 @@ export interface CommandArtifactReceipt {
   readonly path: string;
   readonly bytes: number;
   readonly sha256: string;
+}
+
+interface CommandArtifactFailure {
+  readonly role: CommandArtifactReceipt["role"];
+  readonly path: string;
+  readonly reason: "missing" | "unreadable";
+  readonly errorCode?: string;
 }
 
 export interface CommandExecutionReceipt {
@@ -41,9 +49,13 @@ export interface CommandExecutionReceipt {
     readonly errorCode?: string;
   };
   readonly timeoutPolicy: { readonly timeoutMs: number | null; readonly killSignal: string };
+  readonly cancellationPolicy: "pre-start-only" | "unsupported";
   readonly stdout: { readonly bytes: number; readonly sha256: string };
   readonly stderr: { readonly bytes: number; readonly sha256: string };
   readonly artifacts: readonly CommandArtifactReceipt[];
+  /** Output failures do not overwrite the actual child exit or signal. */
+  readonly artifactFailures: readonly CommandArtifactFailure[];
+  readonly comparisonIdentity?: { readonly sourceSha256: string; readonly selectionSha256: string; readonly toolchainSha256: string };
   readonly measurements?: {
     readonly completedTests?: number;
     readonly testsDiscovered?: number;
@@ -63,6 +75,8 @@ export interface CommandExecutionReceiptInput {
   readonly finishedAt: string;
   readonly outcome: CommandExecutionReceipt["outcome"];
   readonly timeoutPolicy?: { readonly timeoutMs?: number | null; readonly killSignal?: string };
+  readonly cancellationPolicy?: CommandExecutionReceipt["cancellationPolicy"];
+  readonly comparisonIdentity?: CommandExecutionReceipt["comparisonIdentity"];
   readonly stdout?: string | Buffer;
   readonly stderr?: string | Buffer;
   readonly artifacts?: readonly { readonly role: CommandArtifactReceipt["role"]; readonly path: string }[];
@@ -149,7 +163,9 @@ function redactUrlSecrets(value: string): string {
 }
 
 function sanitizeReceiptValue(value: unknown, secretValues: readonly string[]): unknown {
-  if (Array.isArray(value)) return value.map((item) => sanitizeReceiptValue(item, secretValues));
+  if (Array.isArray(value)) return value.every((item) => typeof item === "string")
+    ? sanitizeCommandArgv(value, secretValues)
+    : value.map((item) => sanitizeReceiptValue(item, secretValues));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [
       key,
@@ -157,7 +173,7 @@ function sanitizeReceiptValue(value: unknown, secretValues: readonly string[]): 
     ]));
   }
   if (typeof value !== "string") return value;
-  let sanitized = redactUrlSecrets(value);
+  let sanitized = sanitizeCommandArgv([value])[0]!;
   for (const secret of secretValues.filter(Boolean).sort((left, right) => right.length - left.length)) sanitized = sanitized.split(secret).join("<redacted>");
   return sanitized;
 }
@@ -180,7 +196,8 @@ export function sanitizeCommandArgv(argv: readonly string[], secretValues: reado
     if (raw.startsWith("--") && equals > 2 && SECRET_OPTION.test(raw.slice(2, equals))) {
       value = `${raw.slice(0, equals + 1)}<redacted>`;
     } else {
-      value = redactUrlSecrets(value);
+      value = redactUrlSecrets(raw);
+      if (value === raw && equals > 0) value = `${raw.slice(0, equals + 1)}${redactUrlSecrets(raw.slice(equals + 1))}`;
     }
     for (const secret of secrets) value = value.split(secret).join("<redacted>");
     return value;
@@ -201,11 +218,18 @@ function commandReceiptWithoutDigest(receipt: CommandExecutionReceipt): Omit<Com
 /** Finalize only after the child has terminated and every declared artifact has settled on disk. */
 export function createCommandExecutionReceipt(input: CommandExecutionReceiptInput): CommandExecutionReceipt {
   const secretValues = input.secretValues ?? [];
+  const artifactFailures: CommandArtifactFailure[] = [];
   const artifacts = [...(input.artifacts ?? [])]
-    .map(({ role, path }) => {
-      if (!existsSync(path)) throw new Error(`command receipt artifact is missing: ${path}`);
-      const bytes = readFileSync(path);
-      return { role, path, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+    .flatMap(({ role, path: declaredPath }): CommandArtifactReceipt[] => {
+      const path = resolve(input.command.cwd, declaredPath);
+      try {
+        const bytes = readFileSync(path);
+        return [{ role, path, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") }];
+      } catch (error) {
+        const errorCode = (error as NodeJS.ErrnoException).code;
+        artifactFailures.push({ role, path, reason: errorCode === "ENOENT" ? "missing" : "unreadable", ...(errorCode ? { errorCode } : {}) });
+        return [];
+      }
     })
     .sort((left, right) => byBytes(`${left.role}\0${left.path}`, `${right.role}\0${right.path}`));
   const body: Omit<CommandExecutionReceipt, "sha256"> = {
@@ -227,9 +251,12 @@ export function createCommandExecutionReceipt(input: CommandExecutionReceiptInpu
       timeoutMs: input.timeoutPolicy?.timeoutMs ?? null,
       killSignal: input.timeoutPolicy?.killSignal ?? "SIGTERM",
     },
+    cancellationPolicy: input.cancellationPolicy ?? "unsupported",
     stdout: streamReceipt(input.stdout),
     stderr: streamReceipt(input.stderr),
     artifacts,
+    artifactFailures: artifactFailures.sort((left, right) => byBytes(`${left.role}\0${left.path}`, `${right.role}\0${right.path}`)),
+    ...(input.comparisonIdentity ? { comparisonIdentity: input.comparisonIdentity } : {}),
     ...(input.measurements ? { measurements: input.measurements } : {}),
   };
   const receipt = { ...body, sha256: receiptSha256(body) };
@@ -254,21 +281,26 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
   if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");
   if (["policy-denied", "spawn-failed", "cancelled", "unknown-exit"].includes(receipt.outcome.state) && receipt.outcome.exitCode !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim an exit code`);
   if (!receipt.timeoutPolicy || (receipt.timeoutPolicy.timeoutMs !== null && (!Number.isInteger(receipt.timeoutPolicy.timeoutMs) || receipt.timeoutPolicy.timeoutMs < 1)) || !receipt.timeoutPolicy.killSignal?.trim()) throw new Error("command execution receipt has an invalid timeout policy");
+  if (!["pre-start-only", "unsupported"].includes(receipt.cancellationPolicy)) throw new Error("command execution receipt has an invalid cancellation policy");
   for (const stream of [receipt.stdout, receipt.stderr]) if (!Number.isInteger(stream?.bytes) || stream.bytes < 0 || !/^[a-f0-9]{64}$/.test(stream.sha256)) throw new Error("command execution receipt has an invalid output digest");
   if (!Array.isArray(receipt.artifacts)) throw new Error("command execution receipt artifacts are missing");
   for (const artifact of receipt.artifacts) if (!artifact.path?.trim() || !["report", "stdout", "stderr", "raw-output", "other"].includes(artifact.role) || !Number.isInteger(artifact.bytes) || artifact.bytes < 0 || !/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error("command execution receipt has an invalid artifact digest");
+  if (!Array.isArray(receipt.artifactFailures)) throw new Error("command execution receipt artifact failures are missing");
+  for (const artifact of receipt.artifactFailures) if (!artifact.path?.trim() || !["report", "stdout", "stderr", "raw-output", "other"].includes(artifact.role) || !["missing", "unreadable"].includes(artifact.reason)) throw new Error("command execution receipt has an invalid artifact failure");
+  if (receipt.comparisonIdentity && [receipt.comparisonIdentity.sourceSha256, receipt.comparisonIdentity.selectionSha256, receipt.comparisonIdentity.toolchainSha256].some((sha) => !/^[a-f0-9]{64}$/.test(sha))) throw new Error("command execution receipt has an invalid comparison identity");
   for (const metric of Object.values(receipt.measurements ?? {})) if (!Number.isInteger(metric) || metric < 0) throw new Error("command execution receipt measurements must be non-negative integers");
   if (!/^[a-f0-9]{64}$/.test(receipt.sha256) || receipt.sha256 !== receiptSha256(commandReceiptWithoutDigest(receipt))) throw new Error("command execution receipt digest is invalid");
 }
 
 export function commandReceiptSucceeded(receipt: CommandExecutionReceipt): boolean {
   assertCommandExecutionReceipt(receipt);
-  return receipt.outcome.state === "exited" && receipt.outcome.exitCode === 0;
+  return receipt.outcome.state === "exited" && receipt.outcome.exitCode === 0 && receipt.artifactFailures.length === 0;
 }
 
 /** Re-read every output named by the receipt; regeneration or cross-run substitution fails loud. */
 export function verifyCommandExecutionReceiptArtifacts(receipt: CommandExecutionReceipt): void {
   assertCommandExecutionReceipt(receipt);
+  if (receipt.artifactFailures.length) throw new Error(`command receipt declared artifact is ${receipt.artifactFailures[0]!.reason}: ${receipt.artifactFailures[0]!.path}`);
   for (const artifact of receipt.artifacts) {
     if (!existsSync(artifact.path)) throw new Error(`command receipt artifact is missing: ${artifact.path}`);
     const stat = statSafe(artifact.path);

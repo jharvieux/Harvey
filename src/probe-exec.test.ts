@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -48,8 +48,42 @@ describe("probeExec command execution receipts", () => {
 
     const controller = new AbortController();
     controller.abort();
-    const cancelled = probeExec(process.execPath, ["-e", "process.exit(0)"], { ...receiptOptions({ invocationId: "cancelled" }), signal: controller.signal });
+    const marker = join(root, "cancelled-child-started");
+    const cancelled = probeExec(process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`], { ...receiptOptions({ invocationId: "cancelled" }), signal: controller.signal });
+    expect(existsSync(marker)).toBe(false);
+    expect(cancelled.ok).toBe(false);
     expect(cancelled.receipt?.outcome.state).toBe("cancelled");
+    expect(cancelled.receipt?.cancellationPolicy).toBe("pre-start-only");
+  });
+
+  it("discloses synchronous cancellation limits and preserves the real completed exit", async () => {
+    const controller = new AbortController();
+    const abort = new Promise<void>((resolve) => setTimeout(() => { controller.abort(); resolve(); }, 1));
+    const result = probeExec(process.execPath, ["-e", "setTimeout(() => process.exit(7), 25)"], { signal: controller.signal });
+    await abort;
+    expect(controller.signal.aborted).toBe(true);
+    expect(result.receipt?.outcome).toEqual({ state: "exited", exitCode: 7, signal: null });
+    expect(result.receipt?.cancellationPolicy).toBe("pre-start-only");
+  });
+
+  it.each([0, 7])("retains exit %i and the missing output identity without accepting an incomplete command", (exitCode) => {
+    const report = join(root, `absent-${exitCode}.json`);
+    const result = probeExec(process.execPath, ["-e", `process.exit(${exitCode})`], receiptOptions({ artifacts: [{ role: "report", path: report }] }));
+    expect(result.ok).toBe(false);
+    expect(result.receipt?.outcome).toEqual({ state: "exited", exitCode, signal: null });
+    expect(result.receipt?.artifactFailures).toEqual([{ role: "report", path: report, reason: "missing", errorCode: "ENOENT" }]);
+    expect(result.output).toContain("declared report artifact missing");
+    expect(commandReceiptSucceeded(result.receipt!)).toBe(false);
+    expect(() => verifyCommandExecutionReceiptArtifacts(result.receipt!)).toThrow(/artifact is missing/);
+  });
+
+  it("sanitizes assignment URL credentials before retaining argv and hashing effective configuration", () => {
+    const run = (password: string, token: string) => probeExec(process.execPath, ["-e", "process.exit(0)", "--", `--db-url=postgres://demo:${password}@example.test/db`, `--endpoint=https://example.test?token=${token}`]);
+    const first = run("sentinel-password", "sentinel-token");
+    const second = run("different-password", "different-token");
+    expect(first.ok).toBe(true);
+    expect(JSON.stringify(first.receipt)).not.toContain("sentinel-");
+    expect(first.receipt?.configuration.sha256).toBe(second.receipt?.configuration.sha256);
   });
 
   it("redacts credentials and invalidates acceptance when a bound artifact is regenerated", () => {

@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import { runAudit, type Examined, type ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import type { Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
+import { probeExec } from "./probe-exec.js";
 
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.restoreAllMocks(); });
@@ -53,6 +55,81 @@ describe("bound audit replay", () => {
     writeFileSync(f.raw, JSON.stringify({ module: "M1", reports: [f.passes[0]!.result], commandExecutionReceipts: receipts }));
     f.passes[0]!.rawArtifacts = [f.raw, report];
   };
+
+  it("rejects a substituted derived result and missing command catalogs from real process evidence", () => {
+    for (const defect of ["result", "missing-catalog", "empty-catalog"] as const) {
+      const f = fixture();
+      const report = join(f.root, "M1-command.json");
+      const actual = probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ observed: 'run-a' }))", report], { receipt: { artifacts: [{ role: "report", path: report }] } });
+      expect(actual.ok).toBe(true);
+      installOwningRun(f, report, [actual.receipt]);
+      f.passes[0]!.producer.name = "audit-runner:M1";
+      f.passes[0]!.scope.tier = "orchestrated";
+      if (defect === "result") f.passes[0]!.result = { ...(f.passes[0]!.result as Examined), detail: "unrelated run B" };
+      if (defect === "missing-catalog") f.passes[0]!.rawArtifacts = [report];
+      if (defect === "empty-catalog") writeFileSync(f.raw, JSON.stringify({ module: "M1", reports: [f.passes[0]!.result], commandExecutionReceipts: [] }));
+      expect(() => f.write(), defect).toThrow(/derived report|missing.*catalog|Empty command receipt catalog/);
+    }
+  });
+
+  it("checks derived-result ownership again during replay even when bundle checksums are consistent", () => {
+    const f = fixture();
+    const report = join(f.root, "M1-command.json");
+    const actual = probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], 'actual report')", report], { receipt: { artifacts: [{ role: "report", path: report }] } });
+    installOwningRun(f, report, [actual.receipt]);
+    f.write();
+    const manifestPath = join(f.bundle, "audit-replay.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const receiptPath = join(f.bundle, manifest.receipts[0].path);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    receipt.result.detail = "unrelated measured result";
+    const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}` : JSON.stringify(value);
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    delete receipt.id;
+    receipt.id = digest(canonical(receipt));
+    const receiptBytes = JSON.stringify(receipt);
+    writeFileSync(receiptPath, receiptBytes);
+    manifest.receipts[0].sha256 = digest(receiptBytes);
+    delete manifest.sha256;
+    manifest.sha256 = digest(canonical(manifest));
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(() => replayAuditBundle(f.bundle, f.target, { now: f.now })).toThrow(/owning-run derived report/);
+  });
+
+  it("retains explicit in-process module evidence without inventing child command attempts", () => {
+    const f = fixture();
+    const pass = f.passes[0]!;
+    pass.producer.name = "audit-runner:M1";
+    pass.scope.tier = "orchestrated";
+    const raw = join(f.root, "M1-in-process.json");
+    writeFileSync(raw, JSON.stringify({ module: "M1", reports: [pass.result], commandExecution: { kind: "in-process", reason: "Module examined source directly." }, commandExecutionReceipts: [] }));
+    pass.rawArtifacts = [raw];
+    f.write();
+    expect(() => replayAuditBundle(f.bundle, f.target, { now: f.now })).not.toThrow();
+  });
+
+  it("distinguishes byte-identical reports by their original artifact identity", () => {
+    const f = fixture();
+    const reports = [join(f.root, "first.json"), join(f.root, "second.json")];
+    const receipts = reports.map((report) => probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], '[]')", report], { receipt: { artifacts: [{ role: "report", path: report }] } }).receipt);
+    installOwningRun(f, reports[0]!, receipts);
+    f.passes[0]!.rawArtifacts.push(reports[1]!);
+    f.write();
+    expect(() => replayAuditBundle(f.bundle, f.target, { now: f.now })).not.toThrow();
+  });
+
+  it.each(["executionReceipt", "nativeComparison"])("validates nested %s outputs against the original command", (kind) => {
+    const f = fixture();
+    const nestedReport = join(f.root, "native.json");
+    const nested = probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], 'actual')", nestedReport], { receipt: { artifacts: [{ role: "report", path: nestedReport }] } }).receipt;
+    const report = join(f.root, "M1-report.json");
+    writeFileSync(report, JSON.stringify(kind === "executionReceipt" ? { executionReceipt: nested } : { runnerValidity: { issues: [{ nativeComparison: { receipt: nested } }] } }));
+    const parent = bindCommand(f, report);
+    installOwningRun(f, report, [parent]);
+    f.passes[0]!.rawArtifacts.push(nestedReport);
+    writeFileSync(nestedReport, "unrelated run");
+    expect(() => f.write()).toThrow(/missing or mixed with another run/);
+  });
 
   it("binds an accepted report to one exact invocation and rejects regeneration, mixed runs and duplicate invocation IDs", () => {
     const accepted = fixture();

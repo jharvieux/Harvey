@@ -15,7 +15,7 @@
 
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
-import type { CommandExecutionReceipt } from "./producer-execution-receipt.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 export type MutantStatus =
   | "Killed"
@@ -118,6 +118,50 @@ export interface MutationRunnerValidity {
     missingCompletedCountSurvivors: number;
   };
   issues: MutationRunnerValidityIssue[];
+}
+
+/** Carry the effective runner limitation wherever the mutation measurement is consumed. */
+export function mutationRunnerValidityReason(artifact: unknown): string | undefined {
+  if (!artifact || typeof artifact !== "object") return undefined;
+  const validity = (artifact as { runnerValidity?: MutationRunnerValidity }).runnerValidity;
+  if (validity?.status !== "uncheckable") return undefined;
+  const reasons = [...new Set(validity.issues.map((issue) => issue.reason))];
+  return `Mutation runner results are uncheckable for ${validity.issues.length} mutant(s): ${reasons.join(" ")} [MEASURED from completed-test evidence; falsifier: repair suite loading and rerun the affected mutants with positive completed-test counts].`;
+}
+
+export interface MutationStability {
+  schemaVersion: 1;
+  status: "not-assessed" | "stable" | "unstable";
+  reason: string;
+  invocationIds: string[];
+  comparedMutants: number;
+  changes: { file: string; mutantId: string; previous: MutantStatus | null; current: MutantStatus | null }[];
+}
+
+/** Compare the full mutant population only after source, selection and tool identities match. */
+export function compareMutationRuns(current: { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt }, previous?: { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt }): MutationStability {
+  if (!previous) return { schemaVersion: 1, status: "not-assessed", reason: "Mutation status stability was not assessed: no prior bound invocation was supplied. Falsifier: rerun the same source and selection with --compare-run <retained M8 artifact>.", invocationIds: current.executionReceipt ? [current.executionReceipt.invocationId] : [], comparedMutants: 0, changes: [] };
+  for (const run of [current, previous]) {
+    assertCommandExecutionReceipt(run.executionReceipt);
+    if (!run.executionReceipt.comparisonIdentity || run.executionReceipt.artifactFailures.length || run.executionReceipt.outcome.state !== "exited" || !run.rawReport?.files) throw new Error("Mutation comparison requires complete original command, report and comparison identities");
+  }
+  const receipt = current.executionReceipt!, prior = previous.executionReceipt!;
+  if (receipt.invocationId === prior.invocationId) throw new Error("Mutation comparison requires two distinct command invocations");
+  for (const key of ["sourceSha256", "selectionSha256", "toolchainSha256"] as const) if (receipt.comparisonIdentity![key] !== prior.comparisonIdentity![key]) throw new Error(`Mutation comparison ${key} mismatch; source, selection and tools must match exactly`);
+  const population = (report: StrykerReport) => {
+    const effective = validateMutationRunnerReport(report).report;
+    const entries = Object.entries(effective.files).flatMap(([file, entry]) => entry.mutants.map((mutant) => [JSON.stringify([file, mutant.location, mutant.mutatorName, mutant.replacement ?? null]), { file, mutantId: mutant.id, status: mutant.status }] as const));
+    const unique = new Map(entries);
+    if (unique.size !== entries.length || unique.size === 0) throw new Error("Mutation comparison needs a nonempty, unambiguous mutant population");
+    return unique;
+  };
+  const currentPopulation = population(current.rawReport), previousPopulation = population(previous.rawReport);
+  const keys = [...new Set([...currentPopulation.keys(), ...previousPopulation.keys()])].sort();
+  const changes = keys.flatMap((key) => {
+    const currentMutant = currentPopulation.get(key), previousMutant = previousPopulation.get(key);
+    return currentMutant?.status === previousMutant?.status ? [] : [{ file: (currentMutant ?? previousMutant)!.file, mutantId: (currentMutant ?? previousMutant)!.mutantId, previous: previousMutant?.status ?? null, current: currentMutant?.status ?? null }];
+  });
+  return { schemaVersion: 1, status: changes.length ? "unstable" : "stable", reason: changes.length ? `Mutation status is unstable: ${changes.length} of ${keys.length} mutant outcomes changed across two bound invocations. Affected mutants: ${changes.map((change) => `${change.file}#${change.mutantId} ${change.previous ?? "absent"}→${change.current ?? "absent"}`).join("; ")}. Repeat these mutants under the same timeout policy before treating their score as settled.` : `All ${keys.length} mutant outcomes matched across these two bound invocations; this comparison does not establish future stability.`, invocationIds: [prior.invocationId, receipt.invocationId], comparedMutants: keys.length, changes };
 }
 
 /**
@@ -471,8 +515,10 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
     reportRows?: TestQualityRow[];
     scope?: MutationScope;
     lineCoverage?: TestQuality["lineCoverage"];
+    mutationStability?: MutationStability;
   };
   if (!a.summary?.overall || !Array.isArray(a.reportRows)) return undefined;
+  const runnerReason = mutationRunnerValidityReason(artifact);
   const survivors = a.summary.survivingMutants ?? [];
   return {
     mutationScore: a.summary.overall.mutationScore,
@@ -483,8 +529,8 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
       : {}),
     coveredScope: a.summary.coveredScope ?? [],
     // An UNVERIFIABLE scope is not a whole-repo claim: only a verified, unscoped run earns `true`.
-    wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped),
-    scopeNote: a.scope?.note ?? "the scan reported no mutate-scope verdict — treat the score as covering only the listed files",
+    wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped && !runnerReason && a.mutationStability?.status !== "unstable"),
+    scopeNote: [a.scope?.note ?? "the scan reported no mutate-scope verdict — treat the score as covering only the listed files", runnerReason, a.mutationStability?.reason].filter(Boolean).join(". "),
     rows: a.reportRows,
     lineCoverage: a.lineCoverage ?? { status: "partial", reason: "the scan reported no line-coverage verdict (#819)" },
     survivors: survivors.slice(0, SURVIVOR_LIST_MAX).map((s) => ({ file: s.file, line: s.line, mutator: s.mutatorName, hotspot: s.hotspot })),

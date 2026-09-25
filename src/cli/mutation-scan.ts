@@ -117,9 +117,10 @@ import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub
 import { mirrorNodeModules } from "../stub-worktree.js";
 import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
 import { redactSecrets } from "../secret-redact.js";
-import { createCommandExecutionReceipt, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
+import { createCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
 import {
   coveredScopeLine,
+  compareMutationRuns,
   applyReportedMutation,
   detectDryRunFailure,
   detectNoTestSuite,
@@ -132,6 +133,7 @@ import {
   dryRunFailureModuleRecord,
   isIncompatibleTypeScript7,
   mutationNotRunModuleRecord,
+  mutationRunnerValidityReason,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   planTsconfigRewrites,
@@ -196,11 +198,15 @@ let reportPath = arg("--report");
 const hotspotsPath = arg("--hotspots");
 const outPath = arg("--out");
 const scopeOutPath = arg("--scope-out");
+const compareRunPath = arg("--compare-run");
 // #819: where/whose package.json the line-coverage tool run should invoke — the target itself for
 // an ordinary per-app run, redirected to the workspace root by a successful #655 root-scoped run
 // below (the same case where reportPath/configPath are redirected).
 let coverageCwd = targetDir;
 const install = process.argv.includes("--install");
+let strykerExecution: CommandObservation | undefined;
+let originalStrykerReportPath: string | undefined;
+let rootScopedComparison: { root: string; appRelative: string; report: StrykerReport } | undefined;
 
 function receiptArtifactBesideOutput(suffix: string): string | undefined {
   if (!outPath) return undefined;
@@ -704,7 +710,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // Package directories existing (checked above) doesn't guarantee node_modules/.bin/stryker was
   // hoisted there too — pnpm workspace hoisting can differ from a plain npm install's layout — so
   // this still degrades rather than lets runStryker's ENOENT throw crash the whole CLI.
-  let run: { dryRunFailure?: string; ts7Crash?: boolean };
+  let run: StrykerRunResult;
   try {
     run = runStryker(redirect.cfgPath, runCwd);
   } catch (err) {
@@ -718,9 +724,11 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   }
 
   const rawReportPath = resolveReportPath(redirect.cfgPath, rootSuite.root, redirect.scratchRoot);
+  originalStrykerReportPath = rawReportPath;
   if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
 
   const rawReport = JSON.parse(readFileSync(rawReportPath, "utf8")) as StrykerReport;
+  rootScopedComparison = { root: rootSuite.root, appRelative: appRelFromRoot, report: rawReport };
   const { report, dropped } = reRootReportToApp(rawReport, appRelFromRoot);
   if (dropped.length) {
     console.error(`⚠ #655: ${dropped.length} mutated file(s) from the root run fell outside ${appRelFromRoot} and were dropped from this app's measurement (e.g. ${dropped.slice(0, 3).join(", ")}) — should not happen when mutate globs are scoped correctly`);
@@ -797,7 +805,7 @@ if (!reportPath) {
         const moduleRecord = attempt
           ? { ...baseRecord, note: `${baseRecord.note} Attempted a root-scoped run (#655) but could not complete it: ${attempt.degradeReason}.` }
           : baseRecord;
-        const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord };
+        const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord, ...(strykerExecution ? { executionReceipt: finalizeStrykerReceipt() } : {}) };
         const json = JSON.stringify(output, null, 2);
         if (outPath) {
           writeFileSync(outPath, json + "\n");
@@ -987,7 +995,7 @@ if (stubCheck) {
 // instead of a bare non-zero exit it could only record as a generic requires-live-run.
 function emitAndExit(output: Record<string, unknown>, stderrNote: string): never {
   console.error(stderrNote);
-  const json = JSON.stringify(output, null, 2);
+  const json = JSON.stringify({ ...output, ...(strykerExecution ? { executionReceipt: finalizeStrykerReceipt() } : {}) }, null, 2);
   if (outPath) {
     writeFileSync(outPath, json + "\n");
     console.error(`wrote M8 artifact to ${outPath}`);
@@ -1009,6 +1017,7 @@ function instrumentedFileCount(output: string): number | undefined {
 }
 
 interface CommandObservation {
+  invocationId: string;
   executable: string;
   argv: string[];
   cwd: string;
@@ -1017,6 +1026,40 @@ interface CommandObservation {
   outcome: { state: CommandTerminalState; exitCode: number | null; signal: string | null; errorCode?: string };
   stdout: string;
   stderr: string;
+  expectedReportPath: string;
+  configuration: unknown;
+  comparisonIdentity: NonNullable<CommandExecutionReceipt["comparisonIdentity"]>;
+}
+
+function finalizeStrykerReceipt(report?: StrykerReport, measurements?: CommandExecutionReceipt["measurements"]): CommandExecutionReceipt {
+  if (!strykerExecution) throw new Error("No original Stryker execution to retain");
+  const execution = strykerExecution;
+  const source = originalStrykerReportPath ?? execution.expectedReportPath;
+  let artifact = source;
+  const retained = receiptArtifactBesideOutput("raw-stryker.json");
+  if (retained && existsSync(source)) {
+    mkdirSync(dirname(retained), { recursive: true });
+    writeFileSync(retained, readFileSync(source));
+    artifact = retained;
+  }
+  return createCommandExecutionReceipt({
+    invocationId: execution.invocationId,
+    command: { executable: execution.executable, argv: execution.argv, cwd: execution.cwd },
+    target: { identity: targetDir, value: { targetDir, invocationRoot: execution.cwd } },
+    toolchain: [
+      { name: report?.framework?.name ?? "StrykerJS", version: report?.framework?.version ?? installedPackageVersion(execution.cwd, "@stryker-mutator/core") },
+      { name: "vitest", version: installedPackageVersion(execution.cwd, "vitest") },
+    ],
+    configuration: { identity: "invoked-stryker-config", value: execution.configuration },
+    startedAt: execution.startedAt,
+    finishedAt: execution.finishedAt,
+    outcome: execution.outcome,
+    stdout: execution.stdout,
+    stderr: execution.stderr,
+    artifacts: [{ role: "report", path: artifact }],
+    comparisonIdentity: execution.comparisonIdentity,
+    ...(measurements ? { measurements } : {}),
+  });
 }
 
 interface StrykerRunResult {
@@ -1040,23 +1083,40 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   const localBin = join(cwd, "node_modules", ".bin", "stryker");
   const strykerBin = existsSync(localBin) ? localBin : "stryker";
   const startedAt = new Date().toISOString();
+  const configuration = { path: cfgPath ?? null, contents: cfgPath && existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : null };
+  const selectionConfig = cfgPath?.endsWith(".json") && configuration.contents ? JSON.parse(configuration.contents) as Record<string, unknown> : { contents: configuration.contents };
+  // These three destinations are allocated afresh by withOffTreeScratch; every execution option,
+  // including test selection, concurrency and timeout policy, stays in the comparison identity.
+  for (const key of ["tempDirName", "incrementalFile", "jsonReporter"]) delete selectionConfig[key];
+  const comparisonIdentity = {
+    sourceSha256: sha256Text(JSON.stringify(walkRelPaths(cwd).sort().map((path) => [path, sha256Text(readFileSync(resolve(cwd, path)))]))),
+    selectionSha256: sha256Text(JSON.stringify({ config: selectionConfig, concurrency: concurrency ?? null, incremental, timeout: "no-parent-timeout" })),
+    toolchainSha256: sha256Text(JSON.stringify({ node: process.version, stryker: installedPackageVersion(cwd, "@stryker-mutator/core"), vitest: installedPackageVersion(cwd, "vitest"), executableSha256: existsSync(strykerBin) ? sha256Text(readFileSync(strykerBin)) : null })),
+  };
   // Stryker exits non-zero when the mutation score is under its configured break threshold —
   // that's not a wrapper failure, the report is still written. spawnSync retains both streams on
   // success as well as failure so the receipt digests the command's complete observation.
   const child = spawnSync(strykerBin, strykerArgs, { cwd, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-  if ((child.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-    throw new Error("stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo (see this file's header comment)");
-  }
   const stdout = child.stdout ?? "";
   const stderr = child.stderr ?? "";
   process.stderr.write(stdout);
   process.stderr.write(stderr);
-  const outcome = child.status !== null
+  const errorCode = (child.error as NodeJS.ErrnoException | undefined)?.code;
+  const outcome = child.error
+    ? { state: "spawn-failed" as const, exitCode: null, signal: child.signal, ...(errorCode ? { errorCode } : {}) }
+    : child.status !== null
     ? { state: "exited" as const, exitCode: child.status, signal: null }
     : child.signal
       ? { state: "signaled" as const, exitCode: null, signal: child.signal }
-      : { state: "unknown-exit" as const, exitCode: null, signal: null, ...((child.error as NodeJS.ErrnoException | undefined)?.code ? { errorCode: (child.error as NodeJS.ErrnoException).code } : {}) };
-  const execution: CommandObservation = { executable: strykerBin, argv: strykerArgs, cwd, startedAt, finishedAt: new Date().toISOString(), outcome, stdout, stderr };
+      : { state: "unknown-exit" as const, exitCode: null, signal: null };
+  const execution: CommandObservation = {
+    invocationId: randomUUID(), executable: strykerBin, argv: strykerArgs, cwd, startedAt, finishedAt: new Date().toISOString(), outcome, stdout, stderr,
+    expectedReportPath: resolve(cwd, reporterFileNameFromConfig(cfgPath) ?? "reports/mutation/mutation.json"),
+    configuration,
+    comparisonIdentity,
+  };
+  strykerExecution = execution;
+  if (errorCode === "ENOENT") return { dryRunFailure: "stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo", execution };
   if (child.status === 0) {
     const phases = strykerPhaseDurations(stdout);
     const instrumented = instrumentedFileCount(stdout);
@@ -1166,7 +1226,7 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
   }
 }
 
-function sha256Text(text: string): string {
+function sha256Text(text: string | Buffer): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
@@ -1187,10 +1247,10 @@ function installedPackageVersion(root: string, packageName: string): string {
 /** Re-run a suspect zero-completed survivor through native Vitest in a disposable copy. This is
  * a comparison oracle, not a reclassification as Killed: a suite-load error completed no tests,
  * so the effective report remains explicit RuntimeError/uncheckable. */
-function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["files"][string]["mutants"][number], report: StrykerReport, receiptArtifactPath?: string): NativeMutationComparison | undefined {
+function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["files"][string]["mutants"][number], report: StrykerReport, receiptArtifactPath?: string, comparisonRoot = targetDir): NativeMutationComparison | undefined {
   if (report.config?.testRunner !== "vitest") return undefined;
-  const sourcePath = resolve(targetDir, file);
-  const rel = relative(targetDir, sourcePath);
+  const sourcePath = resolve(comparisonRoot, file);
+  const rel = relative(comparisonRoot, sourcePath);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !existsSync(sourcePath)) return undefined;
 
   const runDir = mkdtempSync(join(realpathSync(tmpdir()), "harvey-native-mutant-"));
@@ -1206,8 +1266,20 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   const vitestConfig = (report.config?.vitest && typeof report.config.vitest === "object")
     ? (report.config.vitest as { configFile?: unknown }).configFile
     : undefined;
-  const args = ["run", ...(typeof vitestConfig === "string" ? ["--config", vitestConfig] : []), ...selectedTests, "--reporter=json", `--outputFile=${resultPath}`];
-  const localBin = join(targetDir, "node_modules", ".bin", "vitest");
+  const sourceOperand = (path: string): string | undefined => {
+    const absolute = resolve(comparisonRoot, path);
+    const within = relative(comparisonRoot, absolute);
+    return within && within !== ".." && !within.startsWith(`..${sep}`) && !isAbsolute(within) && existsSync(absolute) ? `./${within}` : undefined;
+  };
+  const testOperands = selectedTests.map(sourceOperand);
+  const configOperand = typeof vitestConfig === "string" ? sourceOperand(vitestConfig) : undefined;
+  if (testOperands.some((path) => !path) || (typeof vitestConfig === "string" && !configOperand)) {
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(dirname(resultPath), { recursive: true, force: true });
+    return undefined;
+  }
+  const args = ["run", ...(configOperand ? ["--config", configOperand] : []), ...(testOperands as string[]), "--reporter=json", `--outputFile=${resultPath}`];
+  const localBin = join(comparisonRoot, "node_modules", ".bin", "vitest");
   const bin = existsSync(localBin) ? localBin : "vitest";
   let exitCode: number | null = 0;
   let signal: string | null = null;
@@ -1216,11 +1288,16 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   let stderr = "";
   const startedAt = new Date().toISOString();
   try {
-    copySource(targetDir, runDir);
-    if (existsSync(join(targetDir, "node_modules"))) mirrorSourceDependencies(targetDir, runDir);
+    copySource(comparisonRoot, runDir);
+    if (existsSync(join(comparisonRoot, "node_modules"))) mirrorSourceDependencies(comparisonRoot, runDir);
     const staged = join(runDir, rel);
     writeFileSync(staged, applyReportedMutation(readFileSync(staged, "utf8"), mutant));
-    stdout = execFileSync(bin, args, { cwd: runDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    const child = spawnSync(bin, args, { cwd: runDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    exitCode = child.status;
+    signal = child.signal;
+    errorCode = (child.error as NodeJS.ErrnoException | undefined)?.code;
+    stdout = child.stdout ?? "";
+    stderr = child.stderr ?? "";
   } catch (error) {
     const failure = error as { code?: string; status?: number; signal?: string; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
     exitCode = typeof failure.status === "number" ? failure.status : null;
@@ -1254,7 +1331,9 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   const artifact = receiptArtifactPath && existsSync(resultPath)
     ? (() => { mkdirSync(dirname(receiptArtifactPath), { recursive: true }); writeFileSync(receiptArtifactPath, readFileSync(resultPath)); return receiptArtifactPath; })()
     : undefined;
-  const outcome = exitCode !== null
+  const outcome = errorCode
+    ? { state: "spawn-failed" as const, exitCode: null, signal, errorCode }
+    : exitCode !== null
     ? { state: "exited" as const, exitCode, signal: null }
     : signal
       ? { state: "signaled" as const, exitCode: null, signal }
@@ -1263,14 +1342,14 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     invocationId: randomUUID(),
     command: { executable: bin, argv: args, cwd: runDir },
     target: { identity: `${file}:${mutant.id}`, value: { file, mutantId: mutant.id, replacement: mutant.replacement } },
-    toolchain: [{ name: "vitest", version: installedPackageVersion(targetDir, "vitest") }],
+    toolchain: [{ name: "vitest", version: installedPackageVersion(comparisonRoot, "vitest") }],
     configuration: { identity: "stryker-effective-vitest-config", value: { stryker: report.config ?? {}, selectedTests } },
     startedAt,
     finishedAt,
     outcome,
     stdout,
     stderr,
-    artifacts: artifact ? [{ role: "report", path: artifact }] : [],
+    artifacts: [{ role: "report", path: artifact ?? resultPath }],
     measurements: {
       completedTests,
       testsDiscovered: Object.values(report.testFiles ?? {}).reduce((count, testFile) => count + testFile.tests.length, 0),
@@ -1278,7 +1357,7 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     },
   });
   rmSync(runDir, { recursive: true, force: true });
-  rmSync(dirname(resultPath), { recursive: true, force: true });
+  if (artifact) rmSync(dirname(resultPath), { recursive: true, force: true });
   return { command: ["vitest", ...args], selectedTests, exitCode, signal, completedTests, suiteErrors: [...new Set(suiteErrors)], stdoutSha256: sha256Text(stdout), stderrSha256: sha256Text(stderr), receipt };
 }
 
@@ -1367,7 +1446,6 @@ let pristine: PristineSnapshot | undefined;
 let strykerPhases: { testBaselineMs: number; mutationMs: number } | undefined;
 let strykerInstrumentedFileCount: number | undefined;
 let mutationInvocationRoot: string | undefined;
-let strykerExecution: CommandObservation | undefined;
 
 let resolvedReportPath: string;
 if (reportPath) {
@@ -1409,6 +1487,7 @@ if (reportPath) {
     );
   }
   resolvedReportPath = resolveReportPath(redirect.cfgPath, runCwd, redirect.scratchRoot);
+  originalStrykerReportPath = resolvedReportPath;
 }
 
 if (!existsSync(resolvedReportPath)) {
@@ -1430,12 +1509,14 @@ const rawReport = JSON.parse(readFileSync(resolvedReportPath, "utf8")) as Stryke
 const nativeComparisons = new Map<string, NativeMutationComparison>();
 // A replay proves only what its bound report contains. A live run can additionally reproduce a
 // suspect mutant with the native runner against an isolated copy of the same target and selection.
-if (!reportPath) {
+if (strykerExecution) {
   for (const [file, fileReport] of Object.entries(rawReport.files)) {
     for (const mutant of fileReport.mutants) {
       if (mutant.status !== "Survived" || (Number.isSafeInteger(mutant.testsCompleted) && Number(mutant.testsCompleted) > 0)) continue;
       const nativeReportArtifact = receiptArtifactBesideOutput(`native-${sha256Text(`${file}\0${mutant.id}`).slice(0, 12)}.vitest.json`);
-      const comparison = compareMutantWithNativeVitest(file, mutant, rawReport, nativeReportArtifact);
+      const comparison = rootScopedComparison
+        ? compareMutantWithNativeVitest(`${rootScopedComparison.appRelative}/${file}`, mutant, rootScopedComparison.report, nativeReportArtifact, rootScopedComparison.root)
+        : compareMutantWithNativeVitest(file, mutant, rawReport, nativeReportArtifact);
       if (comparison) nativeComparisons.set(`${file}\0${mutant.id}`, comparison);
     }
   }
@@ -1443,34 +1524,13 @@ if (!reportPath) {
 const { report, validity: runnerValidity } = validateMutationRunnerReport(rawReport, nativeComparisons);
 let executionReceipt: CommandExecutionReceipt | undefined;
 if (strykerExecution) {
-  const reportArtifact = receiptArtifactBesideOutput("raw-stryker.json");
-  if (reportArtifact) {
-    mkdirSync(dirname(reportArtifact), { recursive: true });
-    writeFileSync(reportArtifact, readFileSync(resolvedReportPath));
-  }
   const mutants = Object.values(rawReport.files).flatMap((fileReport) => fileReport.mutants);
-  executionReceipt = createCommandExecutionReceipt({
-    invocationId: randomUUID(),
-    command: { executable: strykerExecution.executable, argv: strykerExecution.argv, cwd: strykerExecution.cwd },
-    target: { identity: targetDir, value: { targetDir, files: Object.keys(rawReport.files).sort() } },
-    toolchain: [
-      { name: rawReport.framework?.name ?? "StrykerJS", version: rawReport.framework?.version ?? "unknown" },
-      { name: "vitest", version: installedPackageVersion(targetDir, "vitest") },
-    ],
-    configuration: { identity: effectiveConfigPath ?? "effective-stryker-report-config", value: rawReport.config ?? {} },
-    startedAt: strykerExecution.startedAt,
-    finishedAt: strykerExecution.finishedAt,
-    outcome: strykerExecution.outcome,
-    stdout: strykerExecution.stdout,
-    stderr: strykerExecution.stderr,
-    artifacts: reportArtifact ? [{ role: "report", path: reportArtifact }] : [],
-    measurements: {
+  executionReceipt = finalizeStrykerReceipt(rootScopedComparison?.report ?? rawReport, {
       // Command-level corroboration: Stryker's report counts completed tests per mutant, so this
       // is their aggregate. The per-mutant counts remain authoritative in runnerValidity.
       completedTests: mutants.reduce((count, mutant) => count + (Number.isSafeInteger(mutant.testsCompleted) ? Number(mutant.testsCompleted) : 0), 0),
       testsDiscovered: Object.values(rawReport.testFiles ?? {}).reduce((count, testFile) => count + testFile.tests.length, 0),
       suiteLoadErrors: runnerValidity.issues.filter((issue) => issue.suiteErrors.length > 0).length,
-    },
   });
 }
 const hotspotFiles = hotspotsPath
@@ -1567,6 +1627,26 @@ if (lineCoverage.status === "partial") {
 // counted but nothing turned into a Finding. #1100: vacuousTestFindings needs the raw report (the
 // testFiles/coveredBy/killedBy join lives at that level, not in the collapsed MutationSummary).
 const findings = [...survivingMutantFindings(summary), ...noCoverageFindings(summary), ...vacuousTestFindings(report)];
+const currentRun = { rawReport: rootScopedComparison?.report ?? rawReport, executionReceipt };
+let mutationStability = compareMutationRuns(currentRun);
+let comparisonRun: { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt } | undefined;
+if (compareRunPath) {
+  try {
+    const priorRun = JSON.parse(readFileSync(resolve(compareRunPath), "utf8")) as { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt };
+    if (!priorRun.executionReceipt) throw new Error("Mutation comparison requires the prior original command receipt");
+    verifyCommandExecutionReceiptArtifacts(priorRun.executionReceipt);
+    const rawArtifacts = priorRun.executionReceipt.artifacts.filter((artifact) => artifact.role === "report");
+    if (rawArtifacts.length !== 1 || JSON.stringify(JSON.parse(readFileSync(rawArtifacts[0]!.path, "utf8"))) !== JSON.stringify(priorRun.rawReport)) throw new Error("Mutation comparison raw report differs from the prior command's retained artifact");
+    mutationStability = compareMutationRuns(currentRun, priorRun);
+    comparisonRun = { rawReport: priorRun.rawReport, executionReceipt: priorRun.executionReceipt };
+  } catch (error) {
+    mutationStability = { ...mutationStability, reason: `Mutation comparison rejected: ${(error as Error).message}. Stability remains not assessed; rerun with an unchanged source, selection, toolchain and intact retained report.` };
+  }
+}
+const scopeModuleRecord = scope.scoped ? scopedRunModuleRecord(scope) : !scope.verified ? unverifiableScopeModuleRecord(scope) : undefined;
+const runnerReason = mutationRunnerValidityReason({ runnerValidity });
+const stabilityReason = mutationStability.status === "unstable" || (compareRunPath && mutationStability.status === "not-assessed") ? mutationStability.reason : undefined;
+const moduleRecord = runnerReason || stabilityReason ? { status: "partial" as const, note: [scopeModuleRecord?.note, runnerReason, stabilityReason].filter(Boolean).join(" ") } : scopeModuleRecord;
 const output = {
   summary,
   reportRows: toReportRows(summary, lineCoverage.byModule),
@@ -1590,17 +1670,23 @@ const output = {
   // own tests skipped. Falling through to no moduleRecord on that second case let mutationVerdict
   // read a full `ran` over a scope nobody confirmed. Only `verified && !scoped` — a proven
   // full-scope run — earns no moduleRecord at all.
-  ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : !scope.verified ? { moduleRecord: unverifiableScopeModuleRecord(scope) } : {}),
+  ...(moduleRecord ? { moduleRecord } : {}),
   // #1076: the raw Stryker report, retained alongside the transformed summary — previously
   // discarded after JSON.parse (src/mutation-scan.ts's own header note: "No raw Stryker report is
   // retained anywhere in the repo... Retaining one would make these verifiable"). Every future
   // fixture/regression capture can now be pulled straight from a real --out artifact instead of
   // reconstructed by hand.
   runnerValidity,
+  mutationStability,
+  ...(comparisonRun ? { comparisonRun } : {}),
   executionReceipt,
-  // The untouched upstream report remains the provenance record. Summary/findings above use the
-  // effective validated report so a zero-completed survivor cannot influence the score.
-  rawReport,
+  // REASON: A zero-completed survivor is uncheckable and excluded from the mutation score.
+  // KIND: empirical
+  // PROVENANCE: MEASURED 2026-09-25 — validateMutationRunnerReport reclassifies zero-completed survivors as RuntimeError while retaining the original report.
+  // FALSIFIER: pnpm exec vitest run src/mutation-scan.test.ts -t zero
+  // TOUCHES: src/cli/mutation-scan.ts, src/mutation-scan.ts
+  rawReport: rootScopedComparison?.report ?? rawReport,
+  ...(rootScopedComparison ? { appScopedReport: rawReport } : {}),
   effectiveReport: report,
 };
 if (scope.scoped) console.error(`⚠ M8 coverage: partial (scoped mutation run, #504) — this score is a subset measurement, not the module's result.`);

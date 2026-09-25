@@ -17,6 +17,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -737,6 +738,29 @@ describe("mutation-scan monorepo root invoked directly, tests live in workspaces
 // exercise a distinct degrade rung of that attempt — proving it is really invoked, not skipped —
 // while a live Stryker run itself stays out of scope for a unit/CLI test (see #655's task note).
 describe("mutation-scan monorepo root-scoped run attempt (#655, child process)", () => {
+  it("preserves the original root-scoped invocation and unmodified report", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-root-receipt-")); dirs.push(root);
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { test: "vitest run" }, devDependencies: { vitest: "3.0.0" } }));
+    writeFileSync(join(root, "vitest.workspace.ts"), 'export default ["apps/*"];');
+    for (const name of ["core", "vitest-runner"]) mkdirSync(join(root, "node_modules", "@stryker-mutator", name), { recursive: true });
+    const app = join(root, "apps", "main"); mkdirSync(join(app, "src"), { recursive: true });
+    writeFileSync(join(app, "package.json"), '{"name":"app"}');
+    writeFileSync(join(app, "src", "index.ts"), "export const value = 1;");
+    writeFakeStrykerBinaryHonoringConfig(root);
+    const bin = join(root, "node_modules", ".bin", "stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace('"src/add.ts"', '"apps/main/src/index.ts"'));
+    const { status, out } = await runCli(app, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out);
+    assertCommandExecutionReceipt(parsed.executionReceipt);
+    expect(parsed.executionReceipt.command.cwd).toBe(root);
+    expect(parsed.executionReceipt.outcome.exitCode).toBe(0);
+    expect(Object.keys(parsed.rawReport.files)).toEqual(["apps/main/src/index.ts"]);
+    expect(Object.keys(parsed.appScopedReport.files)).toEqual(["src/index.ts"]);
+    expect(parsed.executionReceipt.artifacts).toHaveLength(1);
+  });
+
   it("degrades naming 'no recognized source directory' when the app has none of the scaffold's known dirs to scope to", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-nosrc-"));
     dirs.push(root);
@@ -803,6 +827,33 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
     expect(parsed.moduleRecord.note).not.toMatch(/Attempted a root-scoped run/);
+  });
+});
+
+describe("mutation invocation comparison (#2139)", () => {
+  it("discloses status variation and refuses changed-source comparison while retaining both real attempts", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/add.ts"] }));
+    const evidence = mkdtempSync(join(tmpdir(), "harvey-m8-comparison-")); dirs.push(evidence);
+    const firstPath = join(evidence, "first.json"), secondPath = join(evidence, "second.json"), changedPath = join(evidence, "changed.json");
+    writeFakeStrykerBinaryHonoringConfig(repo);
+    const bin = join(repo, "node_modules", ".bin", "stryker");
+    const script = readFileSync(bin, "utf8").replace('const cfg =', `const counter = ${JSON.stringify(join(evidence, "counter"))}; const repeat = fs.existsSync(counter); fs.writeFileSync(counter, "ran");\nconst cfg =`).replace('status: "Killed"', 'status: repeat ? "Survived" : "Killed", testsCompleted: 2');
+    writeFileSync(bin, script);
+    expect((await runCli(repo, ["--out", firstPath])).status).toBe(0);
+    const first = JSON.parse(readFileSync(firstPath, "utf8"));
+    expect(first.mutationStability.status).toBe("not-assessed");
+    expect((await runCli(repo, ["--out", secondPath, "--compare-run", firstPath])).status).toBe(0);
+    const second = JSON.parse(readFileSync(secondPath, "utf8"));
+    expect(second.mutationStability).toMatchObject({ status: "unstable", comparedMutants: 1, changes: [{ previous: "Killed", current: "Survived" }] });
+    expect(second.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining("Mutation status is unstable") });
+    expect(second.executionReceipt.invocationId).not.toBe(first.executionReceipt.invocationId);
+    writeFileSync(join(repo, "src", "add.ts"), "export const add = (a: number, b: number) => a - b;");
+    expect((await runCli(repo, ["--out", changedPath, "--compare-run", firstPath])).status).toBe(0);
+    const changed = JSON.parse(readFileSync(changedPath, "utf8"));
+    expect(changed.mutationStability).toMatchObject({ status: "not-assessed", reason: expect.stringContaining("sourceSha256 mismatch") });
+    expect(changed.moduleRecord.status).toBe("partial");
+    assertCommandExecutionReceipt(changed.executionReceipt);
   });
 });
 
@@ -1154,10 +1205,14 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
 
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0); // not the pre-#773 hard exit-1 "mutation report not found" crash
-    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string }; executionReceipt: CommandExecutionReceipt };
     expect(parsed.moduleRecord?.status).toBe("partial");
     expect(parsed.moduleRecord?.note).toMatch(/#773/);
     expect(parsed.moduleRecord?.note).toMatch(/parseConfigFileTextToJson is not a function/);
+    assertCommandExecutionReceipt(parsed.executionReceipt);
+    expect(parsed.executionReceipt.outcome).toEqual({ state: "exited", exitCode: 1, signal: null });
+    expect(parsed.executionReceipt.stderr.bytes).toBeGreaterThan(0);
+    expect(parsed.executionReceipt.artifactFailures).toMatchObject([{ role: "report", reason: "missing" }]);
   });
 
   // #773 (reopened): the bypass alone stops the crash but leaves the target's tsconfig.json
