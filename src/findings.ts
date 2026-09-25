@@ -481,17 +481,27 @@ function validateDependencyMetadataEvidence(value: unknown, at: string, errors: 
   if (typeof value.complete !== "boolean") errors.push(`${at}.complete: expected boolean`);
   if (!Array.isArray(value.outcomes)) { errors.push(`${at}.outcomes: expected array`); return; }
   if (Number.isSafeInteger(value.processed) && value.processed !== value.outcomes.length) errors.push(`${at}.processed: must equal outcomes.length`);
+  if (Number.isSafeInteger(value.population) && Number.isSafeInteger(value.processed) && (value.processed as number) > (value.population as number)) errors.push(`${at}.processed: must not exceed population`);
   if (Number.isSafeInteger(value.population) && value.outcomes.length > (value.population as number)) errors.push(`${at}.outcomes: exceeds population`);
+  if (value.complete === true && Number.isSafeInteger(value.population) && value.outcomes.length !== value.population) errors.push(`${at}.complete: requires one outcome per population member`);
   const statuses = new Set<DependencyMetadataOutcomeStatus>(["local-manifest", "lockfile", "registry", "cache", "missing-local-license", "private-unpublished", "registry-not-found", "registry-access-denied", "network-denied", "unsupported-install-script", "unresolved-identity"]);
+  const incompleteStatuses = new Set<DependencyMetadataOutcomeStatus>(["registry-not-found", "registry-access-denied", "network-denied", "unresolved-identity"]);
+  const coordinates = new Set<string>();
   value.outcomes.forEach((outcome: unknown, index: number) => {
     const where = `${at}.outcomes[${index}]`;
     if (!isRecord(outcome)) { errors.push(`${where}: expected object`); return; }
     if (typeof outcome.coordinate !== "string" || outcome.coordinate.length === 0) errors.push(`${where}.coordinate: expected non-empty string`);
+    else if (coordinates.has(outcome.coordinate)) errors.push(`${where}.coordinate: duplicate coordinate`);
+    else coordinates.add(outcome.coordinate);
     if (!statuses.has(outcome.status as DependencyMetadataOutcomeStatus)) errors.push(`${where}.status: invalid outcome status`);
+    else if (value.complete === true && incompleteStatuses.has(outcome.status as DependencyMetadataOutcomeStatus)) errors.push(`${where}.status: incompatible with complete receipt`);
     if (typeof outcome.provenance !== "string" || outcome.provenance.length === 0) errors.push(`${where}.provenance: expected non-empty string`);
     if (!(["present", "absent", "unsupported"] as const).includes(outcome.installScriptAssessment as "present" | "absent" | "unsupported")) errors.push(`${where}.installScriptAssessment: invalid assessment`);
     if (outcome.license !== undefined && typeof outcome.license !== "string") errors.push(`${where}.license: expected string`);
     if (outcome.hasInstallScript !== undefined && typeof outcome.hasInstallScript !== "boolean") errors.push(`${where}.hasInstallScript: expected boolean`);
+    if (outcome.installScriptAssessment === "present" && outcome.hasInstallScript !== true) errors.push(`${where}.installScriptAssessment: present requires hasInstallScript true`);
+    if (outcome.installScriptAssessment === "absent" && outcome.hasInstallScript !== false) errors.push(`${where}.installScriptAssessment: absent requires hasInstallScript false`);
+    if (outcome.installScriptAssessment === "unsupported" && outcome.hasInstallScript !== undefined) errors.push(`${where}.installScriptAssessment: unsupported forbids hasInstallScript proof`);
     if (outcome.detail !== undefined && typeof outcome.detail !== "string") errors.push(`${where}.detail: expected string`);
   });
 }

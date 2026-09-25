@@ -309,7 +309,11 @@ describe("dependency metadata delivery (#2141)", () => {
       expect(validateFindings(delivered).errors).toEqual([]);
       expect(delivered.findings[0]?.dependencyMetadataEvidence).toEqual(receipt.dependencyMetadataEvidence);
       const html = buildHtml(doc);
-      expect(html).toContain("Complete per-package outcomes are attached");
+      expect(html).toContain("Dependency metadata outcomes");
+      expect(html).toContain("child@1.0.0");
+      expect(html).toContain("package-lock.json");
+      expect(html).toContain("absent");
+      expect(html).not.toContain("Complete per-package outcomes are attached");
       expect(renderFidelityBreaches(doc, html)).toEqual([]);
     } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });

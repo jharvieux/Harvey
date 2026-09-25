@@ -25545,7 +25545,7 @@
     "id": "SUP-METADATA-00",
     "title": "Dependency metadata: 400 of 400 packages recorded",
     "taxonomy": "Coverage — dependency metadata assessment",
-    "evidence": "Complete per-package outcomes are attached to this finding. Sources: lockfile 390, network-denied 10. Cache hits: 0; registry requests: 0.",
+    "evidence": "Recorded 400 of 400 per-package metadata outcomes. Sources: lockfile 390, network-denied 10. Cache hits: 0; registry requests: 0. Exact package/version, status, install-script assessment, and provenance are rendered below.",
     "impact": "License and install-script conclusions are traceable to local manifests, lockfiles, registry responses, or an explicit cause-specific gap.",
     "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "severity": "Info",

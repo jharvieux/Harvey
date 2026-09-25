@@ -175,6 +175,12 @@ describe("declared lockfile range edges (#1774)", () => {
     expect(parsed.ranges.detail).toContain("1 package/snapshot dependency reference(s)");
   });
 
+  it("counts orphan pnpm v5 specifiers as present but unread", () => {
+    const parsed = parsePnpmLock("lockfileVersion: '5.4'\nspecifiers:\n  orphan: ^1.0.0\n");
+    expect(parsed.ranges).toMatchObject({ sourceVersion: "5.4", status: "partial", examined: 1, unread: 1, edges: [] });
+    expect(parsed.ranges.detail).toContain("1 orphan importer/root specifier value(s)");
+  });
+
   it.each([
     ["importer map", { importers: "malformed" }],
     ["null importer map", { importers: null }],
@@ -345,6 +351,55 @@ describe("licenseScope (#1213)", () => {
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({ coordinate: "@local/private", status: "private-unpublished", provenance: "packages/private/package.json#license", installScriptAssessment: "present" }));
+  });
+
+  it.each(["workspace:*", "link:packages/private", "portal:packages/private", "file:packages/private"])(
+    "binds a %s declaration to the exact owned workspace manifest",
+    (specifier) => {
+      mkdirSync(join(dir, "packages/private"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": specifier } }));
+      writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", private: true, license: "MIT" }));
+
+      expect(licenseScope(dir).candidates).toContainEqual({
+        name: "@local/private",
+        direct: true,
+        localMetadata: { manifest: "packages/private/package.json", private: true, license: "MIT", hasInstallScript: false },
+      });
+    },
+  );
+
+  it("binds an npm package-lock link to the exact owned workspace manifest even when the declaration is semver", () => {
+    mkdirSync(join(dir, "packages/private"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "*" } }));
+    writeFileSync(join(dir, "packages/private/package.json"), JSON.stringify({ name: "@local/private", version: "1.0.0", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "": { name: "root", workspaces: ["packages/*"], dependencies: { "@local/private": "*" } },
+      "packages/private": { name: "@local/private", version: "1.0.0" },
+      "node_modules/@local/private": { resolved: "packages/private", link: true },
+    } }));
+
+    expect(licenseScope(dir).candidates).toEqual([{
+      name: "@local/private",
+      direct: true,
+      localMetadata: { manifest: "packages/private/package.json", private: true, license: "MIT", hasInstallScript: false },
+    }]);
+  });
+
+  it("does not bind or query a same-name workspace manifest when a local path points elsewhere", async () => {
+    mkdirSync(join(dir, "packages/collision"), { recursive: true });
+    mkdirSync(join(dir, "packages/other"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { collision: "file:packages/other" } }));
+    writeFileSync(join(dir, "packages/collision/package.json"), JSON.stringify({ name: "collision", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "packages/other/package.json"), JSON.stringify({ name: "other", private: true, license: "Apache-2.0" }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }))) as unknown as typeof fetch;
+
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({
+      coordinate: "collision",
+      status: "unresolved-identity",
+      provenance: "package.json",
+    }));
   });
 
   it("does not substitute workspace metadata for an unrelated registry package with the same name", () => {

@@ -171,6 +171,26 @@ function findingCard(f) {
   </div>`;
 }
 
+function dependencyMetadataSection(findings) {
+  const receipts = findings.filter((finding) => finding.dependencyMetadataEvidence);
+  if (receipts.length === 0) return "";
+  const blocks = receipts.map((finding) => {
+    const receipt = finding.dependencyMetadataEvidence;
+    const rows = receipt.outcomes.map((outcome) => `<tr>
+      <td class="b"><code>${esc(outcome.coordinate)}</code></td>
+      <td>${esc(outcome.status)}</td>
+      <td>${esc(outcome.installScriptAssessment)}</td>
+      <td>${esc(outcome.license ?? "—")}</td>
+      <td><code>${esc(outcome.provenance)}</code>${outcome.detail ? `<br>${esc(outcome.detail)}` : ""}</td>
+    </tr>`).join("");
+    return `<h3>${esc(finding.id)} — ${receipt.processed} of ${receipt.population} packages recorded</h3>
+      <table class="dep-metadata"><tr><th>Package/version</th><th>Metadata status</th><th>Install script</th><th>License</th><th>Provenance / cause</th></tr>${rows}</table>`;
+  }).join("");
+  return `<h2>Dependency metadata outcomes</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Every assessed package is listed with its exact coordinate, metadata status, install-script result, and source. Unsupported or failed outcomes state their cause in the final column.</div>
+    ${blocks}`;
+}
+
 // Keep large groups bounded, but every summary destination needs its own usable detail.
 // Linked members beyond the representatives expand on navigation and are opened for PDF export.
 function groupCard(g) {
@@ -609,6 +629,7 @@ export function buildHtml(data) {
     ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${notApplicableSection(na)}
+    ${dependencyMetadataSection(all)}
     ${legalTermsSection(data)}
   </div>
   <script>

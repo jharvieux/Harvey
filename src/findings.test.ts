@@ -46,8 +46,10 @@ describe("validateFindings — mechanical scan fields", () => {
     for (const broken of [
       { ...dependencyMetadataEvidence, schemaVersion: 2 },
       { ...dependencyMetadataEvidence, processed: 0 },
+      { ...dependencyMetadataEvidence, population: 2, complete: true },
       { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], status: "guessed" }] },
       { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], installScriptAssessment: "maybe" }] },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], hasInstallScript: true, installScriptAssessment: "absent" }] },
     ]) expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: broken }] }).errors.join("\n")).toContain("dependencyMetadataEvidence");
   });
 

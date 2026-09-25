@@ -206,6 +206,7 @@ export function supplyChainScopeFinding(s: {
   workspaceInternalNames: readonly string[];
   osvRan?: boolean;
   osvAssessment?: OsvAssessment;
+  dependencyMetadataEvidence?: DependencyMetadataEvidence;
 }): Finding {
   const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
   const manifestOnly = [
@@ -219,6 +220,10 @@ export function supplyChainScopeFinding(s: {
       `Excluded copies/constraints: root ${scope.excluded.root}, workspace ${scope.excluded.workspace}, link ${scope.excluded.link}, peer ${scope.excluded.peer}. ${scope.detail}`).join(" ");
   if (s.license.source === "package-lock.json") {
     treeWide.push("SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351)");
+  } else if (s.dependencyMetadataEvidence) {
+    const assessments = { present: 0, absent: 0, unsupported: 0 };
+    for (const outcome of s.dependencyMetadataEvidence.outcomes) assessments[outcome.installScriptAssessment]++;
+    manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP: ${s.license.source} itself does not record a per-package install-script flag, while registry/local metadata separately assessed ${s.dependencyMetadataEvidence.processed} of ${s.dependencyMetadataEvidence.population} packages (present ${assessments.present}, absent ${assessments.absent}, unsupported ${assessments.unsupported}); exact package/version and provenance rows are in SUP-METADATA-00`);
   } else {
     manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP, not computable against ${s.license.source}: neither pnpm-lock.yaml nor yarn.lock records a per-package install-script flag in the form Harvey parses (MEASURED 2026-07-30 against this repo's own pnpm-lock.yaml — falsifier: \`grep -c hasInstallScript <the lockfile>\` returning >0 on a real pnpm/yarn project)`);
   }
@@ -645,16 +650,6 @@ function extractLicenseFrom(meta: NpmPackageMeta): string | undefined {
   return undefined;
 }
 
-// #1099: prefer the INSTALLED version's own license (`versions[<v>]`) when the caller knows which
-// version resolved — the top-level `license` is the latest publish's, which can differ from (and,
-// for a package whose license changed between releases, actively mislead about) the version a
-// project actually depends on. Falls back to the top-level snapshot when no version is known or
-// the packument has no per-version entry for it (some registries/mirrors omit `versions`).
-function extractLicenseId(pkg: NpmPackument, version?: string): string | undefined {
-  const versioned = version !== undefined ? pkg.versions?.[version] : undefined;
-  return (versioned && extractLicenseFrom(versioned)) ?? extractLicenseFrom(pkg);
-}
-
 // License lookup over the RESOLVED DEPENDENCY TREE (src/sbom.ts's `licenseScope`, the same parse
 // the SBOM uses). package-lock.json records `license` on essentially every entry (MEASURED
 // 2026-07-27 on targets/calibration: 390 of 396), so for that format the classification is entirely
@@ -664,8 +659,8 @@ function extractLicenseId(pkg: NpmPackument, version?: string): string | undefin
 // The network path keeps its old trust boundary, same as checkSlopsquat above: a name-only request
 // (no code egress). It asks for the INSTALLED version's own manifest (`/<name>/<version>`) when the
 // tree resolved one — the version's license, not the latest publish's (#1099), and a few KB instead
-// of a whole packument — falling back to the packument when the version is unknown or that route
-// answers non-OK. A network failure or non-OK status leaves that package's license indeterminate —
+// of a whole packument — falling back to an exact `versions[<v>]` packument entry when that route
+// answers non-OK. A network failure, missing exact entry, or non-OK status leaves that package's license indeterminate —
 // which is not the same as "no license", and since #1067 is not the same as silence either: the
 // indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned finding is
 // "high" for a copyleft match (the SPDX id itself is deterministic, self-declared registry data)
@@ -710,9 +705,8 @@ export async function checkLicenseCompliance(
     registryRequests += meta.requests;
     if (meta.status === "cache") cacheHits++;
     if ("error" in meta) return { candidate, source: "the npm registry", outcome: { coordinate, status: meta.status, provenance: meta.provenance, installScriptAssessment: "unsupported", detail: meta.error } };
-    const versioned = version === undefined ? meta.body : meta.body.versions?.[version] ?? meta.body;
-    const licenseId = extractLicenseId(meta.body, version);
-    const installScript = hasInstallLifecycleScript(versioned);
+    const licenseId = extractLicenseFrom(meta.body);
+    const installScript = hasInstallLifecycleScript(meta.body);
     return { candidate, licenseId, source: meta.status === "cache" ? "the dependency-metadata cache" : "the npm registry", installScript,
       outcome: { coordinate, status: meta.status, provenance: meta.provenance, ...(licenseId ? { license: licenseId } : {}), ...(installScript !== undefined ? { hasInstallScript: installScript } : {}), installScriptAssessment: installScript === undefined ? "unsupported" : installScript ? "present" : "absent" } };
   };
@@ -797,7 +791,7 @@ function metadataAssessmentFinding(evidence: DependencyMetadataEvidence): Findin
   for (const outcome of evidence.outcomes) counts.set(outcome.status, (counts.get(outcome.status) ?? 0) + 1);
   const summary = [...counts.entries()].map(([status, count]) => `${status} ${count}`).join(", ");
   return { ...coverageFinding({ id: "SUP-METADATA-00", title: `Dependency metadata: ${evidence.processed} of ${evidence.population} packages recorded`,
-    taxonomy: "Coverage — dependency metadata assessment", evidence: `Complete per-package outcomes are attached to this finding. Sources: ${summary || "empty population"}. Cache hits: ${evidence.cacheHits}; registry requests: ${evidence.registryRequests}.`,
+    taxonomy: "Coverage — dependency metadata assessment", evidence: `Recorded ${evidence.processed} of ${evidence.population} per-package metadata outcomes. Sources: ${summary || "empty population"}. Cache hits: ${evidence.cacheHits}; registry requests: ${evidence.registryRequests}. Exact package/version, status, install-script assessment, and provenance are rendered below.`,
     impact: "License and install-script conclusions are traceable to local manifests, lockfiles, registry responses, or an explicit cause-specific gap.",
     fix: causeSpecificMetadataFixes(evidence.outcomes, "No metadata remediation is required when all package outcomes are locally or remotely assessed.") }), dependencyMetadataEvidence: evidence };
 }
@@ -807,7 +801,7 @@ function causeSpecificMetadataFixes(outcomes: DependencyMetadataEvidence["outcom
   const fixes = [
     statuses.has("missing-local-license") ? "Add a license field or local license file to the workspace package manifest." : undefined,
     statuses.has("private-unpublished") ? "Provide the private workspace package's license in its local manifest; Harvey will not substitute public-registry metadata for it." : undefined,
-    statuses.has("registry-access-denied") ? "Configure read-only credentials for the package's private registry metadata endpoint and resume the scan." : undefined,
+    statuses.has("registry-access-denied") ? "The fixed public npm registry endpoint denied access. Confirm the coordinate is public or provide local manifest metadata; private/custom registry authentication is not supported by this scanner." : undefined,
     statuses.has("registry-not-found") ? "Verify the package/version coordinate and registry mapping; if it is unpublished, provide its manifest metadata locally." : undefined,
     statuses.has("network-denied") ? REGISTRY_FIX : undefined,
     statuses.has("unresolved-identity") ? "Use a supported lockfile that proves each alias target and selected version." : undefined,
@@ -817,19 +811,23 @@ function causeSpecificMetadataFixes(outcomes: DependencyMetadataEvidence["outcom
 
 // `/<name>/<version>` returns that release's own manifest — the license of the version actually
 // installed, in a few KB rather than a whole packument. Not every registry mirror serves it, so a
-// non-OK answer falls back to the packument rather than being recorded as a coverage gap.
+// non-OK answer falls back to the packument only when it contains the requested version entry.
 async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | undefined, name: string, version?: string): Promise<
-  | { body: NpmPackument; status: "cache" | "registry"; provenance: string; requests: number }
+  | { body: NpmPackageMeta; status: "cache" | "registry"; provenance: string; requests: number }
   | { error: string; status: "registry-not-found" | "registry-access-denied" | "network-denied"; provenance: string; requests: number }
 > {
   const coordinate = version ? `${name}@${version}` : name;
-  const cachePath = cacheDir ? join(cacheDir, `${createHash("sha256").update(coordinate).digest("hex")}.json`) : undefined;
-  if (cachePath) try {
-    const cached = JSON.parse(await readFile(cachePath, "utf8")) as { schemaVersion?: unknown; coordinate?: unknown; body?: unknown };
-    if (cached.schemaVersion === 1 && cached.coordinate === coordinate && isRegistryMetadata(cached.body)) return { body: cached.body, status: "cache", provenance: cachePath, requests: 0 };
-  } catch { /* missing or corrupt cache entries are refetched */ }
   const base = `${NPM_REGISTRY}/${encodeURIComponent(name)}`;
   const urls = version ? [`${base}/${encodeURIComponent(version)}`, base] : [base];
+  const cachePath = cacheDir ? join(cacheDir, `${createHash("sha256").update(coordinate).digest("hex")}.json`) : undefined;
+  if (cachePath) try {
+    const cached = JSON.parse(await readFile(cachePath, "utf8")) as { schemaVersion?: unknown; coordinate?: unknown; observedAt?: unknown; sourceUrl?: unknown; body?: unknown };
+    const observedAt = typeof cached.observedAt === "string" ? Date.parse(cached.observedAt) : Number.NaN;
+    const fresh = Number.isFinite(observedAt) && observedAt <= Date.now() + 5 * 60_000 && Date.now() - observedAt <= 24 * 60 * 60_000;
+    if (cached.schemaVersion === 2 && cached.coordinate === coordinate && typeof cached.sourceUrl === "string" && urls.includes(cached.sourceUrl) && fresh && isRegistryMetadata(cached.body)) {
+      return { body: cached.body, status: "cache", provenance: `${cachePath} (fetched from ${cached.sourceUrl} at ${cached.observedAt})`, requests: 0 };
+    }
+  } catch { /* missing or corrupt cache entries are refetched */ }
   let lastStatus = 0;
   let requests = 0;
   for (const url of urls) {
@@ -841,13 +839,22 @@ async function fetchLicenseMeta(fetchImpl: typeof fetch, cacheDir: string | unde
       return { error: `registry unreachable (${err instanceof Error ? err.message : String(err)})`, status: "network-denied", provenance: url, requests };
     }
     if (res.ok) {
-      const body: unknown = await res.json();
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch (error) {
+        return { error: `registry returned malformed JSON (${error instanceof Error ? error.message : String(error)})`, status: "network-denied", provenance: url, requests };
+      }
       if (!isRegistryMetadata(body)) return { error: "registry returned malformed package metadata", status: "network-denied", provenance: url, requests };
+      const selected = version !== undefined && url === base ? body.versions?.[version] : body;
+      if (!isRegistryMetadata(selected)) {
+        return { error: `registry metadata does not contain requested version ${JSON.stringify(version)}`, status: "registry-not-found", provenance: url, requests };
+      }
       if (cacheDir && cachePath) {
         await mkdir(cacheDir, { recursive: true });
-        await writeFile(cachePath, `${JSON.stringify({ schemaVersion: 1, coordinate, body })}\n`, { mode: 0o600 });
+        await writeFile(cachePath, `${JSON.stringify({ schemaVersion: 2, coordinate, observedAt: new Date().toISOString(), sourceUrl: url, body: selected })}\n`, { mode: 0o600 });
       }
-      return { body, status: "registry", provenance: url, requests };
+      return { body: selected, status: "registry", provenance: url, requests };
     }
     lastStatus = res.status;
     if (lastStatus === 401 || lastStatus === 403) return { error: `registry access denied (HTTP ${lastStatus})`, status: "registry-access-denied", provenance: url, requests };
