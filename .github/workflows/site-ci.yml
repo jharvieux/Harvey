@@ -59,10 +59,15 @@ name: site-ci
 # site's deps resolve out of the root lockfile, so a dependency bump for site can land as a
 # root-lockfile-only diff that never touches `site/**` — without these two paths this gate would
 # never fire for that change, the same silent-coverage-loss shape #1592 was filed for.
+# Shared source imports and the root Node/pnpm selectors also affect the production build.
+# Keep src/** conservative so adding a transitive shared import cannot escape this gate.
 on:
   pull_request:
     paths:
       - "site/**"
+      - "src/**"
+      - ".nvmrc"
+      - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/site-ci.yml"
@@ -70,6 +75,9 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "src/**"
+      - ".nvmrc"
+      - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/site-ci.yml"
