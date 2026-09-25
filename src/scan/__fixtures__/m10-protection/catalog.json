@@ -1,0 +1,929 @@
+{
+  "fixtureSqlSha256": "8fcdc6befe61e9307a483a0aa09c77482a5837b61d65e7b28fd2b0fd70c19d9c",
+  "postgres": [
+    {
+      "version": "PostgreSQL 17.10 (Homebrew) on aarch64-apple-darwin25.4.0, compiled by Apple clang version 21.0.0 (clang-2100.0.123.102), 64-bit"
+    }
+  ],
+  "queries": [
+    {
+      "tag": "harvey-m10-schemas-v1",
+      "parameters": [],
+      "rows": [
+        {
+          "schema": "pgtenant",
+          "relations": 1,
+          "columns": 1
+        },
+        {
+          "schema": "private",
+          "relations": 6,
+          "columns": 9
+        },
+        {
+          "schema": "public",
+          "relations": 1,
+          "columns": 1
+        },
+        {
+          "schema": "unselected",
+          "relations": 1,
+          "columns": 1
+        }
+      ]
+    },
+    {
+      "tag": "harvey-m10-columns-v1",
+      "parameters": [
+        "public"
+      ],
+      "rows": [
+        {
+          "table_schema": "public",
+          "table_name": "contacts",
+          "column_name": "email",
+          "data_type": "text",
+          "relation_kind": "r"
+        }
+      ]
+    },
+    {
+      "tag": "harvey-m10-columns-v1",
+      "parameters": [
+        "private"
+      ],
+      "rows": [
+        {
+          "table_schema": "private",
+          "table_name": "encrypted_patient",
+          "column_name": "ssn",
+          "data_type": "bytea",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient",
+          "column_name": "nickname",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_conditional",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_conditional",
+          "column_name": "tenant",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_open",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_open",
+          "column_name": "nickname",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_rls",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "r"
+        },
+        {
+          "table_schema": "private",
+          "table_name": "patient_view",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "v"
+        }
+      ]
+    },
+    {
+      "tag": "harvey-m10-columns-v1",
+      "parameters": [
+        "pgtenant"
+      ],
+      "rows": [
+        {
+          "table_schema": "pgtenant",
+          "table_name": "customer",
+          "column_name": "ssn",
+          "data_type": "text",
+          "relation_kind": "r"
+        }
+      ]
+    },
+    {
+      "tag": "harvey-effective-authorization-v1",
+      "parameters": [],
+      "rows": [
+        {
+          "authorization": {
+            "roles": [
+              "anon",
+              "authenticated",
+              "service_role"
+            ],
+            "tables": [
+              {
+                "rls": false,
+                "name": "customer",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "pgtenant",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "customer",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "pgtenant",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "customer",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "pgtenant",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "encrypted_patient",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "encrypted_patient",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "encrypted_patient",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "patient",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "patient",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "patient",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": true,
+                "name": "patient_conditional",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  },
+                  {
+                    "name": "tenant",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [
+                  {
+                    "name": "tenant_read",
+                    "check": null,
+                    "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+                    "command": "r",
+                    "permissive": true
+                  }
+                ],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": true,
+                "name": "patient_conditional",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  },
+                  {
+                    "name": "tenant",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [
+                  {
+                    "name": "tenant_read",
+                    "check": null,
+                    "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+                    "command": "r",
+                    "permissive": true
+                  }
+                ],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": true,
+                "name": "patient_conditional",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "tenant",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "patient_open",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "patient_open",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "patient_open",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  },
+                  {
+                    "name": "nickname",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": true,
+                "name": "patient_rls",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": true,
+                "name": "patient_rls",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": true,
+                "name": "patient_rls",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "private",
+                "columns": [
+                  {
+                    "name": "ssn",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "contacts",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": true,
+                  "UPDATE": false
+                },
+                "schema": "public",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": true,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "contacts",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "public",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "contacts",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "public",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": true
+              },
+              {
+                "rls": false,
+                "name": "contact",
+                "role": "anon",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "unselected",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "contact",
+                "role": "authenticated",
+                "owner": "harvey_fixture",
+                "bypass": false,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "unselected",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              },
+              {
+                "rls": false,
+                "name": "contact",
+                "role": "service_role",
+                "owner": "harvey_fixture",
+                "bypass": true,
+                "forced": false,
+                "grants": {
+                  "DELETE": false,
+                  "INSERT": false,
+                  "SELECT": false,
+                  "UPDATE": false
+                },
+                "schema": "unselected",
+                "columns": [
+                  {
+                    "name": "email",
+                    "insert": false,
+                    "select": false,
+                    "update": false
+                  }
+                ],
+                "policies": [],
+                "truncate": false,
+                "superuser": false,
+                "references": false,
+                "ownerAccess": false,
+                "schemaUsage": false
+              }
+            ],
+            "version": 1,
+            "definers": [],
+            "tableCount": 8,
+            "definerCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "tag": "harvey-m10-encryption-config-v1",
+      "parameters": [],
+      "rows": []
+    }
+  ]
+}

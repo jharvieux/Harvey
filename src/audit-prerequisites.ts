@@ -1,3 +1,5 @@
+import { engagementRequirement } from "./engagement-requirements.js";
+
 /** Non-secret intake requirements shared by source and connected audit consumers. */
 interface AuditPrerequisite {
   id: string;
@@ -7,6 +9,25 @@ interface AuditPrerequisite {
   accessBoundary: string;
   ifUnavailable: string;
   verification: string;
+}
+
+const requirementGroups: Record<string, readonly string[]> = {
+  "dependency-metadata": ["registry.public-metadata", "registry.private-authorization"],
+  "database-catalog": ["database.schema-scope", "database.catalog", "database.authorization"],
+  "platform-configuration": ["database.api-configuration"],
+  "application-protection": ["database.encryption-boundaries"],
+};
+
+/** Keep stable public anchors while delivering the scanner's exact prerequisite records. */
+function withAssessmentRequirements(row: AuditPrerequisite): AuditPrerequisite {
+  const details = requirementGroups[row.id]!.map(engagementRequirement);
+  return {
+    ...row,
+    requestedInput: [row.requestedInput, ...details.flatMap((detail) => detail.metadata)].join(" "),
+    accessBoundary: [row.accessBoundary, ...details.flatMap((detail) => detail.access)].join(" "),
+    ifUnavailable: [row.ifUnavailable, ...details.map((detail) => detail.limitation)].join(" "),
+    verification: [row.verification, ...details.flatMap((detail) => [detail.falsifier, detail.nextStep])].join(" "),
+  };
 }
 
 export const AUDIT_PREREQUISITES = {
@@ -48,5 +69,5 @@ export const AUDIT_PREREQUISITES = {
       ifUnavailable: "Keep sensitivity classification separate from a protection failure. Unverified encryption or access boundaries are disclosed as unassessed, with the missing evidence and a bounded next step.",
       verification: "Trace a named sensitive field through the supplied protection boundary and corroborate the relevant configuration; report what the evidence establishes and what remains unverified.",
     },
-  ] satisfies readonly AuditPrerequisite[],
+  ].map(withAssessmentRequirements) satisfies readonly AuditPrerequisite[],
 } as const;

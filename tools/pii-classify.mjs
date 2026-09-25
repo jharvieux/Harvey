@@ -50,6 +50,7 @@ import { basename, dirname, join } from "node:path";
 import { readRecursiveSafe, statSafe } from "../src/fs-walk.js";
 import { parseClassifiableColumns } from "../src/migration-sql-parse.js";
 import { piiProtectionFindings, piiProtectionScope } from "../src/pii-protection-review.js";
+import { loadProtectionCatalog, reviewSourceEncryptionBoundaries } from "../src/pii-protection-review-catalog.js";
 import { parsePrismaSchema } from "../src/prisma-schema-parse.js";
 
 const RULES = [
@@ -85,11 +86,11 @@ const RULES = [
   [/(photo_url|headshot|mugshot|profile_pic(ture)?|avatar_url|face_image|signature_image)/, "PHOTO", "PII", "medium"],
   // --- PCI-DSS cardholder / sensitive authentication data ---
   // CVV/CVC is "sensitive authentication data" — PCI-DSS forbids storing it post-authorization
-  // at all, so a hit here is a compliance violation by itself (see INFOTYPE_POINT_OVERRIDES).
+  // at all; a name match identifies a review priority, not evidence of stored values or a violation.
   [/(^|_)(cvv|cvc|card_verification|card_security_code)(_|$)/, "CVV", "PCI", "high"],
   // #376: PIN/PIN-block and full track/magstripe data are the other two members of PCI-DSS's
   // "sensitive authentication data, never store post-authorization" category CVV belongs to —
-  // a hit is a compliance violation by itself (INFOTYPE_POINT_OVERRIDES scores each Critical
+  // a name hit retains high potential-sensitivity priority (INFOTYPE_POINT_OVERRIDES scores each Critical
   // alone). Deliberately NO bare `pin` alternative: it collides with `pinned`/`is_pinned`
   // feature-flag naming and India's postal "PIN code", so only compound card/ATM names match.
   [/(^|_)(pin_block|pin_verification|atm_pin|card_pin)(_|$)/, "PIN", "PCI", "high"],
@@ -308,7 +309,7 @@ export function classifyColumn(column, sqlType, tableName) {
 // Severity-weighting: lets a caller (an exposure finding in another module) weight severity by
 // WHAT was exposed, not just THAT something was exposed. Category base points, scaled by match
 // confidence, summed per distinct infotype on a table. CVV is overridden — PCI-DSS forbids
-// storing it post-auth at all, so its presence alone should read Critical.
+// storing it post-auth. Critical here is potential sensitivity, not a verified exposure or violation.
 const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6, SECRET: 6 };
 const CONFIDENCE_WEIGHT = { high: 1, medium: 0.6, low: 0.3 };
 // #376: PIN and track data share CVV's override — all three are PCI-DSS "sensitive
@@ -332,10 +333,15 @@ function scoreToSeverity(score) {
   return "Info";
 }
 
+function tableIdentity(col) {
+  const quote = (name) => /^[a-zA-Z_][a-zA-Z0-9_$]*$/.test(name) ? name : `"${name.replaceAll('"', '""')}"`;
+  return col.table_schema ? `${quote(col.table_schema)}.${quote(col.table_name)}` : col.table_name;
+}
+
 /**
  * Build the per-table data map: table → {columns, infotypes, categories, severityScore,
  * severity, phi, pci}. `columns` matches information_schema.columns shape:
- * {table_name, column_name, data_type}. `resolve` is swappable so classifyWithFallback (below)
+ * {table_schema?, table_name, column_name, data_type}. `resolve` is swappable so classifyWithFallback (below)
  * can merge in semantic hits without duplicating the aggregation logic.
  * @param {{table_name: string, column_name: string, data_type?: string}[]} columns
  * @param {(col: {table_name: string, column_name: string, data_type?: string}) => ClassifyResult|null} [resolve]
@@ -345,17 +351,19 @@ export function buildDataMap(columns, resolve = (col) => classifyColumn(col.colu
   for (const col of columns) {
     const hit = resolve(col);
     if (!hit) continue;
-    if (!byTable.has(col.table_name)) byTable.set(col.table_name, { columns: [], infotypes: new Map() });
-    const t = byTable.get(col.table_name);
+    const key = tableIdentity(col);
+    if (!byTable.has(key)) byTable.set(key, { columns: [], infotypes: new Map(), ...(col.table_schema ? { schema: col.table_schema, table: col.table_name } : {}) });
+    const t = byTable.get(key);
     t.columns.push({ column: col.column_name, ...hit });
     if (!t.infotypes.has(hit.infotype)) t.infotypes.set(hit.infotype, hit);
   }
 
-  const map = {};
+  const map = Object.create(null);
   for (const [table, t] of byTable) {
     const infotypes = [...t.infotypes.values()];
     const score = infotypes.reduce((sum, h) => sum + pointsFor(h), 0);
     map[table] = {
+      ...(t.schema ? { schema: t.schema, table: t.table } : {}),
       columns: t.columns,
       infotypes: infotypes.map((h) => h.infotype),
       categories: [...new Set(infotypes.map((h) => h.category))],
@@ -386,14 +394,14 @@ export async function classifyWithFallback(columns, semanticClassifier) {
   if (!semanticClassifier) return buildDataMap(columns);
   const unresolved = columns
     .filter((col) => !classifyColumn(col.column_name, col.data_type, col.table_name))
-    .map((col) => ({ table_name: col.table_name, column_name: col.column_name, data_type: col.data_type }));
+    .map((col) => ({ table_name: tableIdentity(col), column_name: col.column_name, data_type: col.data_type }));
   if (unresolved.length === 0) return buildDataMap(columns);
 
   const semanticHits = await semanticClassifier(unresolved);
   return buildDataMap(columns, (col) => {
     const dictHit = classifyColumn(col.column_name, col.data_type, col.table_name);
     if (dictHit) return dictHit;
-    const semanticHit = semanticHits.get(`${col.table_name}.${col.column_name}`);
+    const semanticHit = semanticHits.get(`${tableIdentity(col)}.${col.column_name}`);
     return semanticHit ? { ...semanticHit, source: "semantic" } : null;
   });
 }
@@ -471,7 +479,7 @@ export function createAnthropicSemanticClassifier({
     const hits = new Map();
     for (let i = 0; i < unresolved.length; i += SEMANTIC_BATCH_SIZE) {
       const items = unresolved.slice(i, i + SEMANTIC_BATCH_SIZE).map((col) => ({
-        table: col.table_name,
+        table: tableIdentity(col),
         column: col.column_name,
         sql_type: col.data_type ?? null,
         sibling_columns: (siblingsByTable.get(col.table_name) ?? [])
@@ -544,7 +552,7 @@ export function dataMapToFindings(dataMap, { tier }) {
   // CREATE TABLE + ALTER TABLE ADD COLUMN but not views/matviews/generated columns.
   const source =
     tier === "live"
-      ? "live information_schema.columns inventory (read-only), public schema only — auth/storage/other schemas not inventoried"
+      ? "live pg_catalog names/types inventory (read-only) in the configured authorized product schemas; exact examined/unexamined counts and limitations are in M10-PROT-00"
       : "static migration-SQL schema parse (no DB connection), CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on this tier";
   const tables = Object.keys(dataMap).sort(
     (a, b) => dataMap[b].severityScore - dataMap[a].severityScore || a.localeCompare(b),
@@ -557,14 +565,14 @@ export function dataMapToFindings(dataMap, { tier }) {
     const freeTextFlags = reviewFlags.filter((c) => c.infotype === "FREE_TEXT_REVIEW");
     const neverStore = t.infotypes.filter((x) => PCI_NEVER_STORE.has(x));
     const compliance = [
-      t.phi && "PHI — HIPAA applicability",
-      t.pci && "PCI-DSS cardholder/sensitive-authentication data",
-      t.secret && "stored credentials/secrets readable by any query path that reaches the table",
+      t.phi && "potential PHI — confirm HIPAA applicability",
+      t.pci && "potential cardholder/sensitive-authentication data — confirm PCI-DSS applicability",
+      t.secret && "potential credentials/secrets — contents, encryption and effective read access are unverified",
     ].filter(Boolean);
     return {
       id: `M10-${String(i + 1).padStart(2, "0")}`,
       title: asserted.length
-        ? `Table \`${table}\` holds ${t.categories.join("/")} data (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
+        ? `Table \`${table}\` has candidate ${t.categories.join("/")} columns (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
         : freeTextFlags.length && !jsonFlags.length
           ? `Table \`${table}\` has free-text column(s) to review for unstructured PII/PHI`
           : jsonFlags.length && !freeTextFlags.length
@@ -587,23 +595,25 @@ export function dataMapToFindings(dataMap, { tier }) {
         freeTextFlags.length
           ? `Review for unstructured PII/PHI (flagged, not asserted — #850): ${freeTextFlags.map((c) => c.column).join(", ")} — free-text column(s) whose values a name-only scan can't see; inspect for names/SSNs/health details.`
           : "",
-        `Severity score ${t.severityScore} → ${t.severity}.`,
+        `Potential-sensitivity score ${t.severityScore} → ${t.severity}; this priority does not establish stored sensitive values, readable plaintext, an exposure or a compliance violation.`,
       ]
         .filter(Boolean)
         .join(" "),
       impact: [
-        `Any over-broad read path (RLS gap, leaked service key, injectable query) on \`${table}\` exposes ${t.categories.join("/")} data.`,
+        asserted.length
+          ? `If the candidate columns contain sensitive values and an unauthorized principal can read them, an over-broad read path on \`${table}\` could expose ${t.categories.join("/")} data. Neither contents nor effective access was verified by this classification.`
+          : "Container and free-text names identify a content-review gap; sensitive contents and exposure have not been established.",
         compliance.length ? `Compliance surface: ${compliance.join("; ")}.` : "",
         neverStore.length
-          ? `Stores PCI sensitive authentication data (${neverStore.join(", ")}) — PCI-DSS forbids storing it post-authorization at all, so its presence is a violation independent of exposure.`
+          ? `Candidate sensitive-authentication fields (${neverStore.join(", ")}) require review of actual contents, authorization lifecycle and applicable retention requirements. Column names alone do not establish post-authorization storage or a PCI-DSS violation.`
           : "",
       ]
         .filter(Boolean)
         .join(" "),
       fix: [
-        "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
-        neverStore.length ? "Remove the sensitive-authentication-data column(s) — they may not be stored post-authorization under PCI-DSS." : "",
-        t.secret ? "Move stored credentials to a secret manager or encrypt them with keys the DB role cannot read." : "",
+        "Confirm the candidate classification and data need, then verify the table's effective RLS/grants and protection controls for the owning tenant/user.",
+        neverStore.length ? "Confirm whether these columns contain sensitive authentication data and retain it after authorization; if prohibited retention is established, remove that retained data and prevent its collection or retention." : "",
+        t.secret ? "Review whether the candidate fields contain credentials, encrypted values or references; if readable credentials are confirmed, evaluate secret management and encryption with separated key access." : "",
         jsonFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
         freeTextFlags.length ? "Review the flagged free-text column(s) for unstructured PII/PHI; a content-classification pass or structured fields make regulated data visible and protectable." : "",
       ]
@@ -732,7 +742,7 @@ export async function valueSample(columns, sampleFn, { rowCap = VALUE_SAMPLE_ROW
   for (const col of candidates) {
     let values;
     try {
-      values = await sampleFn(col.table_name, col.column_name, rowCap);
+      values = await sampleFn(tableIdentity(col), col.column_name, rowCap);
     } catch (err) {
       errorCount++;
       onError?.(col, err);
@@ -743,7 +753,7 @@ export async function valueSample(columns, sampleFn, { rowCap = VALUE_SAMPLE_ROW
     if (asserted.length === 0) continue;
     const nameHit = classifyColumn(col.column_name, col.data_type, col.table_name);
     results.push({
-      table: col.table_name,
+      table: tableIdentity(col),
       column: col.column_name,
       dataType: col.data_type,
       scanned,
@@ -849,9 +859,12 @@ export function valueSamplingToFindings(sampling) {
 // The live sampler: a read-only, LIMIT-capped SELECT of one column's non-null values, cast to text
 // so a jsonb/enum column is scannable. Identifiers are passed through postgres.js's identifier
 // escaping (sql(...)), never string-interpolated. This is the ONLY code that reads cell values.
-function makeLiveSampler(sql) {
+function makeLiveSampler(sql, columns) {
+  const relations = new Map(columns.map((col) => [tableIdentity(col), col]));
   return async (table, column, cap) => {
-    const rows = await sql`SELECT ${sql(column)}::text AS v FROM ${sql("public")}.${sql(table)} WHERE ${sql(column)} IS NOT NULL LIMIT ${cap}`;
+    const relation = relations.get(table);
+    if (!relation) throw new Error("Sampling relation is outside the authorized inventory");
+    const rows = await sql`SELECT ${sql(column)}::text AS v FROM ${sql(relation.table_schema)}.${sql(relation.table_name)} WHERE ${sql(column)} IS NOT NULL LIMIT ${cap}`;
     return rows.map((r) => r.v);
   };
 }
@@ -992,7 +1005,7 @@ function selftest() {
 // #853: scope disclosure printed at the end of every run so a reader never mistakes the tier's
 // coverage limits for a clean bill of health.
 const SCOPE_NOTE = {
-  live: "Scope: public schema only — auth/storage/other schemas were not inventoried (#853).",
+  live: "Scope: configured authorized product schemas; per-schema examined/unexamined counts and protection limits follow in M10-PROT-00.",
   schema: "Scope: CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on the static tier (#853).",
 };
 
@@ -1052,78 +1065,37 @@ function report(cols, dataMap, { tier = "schema", unknownType = [], semanticMode
   return dataMap;
 }
 
-// #1043 — the connected tier's PROTECTION inputs, the facts src/pii-protection-review.ts needs to
-// turn "this column holds PII" into "this column holds PII and anyone with the anon key can read
-// it". Three read-only catalog reads; no data value is ever selected, so the privacy-safe property
-// of M10 is unchanged.
-//
-// exposedSchemas stays empty on this path BY CONSTRUCTION, not by omission: the live inventory only
-// ever reads the `public` schema (SCOPE_NOTE.live), and `public` is PostgREST's default exposure, so
-// no additional exposed schema is observable from what was inventoried. Table-level exposure carries
-// the whole signal here.
-//
-// Exported so the catalog-rows → ExposureFacts transformation is testable against an injected `sql`
-// without a database: the connected tier is the one Harvey sells this check on, and #357's "only
-// ever exercised in its failure path" is exactly how an unverified claim survives.
-/** @param {(strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>} sql */
-export async function gatherProtectionFacts(sql) {
-  const tables =
-    await sql`SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`;
-  const grants =
-    await sql`SELECT DISTINCT table_name FROM information_schema.role_table_grants WHERE table_schema = 'public' AND grantee IN ('anon', 'authenticated') AND privilege_type = 'SELECT'`;
-  // pgsodium's transparent-column-encryption view is the only encryption-at-rest signal a catalog
-  // read can see. Its columns are checked before it is selected from, rather than assumed: the view
-  // shape varies by pgsodium version, and an absent/unreadable view must degrade to "no encryption
-  // observed" (disclosed in M10-PROT-00) instead of failing the whole classification run.
-  const maskingCols =
-    await sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'pgsodium' AND table_name = 'masking_rule'`;
-  const maskingReadable = ["relname", "attname"].every((c) => maskingCols.some((r) => r.column_name === c));
-  const masked = maskingReadable ? await sql`SELECT relname AS table_name, attname AS column_name FROM pgsodium.masking_rule` : [];
-
-  const clientReadable = new Set(grants.map((g) => g.table_name));
-  const autoExposedTables = tables.filter((t) => !t.rls_enabled && clientReadable.has(t.table_name)).map((t) => `public.${t.table_name}`);
-  return {
-    facts: { exposedSchemas: [], autoExposedTables },
-    encrypted: new Set(masked.map((m) => `${m.table_name}.${m.column_name}`)),
-    detail: `Read ${tables.length} public table(s): ${clientReadable.size} carry an anon/authenticated SELECT grant and ${autoExposedTables.length} of those also have RLS disabled (anon-reachable). Encryption at rest: ${maskingReadable ? `pgsodium.masking_rule listed ${masked.length} encrypted column(s)` : "no readable pgsodium.masking_rule view, so no column was credited as encrypted at rest"}.`,
-  };
+/** Catalog/configuration assessment; no application row values are queried. */
+export async function gatherProtectionFacts(sql, options = { schemas: ["public"], schemaSource: "explicit default public; other schemas unassessed" }) {
+  return loadProtectionCatalog((query, parameters) => sql.unsafe(query, parameters), options);
 }
 
-// #1043 — turns the classification into a per-column protection VERDICT, or states that no verdict
-// was made. Review-flagged columns (free-text / JSON containers) are excluded: they are candidates
-// for inspection, not asserted classifications, and asserting "unprotected PII" over one would
-// price a maybe as a fact. Their exclusion is stated in the M10-PROT-00 row.
 function protectionReview(dataMap, protection, tier) {
   if (!protection) {
-    const reason =
-      tier === "schema"
-        ? "this run classified a static schema (--schema), which carries no RLS state, no grants and no encryption configuration"
-        : "no protection facts were gathered on this run";
-    console.log(`\nPII protection: NOT verified — ${reason} (#1043).`);
-    return [piiProtectionScope({ assessed: false, reason })];
+    const reason = tier === "schema"
+      ? "this run classified static schema declarations; effective grants, row policies, deployed configuration and source encryption boundaries were not assessed"
+      : "no protection facts were gathered on this run";
+    console.log(`\nPII protection: NOT verified — ${reason}.`);
+    const source = reviewSourceEncryptionBoundaries({ sourceRoot: flagPath("--source-root") ?? undefined, boundaryManifest: flagPath("--encryption-boundaries") ?? undefined });
+    return [piiProtectionScope({ assessed: false, reason: `${reason}. ${source}` })];
   }
-  const columns = Object.entries(dataMap).flatMap(([table, t]) =>
-    t.columns
-      .filter((c) => !REVIEW_FLAG_INFOTYPES.has(c.infotype))
-      .map((c) => ({
-        schema: "public",
-        table,
-        column: c.column,
-        category: c.category,
-        infotype: c.infotype,
-        encrypted: protection.encrypted.has(`${table}.${c.column}`),
-      })),
+  const columns = Object.values(dataMap).flatMap((t) =>
+    t.columns.filter((c) => !REVIEW_FLAG_INFOTYPES.has(c.infotype)).map((c) => ({
+      schema: t.schema, table: t.table, column: c.column,
+      category: c.category, infotype: c.infotype, encrypted: false,
+    })),
   );
   const findings = piiProtectionFindings(columns, protection.facts);
-  console.log(`\nPII protection verified against the live database (#1043): ${columns.length} asserted column(s) checked, ${findings.length} unprotected.`);
-  for (const f of findings) console.log(`  ${f.location}`);
+  console.log(`\nM10 scope: ${protection.detail}`);
+  console.log("M10 limitations: protection remains a scoped review; encryption behavior, caller-dependent policies, views/RPCs, storage/backups and key management require separate evidence.");
+  console.log(`PII protection review: ${columns.length} classified column(s), ${findings.length} access/protection question(s).`);
   return [piiProtectionScope({ assessed: true, detail: protection.detail, columnsChecked: columns.length, unprotected: findings.length }), ...findings];
 }
 
 // #855: the shared classify → report → emit tail for both CLI tiers. The semantic pass slots in
 // here (behind resolveSemanticClassifier's double gate) so live and schema runs get it identically.
 async function classifyReportAndEmit(cols, { tier, unknownType = [], protection = null, valueSampling = null }) {
-  const semantic = resolveSemanticClassifier({ allColumns: cols });
+  const semantic = resolveSemanticClassifier({ allColumns: cols.map((col) => ({ ...col, table_name: tableIdentity(col) })) });
   const dataMap = await classifyWithFallback(cols, semantic ?? undefined);
   report(cols, dataMap, { tier, unknownType, semanticModel: semantic?.model ?? null, valueSampling });
   writeFindingsOut(dataMap, tier, [...protectionReview(dataMap, protection, tier), ...valueSamplingToFindings(valueSampling)]);
@@ -1133,13 +1105,21 @@ async function classifyReportAndEmit(cols, { tier, unknownType = [], protection 
 async function inventory() {
   const { default: postgres } = await import("postgres");
   const sql = postgres(process.env.SUPABASE_DB_URL, { max: 1, idle_timeout: 5 });
-  const cols =
-    await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
-  const protection = await gatherProtectionFacts(sql);
-  const vsConfig = resolveValueSampling();
-  const valueSampling = await runValueSampling(cols, makeLiveSampler(sql), vsConfig);
-  await sql.end();
-  await classifyReportAndEmit(cols, { tier: "live", protection, valueSampling });
+  try {
+    const selected = flagPath("--schemas") ?? process.env.PII_PRODUCT_SCHEMAS;
+    const exposed = flagPath("--exposed-schemas") ?? process.env.PII_EXPOSED_SCHEMAS;
+    const protection = await gatherProtectionFacts(sql, {
+      schemas: (selected ?? "public").split(","),
+      schemaSource: selected ? "operator-configured authorized allowlist" : "explicit default public; other schemas unassessed",
+      ...(exposed !== undefined && exposed !== null ? { exposedSchemas: exposed.split(",") } : {}),
+      sourceRoot: flagPath("--source-root") ?? undefined,
+      boundaryManifest: flagPath("--encryption-boundaries") ?? undefined,
+    });
+    const cols = protection.columns;
+    const valueSampling = await runValueSampling(cols, makeLiveSampler(sql, cols), resolveValueSampling());
+    await classifyReportAndEmit(cols, { tier: "live", protection, valueSampling });
+    if (!cols.length || protection.schemas.some((s) => s.status === "unavailable")) process.exitCode = 1;
+  } finally { await sql.end(); }
 }
 
 /**
@@ -1272,6 +1252,8 @@ async function classifyFromSchema() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.argv.includes("--selftest")) selftest();
-  else if (process.argv.includes("--schema")) classifyFromSchema();
-  else inventory();
+  else {
+    const run = process.argv.includes("--schema") ? classifyFromSchema : inventory;
+    run().catch(() => { console.error("M10 assessment failed; no clean result is inferred. Check the selected schemas and read-only metadata prerequisites."); process.exitCode = 1; });
+  }
 }

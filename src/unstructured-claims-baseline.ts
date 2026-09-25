@@ -1095,10 +1095,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// every exclusion / deferred write is logged so an un-reviewed allowlist can't hide a real gap.",
     "// also can't reach it, the route may just be down, so a member 2xx is only a finding when the admin",
   ],
-  "src/pii-protection-review.ts": [
-    "// the same read-only connection. protectionScope() is the other half: on any tier that CANNOT",
-    "// gather them, the deliverable says protection was not verified rather than staying silent, because",
-  ],
   "src/prisma-dynamic.ts": [
     "// app-route probes → emit M2.pass.json. A step that can't complete returns a reasoned failure and",
   ],

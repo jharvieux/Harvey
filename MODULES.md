@@ -287,11 +287,17 @@ rather than a silently higher number. It only ever raises, never lowers.
 **Compliance applicability** falls out of the same map: detected PHI → HIPAA checks apply;
 cardholder data → PCI.
 
-**Protection verdict (connected tier):** gathers per-table RLS state, anon/authenticated SELECT
-grants and pgsodium masking rules, and emits a per-column verdict. Every run carries `M10-PROT-00`
-saying whether protection was verified **and what the check cannot see** (application-layer
-encryption, RLS *policy quality*, non-`public` schemas). On the schema tier it states plainly that
-protection was **not** assessed.
+**Protection evidence (connected tier):** classifies names/types in the explicitly authorized
+schema list and compares exact column grants with supported role/RLS semantics. Configure
+`--schemas public,private` (or `PII_PRODUCT_SCHEMAS`); the default selects `public` and reports
+other discovered schemas as unexamined. `M10-PROT-00` states examined and unexamined populations,
+configuration provenance and remaining review. Missing encryption metadata does not establish
+plaintext storage. Source references bind a reviewed file/digest/line; they do not certify
+cryptographic behavior, every read/write path or key management. The schema tier retains
+sensitivity classification with protection explicitly unassessed.
+
+See [M10 inputs](docs/runbooks/full-engagement-run.md#m10-catalog-and-protection-inputs)
+and the [shared prerequisite contract](docs/runbooks/engagement-prerequisites.md).
 
 **Known false-positive class, disclosed rather than hidden:** `email_category` is not an email,
 `awaiting_dob_reprompt` is a boolean, "health" matches `vendor_health`. Hits carry a **confidence**

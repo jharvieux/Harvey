@@ -58,6 +58,31 @@ describe("piiProtectionFindings", () => {
   });
 });
 
+describe("schema-only exposure and sensitivity severity (#2096)", () => {
+  it.each([
+    ["PII", "Medium"], ["SENSITIVE_PII", "High"], ["PHI", "High"],
+    ["PCI", "High"], ["SECRET", "High"],
+  ] as const)("delivers %s schema exposure at %s severity and clears paired controls", (category, severity) => {
+    const column: ClassifiedColumn = {
+      schema: "private", table: "patient", column: "ssn", category,
+      infotype: "US_SSN", encrypted: false,
+    };
+    const schemaOnly = { exposedSchemas: ["  private \t"], autoExposedTables: [] };
+    const findings = piiProtectionFindings([column], schemaOnly);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      location: "private.patient.ssn", severity, precisionTier: "review",
+      category: "Data protection", taxonomy: "M10 — PII/PHI/PCI protection",
+    });
+    expect(findings[0]?.evidence).toContain(`${category}/US_SSN`);
+    expect(findings[0]?.evidence).toContain("an exposed API schema");
+    expect(findings[0]?.evidence).not.toContain("an auto-exposed public table");
+    expect(findings[0]?.title).toContain("private.patient.ssn");
+    expect(piiProtectionFindings([column], { exposedSchemas: ["public"], autoExposedTables: [] })).toEqual([]);
+    expect(piiProtectionFindings([{ ...column, encrypted: true }], schemaOnly)).toEqual([]);
+  });
+});
+
 // #1043 — the sold claim is "PII protection verified in production". These pin the two halves that
 // make it true: a verdict when the connected tier gathered the facts, and an explicit not-assessed
 // row when it did not. A run that produced NEITHER is the defect (M10 reported ran/partial and the
@@ -74,9 +99,10 @@ describe("piiProtectionScope", () => {
 
   it("records the verdict AND its limits when the connected tier did gather the facts", () => {
     const row = piiProtectionScope({ assessed: true, detail: "Read 4 public table(s).", columnsChecked: 7, unprotected: 2 });
-    expect(row.title).toContain("7 classified column(s) checked, 2 unprotected");
+    expect(row.title).toContain("7 classified column(s), 2 access/protection question(s)");
     // The limits are the point: a verdict naming only what it found reads as a clean bill of health.
-    expect(row.impact).toContain("application-layer encryption");
+    expect(row.impact).toContain("database.encryption-boundaries");
+    expect(row.impact).toContain("No finding is a claim that encryption is absent");
   });
 
   it("emits rows the report schema accepts", () => {

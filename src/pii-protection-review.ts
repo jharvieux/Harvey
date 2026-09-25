@@ -1,17 +1,4 @@
-// M10 [LLM] — PII-protection adequacy pass (#201). tools/pii-classify.mjs DETECTS PII/PHI/PCI
-// columns by name+type; it doesn't judge whether they're PROTECTED. This pass takes the M10
-// classification plus connected-tier exposure facts (checkExposedSchemas / checkAutoExposedTables)
-// and surfaces detected-but-unprotected columns: a sensitive column reachable by the anon key
-// (auto-exposed public table or exposed API schema) that isn't encrypted at rest. Columns in an
-// unexposed schema, or encrypted (pgsodium/Vault), are cleared.
-//
-// #1043: this is what the connected tier sells ("PII protection verified in production") and until
-// that issue it had ZERO production callers — the check existed, was unit-tested, and never ran. It
-// is now driven by tools/pii-classify.mjs's live tier, which gathers the ExposureFacts below from
-// the same read-only connection. protectionScope() is the other half: on any tier that CANNOT
-// gather them, the deliverable says protection was not verified rather than staying silent, because
-// a report that shows a longer sensitive-column list and no protection verdict reads as a verdict.
-
+import { ENGAGEMENT_REQUIREMENTS_VERSION, engagementRequirement } from "./engagement-requirements.js";
 import type { Finding, Severity } from "./findings.js";
 import { reviewFinding } from "./review-tier.js";
 
@@ -19,20 +6,26 @@ export interface ClassifiedColumn {
   schema: string;
   table: string;
   column: string;
-  // SECRET is the classifier's stored-credential class (tools/pii-classify.mjs CATEGORY_POINTS) —
-  // scored like PHI/PCI here because a plaintext credential reachable by the anon key is the same
-  // failure with a larger blast radius.
   category: "PII" | "SENSITIVE_PII" | "PHI" | "PCI" | "SECRET";
   infotype: string;
-  // Encrypted at rest via pgsodium/Vault (a connected-tier fact).
+  /** A supplied protection fact; catalog configuration alone does not set this. */
   encrypted: boolean;
 }
 
+export interface ColumnReadAccess {
+  schema: string;
+  table: string;
+  column: string;
+  principals: { role: string; read: "all" | "none" | "conditional"; reason: string }[];
+}
+
 export interface ExposureFacts {
-  // Schemas reachable over PostgREST beyond the internal default (from checkExposedSchemas input).
   exposedSchemas: string[];
-  // "schema.table" for public tables with RLS disabled — anon-reachable (checkAutoExposedTables).
   autoExposedTables: string[];
+  /** Undefined retains the schema-only review path; an empty array is unavailable evidence. */
+  columnAccess?: ColumnReadAccess[];
+  apiConfigurationKnown?: boolean;
+  provenance?: string;
 }
 
 function severityFor(category: ClassifiedColumn["category"]): Severity {
@@ -49,58 +42,49 @@ export function reviewPiiColumn(col: ClassifiedColumn, facts: ExposureFacts): Pi
   const qualified = `${col.schema}.${col.table}.${col.column}`;
   const schemaExposed = facts.exposedSchemas.map((s) => s.trim()).includes(col.schema);
   const tableExposed = facts.autoExposedTables.includes(`${col.schema}.${col.table}`);
-  if ((schemaExposed || tableExposed) && !col.encrypted) {
-    return {
-      column: qualified,
-      category: col.category,
-      reason: `${col.category}/${col.infotype} column is reachable via ${tableExposed ? "an auto-exposed public table" : "an exposed API schema"} and is not encrypted at rest.`,
-    };
+  if (col.encrypted) return null;
+  if (facts.apiConfigurationKnown !== false && !schemaExposed && !tableExposed) return null;
+  let access: string;
+  if (facts.columnAccess !== undefined) {
+    const column = facts.columnAccess.find((entry) => entry.schema === col.schema && entry.table === col.table && entry.column === col.column);
+    const principals = column?.principals.filter((p) => p.role === "anon" || p.role === "authenticated") ?? [];
+    if (principals.length === 2 && principals.every((p) => p.read === "none")) return null;
+    access = principals.length
+      ? principals.map((p) => `${p.role} SELECT=${p.read} (${p.reason})`).join("; ")
+      : "effective column SELECT and row-policy evidence is unavailable for the client roles";
+    if (facts.apiConfigurationKnown === false) access += "; API schema configuration is unavailable, so API reachability is unverified";
+    else access += "; this column belongs to an exposed API schema";
+  } else {
+    access = `this column belongs to ${tableExposed ? "a table identified as potentially exposed" : "an exposed API schema"}; schema/table exposure alone does not prove permission to read this column or any row`;
   }
-  return null;
+  return {
+    column: qualified,
+    category: col.category,
+    reason: `${col.category}/${col.infotype} is a name/type sensitivity classification. Access evidence: ${access}. Encryption and masking adequacy remain unverified; missing encryption metadata is not evidence of plaintext. Provenance: ${facts.provenance ?? "supplied exposure metadata"}.`,
+  };
 }
 
-// #1043 — the coverage row for the protection VERDICT itself, emitted on every tier so the client
-// can tell "we checked and these columns are protected" from "we never checked". Both branches are
-// Info/N-A rows: they report on the check, not on a defect.
-//
-// The limits are stated on the assessed branch too. A protection check that names only what it
-// found, and not what it could not see, is the same clean-bill-of-health failure one level up.
 export function piiProtectionScope(
   scope: { assessed: false; reason: string } | { assessed: true; detail: string; columnsChecked: number; unprotected: number },
 ): Finding {
-  if (!scope.assessed) {
-    return {
-      id: "M10-PROT-00",
-      title: "PII protection NOT verified — no live database connection on this run",
-      severity: "Info",
-      confidence: "N/A",
-      category: "Data protection",
-      taxonomy: "M10 — PII/PHI/PCI protection",
-      location: "(engagement-wide)",
-      status: "Open",
-      evidence: `M10 classified which columns hold PII/PHI/PCI, but made NO judgment about whether any of them is protected. Verifying protection needs facts that exist only on a live connection — per-table RLS state (pg_class.relrowsecurity), anon/authenticated SELECT grants (information_schema.role_table_grants), and encryption-at-rest (pgsodium masking rules). Reason: ${scope.reason} [MEASURED — this run gathered none of those three inputs.]`,
-      impact:
-        "The sensitive-column list in this report is an inventory, not a verdict. No column here has been shown to be either protected or exposed; treat every one as unverified. Falsifier: re-run `SUPABASE_DB_URL=<read-only url> pnpm pii-classify` — the connected tier gathers the three inputs above and replaces this row with a per-column verdict.",
-      fix: "Run the connected tier against a read-only database connection so each classified column gets a protection verdict.",
-      value: 1,
-      ease: 4,
-      safety: 5,
-      mechanical: true,
-    };
-  }
+  const requirements = ["database.schema-scope", "database.catalog", "database.api-configuration", "database.authorization", "database.encryption-boundaries"].map(engagementRequirement);
+  const prerequisites = `Prerequisite contract ${ENGAGEMENT_REQUIREMENTS_VERSION}. ` + requirements.map((r) => `${r.id}: ${r.limitation} Metadata needed: ${r.metadata.join("; ")}. Access needed: ${r.access.join("; ")}. Falsifier: ${r.falsifier} Next step: ${r.nextStep}`).join(" ");
   return {
     id: "M10-PROT-00",
-    title: `PII protection verified against the live database — ${scope.columnsChecked} classified column(s) checked, ${scope.unprotected} unprotected`,
+    title: scope.assessed
+      ? `PII protection review — ${scope.columnsChecked} classified column(s), ${scope.unprotected} access/protection question(s)`
+      : "PII protection NOT verified — protection evidence unavailable on this run",
     severity: "Info",
     confidence: "N/A",
     category: "Data protection",
     taxonomy: "M10 — PII/PHI/PCI protection",
     location: "(engagement-wide)",
     status: "Open",
-    evidence: `${scope.detail} Each asserted PII/PHI/PCI/secret column was judged reachable-and-plaintext or cleared; every unprotected one is its own M10-PII-nn finding. [MEASURED — read-only catalog queries on this run.]`,
-    impact:
-      "What this verdict does NOT cover: application-layer encryption (invisible to a catalog read, so a column encrypted by the app reads as plaintext here); the quality of an RLS policy on a table that HAS RLS enabled (M1 judges that, not this check); schemas other than `public`; and review-flagged columns (free-text/JSON containers), which are candidates for inspection rather than asserted classifications and are not verdicted.",
-    fix: "Address each M10-PII-nn finding; for a column encrypted at the application layer, record that as the answer to its review question so the next audit's baseline carries it.",
+    evidence: scope.assessed
+      ? `${scope.detail} Sensitivity, effective direct column access, and encryption adequacy are separate assessments. No production row values were sampled by the catalog assessment. Review-flagged free-text/JSON containers are not asserted sensitive columns. [MEASURED — read-only catalog/configuration evidence.] ${prerequisites}`
+      : `Name/type classification is an inventory, not a protection verdict. Reason: ${scope.reason}. [MEASURED — protection metadata was not assessed on this run.] ${prerequisites}`,
+    impact: `No finding is a claim that encryption is absent. A denied direct client SELECT path does not certify views, RPCs, application/server roles, backups, storage encryption, or key management. Prerequisite contract ${ENGAGEMENT_REQUIREMENTS_VERSION}. ${requirements.map((r) => `${r.id}: ${r.limitation} Falsifier: ${r.falsifier}`).join(" ")}`,
+    fix: requirements.map((r) => `${r.id}: ${r.nextStep}`).join(" "),
     value: 1,
     ease: 4,
     safety: 5,
@@ -112,20 +96,18 @@ export function piiProtectionFindings(columns: ClassifiedColumn[], facts: Exposu
   return columns
     .map((c) => reviewPiiColumn(c, facts))
     .filter((r): r is PiiExposure => r !== null)
-    .map((r, i) =>
-      reviewFinding({
-        id: `M10-PII-${String(i + 1).padStart(2, "0")}`,
-        title: `Unprotected ${r.category} column ${r.column}`,
-        severity: severityFor(r.category),
-        category: "Data protection",
-        taxonomy: "M10 — PII/PHI/PCI protection",
-        location: r.column,
-        evidence: r.reason,
-        question: "Is this sensitive column adequately protected — encrypted at rest, masked in the exposed view, or otherwise not readable past RLS by the anon/authenticated key?",
-        impact: "A detected sensitive column reachable by the anon key with no encryption is a plaintext data-exposure path — exactly the class the M10 taxonomy expects to be protected.",
-        fix: "Encrypt the column at rest (pgsodium/Vault), move it out of the exposed schema, or mask it behind an RLS-scoped view; confirm the anon/authenticated grant can't read the raw value.",
-        okWhen: "The column is encrypted at rest, or not reachable by the anon/authenticated key, or masked in every exposed view/RPC.",
-        notOkWhen: "The raw sensitive value is readable by the anon/authenticated key with no encryption or masking.",
-      }),
-    );
+    .map((r, i) => reviewFinding({
+      id: `M10-PII-${String(i + 1).padStart(2, "0")}`,
+      title: `Review ${r.category} access and protection: ${r.column}`,
+      severity: severityFor(r.category),
+      category: "Data protection",
+      taxonomy: "M10 — PII/PHI/PCI protection",
+      location: r.column,
+      evidence: r.reason,
+      question: "Do the supported client roles have an intended read path to this sensitive column, and what evidence covers encryption and masking along that path?",
+      impact: "Sensitive information could be disclosed if the observed or unresolved read path returns raw values. Classification and incomplete protection evidence alone do not establish a vulnerability.",
+      fix: "Review the exact column grants, applicable row policies, views/RPCs and source encryption boundaries using synthetic fixtures. Supply configuration and reviewed source provenance; do not infer plaintext from absent catalog metadata.",
+      okWhen: "The read path is intended and appropriately restricted, or verified encryption/masking covers every relevant path.",
+      notOkWhen: "A synthetic control demonstrates unintended reading of a raw sensitive value by a client role.",
+    }));
 }

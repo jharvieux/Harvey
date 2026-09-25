@@ -33,15 +33,17 @@ const FIXTURE: AdvisorsResponse = {
 };
 
 describe("parseAdvisorFindings", () => {
-  it("marks every advisor hit as mechanical + high precision — advisor-sourced is ground truth", () => {
+  it("preserves catalog observations while leaving authorization inventory in review", () => {
     const findings = parseAdvisorFindings(FIXTURE);
-    expect(findings.every((f) => f.mechanical && f.precisionTier === "high")).toBe(true);
+    expect(findings.every((f) => f.mechanical)).toBe(true);
+    expect(findings.map((f) => f.precisionTier)).toEqual(["review", "review", "high"]);
   });
 
-  it("escalates rls_disabled_in_public to Critical regardless of Supabase's own ERROR level", () => {
+  it("keeps disabled RLS as posture until effective access is established", () => {
     const findings = parseAdvisorFindings(FIXTURE);
-    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.severity).toBe("Info");
     expect(findings[0]?.location).toBe("public.orders");
+    expect(findings[1]?.evidence).toContain("denies normal row access");
   });
 
   it("falls back to the level-based severity for lints outside the curated map", () => {
@@ -116,16 +118,16 @@ const B8_FIXTURE: AdvisorsResponse = {
 };
 
 describe("parseAdvisorFindings — Batch B8 connected-tier lint set", () => {
-  it("curates each B8 lint to the CURATED_SEVERITY the connected-tier calibration entries expect", () => {
+  it("separates B8 authorization posture from asserted vulnerability severity", () => {
     const findings = parseAdvisorFindings(B8_FIXTURE);
     const severityByName = Object.fromEntries(findings.map((f, i) => [B8_FIXTURE.lints[i]?.name, f.severity]));
     expect(severityByName).toEqual({
-      auth_users_exposed: "Critical",
-      security_definer_view: "High",
+      auth_users_exposed: "Info",
+      security_definer_view: "Info",
       function_search_path_mutable: "Medium",
-      rls_references_user_metadata: "High",
-      sensitive_columns_exposed: "High",
-      rls_enabled_no_policy: "Medium",
+      rls_references_user_metadata: "Info",
+      sensitive_columns_exposed: "Info",
+      rls_enabled_no_policy: "Info",
     });
   });
 
@@ -141,9 +143,20 @@ describe("parseAdvisorFindings — Batch B8 connected-tier lint set", () => {
     ]);
   });
 
-  it("marks every B8 lint mechanical + high precision, same as any other advisor hit", () => {
+  it("keeps authorization observations in review without discarding their source evidence", () => {
     const findings = parseAdvisorFindings(B8_FIXTURE);
-    expect(findings.every((f) => f.mechanical && f.precisionTier === "high")).toBe(true);
+    expect(findings.every((f) => f.mechanical)).toBe(true);
+    expect(findings.map((f) => f.precisionTier)).toEqual(["review", "review", "high", "review", "review", "review"]);
+    expect(findings[0]!.evidence).toContain(B8_FIXTURE.lints[0]!.detail);
+    expect(findings[1]!.evidence).toContain("effective owner privileges");
+  });
+});
+
+describe("authorization advisor composition", () => {
+  it.each(["policy_exists_rls_disabled", "rls_policy_always_true", "materialized_view_in_api", "foreign_table_in_api", "insecure_queue_exposed_in_api", "public_bucket_allows_listing"])("keeps %s as an observation until its effective path is proved", (name) => {
+    const findings = parseAdvisorFindings({ lints: [{ name, title: name, level: "ERROR", metadata: { schema: "public", name: "fixture" } }] });
+    expect(findings[0]).toMatchObject({ severity: "Info", precisionTier: "review", taxonomy: name });
+    expect(findings[0]!.evidence).toContain("not an effective-access verdict");
   });
 });
 
@@ -236,7 +249,7 @@ describe("parseAdvisorFindings — #1083 PERFORMANCE lints route through M7's pr
     const findings = parseAdvisorFindings(MIXED_CATEGORY_FIXTURE);
     const sec = findings.find((f) => f.taxonomy === "rls_disabled_in_public")!;
     expect(sec.category).toBe("Supabase advisor");
-    expect(sec.severity).toBe("Critical");
+    expect(sec.severity).toBe("Info");
   });
 
   it("folds facing (EXTERNAL/INTERNAL) into the evidence text since Finding has no dedicated field for it", () => {

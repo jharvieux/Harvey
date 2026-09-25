@@ -1,0 +1,4318 @@
+{
+  "fixtureSqlSha256": "1a00d04ca12408e69f4b203344ea029d9ca7641a17b0aa00e8b9132f8e20f520",
+  "postgresVersion": "17.10 (Homebrew)",
+  "captureCommand": "HARVEY_AUTHZ_POSTGRES_TESTS=1 HARVEY_AUTHZ_PG_BIN=/opt/homebrew/opt/postgresql@17/bin HARVEY_AUTHZ_EVIDENCE_DIR=<disposable-evidence> pnpm exec vitest run src/scan/supabase-authorization.test.ts -t 'real disposable'",
+  "authorization": {
+    "roles": [
+      "anon",
+      "app_owner",
+      "authenticated",
+      "bounded_definer",
+      "service_role"
+    ],
+    "tables": [
+      {
+        "rls": true,
+        "name": "current_denied",
+        "role": "anon",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "current_denied",
+        "role": "app_owner",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "current_denied",
+        "role": "authenticated",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": true,
+        "name": "current_denied",
+        "role": "bounded_definer",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": true,
+        "name": "current_denied",
+        "role": "service_role",
+        "owner": "app_owner",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": true,
+        "name": "default_denied",
+        "role": "anon",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "default_denied",
+        "role": "app_owner",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "default_denied",
+        "role": "authenticated",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": true,
+        "name": "default_denied",
+        "role": "bounded_definer",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": true,
+        "name": "default_denied",
+        "role": "service_role",
+        "owner": "app_owner",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "default_open",
+        "role": "anon",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "default_open",
+        "role": "app_owner",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "default_open",
+        "role": "authenticated",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "default_open",
+        "role": "bounded_definer",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "default_open",
+        "role": "service_role",
+        "owner": "app_owner",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "future",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "no_schema",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "hidden",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "no_schema",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "hidden",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "no_schema",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "hidden",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "no_schema",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "hidden",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "no_schema",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "hidden",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "visible",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "pgtenant",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "visible",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "pgtenant",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "visible",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "pgtenant",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "visible",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "pgtenant",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "visible",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "pgtenant",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "column_open",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "column_open",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "column_open",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "column_open",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "column_open",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "column_rls",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [
+          {
+            "name": "column_scope",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "column_rls",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "column_scope",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "column_rls",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "column_scope",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "column_rls",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "column_scope",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "column_rls",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "column_scope",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "deny_all",
+        "role": "anon",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "deny_all",
+        "role": "app_owner",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "deny_all",
+        "role": "authenticated",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "deny_all",
+        "role": "bounded_definer",
+        "owner": "app_owner",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "deny_all",
+        "role": "service_role",
+        "owner": "app_owner",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "disabled",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "disabled",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "disabled",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "disabled",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "disabled",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "inherited",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "inherited",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "inherited",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "inherited_reader",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "inherited",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "inherited",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "no_grant",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "no_grant",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "no_grant",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "no_grant",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "no_grant",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_forced",
+        "role": "anon",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": true,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_forced",
+        "role": "app_owner",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": true,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_forced",
+        "role": "authenticated",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": true,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_forced",
+        "role": "bounded_definer",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": true,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_forced",
+        "role": "service_role",
+        "owner": "authenticated",
+        "bypass": true,
+        "forced": true,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_unforced",
+        "role": "anon",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_unforced",
+        "role": "app_owner",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_unforced",
+        "role": "authenticated",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": true,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_unforced",
+        "role": "bounded_definer",
+        "owner": "authenticated",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "owner_unforced",
+        "role": "service_role",
+        "owner": "authenticated",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "policy_other_role",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "policy_other_role",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "policy_other_role",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "authenticated_only",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "policy_other_role",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "policy_other_role",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "public_grant",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "public_grant",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "public_grant",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "public_grant",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "public_grant",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [
+          {
+            "name": "permissive_all",
+            "check": "true",
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          },
+          {
+            "name": "restrictive_none",
+            "check": "false",
+            "using": "false",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "permissive_all",
+            "check": "true",
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          },
+          {
+            "name": "restrictive_none",
+            "check": "false",
+            "using": "false",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": true,
+          "INSERT": true,
+          "SELECT": true,
+          "UPDATE": true
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "tenant",
+            "insert": true,
+            "select": true,
+            "update": true
+          },
+          {
+            "name": "secret",
+            "insert": true,
+            "select": true,
+            "update": true
+          }
+        ],
+        "policies": [
+          {
+            "name": "permissive_all",
+            "check": "true",
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          },
+          {
+            "name": "restrictive_none",
+            "check": "false",
+            "using": "false",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": true,
+        "superuser": false,
+        "references": true,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "permissive_all",
+            "check": "true",
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          },
+          {
+            "name": "restrictive_none",
+            "check": "false",
+            "using": "false",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "permissive_all",
+            "check": "true",
+            "using": "true",
+            "command": "*",
+            "permissive": true
+          },
+          {
+            "name": "restrictive_none",
+            "check": "false",
+            "using": "false",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive_only",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "restriction_without_permission",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive_only",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "restriction_without_permission",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive_only",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "restriction_without_permission",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive_only",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "restriction_without_permission",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "restrictive_only",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "restriction_without_permission",
+            "check": null,
+            "using": "true",
+            "command": "*",
+            "permissive": false
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "tenant_rows",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "scoped_rows",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "tenant_rows",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "scoped_rows",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "tenant_rows",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": true,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": true,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": true,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "scoped_rows",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "tenant_rows",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "scoped_rows",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": true,
+        "name": "tenant_rows",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "public",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "tenant",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "secret",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [
+          {
+            "name": "scoped_rows",
+            "check": null,
+            "using": "(tenant = current_setting('fixture.tenant'::text, true))",
+            "command": "*",
+            "permissive": true
+          }
+        ],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": true
+      },
+      {
+        "rls": false,
+        "name": "buckets",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "name",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "public",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "buckets",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "name",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "public",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "buckets",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "name",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "public",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "buckets",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "name",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "public",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "buckets",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "name",
+            "insert": false,
+            "select": false,
+            "update": false
+          },
+          {
+            "name": "public",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "objects",
+        "role": "anon",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "objects",
+        "role": "app_owner",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "objects",
+        "role": "authenticated",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "objects",
+        "role": "bounded_definer",
+        "owner": "harvey_fixture",
+        "bypass": false,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      },
+      {
+        "rls": false,
+        "name": "objects",
+        "role": "service_role",
+        "owner": "harvey_fixture",
+        "bypass": true,
+        "forced": false,
+        "grants": {
+          "DELETE": false,
+          "INSERT": false,
+          "SELECT": false,
+          "UPDATE": false
+        },
+        "schema": "storage",
+        "columns": [
+          {
+            "name": "id",
+            "insert": false,
+            "select": false,
+            "update": false
+          }
+        ],
+        "policies": [],
+        "truncate": false,
+        "superuser": false,
+        "references": false,
+        "ownerAccess": false,
+        "schemaUsage": false
+      }
+    ],
+    "version": 1,
+    "definers": [
+      {
+        "name": "definer_denied",
+        "owner": "bounded_definer",
+        "bypass": false,
+        "schema": "public",
+        "callers": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "arguments": "",
+        "relations": [
+          {
+            "rls": true,
+            "name": "deny_all",
+            "forced": false,
+            "schema": "public",
+            "ownerAccess": false
+          }
+        ],
+        "superuser": false
+      },
+      {
+        "name": "definer_forced",
+        "owner": "authenticated",
+        "bypass": false,
+        "schema": "public",
+        "callers": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "arguments": "",
+        "relations": [
+          {
+            "rls": true,
+            "name": "owner_forced",
+            "forced": true,
+            "schema": "public",
+            "ownerAccess": true
+          }
+        ],
+        "superuser": false
+      },
+      {
+        "name": "definer_private",
+        "owner": "app_owner",
+        "bypass": false,
+        "schema": "public",
+        "callers": [],
+        "arguments": "",
+        "relations": [
+          {
+            "rls": true,
+            "name": "deny_all",
+            "forced": false,
+            "schema": "public",
+            "ownerAccess": true
+          }
+        ],
+        "superuser": false
+      },
+      {
+        "name": "definer_read",
+        "owner": "app_owner",
+        "bypass": false,
+        "schema": "public",
+        "callers": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "arguments": "",
+        "relations": [
+          {
+            "rls": true,
+            "name": "deny_all",
+            "forced": false,
+            "schema": "public",
+            "ownerAccess": true
+          }
+        ],
+        "superuser": false
+      },
+      {
+        "name": "definer_scoped",
+        "owner": "app_owner",
+        "bypass": false,
+        "schema": "public",
+        "callers": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "arguments": "",
+        "relations": [
+          {
+            "rls": true,
+            "name": "deny_all",
+            "forced": false,
+            "schema": "public",
+            "ownerAccess": true
+          }
+        ],
+        "superuser": false
+      }
+    ],
+    "tableCount": 20,
+    "definerCount": 5
+  }
+}

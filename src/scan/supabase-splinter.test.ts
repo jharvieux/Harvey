@@ -124,16 +124,17 @@ describe("parseSplinterOutput -> parseAdvisorFindings — recorded connected-tie
     );
   });
 
-  it("marks every Splinter-sourced finding mechanical + high precision, same trust tier as a hosted advisor hit", () => {
+  it("preserves mechanical observations and marks authorization posture for review", () => {
     const findings = parseAdvisorFindings(parseSplinterOutput(FIXTURE_RAW));
     expect(findings.length).toBeGreaterThan(0);
-    expect(findings.every((f) => f.mechanical && f.precisionTier === "high")).toBe(true);
+    expect(findings.every((f) => f.mechanical)).toBe(true);
+    expect(findings.filter((f) => ["rls_enabled_no_policy", "security_definer_view", "rls_disabled_in_public", "rls_references_user_metadata"].includes(f.taxonomy)).every((f) => f.precisionTier === "review")).toBe(true);
   });
 
-  it("curates rls_disabled_in_public to Critical and locates it at the exact table", () => {
+  it("retains disabled-RLS inventory at the exact table without asserting grants", () => {
     const findings = parseAdvisorFindings(parseSplinterOutput(FIXTURE_RAW));
     const finding = findings.find((f) => f.taxonomy === "rls_disabled_in_public");
-    expect(finding?.severity).toBe("Critical");
+    expect(finding?.severity).toBe("Info");
     expect(finding?.location).toBe("public.audit_logs");
   });
 

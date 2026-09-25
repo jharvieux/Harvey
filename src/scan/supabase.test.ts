@@ -119,7 +119,7 @@ describe("runSupabaseScan", () => {
 
     expect(taxonomies).toContain("rls_disabled_in_public");
     expect(taxonomies).toContain("Auth config: email confirmation disabled");
-    expect(taxonomies).toContain("Auto-exposed public-schema table");
+    expect(taxonomies).toContain("RLS-disabled table inventory");
     expect(taxonomies).toContain("Dangerous extension enabled");
     expect(taxonomies).toContain("Public bucket with no policies");
     expect(findings.every((f) => f.mechanical)).toBe(true);
@@ -232,13 +232,13 @@ describe("runSupabaseScan", () => {
       // From the live auth body: HIBP off with the email provider on.
       expect(findings.map((f) => f.id)).toContain("SB-AUTH-HIBP");
       // From the live table body: all 15 rows carry rlsEnabled true, so nothing is auto-exposed.
-      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+      expect(findings.some((f) => f.taxonomy === "RLS-disabled table inventory")).toBe(false);
     });
 
     it("CONTROL — one row's rlsEnabled flipped to false is graded, so the pass above is not vacuous", async () => {
       const flipped = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: false } : r));
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(flipped) });
-      expect(findings.filter((f) => f.taxonomy === "Auto-exposed public-schema table")).toHaveLength(1);
+      expect(findings.filter((f) => f.taxonomy === "RLS-disabled table inventory")).toHaveLength(1);
     });
 
     it("CONTROL — a driver that stringified the boolean would go silent, which is why the capture matters", async () => {
@@ -247,7 +247,7 @@ describe("runSupabaseScan", () => {
       // is what rules this out; this control states the cost of having assumed it.
       const stringy = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: "f" as unknown as boolean } : r));
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(stringy) });
-      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+      expect(findings.some((f) => f.taxonomy === "RLS-disabled table inventory")).toBe(false);
     });
   });
 
