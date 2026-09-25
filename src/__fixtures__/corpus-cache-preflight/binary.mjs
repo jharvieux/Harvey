@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename } from "node:path";
 
@@ -31,13 +31,36 @@ if (args.includes("--version") || args.includes("version")) {
   if (process.env.HARVEY_PREFLIGHT_HANG === binary && !registryValidation) {
     const record = process.env.HARVEY_PREFLIGHT_CANCEL_RECORD;
     if (!record) throw new Error("hanging fixture tool requires a lifecycle record path");
-    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-    let beat = 0;
-    const writeRecord = () => writeFileSync(record, JSON.stringify({ toolPid: process.pid, descendantPid: descendant.pid, beat: ++beat }));
-    writeRecord();
-    // The parent needs SIGKILL after its group receives SIGTERM. Its child uses the default
-    // disposition, proving the harness waits for both levels before deleting fixture state.
+    // Publish readiness only after the cancellation behavior and descendant event loop exist.
     process.on("SIGTERM", () => {});
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000); process.send({ ready: true, pid: process.pid });"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve, reject) => {
+      descendant.once("error", reject);
+      descendant.once("exit", () => reject(new Error("fixture descendant exited before readiness")));
+      descendant.once("message", (message) => {
+        if (message?.ready !== true || message.pid !== descendant.pid) reject(new Error("invalid fixture descendant readiness"));
+        else resolve();
+      });
+    });
+    let beat = 0;
+    const writeRecord = () => {
+      const payload = JSON.stringify({ version: 1, toolPid: process.pid, descendantPid: descendant.pid, beat: ++beat });
+      const staged = `${record}.tmp`;
+      const marker = process.env.HARVEY_PREFLIGHT_CANCEL_STAGED_WRITE;
+      if (marker && beat === 2) {
+        // Force cancellation into a real interrupted write, instead of hoping for a timing race.
+        const fd = openSync(staged, "w");
+        const split = Math.floor(payload.length / 2);
+        writeSync(fd, payload.slice(0, split));
+        writeFileSync(`${marker}.tmp`, JSON.stringify({ staged, beat }));
+        renameSync(`${marker}.tmp`, marker);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+        writeSync(fd, payload.slice(split));
+        closeSync(fd);
+      } else writeFileSync(staged, payload);
+      renameSync(staged, record);
+    };
+    writeRecord();
     globalThis.setInterval(writeRecord, 10);
     await new Promise(() => {});
   }
