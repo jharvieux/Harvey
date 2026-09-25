@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-export interface MailCapture { url: string; method: string; headers: Record<string, string>; body: { to: string[]; attachments?: { filename: string; content: string }[]; [key: string]: unknown } }
+interface MailCapture { url: string; method: string; headers: Record<string, string>; body: { to: string[]; attachments?: { filename: string; content: string }[]; [key: string]: unknown } }
 
 /** Real Next pages/API, with the external mail transport denied except for a recorded local stub. */
 export async function startSite() {
