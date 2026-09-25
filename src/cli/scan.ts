@@ -1,7 +1,7 @@
 // Scan CLI entry point.
 //   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]
 //     [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--auth-guards a,b] [--out <file>]
-//   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>]
+//   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--drift-schemas public,extensions]
 //     [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]
 //
 // --supabase against a hosted project needs SUPABASE_ACCESS_TOKEN (a Management API personal
@@ -45,6 +45,7 @@ const FLAGS = [
   "--gotrue-url",
   "--mechanical",
   "--migrations",
+  "--drift-schemas",
   "--out",
   "--rest-url",
   "--supabase",
@@ -82,6 +83,7 @@ function emit(findings: Finding[]): void {
 async function main(): Promise<void> {
   if (process.argv.includes("--mechanical")) {
     assertKnownFlags(FLAGS);
+    if (arg("--drift-schemas") !== undefined) throw new Error("--drift-schemas requires a connected --supabase scan, not --mechanical");
     const dir = targetDir();
     const bundle = arg("--bundle");
     const tenantKey = arg("--tenant-key");
@@ -99,21 +101,22 @@ async function main(): Promise<void> {
     assertKnownFlags(FLAGS);
     const functionsDir = arg("--functions");
     const migrationsDir = arg("--migrations");
+    const driftSchemas = arg("--drift-schemas")?.split(",").map((schema) => schema.trim());
     const gotrueProbe = gotrueProbeArg();
     // #1494 — local mode defaults to probing the local stack's own REST surface unless overridden;
     // hosted mode already answers these two checks through the Management API and ignores it.
     const restUrl = arg("--rest-url") ?? LOCAL_REST_URL;
     const findings =
       supabaseTarget === "local"
-        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, gotrueProbe, restUrl })
-        : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, migrationsDir, gotrueProbe });
+        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, driftSchemas, gotrueProbe, restUrl })
+        : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, migrationsDir, driftSchemas, gotrueProbe });
     emit(findings);
     return;
   }
 
   console.error("usage: scan --mechanical --dir <path> [--bundle <path>] [--out <file>]");
   console.error(
-    "       scan --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--gotrue-url <url> --gotrue-anon-key <key>] [--rest-url <url>] [--out <file>]",
+    "       scan --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--drift-schemas public,extensions] [--gotrue-url <url> --gotrue-anon-key <key>] [--rest-url <url>] [--out <file>]",
   );
   process.exit(2);
 }
