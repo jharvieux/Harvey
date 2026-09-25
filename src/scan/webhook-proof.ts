@@ -56,8 +56,6 @@ function runtimeShape(text: string): string {
   // Function names, export modifiers and types do not affect the proven algorithm.
   return JSON.stringify([fn.parameters.map(shape), fn.body ? shape(fn.body) : null]);
 }
-let stripeShape: string | undefined;
-let compareShape: string | undefined;
 
 class SourceGraph {
   readonly files: Map<string, SourceInput>;
@@ -178,9 +176,9 @@ function bindingContains(node: ts.Node, names: ReadonlySet<string>): boolean {
 }
 
 function provenVerifier(graph: SourceGraph, resolved: ResolvedFunction): boolean {
-  if (runtimeShape(resolved.fn.getText(resolved.sf)) !== (stripeShape ??= runtimeShape(STRIPE_HMAC))) return false;
+  if (runtimeShape(resolved.fn.getText(resolved.sf)) !== runtimeShape(STRIPE_HMAC)) return false;
   const comparator = graph.resolve(resolved.path, "timingSafeEqual");
-  if (!comparator || runtimeShape(comparator.fn.getText(comparator.sf)) !== (compareShape ??= runtimeShape(CONSTANT_TIME_COMPARE))) return false;
+  if (!comparator || runtimeShape(comparator.fn.getText(comparator.sf)) !== runtimeShape(CONSTANT_TIME_COMPARE)) return false;
   // A local/imported replacement of a platform primitive, verifier or comparator is unresolved.
   const protectedNames = new Set(["crypto", "TextEncoder", "Uint8Array", "Array", "Math", "Number", "Date", "timingSafeEqual", resolved.fn.name!.text]);
   let unsafe = false;
