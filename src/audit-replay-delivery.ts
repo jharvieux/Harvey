@@ -33,7 +33,9 @@ export async function deliverAuditReplay(options: {
     kind: retainedContext?.kind ?? "same-run-checkpoint",
     target: { id: evidence.binding.target.path, revision: `${evidence.binding.target.revision}:${evidence.binding.target.sha256}` },
     schemaVersion: "finding-dispositions/1",
-    producerVersions: { ...Object.fromEntries(evidence.current.map((receipt) => [JSON.stringify([receipt.scope, receipt.producer.name]), receipt.producer.version])), engine: evidence.binding.engine.sha256, configuration: evidence.binding.configSha256 },
+    // Scope belongs in assessedScope. Repeating a producer in another workspace
+    // must not masquerade as a tool change; distinct versions still remain bound.
+    producerVersions: { ...Object.fromEntries(evidence.current.map((receipt) => [JSON.stringify([receipt.producer.name, receipt.producer.version]), receipt.producer.version] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), engine: evidence.binding.engine.sha256, configuration: evidence.binding.configSha256 },
     assessedScope: evidence.current.map((receipt) => JSON.stringify([receipt.scope.module, receipt.scope.workspace, receipt.scope.tier, receipt.scope.surface])).sort(),
     scopeComplete: evidence.missing.length === 0 && evidence.current.every((receipt) => !receipt.legacyReason) && result.recorded.every((row) => row.status === "ran"),
   };

@@ -15,9 +15,9 @@ const children: Promise<GuardCommandResult>[] = [];
 const teardown = new AbortController();
 const meta: ReportMeta = { client: "CLI replay", subtitle: "evidence", date: "2026-09-24", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 5, tenantIsolation: "Unverified", authModel: "fixture", headline: "Scoped receipts", scope: "ten modules", methodology: "replay", outOfScope: "missing surfaces" };
 
-async function run(extra: string[], env: Record<string, string> = {}, assemble = true): Promise<{ code: number | null; stdout: string; stderr: string }> {
+async function run(extra: string[], env: Record<string, string> = {}, assemble = true, assemblyBundle = bundle): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = runGuardCommand({
-    command: ["/usr/bin/env", ...Object.entries(env).map(([key, value]) => `${key}=${value}`), process.execPath, "--require", preload, "--import", "tsx", "src/cli/run-audit.ts", target, ...(assemble ? ["--assemble", bundle] : []), ...extra],
+    command: ["/usr/bin/env", ...Object.entries(env).map(([key, value]) => `${key}=${value}`), process.execPath, "--require", preload, "--import", "tsx", "src/cli/run-audit.ts", target, ...(assemble ? ["--assemble", assemblyBundle] : []), ...extra],
     cwd: repo, bundleDir: root, outputPrefix: `child-${children.length}`, timeoutMs: 20_000,
     killGraceMs: 1_000, signal: teardown.signal,
   });
@@ -73,6 +73,86 @@ afterAll(async () => {
 });
 
 describe("run-audit assembly capability boundary", () => {
+  it("distinguishes receipt scope expansion from actual producer changes in every export", async () => {
+    const initial = JSON.parse(readFileSync(join(root, "findings.json"), "utf8")) as FindingsDocument;
+    type Mode = "same" | "expanded" | "reversed" | "new-version" | "two-versions" | "partial";
+    async function capture(name: string, mode: Mode, prior?: string) {
+      const passes: AuditEvidenceInput[] = AUDIT_MODULES.map((module) => ({
+        scope: { module, workspace: ".", tier: "source", surface: "module", wholeModule: true },
+        generatedAt: new Date().toISOString(), producer: { name: module, version: mode === "new-version" && module === "M7" ? "2" : "1" },
+        rawArtifacts: [join(root, "raw.json")],
+        result: { kind: "examined", unitsExamined: 1, scope: "owned files", detail: "Bound source scope",
+          findings: [structuredClone(initial.findings.find((finding) => finding.id === `${module}-CLI`)!)],
+          ...(module === "M10" ? { dataMap: {} } : {}),
+        },
+      }));
+      if (mode === "expanded" || mode === "reversed" || mode === "two-versions") {
+        const additional = structuredClone(passes[6]!);
+        additional.scope.workspace = "another-workspace";
+        if (mode === "two-versions") additional.producer.version = "2";
+        if ("kind" in additional.result && additional.result.kind === "examined") {
+          additional.result.findings[0]!.id = "M7-ANOTHER";
+          additional.result.findings[0]!.location = "another-workspace/sample.ts:1";
+        }
+        passes.push(additional);
+      }
+      if (mode === "reversed") passes.reverse();
+      if (mode === "partial") passes[7]!.result = {
+        kind: "not-assessed", reason: "Native mutation evidence unavailable", provenance: "TRIED",
+        falsifier: "Run the native mutation producer", findings: [],
+      };
+      const retained = join(root, `${name}-bundle`);
+      writeAuditReplayBundle(retained, {
+        binding: createAuditReplayBinding(target, { fixture: "scope-classification" }),
+        scopes: passes.map((pass) => pass.scope), passes,
+        meta: { ...meta, auditContext: { ...initial.auditContext!, engagementId: name, kind: "client-audit" } },
+      });
+      const path = join(root, `${name}.json`), html = join(root, `${name}.html`), sarif = join(root, `${name}.sarif`);
+      const result = await run(["--findings-out", path, "--html-out", html, "--sarif-out", sarif,
+        ...(prior ? ["--baseline", prior] : [])], {}, true, retained);
+      expect(result.code, result.stderr).toBe(0);
+      const document = JSON.parse(readFileSync(path, "utf8")) as FindingsDocument;
+      const exported = JSON.parse(readFileSync(sarif, "utf8"));
+      expect(exported.runs[0].properties.harveyAuditContext).toEqual(document.auditContext);
+      if (prior) {
+        expect(exported.runs[0].properties.harveyBaseline).toEqual(document.baseline);
+        for (const reason of document.baseline!.comparison!.limitations) expect(readFileSync(html, "utf8")).toContain(reason);
+      }
+      return { document, path };
+    }
+    const prior = await capture("scope-prior", "same");
+    const same = await capture("scope-same", "same", prior.path);
+    expect(same.document.baseline?.comparison?.kind).toBe("same-source");
+    const expanded = await capture("scope-expanded", "expanded", prior.path);
+    expect(expanded.document.baseline?.comparison?.kind).toBe("scope-change");
+    expect(expanded.document.auditContext?.producerVersions).toEqual(prior.document.auditContext?.producerVersions);
+    expect(expanded.document.auditContext!.assessedScope).toHaveLength(prior.document.auditContext!.assessedScope.length + 1);
+    expect(expanded.document.baseline?.counts).toMatchObject({ new: 0, resolved: 0 });
+    const reversed = await capture("scope-reversed", "reversed", prior.path);
+    expect(JSON.stringify(reversed.document.auditContext?.producerVersions)).toBe(JSON.stringify(expanded.document.auditContext?.producerVersions));
+    expect(reversed.document.baseline?.comparison?.kind).toBe("scope-change");
+    for (const mode of ["new-version", "two-versions"] as const) {
+      const changed = await capture(`scope-${mode}`, mode, prior.path);
+      expect(changed.document.baseline?.comparison?.kind).toBe("tool-change");
+      expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "2"])]).toBe("2");
+      if (mode === "two-versions") expect(changed.document.auditContext?.producerVersions[JSON.stringify(["M7", "1"])]).toBe("1");
+    }
+    const partial = await capture("scope-partial", "partial", prior.path);
+    expect(partial.document.baseline?.comparison?.kind).toBe("scope-change");
+    expect(partial.document.auditContext?.scopeComplete).toBe(false);
+    const unknown = structuredClone(prior.document);
+    delete unknown.auditContext;
+    const unknownPath = join(root, "scope-unknown.json");
+    writeFileSync(unknownPath, JSON.stringify(unknown));
+    expect((await capture("scope-unknown-current", "same", unknownPath)).document.baseline?.comparison?.kind).toBe("incompatible");
+    const source = join(target, "sample.ts"), original = readFileSync(source, "utf8");
+    try {
+      writeFileSync(source, `${original}export const changed = true;\n`);
+      expect((await capture("scope-source-change", "same", prior.path)).document.baseline?.comparison?.kind).toBe("source-change");
+    } finally {
+      writeFileSync(source, original);
+    }
+  }, 60_000);
   it("refuses to re-sign unbound legacy passes as fresh retained execution before invoking scanners", async () => {
     const result = await run(["--retain-artifacts", join(root, "laundered"), "--artifacts-dir", join(root, "legacy")], {}, false);
     expect(result.code).toBe(2);
