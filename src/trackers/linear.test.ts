@@ -28,7 +28,7 @@ function harness(respond: (call: GraphQLCall) => unknown) {
 
 describe("LinearTracker", () => {
   it("creates an epic via issueCreate and sends the raw API key as the Authorization header", async () => {
-    const { tracker, calls } = harness(() => ({ issueCreate: { issue: { id: "iss-1", url: "https://linear.app/acme/issue/ENG-1" } } }));
+    const { tracker, calls } = harness(() => ({ issueCreate: { success: true, issue: { id: "iss-1", url: "https://linear.app/acme/issue/ENG-1" } } }));
     const ref = await tracker.createEpic({ title: "Epic A", description: "body" });
 
     expect(ref).toEqual({ id: "iss-1", url: "https://linear.app/acme/issue/ENG-1" });
@@ -38,7 +38,7 @@ describe("LinearTracker", () => {
   });
 
   it("creates a story as a sub-issue by setting parentId to the epic", async () => {
-    const { tracker, calls } = harness(() => ({ issueCreate: { issue: { id: "iss-2", url: "u" } } }));
+    const { tracker, calls } = harness(() => ({ issueCreate: { success: true, issue: { id: "iss-2", url: "https://linear.app/issue/fixture" } } }));
     const ref = await tracker.createStory({ title: "Story", description: "desc" }, "iss-1");
 
     expect(ref.id).toBe("iss-2");
@@ -48,7 +48,7 @@ describe("LinearTracker", () => {
   it("resolves label names to ids (creating missing ones) before setting labelIds", async () => {
     const { tracker, calls } = harness((call) => {
       if (call.query.includes("labels(first")) return { team: { labels: { nodes: [{ id: "lbl-sec", name: "security" }] } } };
-      if (call.query.includes("issueLabelCreate")) return { issueLabelCreate: { issueLabel: { id: "lbl-new" } } };
+      if (call.query.includes("issueLabelCreate")) return { issueLabelCreate: { success: true, issueLabel: { id: "lbl-new" } } };
       return { issueUpdate: { success: true } };
     });
 
@@ -67,7 +67,7 @@ describe("LinearTracker", () => {
   });
 
   it("posts the brief as a comment and returns the comment URL", async () => {
-    const { tracker, calls } = harness(() => ({ commentCreate: { comment: { url: "https://linear.app/acme/issue/ENG-1#comment-9" } } }));
+    const { tracker, calls } = harness(() => ({ commentCreate: { success: true, comment: { url: "https://linear.app/acme/issue/ENG-1#comment-9" } } }));
     const ref = await tracker.attachBrief("iss-1", "# Brief");
 
     expect(ref).toEqual({ url: "https://linear.app/acme/issue/ENG-1#comment-9" });
@@ -75,12 +75,12 @@ describe("LinearTracker", () => {
   });
 
   it("finds an existing item by a description-contains filter, returning null on no hit", async () => {
-    const { tracker, calls } = harness(() => ({ issues: { nodes: [{ id: "iss-9", url: "u9" }] } }));
+    const { tracker, calls } = harness(() => ({ issues: { pageInfo: { hasNextPage: false }, nodes: [{ id: "iss-9", url: "u9", description: "<!-- epic-builder:csv-export/epic -->", team: { id: "team-1" } }] } }));
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
     expect(ref).toEqual({ id: "iss-9", url: "u9" });
     expect(calls[0]?.variables.marker).toBe("<!-- epic-builder:csv-export/epic -->");
 
-    const { tracker: t2 } = harness(() => ({ issues: { nodes: [] } }));
+    const { tracker: t2 } = harness(() => ({ issues: { pageInfo: { hasNextPage: false }, nodes: [] } }));
     expect(await t2.findByMarker("x")).toBeNull();
   });
 
@@ -111,7 +111,7 @@ describe("LinearTracker", () => {
 
   // #883 fix-verification write-back
   it("adds a comment via commentCreate", async () => {
-    const { tracker, calls } = harness(() => ({ commentCreate: { comment: { url: "u" } } }));
+    const { tracker, calls } = harness(() => ({ commentCreate: { success: true, comment: { url: "https://linear.app/issue/fixture" } } }));
     await tracker.addComment("iss-1", "verified resolved");
     expect(calls[0]?.query).toContain("commentCreate");
     expect(calls[0]?.variables.input).toEqual({ issueId: "iss-1", body: "verified resolved" });

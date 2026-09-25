@@ -9,6 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "test:site-forms": "vitest run --config tools/site-forms.vitest.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
