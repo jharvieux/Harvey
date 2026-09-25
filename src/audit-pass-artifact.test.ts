@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildPassArtifact, findFreshPass, ingestPassArtifactReceipts, MAX_PASS_AGE_MS, mergePassArtifact, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
+import { buildPassArtifact, findFreshPass, ingestPassArtifactReceipts, MAX_PASS_AGE_MS, MAX_PASS_FUTURE_SKEW_MS, mergePassArtifact, type PassArtifact, passSlotCensus, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
@@ -85,6 +85,15 @@ describe("findFreshPass (#416 — derive ran only from a fresh, target-matching 
     expect(findFreshPass(ctx(artifact({ generatedAt: iso(MAX_PASS_AGE_MS + 1000) })), "M1").fresh).toBe(false);
   });
 
+  it("accepts bounded clock skew but rejects a far-future primary pass with a client-legible reason", () => {
+    const future = (ms: number): string => new Date(NOW + ms).toISOString();
+    expect(findFreshPass(ctx(artifact({ generatedAt: future(MAX_PASS_FUTURE_SKEW_MS) })), "M1").fresh).toBe(true);
+    const justOutside = findFreshPass(ctx(artifact({ generatedAt: future(MAX_PASS_FUTURE_SKEW_MS + 1) })), "M1");
+    expect(justOutside.fresh).toBe(false);
+    if (!justOutside.fresh) expect(justOutside.reason).toMatch(/future-dated.*5-minute clock-skew tolerance/);
+    expect(findFreshPass(ctx(artifact({ generatedAt: future(365 * DAY) })), "M1").fresh).toBe(false);
+  });
+
   it("REJECTS an artifact whose target does not match the audited directory", () => {
     const r = findFreshPass(ctx(artifact({ target: "/some-other-target" })), "M1");
     expect(r.fresh).toBe(false);
@@ -145,6 +154,24 @@ describe("ranFromPass", () => {
     const out = ranFromPass(slot, "mech", NOW);
     expect(out.findings?.map((f) => f.id)).toEqual(["SB-DRIFT-01"]);
     expect(out.detail).toMatch(/stale and therefore NOT collected: live pass/);
+  });
+
+  it("applies the same future-skew bound to the prior-pass census and names the rejection", () => {
+    const slot = artifact({
+      findings: [{ id: "CURRENT" } as never],
+      priorPasses: [
+        { module: "M1", target: "/target", pass: "within-skew", generatedAt: new Date(NOW + MAX_PASS_FUTURE_SKEW_MS).toISOString(), findings: [{ id: "WITHIN" } as never] },
+        { module: "M1", target: "/target", pass: "future", generatedAt: new Date(NOW + MAX_PASS_FUTURE_SKEW_MS + 1).toISOString(), findings: [{ id: "FUTURE" } as never] },
+        { module: "M1", target: "/target", pass: "stale", generatedAt: iso(MAX_PASS_AGE_MS + 1), findings: [{ id: "STALE" } as never] },
+      ],
+    });
+    const census = passSlotCensus(slot, NOW);
+    expect(census.fresh.map((pass) => pass.pass)).toEqual(["semantic", "within-skew"]);
+    expect(census.stale.map((pass) => pass.pass)).toEqual(["future", "stale"]);
+    const result = ranFromPass(slot, "mechanical", NOW);
+    expect(result.findings?.map((finding) => finding.id)).toEqual(["CURRENT", "WITHIN"]);
+    expect(result.detail).toMatch(/future-dated beyond 5-minute tolerance/);
+    expect(result.detail).toMatch(/stale beyond 30-day window/);
   });
 });
 

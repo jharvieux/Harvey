@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { GUARD_SET } from "./guard-mutation-census.js";
+import { validateMutationRunnerReport, type MutationRunnerValidity, type StrykerReport } from "./mutation-scan.js";
 
 type Location = { start: { line: number; column: number }; end: { line: number; column: number } };
 type Status = "Killed" | "Timeout" | "Survived" | "NoCoverage" | "CompileError" | "RuntimeError" | "Ignored" | "Pending";
 // attempted counts reported mutants; excluded is a guard indicator. A failed exclusion probe's
 // generated population is recorded separately: inventing terminal statuses for it would fake data.
 type Population = { attempted: number; killed: number; survived: number; noCoverage: number; unscored: number; excluded: number };
-type Mutant = { id: string; mutator: string; location: Location; original: string; replacement: string; status: Status };
+type Mutant = { id: string; mutator: string; location: Location; original: string; replacement: string; status: Status; testsCompleted?: number; statusReason?: string };
 type ExclusionCheck = {
   file: string;
   outcome: "blocked" | "measurable" | "uncheckable";
@@ -50,6 +51,7 @@ export interface NormalizedGuardCensus {
   identityVersion: "file-location-mutation-v1";
   receipt: GuardMutationReceipt;
   guards: Guard[];
+  runnerValidity?: MutationRunnerValidity;
 }
 
 export interface GuardMutationReview {
@@ -217,7 +219,9 @@ function readMutant(value: unknown, file: string, source?: string): Mutant {
   const fields = { mutator, location: loc, original, replacement: x.replacement };
   const id = mutantId(file, fields);
   if (source === undefined) demand(x.id === id, `mutant identity mismatch in ${file}`);
-  return { id, ...fields, status: x.status as Status };
+  const testsCompleted = x.testsCompleted === undefined ? undefined : integer(x.testsCompleted, "mutant testsCompleted");
+  const statusReason = x.statusReason === undefined ? undefined : text(x.statusReason, "mutant statusReason");
+  return { id, ...fields, status: x.status as Status, ...(testsCompleted === undefined ? {} : { testsCompleted }), ...(statusReason === undefined ? {} : { statusReason }) };
 }
 
 function population(mutants: Mutant[], excluded = false): Population {
@@ -240,7 +244,8 @@ function measuredState(p: Population): Guard["state"] {
 export function normalizeGuardMutationCensus(reportValue: unknown, receiptValue: unknown, reportSha256: string): NormalizedGuardCensus {
   const receipt = parseGuardMutationReceipt(receiptValue);
   demand(receipt.reportSha256 === reportSha256, "raw report digest does not match its capture receipt");
-  const report = record(reportValue, "Stryker report");
+  const validated = validateMutationRunnerReport(reportValue as StrykerReport);
+  const report = record(validated.report, "Stryker report");
   demand(report.schemaVersion === "1.0", "unsupported Stryker report schemaVersion");
   const framework = record(report.framework, "Stryker framework identity");
   demand(framework.name === "StrykerJS" && framework.version === receipt.toolchain.packages["@stryker-mutator/core"]!.version, "Stryker report and capture toolchain disagree");
@@ -261,7 +266,7 @@ export function normalizeGuardMutationCensus(reportValue: unknown, receiptValue:
     const counts = population(mutants);
     return { file, sourceSha256, state: measuredState(counts), population: counts, mutants };
   });
-  return { schemaVersion: 1, identityVersion: "file-location-mutation-v1", receipt, guards };
+  return { schemaVersion: 1, identityVersion: "file-location-mutation-v1", receipt, guards, runnerValidity: validated.validity };
 }
 
 function parseCensus(value: unknown, forUpdate: boolean): NormalizedGuardCensus {
@@ -290,7 +295,8 @@ function parseCensus(value: unknown, forUpdate: boolean): NormalizedGuardCensus 
     return { file, sourceSha256, state, population: counts, mutants, ...(exclusion ? { exclusion } : {}) };
   }), (g) => g.file, "guard").sort((a, b) => a.file.localeCompare(b.file));
   demand(guards.map((g) => g.file).join() === [...expectedGuards].sort().join(), "baseline must identify every declared guard exactly");
-  return { schemaVersion: 1, identityVersion: "file-location-mutation-v1", receipt, guards };
+  const runnerValidity = x.runnerValidity === undefined ? undefined : x.runnerValidity as MutationRunnerValidity;
+  return { schemaVersion: 1, identityVersion: "file-location-mutation-v1", receipt, guards, ...(runnerValidity ? { runnerValidity } : {}) };
 }
 
 function kind(mutant: Mutant): string | undefined {

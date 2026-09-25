@@ -30,7 +30,7 @@ export function bundleAuditEvidenceRecipe(recipePath: string, out: string): stri
     if (!receipt) throw new Error(`Original bound receipt not found: ${selection.receiptId}`);
     return {
       scope: receipt.scope, generatedAt: receipt.generatedAt, producer: receipt.producer, result: receipt.result,
-      rawArtifacts: receipt.rawArtifacts.map((raw) => join(source, raw.path)),
+      rawArtifacts: receipt.rawArtifacts.map((raw) => ({ path: join(source, raw.path), sourcePath: raw.sourcePath, sha256: raw.sha256 })),
       ...(receipt.legacyReason ? { legacyReason: receipt.legacyReason } : {}),
       ...(receipt.historicalOrigin ? { historicalOrigin: receipt.historicalOrigin } : {}),
       ...(receipt.supersedes ? { supersedes: receipt.supersedes } : {}),
