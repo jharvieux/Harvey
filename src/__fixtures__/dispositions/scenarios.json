@@ -1,0 +1,371 @@
+{
+  "meta": {
+    "client": "Disposition acceptance fixture",
+    "subtitle": "Synthetic evidence populations",
+    "date": "2026-09-25",
+    "commit": "current-fixture-revision",
+    "auditor": "Harvey fixture review",
+    "confidential": false,
+    "overallHealth": 6.8,
+    "tenantIsolation": "See confirmed findings and review queue",
+    "authModel": "Fixture",
+    "headline": "Independent review and scanner inventory are accounted separately.",
+    "scope": "Synthetic local fixture; no client system accessed.",
+    "methodology": "Source review and local synthetic runtime controls",
+    "outOfScope": "Live client infrastructure"
+  },
+  "templates": {
+    "confirmed": {
+      "id": "seed",
+      "title": "Independently confirmed M1 defect",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Security",
+      "taxonomy": "M1 \u2014 Multi-tenant security",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "Local synthetic producer evidence",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Remediate the reviewed behavior.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5,
+      "assessment": {
+        "disposition": "confirmed",
+        "evidenceKind": "runtime",
+        "reviewStatus": "reviewed",
+        "sourceScope": "current",
+        "reason": "Synthetic independently reviewed evidence for this disposition.",
+        "review": {
+          "reviewer": "fixture-independent-reviewer",
+          "evidence": [
+            "fixture://dispositions/reproduction"
+          ]
+        }
+      }
+    },
+    "candidate": {
+      "id": "seed",
+      "title": "Raw scanner candidate",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Security",
+      "taxonomy": "M1 \u2014 Multi-tenant security",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "Scanner confidence is Confirmed but no independent review exists.",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Remediate the reviewed behavior.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "dependency": {
+      "id": "seed",
+      "title": "Transitive advisory requires reachability review",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Security",
+      "taxonomy": "M1 \u2014 Dependency advisory",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "Matching advisory; runtime reachability has not been reproduced.",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Remediate the reviewed behavior.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "inventory": {
+      "id": "seed",
+      "title": "Classified sensitive table",
+      "severity": "Critical",
+      "confidence": "Confirmed",
+      "category": "Data classification",
+      "taxonomy": "M10 \u2014 Data classification (PII/PHI/PCI)",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "PII/PHI/PCI sensitivity inventory. No exploit is established.",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Maintain the classification inventory.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "historical": {
+      "id": "seed",
+      "title": "Historical surviving mutant",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Testing",
+      "taxonomy": "M8 \u2014 Test quality",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "Historical 27.8% mutation report, replaced by the current measured execution.",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Remediate the reviewed behavior.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5,
+      "assessment": {
+        "disposition": "superseded",
+        "evidenceKind": "historical",
+        "reviewStatus": "reviewed",
+        "sourceScope": "historical",
+        "reason": "Synthetic independently reviewed evidence for this disposition.",
+        "review": {
+          "reviewer": "fixture-independent-reviewer",
+          "evidence": [
+            "fixture://dispositions/reproduction"
+          ]
+        },
+        "supersededBy": {
+          "artifact": "fixture://M8/current-mutation-report",
+          "reason": "A complete current execution replaces historical test evidence."
+        }
+      }
+    },
+    "false-positive": {
+      "id": "seed",
+      "title": "Independently rejected candidate",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Security",
+      "taxonomy": "M1 \u2014 Multi-tenant security",
+      "location": "src/fixture.ts",
+      "status": "Open",
+      "evidence": "Independent reproduction refutes the scanner candidate.",
+      "impact": "Potential cross-tenant action requires independent review.",
+      "fix": "Remediate the reviewed behavior.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5,
+      "assessment": {
+        "disposition": "false-positive",
+        "evidenceKind": "source-review",
+        "reviewStatus": "reviewed",
+        "sourceScope": "current",
+        "reason": "Synthetic independently reviewed evidence for this disposition.",
+        "review": {
+          "reviewer": "fixture-independent-reviewer",
+          "evidence": [
+            "fixture://dispositions/reproduction"
+          ]
+        }
+      }
+    },
+    "M4": {
+      "id": "seed",
+      "title": "Current M4 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Maintainability",
+      "taxonomy": "M4 \u2014 Current measured health finding",
+      "location": "src/module4.ts",
+      "status": "Open",
+      "evidence": "Current M4 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M4 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "M5": {
+      "id": "seed",
+      "title": "Current M5 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Maintainability",
+      "taxonomy": "M5 \u2014 Current measured health finding",
+      "location": "src/module5.ts",
+      "status": "Open",
+      "evidence": "Current M5 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M5 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "M6": {
+      "id": "seed",
+      "title": "Current M6 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Maintainability",
+      "taxonomy": "M6 \u2014 Current measured health finding",
+      "location": "src/module6.ts",
+      "status": "Open",
+      "evidence": "Current M6 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M6 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "M7": {
+      "id": "seed",
+      "title": "Current M7 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Maintainability",
+      "taxonomy": "M7 \u2014 Current measured health finding",
+      "location": "src/module7.ts",
+      "status": "Open",
+      "evidence": "Current M7 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M7 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "M8": {
+      "id": "seed",
+      "title": "Current M8 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Testing",
+      "taxonomy": "M8 \u2014 Current measured health finding",
+      "location": "src/module8.ts",
+      "status": "Open",
+      "evidence": "Current M8 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M8 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    },
+    "M9": {
+      "id": "seed",
+      "title": "Current M9 health work",
+      "severity": "High",
+      "confidence": "Confirmed",
+      "category": "Maintainability",
+      "taxonomy": "M9 \u2014 Current measured health finding",
+      "location": "src/module9.ts",
+      "status": "Open",
+      "evidence": "Current M9 evidence remains actionable at original severity and BFTB.",
+      "impact": "Current codebase health requires remediation.",
+      "fix": "Complete current M9 remediation.",
+      "value": 5,
+      "ease": 5,
+      "safety": 5
+    }
+  },
+  "scenarios": {
+    "ATC": [
+      {
+        "template": "confirmed",
+        "count": 8
+      },
+      {
+        "template": "candidate",
+        "count": 1312
+      },
+      {
+        "template": "inventory",
+        "count": 90
+      },
+      {
+        "template": "historical",
+        "count": 83
+      },
+      {
+        "template": "false-positive",
+        "count": 3
+      },
+      {
+        "template": "M4",
+        "count": 1
+      },
+      {
+        "template": "M5",
+        "count": 1
+      },
+      {
+        "template": "M6",
+        "count": 1
+      },
+      {
+        "template": "M7",
+        "count": 1
+      },
+      {
+        "template": "M8",
+        "count": 1
+      },
+      {
+        "template": "M9",
+        "count": 1
+      }
+    ],
+    "AoP": [
+      {
+        "template": "confirmed",
+        "count": 1
+      },
+      {
+        "template": "candidate",
+        "count": 687
+      },
+      {
+        "template": "dependency",
+        "count": 21
+      },
+      {
+        "template": "inventory",
+        "count": 1
+      },
+      {
+        "template": "false-positive",
+        "count": 3
+      },
+      {
+        "template": "M4",
+        "count": 1
+      },
+      {
+        "template": "M5",
+        "count": 1
+      },
+      {
+        "template": "M6",
+        "count": 1
+      },
+      {
+        "template": "M7",
+        "count": 1
+      },
+      {
+        "template": "M8",
+        "count": 1
+      },
+      {
+        "template": "M9",
+        "count": 1
+      }
+    ]
+  },
+  "testQuality": {
+    "mutationScore": 39.7,
+    "mutationScoreBasedOnCoveredCode": 58.6,
+    "coveredScope": [
+      "src/current-module.ts"
+    ],
+    "wholeRepo": false,
+    "scopeNote": "Current supported fixture scope only. Historical 27.8% evidence is superseded.",
+    "rows": [
+      {
+        "module": "Current scope",
+        "lineCoverage": 78,
+        "mutationScore": 39.7,
+        "survivingCount": 12,
+        "hotspotSurvivingCount": 3
+      }
+    ],
+    "lineCoverage": {
+      "status": "ran"
+    },
+    "survivors": [],
+    "survivorTotal": 12
+  }
+}

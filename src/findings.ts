@@ -2,12 +2,12 @@
 // this shape; validate an engagement's findings.json here before rendering.
 
 import { completenessStatement, deriveCompleteness, headlineClaimsCompletion } from "./audit-completeness.js";
+import { assessmentErrors, baselineIntegrityErrors, contentIdentity, populationSummary } from "../report-template/dispositions.mjs";
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
-// Trust tier for mechanically-generated findings: "high" = ~100%-precision source (verified
-// secret, decoded service-role JWT, exact CVE match, advisor lint, HIGH-confidence ERROR
-// Semgrep rule) — safe to count without triage. "review" = heuristic/grep-sourced, needs triage.
+// Mechanical precision is separate from independent disposition review. Even a high-precision
+// secret/advisory/rule result needs attributable review before it becomes a confirmed defect.
 export const PRECISION_TIERS = ["high", "review"] as const;
 
 // Per-module coverage ledger carried into the deliverable (#349/#312). Derived by run-audit from
@@ -28,7 +28,35 @@ export const SUB_STATUSES = ["sub-step-blocked"] as const;
 // Engagement baseline diff (#457). A finding's standing relative to the prior audit of the same
 // client: "persistent" (matched by identity in both), "new" (only this run), "resolved" (only the
 // prior run). Set by src/audit-diff.ts, never hand-typed. Absent ⇒ no baseline was supplied.
-export const BASELINE_STATUSES = ["new", "persistent", "resolved"] as const;
+export const BASELINE_STATUSES = ["new", "persistent", "resolved", "unresolved", "checkpoint", "tool-change", "scope-change", "incompatible"] as const;
+
+export type FindingDisposition = "confirmed" | "actionable" | "pending-review" | "false-positive" | "inventory" | "superseded" | "not-applicable";
+export interface FindingAssessment {
+  disposition: FindingDisposition;
+  evidenceKind: "scanner" | "source-review" | "runtime" | "inventory" | "historical" | "scope";
+  reviewStatus: "unreviewed" | "reviewed";
+  sourceScope: "current" | "historical" | "unknown";
+  reason: string;
+  review?: { reviewer: string; evidence: string[] };
+  supersededBy?: { artifact: string; reason: string };
+}
+
+export interface AuditContext {
+  engagementId: string;
+  kind: "client-audit" | "same-run-checkpoint";
+  target: { id: string; revision: string };
+  producerVersions: Record<string, string>;
+  schemaVersion: string;
+  assessedScope: string[];
+  scopeComplete: boolean;
+}
+
+export interface IdentityMigration {
+  priorContentKey: string;
+  currentContentKey: string;
+  reason: string;
+  reviewedBy: string;
+}
 
 // #874: how reachable a known-vulnerable dependency is IN THIS CODEBASE, at import granularity.
 // Orders the CVE list and justifies each row; deliberately NOT an exploitability claim (see
@@ -207,6 +235,10 @@ export function redactDependencyRange(range: string): string {
 }
 
 export interface Finding {
+  module?: string;
+  assessment?: FindingAssessment;
+  origin?: { contentKey: string; occurrenceKey: string; producerId: string };
+  baselineReason?: string;
   id: string;
   title: string;
   severity: Severity;
@@ -292,9 +324,20 @@ export interface BaselineSummary {
   priorLabel?: string;
   resolved: Finding[];
   counts: { resolved: number; persistent: number; new: number };
+  unresolved?: Finding[];
+  comparison?: {
+    kind: "source-change" | "same-source" | "same-run-checkpoint" | "tool-change" | "scope-change" | "incompatible";
+    limitations: string[];
+    prior?: AuditContext;
+    current?: AuditContext;
+    migrations: IdentityMigration[];
+    denominators: { prior: number; current: number; matched: number; comparablePrior: number; comparableCurrent: number; unresolvedPrior: number; unresolvedCurrent: number };
+  };
 }
 
 export interface ReportMeta {
+  auditContext?: AuditContext;
+  identityMigrations?: IdentityMigration[];
   client: string;
   subtitle: string;
   date: string;
@@ -365,6 +408,9 @@ export interface LegalTerms {
 export interface FindingsDocument {
   meta: ReportMeta;
   findings: Finding[];
+  auditContext?: AuditContext;
+  identityMigrations?: IdentityMigration[];
+  populations?: { total: number; counts: Record<FindingDisposition, number> };
   // The derived per-module coverage ledger (#349). Optional for back-compat with hand-authored
   // engagement docs; when present the renderer states coverage from it rather than from the
   // free-text meta.outOfScope.
@@ -470,7 +516,7 @@ function validateCoverage(coverage: unknown, errors: string[]): void {
   });
 }
 
-function validateBaseline(baseline: unknown, errors: string[]): void {
+function validateBaseline(baseline: unknown, errors: string[], findings: unknown): void {
   if (!isRecord(baseline)) {
     errors.push("baseline: expected an object");
     return;
@@ -482,11 +528,32 @@ function validateBaseline(baseline: unknown, errors: string[]): void {
     return;
   }
   for (const k of ["resolved", "persistent", "new"] as const) {
-    if (typeof c[k] !== "number" || !Number.isInteger(c[k])) errors.push(`baseline.counts.${k}: expected integer`);
+    if (typeof c[k] !== "number" || !Number.isInteger(c[k]) || c[k] < 0) errors.push(`baseline.counts.${k}: expected nonnegative integer`);
   }
   if (baseline.priorLabel !== undefined && typeof baseline.priorLabel !== "string") {
     errors.push("baseline.priorLabel: expected string");
   }
+  if (baseline.comparison !== undefined) {
+    const comparison = baseline.comparison;
+    if (!isRecord(comparison) || !["source-change", "same-source", "same-run-checkpoint", "tool-change", "scope-change", "incompatible"].includes(String(comparison.kind))) { errors.push("baseline.comparison: invalid comparison kind"); return; }
+    if (!Array.isArray(comparison.limitations) || !comparison.limitations.length || comparison.limitations.some((x) => typeof x !== "string" || !x.trim())) errors.push("baseline.comparison.limitations: required");
+    for (const key of ["prior", "current"]) if (comparison[key] !== undefined) validateAuditContext(comparison[key], `baseline.comparison.${key}`, errors);
+    const d = comparison.denominators;
+    if (!isRecord(d) || ["prior", "current", "matched", "comparablePrior", "comparableCurrent", "unresolvedPrior", "unresolvedCurrent"].some((k) => typeof d[k] !== "number" || !Number.isInteger(d[k]) || d[k] < 0)) errors.push("baseline.comparison.denominators: expected nonnegative population counts");
+    else if (!Array.isArray(findings) || !Array.isArray(baseline.resolved) || !Array.isArray(baseline.unresolved) || d.current !== findings.length || d.prior !== Number(d.matched) + baseline.resolved.length + baseline.unresolved.length || d.current !== Number(d.matched) + Number(d.unresolvedCurrent) + Number(c.new) || c.resolved !== baseline.resolved.length || c.persistent !== d.matched || d.unresolvedPrior !== baseline.unresolved.length || c.new !== findings.filter((f) => isRecord(f) && f.baselineStatus === "new").length) errors.push("baseline.comparison: populations do not reconcile");
+    if (comparison.kind !== "source-change" && (c.new !== 0 || c.resolved !== 0)) errors.push("baseline.comparison: uncomparable evidence cannot claim new/resolved defects");
+  }
+}
+
+function validateAuditContext(value: unknown, at: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${at}: expected an object`); return; }
+  const nonempty = (x: unknown): boolean => typeof x === "string" && x.trim().length > 0;
+  for (const key of ["engagementId", "schemaVersion"]) if (!nonempty(value[key])) errors.push(`${at}.${key}: required`);
+  if (!["client-audit", "same-run-checkpoint"].includes(String(value.kind))) errors.push(`${at}.kind: invalid engagement kind`);
+  if (!isRecord(value.target) || !nonempty(value.target.id) || !nonempty(value.target.revision)) errors.push(`${at}.target: requires identity and revision`);
+  if (!isRecord(value.producerVersions) || !Object.keys(value.producerVersions).length || Object.values(value.producerVersions).some((x) => !nonempty(x))) errors.push(`${at}.producerVersions: requires versioned producers`);
+  if (!Array.isArray(value.assessedScope) || !value.assessedScope.length || value.assessedScope.some((x) => !nonempty(x))) errors.push(`${at}.assessedScope: requires explicit scope units`);
+  if (typeof value.scopeComplete !== "boolean") errors.push(`${at}.scopeComplete: expected boolean`);
 }
 
 // #1045: a malformed testQuality would render a table of "undefined%" — a mutation score is a
@@ -548,7 +615,9 @@ export function validateFindings(data: unknown): ValidationResult {
   }
 
   if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
-  if (data.baseline !== undefined) validateBaseline(data.baseline, errors);
+  if (data.auditContext !== undefined) validateAuditContext(data.auditContext, "auditContext", errors);
+  if (isRecord(data.meta) && data.meta.auditContext !== undefined) validateAuditContext(data.meta.auditContext, "meta.auditContext", errors);
+  if (data.baseline !== undefined) validateBaseline(data.baseline, errors, data.findings);
   if (data.testQuality !== undefined) validateTestQuality(data.testQuality, errors);
   if (data.legalTerms !== undefined && (!isRecord(data.legalTerms) || typeof data.legalTerms.text !== "string" || data.legalTerms.text.trim() === "")) {
     errors.push("legalTerms.text: expected non-empty string — an empty terms block would render as approved-but-blank");
@@ -580,6 +649,11 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     for (const k of FINDING_STRING_FIELDS) {
       if (typeof f[k] !== "string") errors.push(`${at}.${k}: expected string`);
+    }
+    if (f.assessment !== undefined) for (const error of assessmentErrors(f.assessment)) errors.push(`${at}.assessment: ${error}`);
+    if (f.module !== undefined && !/^M(?:10|[1-9])$/.test(String(f.module))) errors.push(`${at}.module: expected M1–M10`);
+    if (f.origin !== undefined) {
+      if (!isRecord(f.origin) || typeof f.origin.producerId !== "string" || !/^[a-f0-9]{64}:[1-9]\d*$/.test(String(f.origin.occurrenceKey)) || f.origin.contentKey !== contentIdentity(f as unknown as Finding) || !String(f.origin.occurrenceKey).startsWith(`${String(f.origin.contentKey)}:`)) errors.push(`${at}.origin: requires content-bound occurrence identity and producer id`);
     }
     if (!SEVERITIES.includes(f.severity as Severity)) {
       errors.push(`${at}.severity: "${String(f.severity)}" not one of ${SEVERITIES.join("/")}`);
@@ -667,5 +741,11 @@ export function validateFindings(data: unknown): ValidationResult {
     }
   });
 
+  if (data.populations !== undefined && !errors.length) {
+    const expected = populationSummary(data.findings as Finding[]);
+    const supplied = data.populations;
+    if (!isRecord(supplied) || supplied.total !== expected.total || !isRecord(supplied.counts) || Object.entries(expected.counts).some(([key, count]) => (supplied.counts as Record<string, unknown>)[key] !== count)) errors.push("populations: must reconcile every finding by reviewed disposition");
+  }
+  if (data.baseline !== undefined && !errors.length) errors.push(...baselineIntegrityErrors(data.baseline, data.findings as Finding[]).map((message) => `baseline: ${message}`));
   return { ok: errors.length === 0, errors };
 }

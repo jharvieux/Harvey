@@ -1,0 +1,10 @@
+import type { Finding, FindingAssessment, FindingDisposition } from "../src/findings.js";
+export declare const DISPOSITIONS: readonly FindingDisposition[];
+export declare const DISPOSITION_LABELS: Record<FindingDisposition, string>;
+export declare function findingModule(f: Pick<Finding, "taxonomy" | "category"> & { module?: string }): string | undefined;
+export declare function assessmentErrors(a: unknown): string[];
+export declare function assessmentFor(f: Finding): FindingAssessment;
+export declare function contentIdentity(f: Finding): string;
+export declare function prepareFindings(findings: Finding[]): (Finding & { assessment: FindingAssessment })[];
+export declare function populationSummary(findings: Finding[]): { total: number; counts: Record<FindingDisposition, number> };
+export declare function baselineIntegrityErrors(baseline: unknown, findings: Finding[]): string[];

@@ -1,55 +1,18 @@
-// Engagement baseline diff (#457) — resolved-vs-persistent-vs-new across two audits of the SAME
-// client. A repeat client re-audited next quarter gets a fresh findings.json; this classifies each
-// finding against a prior engagement's findings.json so the deliverable can lead with "you fixed 6
-// of last time's 9, and here are 3 new ones."
-//
-// ── The finding-identity model (the crux) ────────────────────────────────────────────────────────
-// "The same finding" across two audits is NOT the positional `id` (F-01, F-02…) — those are assigned
-// per-run in severity/BFTB order and reshuffle every audit, so they carry no cross-audit meaning.
-// Identity is instead a STABLE KEY derived from two fields that describe WHAT and WHERE, not HOW the
-// run happened to render it:
-//
-//   identity = normalize(taxonomy || category) :: normalizeLocation(location)
-//
-//   • taxonomy is the detector/rule class ("auth_rls_initplan", "Missing index", "Dead code") — the
-//     closest thing Harvey has to a rule id, and stable across runs. category is the fallback when a
-//     hand-authored finding left taxonomy blank.
-//   • normalizeLocation tolerates the churn that does NOT change identity: raw line/column numbers
-//     (":42", ":42:10", "(line 42)", GitHub "#L42"), case, and whitespace. A finding that simply
-//     MOVED because unrelated code shifted above it keeps the same key → classified `persistent`,
-//     which is the acceptance-test invariant.
-//
-// Deliberately NOT in the key: raw line numbers, the title (counts like "124 unindexed FKs" drift
-// run-to-run), evidence/snippet whitespace, severity, BFTB — all volatile. Keying on them would
-// churn identity on cosmetic edits and inflate the resolved/new counts, defeating the feature.
-//
-// Trade-off / known limits (documented, not hidden):
-//   • Coarse locations ("main DB (multiple tables)", "repo-wide") collapse to one key per taxonomy.
-//     Two distinct repo-wide findings of the same taxonomy would collide; acceptable because Harvey
-//     emits at most one such rollup per taxonomy per run today.
-//   • A file RENAME, or a taxonomy re-label of the same underlying issue, breaks the exact key. Such
-//     a finding is NOT silently merged. It surfaces as `new` with a low-confidence-match pointer to
-//     the plausible baseline finding (same taxonomy + same location basename), AND the baseline
-//     finding still shows as `resolved` — so the pair points at each other for a human to confirm.
-//     That is the required fail-loud behaviour: an uncertain match is never quietly treated as the
-//     same finding.
-//
-// ── How a re-audit consumes a baseline ────────────────────────────────────────────────────────────
-// `run-audit <t> --findings-out cur.json --baseline prior.json` reads the prior engagement's
-// findings.json, runs diffAgainstBaseline over (prior.findings, current.findings), tags every current
-// finding with `baselineStatus` (+ `lowConfidenceMatch` where applicable), and attaches a `baseline`
-// summary (resolved list + counts) to the deliverable. No --baseline ⇒ nothing added, current
-// behaviour unchanged.
-
+// Compare evidence only after recording source, producer and assessed-scope compatibility.
 import { lstatSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
-import type { BaselineSummary, Finding, FindingsDocument } from "./findings.js";
+import { assessmentFor, contentIdentity } from "../report-template/dispositions.mjs";
+import type { AuditContext, BaselineSummary, Finding, FindingsDocument, IdentityMigration } from "./findings.js";
 
 export interface FindingIdentityOptions {
   /** Authoritative root that file locations are relative to. */
   root?: string;
   /** Override the root filesystem's case policy. Auto-detected when possible. */
   caseSensitive?: boolean;
+  priorContext?: AuditContext;
+  currentContext?: AuditContext;
+  migrations?: IdentityMigration[];
 }
 
 function withoutLinePosition(location: string): string {
@@ -180,97 +143,97 @@ function normalizeTaxonomy(f: Finding): string {
   return t.replace(/\s+/g, " ");
 }
 
-// The cross-audit identity key. Same key ⇒ "the same finding". See the header for the model and its
-// trade-offs.
+// A candidate-location key; semantic evidence and provenance are checked before matching.
 export function findingIdentity(f: Finding, options: FindingIdentityOptions = {}): string {
   return `${normalizeTaxonomy(f)}::${normalizeLocation(f.location, options)}`;
 }
 
-// The location "stem" used ONLY for low-confidence matching: taxonomy is equal but the exact key is
-// not, and we ask "is this plausibly the same place?" — drop any "(...)" descriptor and reduce a path
-// to its basename, so a param rename or a moved file still points a human at the likely prior finding
-// without ever auto-merging it.
-function locationStem(location: string, options: FindingIdentityOptions): string {
-  const base = normalizeLocation(location, options).replace(/\s*\(.*$/, "").trim();
-  const firstToken = base.split(/\s+/)[0] ?? base;
-  const slug = firstToken.split("/").pop() ?? firstToken;
-  return slug;
-}
-
 interface BaselineDiff {
-  // Current findings, each tagged with baselineStatus ("persistent" | "new") and, where a plausible
-  // but unconfirmed prior match exists, lowConfidenceMatch = that baseline finding's id.
   findings: Finding[];
-  // Baseline findings absent from the current run, tagged baselineStatus "resolved".
   resolved: Finding[];
+  unresolved: Finding[];
   counts: { resolved: number; persistent: number; new: number };
+  comparison: NonNullable<BaselineSummary["comparison"]>;
 }
 
-export function diffAgainstBaseline(
-  baseline: Finding[],
-  current: Finding[],
-  options: FindingIdentityOptions = {},
-): BaselineDiff {
-  const baselineByKey = new Map<string, Finding[]>();
-  for (const b of baseline) {
-    const key = findingIdentity(b, options);
-    const bucket = baselineByKey.get(key);
-    if (bucket) bucket.push(b);
-    else baselineByKey.set(key, [b]);
-  }
+function contextComplete(c: AuditContext | undefined): c is AuditContext {
+  return !!c && typeof c.engagementId === "string" && !!c.engagementId.trim()
+    && ["client-audit", "same-run-checkpoint"].includes(c.kind)
+    && !!c.target?.id && !!c.target.revision && !!c.schemaVersion
+    && !!c.producerVersions && Object.keys(c.producerVersions).length > 0
+    && Object.values(c.producerVersions).every((v) => typeof v === "string" && !!v.trim())
+    && Array.isArray(c.assessedScope) && c.assessedScope.length > 0
+    && c.assessedScope.every((v) => typeof v === "string" && !!v.trim()) && typeof c.scopeComplete === "boolean";
+}
 
-  const matched = new Set<Finding>();
-  const tagged: Finding[] = [];
-  let persistent = 0;
+function comparisonContext(options: FindingIdentityOptions): Pick<BaselineDiff["comparison"], "kind" | "limitations"> {
+  const a = options.priorContext;
+  const b = options.currentContext;
+  if (!contextComplete(a) || !contextComplete(b)) return { kind: "incompatible", limitations: ["Missing engagement, target revision, producer/schema versions or assessed-scope provenance. Unmatched identities remain unresolved; absence is not remediation."] };
+  if (a.target.id !== b.target.id) return { kind: "incompatible", limitations: ["Baseline and current evidence name different targets."] };
+  if (a.engagementId === b.engagementId || a.kind === "same-run-checkpoint" || b.kind === "same-run-checkpoint") return { kind: "same-run-checkpoint", limitations: ["This comparison includes a checkpoint from the same engagement, not a prior client audit. It measures capture changes, not client remediation."] };
+  const producerKey = (c: AuditContext): string => JSON.stringify(Object.entries(c.producerVersions).sort(([a], [b]) => a.localeCompare(b)));
+  if (a.schemaVersion !== b.schemaVersion || producerKey(a) !== producerKey(b)) return { kind: "tool-change", limitations: ["Producer, rule or schema versions changed. New and absent observations are not attributed to source regressions or remediation."] };
+  if (!a.scopeComplete || !b.scopeComplete || JSON.stringify([...new Set(a.assessedScope)].sort()) !== JSON.stringify([...new Set(b.assessedScope)].sort())) return { kind: "scope-change", limitations: ["Assessed scope changed or is incomplete. Expanded and missing observations do not establish new or resolved defects."] };
+  if (a.target.revision === b.target.revision) return { kind: "same-source", limitations: ["The target revision is unchanged. Unmatched observations require identity or capture review; no source regression/remediation is claimed."] };
+  return { kind: "source-change", limitations: ["Counts cover only reviewed defects and current health findings within identical, complete assessed scope and producer/schema versions. Ambiguous identities and pending reviews remain unresolved."] };
+}
 
-  for (const c of current) {
-    const key = findingIdentity(c, options);
-    const exact = baselineByKey.get(key)?.find((b) => !matched.has(b));
-    if (exact) {
-      matched.add(exact);
-      tagged.push({ ...c, baselineStatus: "persistent" });
-      persistent++;
-      continue;
+export function semanticFindingIdentity(f: Finding, options: FindingIdentityOptions = {}): string {
+  const normalized = (s: string): string => s.replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(JSON.stringify([findingIdentity(f, options), f.category, f.module, f.dependency, f.cwe, normalized(f.title), normalized(f.evidence), normalized(f.impact), normalized(f.fix)])).digest("hex");
+}
+
+export function diffAgainstBaseline(baseline: Finding[], current: Finding[], options: FindingIdentityOptions = {}): BaselineDiff {
+  const compatibility = comparisonContext(options);
+  const matched = new Set<number>();
+  const ambiguous = new Set<number>();
+  const migrationRows = options.migrations ?? [];
+  const keyCount = (rows: Finding[], key: string): number => rows.filter((f) => contentIdentity(f) === key).length;
+  const validMigrations = migrationRows.filter((m) => m.reason?.trim() && m.reviewedBy?.trim()
+    && keyCount(baseline, m.priorContentKey) === 1 && keyCount(current, m.currentContentKey) === 1
+    && migrationRows.filter((x) => x.priorContentKey === m.priorContentKey || x.currentContentKey === m.currentContentKey).length === 1);
+  const eligible = (f: Finding): boolean => ["confirmed", "actionable"].includes(assessmentFor(f).disposition);
+  const canClaim = compatibility.kind === "source-change";
+  let matchCount = 0;
+  const findings = current.map((f): Finding => {
+    const key = semanticFindingIdentity(f, options);
+    const migration = validMigrations.find((m) => m.currentContentKey === contentIdentity(f));
+    const specificLocation = looksLikeFileLocation(withoutLinePosition(f.location));
+    const index = baseline.findIndex((b, i) => !matched.has(i) && ((specificLocation && semanticFindingIdentity(b, options) === key) || (migration && contentIdentity(b) === migration.priorContentKey)));
+    if (index >= 0 && options.priorContext?.target.id === options.currentContext?.target.id) {
+      matched.add(index); matchCount++;
+      return { ...f, baselineStatus: compatibility.kind === "same-run-checkpoint" ? "checkpoint" : "persistent", baselineReason: migration ? `Reviewed identity migration: ${migration.reason} (${migration.reviewedBy}).` : "Matching semantic evidence and normalized location; producer display IDs are not identity." };
     }
-    // No confident (exact-key) match. Look for a plausible-but-uncertain prior: same taxonomy, same
-    // location basename. We do NOT consume it — it still surfaces as `resolved` — so the uncertain
-    // pair points at each other for a human to reconcile (fail loud, never silently merged).
-    const cTaxonomy = normalizeTaxonomy(c);
-    const cStem = locationStem(c.location, options);
-    const candidate = baseline.find(
-      (b) => !matched.has(b) && normalizeTaxonomy(b) === cTaxonomy && locationStem(b.location, options) === cStem,
-    );
-    tagged.push(candidate ? { ...c, baselineStatus: "new", lowConfidenceMatch: candidate.id } : { ...c, baselineStatus: "new" });
-  }
-
-  const resolved = baseline.filter((b) => !matched.has(b)).map((b): Finding => ({ ...b, baselineStatus: "resolved" }));
-
-  return {
-    findings: tagged,
-    resolved,
-    counts: { resolved: resolved.length, persistent, new: tagged.length - persistent },
+    const candidates = baseline.flatMap((b, i) => normalizeTaxonomy(b) === normalizeTaxonomy(f) ? [i] : []);
+    for (const i of candidates) ambiguous.add(i);
+    const sourceNew = canClaim && eligible(f) && candidates.length === 0;
+    const status = sourceNew ? "new" : compatibility.kind === "same-run-checkpoint" ? "checkpoint" : compatibility.kind === "tool-change" || compatibility.kind === "scope-change" || compatibility.kind === "incompatible" ? compatibility.kind : "unresolved";
+    return { ...f, baselineStatus: status, baselineReason: sourceNew ? "Current actionable observation absent from the comparable prior scope." : candidates.length ? "Possible prior identity has changed evidence or location; explicit reviewed migration is required." : compatibility.limitations.join(" "), ...(candidates.length ? { lowConfidenceMatch: baseline[candidates[0]!]!.id } : {}) };
+  });
+  // A later exact match may consume a candidate. Only still-unmatched prior evidence can resolve.
+  const resolved: Finding[] = [];
+  const unresolved: Finding[] = [];
+  baseline.forEach((f, i) => {
+    if (matched.has(i)) return;
+    if (current.some((c) => normalizeTaxonomy(c) === normalizeTaxonomy(f))) ambiguous.add(i);
+    if (canClaim && eligible(f) && !ambiguous.has(i)) resolved.push({ ...f, baselineStatus: "resolved", baselineReason: "Absent from the same complete scope with unchanged producer/schema versions at a later target revision." });
+    else unresolved.push({ ...f, baselineStatus: "unresolved", baselineReason: ambiguous.has(i) ? "Possible changed identity remains unresolved; absence is not a resolution." : compatibility.limitations.join(" ") });
+  });
+  const comparison: BaselineDiff["comparison"] = { ...compatibility,
+    ...(options.priorContext ? { prior: options.priorContext } : {}), ...(options.currentContext ? { current: options.currentContext } : {}), migrations: validMigrations,
+    denominators: { prior: baseline.length, current: current.length, matched: matchCount,
+      comparablePrior: canClaim ? baseline.filter(eligible).length : 0, comparableCurrent: canClaim ? current.filter(eligible).length : 0,
+      unresolvedPrior: unresolved.length, unresolvedCurrent: findings.length - matchCount - findings.filter((f) => f.baselineStatus === "new").length },
   };
+  if (validMigrations.length !== migrationRows.length) comparison.limitations.push("Invalid or ambiguous migration mappings were not applied; mappings must bind one prior occurrence to one current occurrence with a reviewer and reason.");
+  return { findings, resolved, unresolved, comparison, counts: { resolved: resolved.length, persistent: matchCount, new: findings.filter((f) => f.baselineStatus === "new").length } };
 }
 
-// Fold a baseline diff into a summary for the deliverable. priorLabel is a human-facing tag for the
-// prior audit (its date/commit) shown in the report header.
-function baselineSummary(diff: BaselineDiff, priorLabel?: string): BaselineSummary {
-  return {
-    ...(priorLabel ? { priorLabel } : {}),
-    resolved: diff.resolved,
-    counts: diff.counts,
-  };
-}
-
-// Apply a prior engagement's findings as a baseline to an assembled deliverable: tag every current
-// finding with its baselineStatus and attach the summary. run-audit calls this when --baseline is
-// given; no baseline ⇒ the document is returned unchanged.
-export function applyBaseline(
-  doc: FindingsDocument,
-  baselineFindings: Finding[],
-  priorLabel?: string,
-  options: FindingIdentityOptions = {},
-): FindingsDocument {
-  const diff = diffAgainstBaseline(baselineFindings, doc.findings, options);
-  return { ...doc, findings: diff.findings, baseline: baselineSummary(diff, priorLabel) };
+export function applyBaseline(doc: FindingsDocument, prior: Finding[] | FindingsDocument, priorLabel?: string, options: FindingIdentityOptions = {}): FindingsDocument {
+  const baselineFindings = Array.isArray(prior) ? prior : prior.findings;
+  const diff = diffAgainstBaseline(baselineFindings, doc.findings, { ...options,
+    priorContext: options.priorContext ?? (Array.isArray(prior) ? undefined : prior.auditContext), currentContext: options.currentContext ?? doc.auditContext,
+    migrations: options.migrations ?? doc.identityMigrations });
+  return { ...doc, findings: diff.findings, baseline: { ...(priorLabel ? { priorLabel } : {}), resolved: diff.resolved, unresolved: diff.unresolved, comparison: diff.comparison, counts: diff.counts } };
 }

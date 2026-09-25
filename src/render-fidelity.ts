@@ -46,15 +46,17 @@
 // each flagged column, because it deliberately does not restate evidence.
 
 import { esc } from "../report-template/sections.mjs";
+import { findingIdAttribute } from "../report-template/navigation.mjs";
 import type { Finding, FindingsDocument } from "./findings.js";
+import { assessmentFor, populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
 
 interface FidelityBreach {
   id: string;
-  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup" | "fix-diff-dropped" | "coverage-text-dropped";
+  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup" | "fix-diff-dropped" | "coverage-text-dropped" | "population-misclassified";
   detail: string;
 }
 
-const shapeKey = (f: Finding): string => `${f.taxonomy} ${f.severity}`;
+const shapeKey = (f: Finding): string => `${f.taxonomy} ${f.severity} ${assessmentFor(f).disposition}`;
 
 /** Present as the renderer would have written it — escaped, so a `<` in evidence still matches. */
 function rendered(html: string, text: string): boolean {
@@ -113,7 +115,15 @@ function regionsById(html: string): Map<string, string> {
  * missed the defect that motivated it.
  */
 export function renderFidelityBreaches(doc: FindingsDocument, html: string): FidelityBreach[] {
+  doc = { ...doc, findings: prepareFindings(doc.findings) };
   const breaches: FidelityBreach[] = [];
+  const population = populationSummary(doc.findings);
+  const actionable = doc.findings.filter((f) => ["confirmed", "actionable"].includes(assessmentFor(f).disposition) && !f.reviewFlagOnly);
+  const actionHtml = /<table class="action">[\s\S]*?<\/table>/.exec(html)?.[0] ?? "";
+  const actions = [...actionHtml.matchAll(/data-finding-link="([^"]+)"/g)].map((m) => m[1]);
+  if (!html.includes(`data-population-total="${population.total}"`) || !html.includes(`data-chart-total="${actionable.length}"`) || Object.entries(population.counts).some(([key, count]) => !html.includes(`data-disposition="${key}" data-count="${count}"`)) || actions.some((id) => !actionable.some((f) => findingIdAttribute(f.id) === id))) {
+    breaches.push({ id: "report-populations", kind: "population-misclassified", detail: "Cover, chart or action population does not reconcile reviewed dispositions. Raw candidates, inventory and superseded evidence must stay distinct from current remediation." });
+  }
   const regions = regionsById(html);
   /** The part of the report the report itself attributes to this finding. Empty ⇒ it rendered no row. */
   const region = (f: Finding): string => regions.get(esc(f.id)) ?? "";
@@ -145,7 +155,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
     }
   }
 
-  for (const f of doc.findings.filter((x) => x.confidence === "N/A")) {
+  for (const f of doc.findings.filter((x) => assessmentFor(x).disposition === "not-applicable")) {
     const reason = f.note ?? f.evidence;
     if (!rendered(region(f), reason)) {
       breaches.push({
@@ -169,7 +179,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
     }
   }
 
-  const live = doc.findings.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly);
+  const live = doc.findings.filter((x) => assessmentFor(x).disposition !== "not-applicable" && !x.reviewFlagOnly);
   const absent = live.filter((f) => !rendered(region(f), f.evidence));
 
   // #825 — the same invariant applied to the paid tier's most concrete deliverable. A verified

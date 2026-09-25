@@ -609,6 +609,7 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     finding({
       id: `SB-RLS-POLICY-public.t${i}.t${i}_read`,
       title: "Permissive RLS policy",
+      assessment: { disposition: "confirmed", evidenceKind: "runtime", reviewStatus: "reviewed", sourceScope: "current", reason: "Synthetic independently reproduced policy failure", review: { reviewer: "fixture-reviewer", evidence: ["fixture/policy-reproduction"] } },
       taxonomy: "M1 — Multi-tenant security",
       severity: "High",
       location: `supabase/policies/t${i}.sql:1`,
@@ -642,7 +643,7 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     expect(broken, "the control must actually change the disclosed count").not.toBe(html);
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.map((b) => b.kind)).toEqual(["miscounted-rollup"]);
-    expect(breaches[0]?.detail).toContain("7 finding(s) of shape \"M1 — Multi-tenant security High\"");
+    expect(breaches[0]?.detail).toContain("7 finding(s) of shape \"M1 — Multi-tenant security High confirmed\"");
     expect(breaches[0]?.detail).toContain("the report discloses 3");
   });
 

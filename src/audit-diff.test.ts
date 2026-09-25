@@ -2,14 +2,18 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyBaseline, diffAgainstBaseline, findingIdentity, normalizeLocation } from "./audit-diff.js";
-import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "./findings.js";
+import { applyBaseline, diffAgainstBaseline as rawDiff, findingIdentity, normalizeLocation } from "./audit-diff.js";
+import { type AuditContext, type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "./findings.js";
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
   id: "F-01", title: "t", severity: "Low", confidence: "Confirmed", category: "Security",
   taxonomy: "auth_rls_initplan", location: "lib/rls.ts", status: "Open", evidence: "e", impact: "i",
-  fix: "f", value: 2, ease: 3, safety: 4, ...over,
+  fix: "f", value: 2, ease: 3, safety: 4, assessment: { disposition: "confirmed", evidenceKind: "source-review", reviewStatus: "reviewed", sourceScope: "current", reason: "Independent source review", review: { reviewer: "fixture-reviewer", evidence: ["fixture/source-proof"] } }, ...over,
 });
+
+const context = (revision: string): AuditContext => ({ engagementId: revision, kind: "client-audit", target: { id: "fixture-target", revision }, producerVersions: { scanner: "1" }, schemaVersion: "1", assessedScope: ["source"], scopeComplete: true });
+const comparison = { priorContext: context("prior"), currentContext: context("current") };
+const diffAgainstBaseline: typeof rawDiff = (a, b, options = {}) => rawDiff(a, b, { ...comparison, ...options });
 
 const statuses = (findings: Finding[]) => findings.map((f) => f.baselineStatus);
 
@@ -23,12 +27,13 @@ describe("finding identity (#457)", () => {
     expect(diff.findings[0]?.baselineStatus).toBe("persistent");
   });
 
-  it("does NOT key on volatile fields — same taxonomy+location, changed title/severity/BFTB stays persistent", () => {
+  it("does not merge changed evidence on taxonomy and location alone", () => {
     // If identity ever starts keying on title/severity/evidence/score, this flips to new+resolved.
     const prior = [finding({ id: "F-01", title: "50 policies re-evaluate auth", severity: "Perf", value: 4, ease: 4, safety: 4 })];
     const current = [finding({ id: "F-03", title: "48 policies re-evaluate auth", severity: "Low", value: 2, ease: 5, safety: 5, evidence: "reworded" })];
     const diff = diffAgainstBaseline(prior, current);
-    expect(statuses(diff.findings)).toEqual(["persistent"]);
+    expect(statuses(diff.findings)).toEqual(["unresolved"]);
+    expect(diff.unresolved).toHaveLength(1);
     expect(diff.resolved).toHaveLength(0);
   });
 
@@ -125,16 +130,16 @@ describe("baseline diff buckets (#457)", () => {
 });
 
 describe("low-confidence match — fail loud, never silently merged (#457)", () => {
-  it("a renamed file with the same taxonomy is new+flagged, and the prior stays resolved", () => {
+  it("a renamed file remains unresolved in both populations until reviewed migration", () => {
     const prior = [finding({ id: "F-09", taxonomy: "Tests-verify-intent", location: "lib/commissions/state-machine.ts" })];
     // Same rule + same basename, but the descriptor drifted enough that the exact key differs
     // (a directory move). We must NOT merge it; we flag the possible match and keep both visible.
     const current = [finding({ id: "F-02", taxonomy: "Tests-verify-intent", location: "app/commissions/state-machine.ts" })];
     const diff = diffAgainstBaseline(prior, current);
-    expect(diff.findings[0]?.baselineStatus).toBe("new");
+    expect(diff.findings[0]?.baselineStatus).toBe("unresolved");
     expect(diff.findings[0]?.lowConfidenceMatch).toBe("F-09");
     // The prior finding is still reported resolved — the uncertain pair points at each other.
-    expect(diff.counts).toEqual({ resolved: 1, persistent: 0, new: 1 });
+    expect(diff.counts).toEqual({ resolved: 0, persistent: 0, new: 0 });
   });
 
   it("does not flag a low-confidence match when the taxonomy differs", () => {
@@ -155,7 +160,7 @@ describe("applyBaseline into the deliverable (#457)", () => {
 
   it("tags findings and attaches the summary", () => {
     const prior = [finding({ id: "B-1", taxonomy: "Dead code", location: "old.ts" })];
-    const out = applyBaseline(doc, prior, "2026-04-01 @ abc123");
+    const out = applyBaseline(doc, prior, "2026-04-01 @ abc123", comparison);
     expect(out.baseline?.counts).toEqual({ resolved: 1, persistent: 0, new: 1 });
     expect(out.baseline?.priorLabel).toBe("2026-04-01 @ abc123");
     expect(out.findings[0]?.baselineStatus).toBe("new");

@@ -21,6 +21,15 @@ texts = [normalized(page.extract_text()) for page in reader.pages]
 complete_text = " ".join(texts)
 for text in expected["required_text"]:
     assert normalized(text) in complete_text, f"PDF lost required content: {text}"
+if "populations" in expected:
+    cover = complete_text.split("Scope & methodology", 1)[0]
+    for text in expected["populations"]["cover_text"]:
+        assert normalized(text) in cover, f"Cover population mismatch: {text}"
+    action = cover.split("Action plan", 1)[1]
+    for text in expected["populations"]["forbidden_actions"]:
+        assert normalized(text) not in action, f"Non-actionable population entered action plan: {text}"
+    for text in expected["populations"]["required_actions"]:
+        assert normalized(text) in action, f"Current module action lost: {text}"
 
 destinations = reader.named_destinations
 links = [(index, annotation.get_object().get("/Dest"))

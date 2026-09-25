@@ -196,10 +196,10 @@ const targetDir = resolve(targetArg);
 // The assembly branch is before discovery, probing and execution. Tier flags authorize fresh
 // execution; importing existing evidence never needs them and refuses them to avoid ambiguity.
 if (assembleDir) {
-  const incompatible = ["--connected", "--dynamic", "--llm", "--allow-target-install", "--record", "--artifacts-dir", "--retain-artifacts", "--baseline", "--schema", "--supabase", "--readiness-plan-out"].filter((flag) => args.includes(flag));
+  const incompatible = ["--connected", "--dynamic", "--llm", "--allow-target-install", "--record", "--artifacts-dir", "--retain-artifacts", "--schema", "--supabase", "--readiness-plan-out"].filter((flag) => args.includes(flag));
   if (incompatible.length) { console.error(`--assemble cannot be combined with execution/discovery flags: ${incompatible.join(", ")}`); process.exit(2); }
   try {
-    await deliverAuditReplay({ target: targetDir, bundle: resolve(assembleDir), findingsOut, coverageOut: outPath, sarifOut, sbomOut, htmlOut, pdfOut, metaPath, conservationOut: flagValue("--conservation-out"), configPath: flagValue("--replay-config") });
+    await deliverAuditReplay({ target: targetDir, bundle: resolve(assembleDir), findingsOut, coverageOut: outPath, sarifOut, sbomOut, htmlOut, pdfOut, metaPath, baselinePath, conservationOut: flagValue("--conservation-out"), configPath: flagValue("--replay-config") });
   } catch (error) { console.error(`ASSEMBLY FAIL — ${error instanceof Error ? error.message : String(error)}`); process.exit(1); }
   process.exit(0);
 }
@@ -337,6 +337,7 @@ if (outPath) {
 // 527 raw vs 503 assembled). Only --findings-out writes a file and validates against the report
 // schema; a sarif-only run assembles and exports without one.
 let exportFindings: Finding[] = findings;
+let exportDocument: FindingsDocument | undefined;
 
 if (findingsOut || sarifOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
@@ -369,7 +370,7 @@ if (findingsOut || sarifOut) {
     // unmeasured. Ledger it too — a bug that drops a NEW finding while tagging must fail loud, not
     // ship a report short one row behind a clean coverage pass.
     const beforeBaseline = doc.findings;
-    doc = applyBaseline(doc, prior.findings, priorLabel, { root: targetDir });
+    doc = applyBaseline(doc, prior, priorLabel, { root: targetDir });
     const bLedger = baselineLedger(beforeBaseline, doc.findings, findingsByModule);
     console.log(`\n${formatBaselineLedger(bLedger)}`);
     if (!bLedger.ok) {
@@ -377,7 +378,7 @@ if (findingsOut || sarifOut) {
       console.error(deliveredNothing(findings.length, "the baseline ledger did not balance (above)"));
       process.exit(1);
     }
-    console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} persistent, ${doc.baseline?.counts.new} new`);
+    console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} matched observations, ${doc.baseline?.counts.new} new; comparison ${doc.baseline?.comparison?.kind}, ${doc.baseline?.comparison?.denominators.unresolvedCurrent} current unresolved`);
   }
 
   // An assembled document that fails the report schema is not a deliverable in ANY format, so this
@@ -406,6 +407,7 @@ if (findingsOut || sarifOut) {
     if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
   }
   exportFindings = doc.findings;
+  exportDocument = doc;
 }
 
 // #867: SARIF 2.1.0 for the client's own security tooling. The coverage ledger travels with it as
@@ -416,7 +418,7 @@ if (sarifOut) {
   // document carries (module names filled in, and a module that was never accounted for at all
   // still gets a row), so the two exports of one run cannot disagree about what ran.
   const ledger = coverageLedger(recorded, env);
-  const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir });
+  const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir, auditContext: exportDocument?.auditContext, baseline: exportDocument?.baseline });
   writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
   const gaps = ledger.filter((r) => r.status !== "ran").length;
   // #1061: the result count is printed AGAINST the count the probes captured, so the next time an

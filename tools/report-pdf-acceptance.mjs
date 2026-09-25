@@ -103,3 +103,41 @@ const failed = await run(process.execPath, [join(root, "report-template/render.m
 assert.notEqual(failed.status, 0, "A failed native PDF export must not report success");
 assert.throws(() => readFileSync(join(failedOutput, "report.pdf")), /ENOENT/, "A previous PDF must not stand in for a failed export");
 console.log(`PASS: native PDF, ${linked.length} destinations, 49 HTML links, keyboard navigation, cross-page PDF links and missing-row/truncated/render-failure controls. ${inspected.stdout.trim()}`);
+
+// These expected populations are acceptance evidence, independent of renderer classification.
+const dispositionFixture = JSON.parse(readFileSync(join(root, "src/__fixtures__/dispositions/scenarios.json"), "utf8"));
+for (const [name, confirmed, pending, inventory, historical, total] of [["ATC", 8, 1312, 90, 83, 1502], ["AoP", 1, 708, 1, 0, 719]]) {
+  const findings = dispositionFixture.scenarios[name].flatMap((group) => Array.from({ length: group.count }, (_, index) => ({
+    ...dispositionFixture.templates[group.template], id: `${name}-${group.template}-${index}`, location: `src/${group.template}/${index}.ts`,
+  })));
+  const targetDir = join(output, name); mkdirSync(targetDir, { recursive: true });
+  const inputPath = join(targetDir, "input.json");
+  const context = { engagementId: `${name}-current`, kind: "client-audit", target: { id: `fixture:${name}`, revision: "current" }, producerVersions: { scanner: "current" }, schemaVersion: "1", assessedScope: ["source", "schema"], scopeComplete: true };
+  const current = { meta: { ...dispositionFixture.meta, client: `${name} synthetic disposition acceptance` }, findings, testQuality: dispositionFixture.testQuality, auditContext: context };
+  const prior = { ...current, findings: name === "ATC" ? findings.slice(0, 8) : findings.slice(1, 56).map((f, i) => ({ ...f, id: `old-${i}` })), auditContext: name === "ATC" ? { ...context, kind: "same-run-checkpoint", scopeComplete: false } : { ...context, engagementId: `${name}-prior`, producerVersions: { scanner: "legacy" }, assessedScope: ["source"] } };
+  writeFileSync(inputPath, JSON.stringify(current));
+  const priorPath = join(targetDir, "prior.json"); writeFileSync(priorPath, JSON.stringify(prior));
+  const compared = await run(process.execPath, ["--import", "tsx", "--input-type=module", "-e", 'import fs from "node:fs"; import { applyBaseline } from "./src/audit-diff.ts"; const [current, prior] = process.argv.slice(1); fs.writeFileSync(current, JSON.stringify(applyBaseline(JSON.parse(fs.readFileSync(current)), JSON.parse(fs.readFileSync(prior)))));', inputPath, priorPath]);
+  assert.equal(compared.status, 0, compared.stderr);
+  const rendered = await run(process.execPath, [join(root, "report-template/render.mjs"), inputPath, targetDir]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const document = JSON.parse(readFileSync(join(targetDir, "findings.report.json"), "utf8"));
+  assert.equal(document.findings.length, total);
+  assert.deepEqual(document.populations.counts, { confirmed, actionable: 6, "pending-review": pending, "false-positive": 3, inventory, superseded: historical, "not-applicable": 0 });
+  const linked = findings.filter((f) => f.id.includes("-confirmed-") || /-M[4-9]-/.test(f.id));
+  const expected = {
+    link_count: confirmed + 12,
+    linked_findings: linked.map((f) => ({ id: f.id, detail: [f.evidence, f.fix] })),
+    required_text: ["39.7%", "58.6%", "Pending review", "Data inventory", "False positives", ...(historical ? ["Superseded evidence", "fixture://M8/current-mutation-report", "not a prior client audit"] : ["Producer, rule or schema versions changed"])],
+    populations: {
+      cover_text: [`Accounted population: ${total}`, `Confirmed defects: ${confirmed}`, `Current health findings: 6`, `Pending review: ${pending}`, `Data inventory: ${inventory}`, `Superseded evidence: ${historical}`, `Current actionable population: ${confirmed + 6}`, `Prior population ${name === "ATC" ? 8 : 55}; current population ${total}`, `Comparison: ${name === "ATC" ? "Same engagement checkpoint" : "Producer or rule changes"}`],
+      forbidden_actions: ["Raw scanner candidate", "Classified sensitive table", "Historical surviving mutant", "Independently rejected candidate", "Transitive advisory"],
+      required_actions: Array.from({ length: 6 }, (_, i) => `Current M${i + 4} health work`),
+    },
+  };
+  const expectationPath = join(targetDir, "expected.json"); writeFileSync(expectationPath, JSON.stringify(expected, null, 2));
+  const inspected = await run(python, [join(root, "tools/report-pdf-inspect.py"), join(targetDir, "report.pdf"), expectationPath]);
+  assert.equal(inspected.status, 0, inspected.stderr);
+  writeFileSync(join(targetDir, "pdf-receipt.json"), inspected.stdout);
+  console.log(`PASS: ${name} actual PDF populations, action exclusions, current M4–M9 actions and measured M8 scores. ${inspected.stdout.trim()}`);
+}

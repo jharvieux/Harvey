@@ -33,7 +33,7 @@ export const ROLLUP_REPRESENTATIVES = 5;
 // (capActionPlan returns the number, the renderer prints it).
 export const ACTION_PLAN_MAX_ROWS = 40;
 
-const shapeKey = (f) => `${f.taxonomy}\u0000${f.severity}`;
+const shapeKey = (f) => `${f.taxonomy}\u0000${f.severity}\u0000${f.assessment?.disposition ?? "legacy"}`;
 
 // findings: the renderer's already-sorted list. Returns presentation items in the same order:
 // { kind: "finding", finding } for members of small shapes, and — at the position of a large
@@ -67,6 +67,7 @@ export function rollupFindings(findings, opts = {}) {
       taxonomy: f.taxonomy,
       severity: f.severity,
       category: f.category,
+      disposition: f.assessment?.disposition ?? "legacy",
       count: group.length,
       representatives: group.slice(0, representatives),
       withheld: group.slice(representatives),

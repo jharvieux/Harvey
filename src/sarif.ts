@@ -27,14 +27,15 @@
 // way to export without one is to state IN THE OUTPUT why there isn't one (`coverageAbsent`),
 // which becomes its own warning notification. There is no silent path.
 
-import { findingIdentity, type FindingIdentityOptions } from "./audit-diff.js";
-import type { CoverageRow, Finding, Severity } from "./findings.js";
+import { semanticFindingIdentity, type FindingIdentityOptions } from "./audit-diff.js";
+import type { AuditContext, BaselineSummary, CoverageRow, Finding, Severity } from "./findings.js";
+import { populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
 import { relativizeScanScope } from "./scan/scan-scope.js";
 
 const SARIF_VERSION = "2.1.0";
 const SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
 
-type SarifLevel = "error" | "warning" | "note";
+type SarifLevel = "error" | "warning" | "note" | "none";
 
 // Harvey severity → SARIF level. Perf/Info/Watch are observations, not defects; they stay in the
 // export (dropping them would be the silent-omission failure) but at "note".
@@ -136,6 +137,8 @@ interface SarifNotification {
 type CoverageInput = { coverage: CoverageRow[] } | { coverageAbsent: string };
 
 interface SarifOptions extends Pick<FindingIdentityOptions, "caseSensitive"> {
+  auditContext?: AuditContext;
+  baseline?: BaselineSummary;
   toolVersion?: string;
   // Absolute-path prefix stripped from artifact URIs so they are repo-relative, which is what
   // GitHub code scanning needs to attach an alert to a file.
@@ -172,9 +175,16 @@ function coverageNotifications(input: CoverageInput): SarifNotification[] {
 export function toSarif(findings: Finding[], coverage: CoverageInput, opts: SarifOptions = {}): object {
   const rules = new Map<string, SarifRule>();
   const nonFileLocations: string[] = [];
+  const occurrences = new Map<string, number>();
 
-  const results = findings.map((f) => {
+  const results = prepareFindings(findings).map((f) => {
     const ruleId = ruleIdOf(f);
+    const asserted = ["confirmed", "actionable"].includes(f.assessment.disposition);
+    // SARIF 2.1.0 §3.27.9–10 requires level=none for review/informational results.
+    const level: SarifLevel = asserted ? LEVEL[f.severity] : "none";
+    const semantic = semanticFindingIdentity(f, { root: opts.baseUri, caseSensitive: opts.caseSensitive });
+    const occurrence = (occurrences.get(semantic) ?? 0) + 1;
+    occurrences.set(semantic, occurrence);
     if (!rules.has(ruleId)) {
       rules.set(ruleId, {
         id: ruleId,
@@ -182,16 +192,21 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         shortDescription: { text: f.title },
         ...(f.impact ? { fullDescription: { text: f.impact } } : {}),
         ...(f.fix ? { help: { text: f.fix } } : {}),
-        defaultConfiguration: { level: LEVEL[f.severity] },
+        defaultConfiguration: { level },
         properties: {
           // #975: alongside the human-readable CWE/OWASP strings, emit the machine tag GitHub code
           // scanning and CWE-indexed ASPMs key on — `external/cwe/cwe-89` — so a CWE-tagged finding
           // lands in the right bucket instead of reading as uncategorized.
           tags: [f.category, ...cweTags(f.cwe), ...asArray(f.cwe), ...asArray(f.owasp)].filter(Boolean),
-          "security-severity": SECURITY_SEVERITY[f.severity],
+          "security-severity": asserted ? SECURITY_SEVERITY[f.severity] : "0.0",
           category: f.category,
         },
       });
+    }
+    const rule = rules.get(ruleId)!;
+    if (asserted && Number(SECURITY_SEVERITY[f.severity]) > Number(rule.properties["security-severity"])) {
+      rule.properties["security-severity"] = SECURITY_SEVERITY[f.severity];
+      rule.defaultConfiguration.level = level;
     }
 
     const parsed = parseLocation(f.location);
@@ -202,10 +217,11 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
 
     return {
       ruleId,
-      level: LEVEL[f.severity],
+      kind: asserted ? "fail" : f.assessment.disposition === "pending-review" ? "review" : "informational",
+      level,
       // The location string is repeated in the message so a finding whose location cannot be a
       // file region still says where it is, rather than reading as an unlocated repo-wide alert.
-      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}` },
+      message: { text: `${f.title} — ${f.location}${f.evidence ? `\n\n${f.evidence}` : ""}\n\nDisposition: ${f.assessment.disposition}. ${f.assessment.reason}` },
       ...(parsed
         ? {
             locations: [{
@@ -219,15 +235,19 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
           }
         : {}),
       partialFingerprints: {
-        "harveyFindingIdentity/v1": findingIdentity(f, { root: opts.baseUri, caseSensitive: opts.caseSensitive }),
+        "harveySemanticIdentity/v2": semantic,
+        "harveyOccurrence/v2": `${semantic}:${occurrence}`,
       },
       properties: {
         harveyId: f.id,
         severity: f.severity,
         confidence: f.confidence,
+        assessment: f.assessment,
+        origin: f.origin,
         location: f.location,
         ...(f.precisionTier ? { precisionTier: f.precisionTier } : {}),
         ...(f.baselineStatus ? { baselineStatus: f.baselineStatus } : {}),
+        ...(f.baselineReason ? { baselineReason: f.baselineReason } : {}),
         ...(f.exploitabilityVerified ? { exploitabilityVerified: true } : {}),
         // #874: reachability ordering travels with the export, so an ASPM ingesting Harvey's CVEs
         // can sort them the way the report does instead of receiving a flat list.
@@ -268,9 +288,14 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         toolExecutionNotifications: notifications,
       }],
       results,
-      properties: "coverage" in coverage
-        ? { harveyCoverage: coverage.coverage }
-        : { harveyCoverageAbsent: coverage.coverageAbsent },
+      properties: {
+        ...("coverage" in coverage ? { harveyCoverage: coverage.coverage } : { harveyCoverageAbsent: coverage.coverageAbsent }),
+        harveyPopulations: populationSummary(findings),
+        harveyIdentitySchema: "semantic-occurrence/v2",
+        harveyIdentityMigration: "Legacy taxonomy/location fingerprints require explicit reviewed mapping; identity changes are not source regressions or resolutions.",
+        ...(opts.auditContext ? { harveyAuditContext: opts.auditContext } : {}),
+        ...(opts.baseline ? { harveyBaseline: opts.baseline } : {}),
+      },
     }],
   };
 }

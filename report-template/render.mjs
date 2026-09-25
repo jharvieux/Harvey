@@ -23,6 +23,7 @@ import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
 import { assertFindingNavigation, findingAnchor, findingIdAttribute } from "./navigation.mjs";
 import { draftTermsBadge, esc, legalTermsSection, notApplicableSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
+import { DISPOSITIONS, DISPOSITION_LABELS, baselineIntegrityErrors, findingModule, populationSummary, prepareFindings } from "./dispositions.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -42,12 +43,6 @@ const bftbColor = (s) => {
   const hue = Math.round(45 - 45 * t);         // 45 (amber) → 0 (red)
   const light = Math.round(47 - 7 * t);        // deepen toward red at the top
   return `hsl(${hue}, 88%, ${light}%)`;
-};
-const CONF = { Confirmed: "#2563eb", Likely: "#ca8a04", Review: "#facc15", "N/A": "#94a3b8" };
-// Pick a legible text color for a badge background (dark ink on light fills like the Review yellow).
-const readableOn = (hex) => {
-  const n = parseInt(hex.slice(1), 16);
-  return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) > 150 ? "#1f2937" : "#fff";
 };
 
 const findingLink = (f, text) => `<a class="finding-link" href="#${findingAnchor(f.id)}" data-finding-link="${findingIdAttribute(f.id)}">${esc(text)}</a>`;
@@ -149,7 +144,7 @@ function findingCard(f) {
       <span class="ftitle">${esc(f.title)}</span>
       <span class="badge" style="background:${sc}">${esc(f.severity)}</span>
       <span class="badge bftb" style="background:${bftbColor(s)}">BFTB ${s}</span>
-      <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"};color:${readableOn(CONF[f.confidence] ?? "#94a3b8")}">${esc(f.confidence ?? "—")}</span>
+      <span class="badge" style="background:#475569">${esc(DISPOSITION_LABELS[f.assessment.disposition])}</span>
       ${baselineBadge(f)}
       ${f.onHotspot ? `<span class="badge" style="background:#7c3aed" title="On an M3 churn×complexity hotspot — higher remediation priority">🔥 Hotspot${f.hotspotRank ? ` #${f.hotspotRank}` : ""}</span>` : ""}
       ${f.dataClass?.escalatedFrom ? `<span class="badge" style="background:#be123c" title="${esc(f.dataClass.reason)}">↑ ${esc(f.dataClass.escalatedFrom)} · ${esc(f.dataClass.categories.join("/"))}</span>` : ""}
@@ -159,12 +154,16 @@ function findingCard(f) {
     ${cweOwaspLine(f)}
     ${f.dataClass ? `<div class="kv"><b>Data class</b> ${esc(f.dataClass.reason)}</div>` : ""}
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
+    <div class="kv"><b>Disposition</b> ${esc(f.assessment.reason)} Review: ${esc(f.assessment.reviewStatus)}. Source: ${esc(f.assessment.sourceScope)} / ${esc(f.assessment.evidenceKind)}. Scanner confidence: ${esc(f.confidence)}.</div>
+    ${f.assessment.review ? `<div class="kv"><b>Review evidence</b> ${esc(f.assessment.review.reviewer)}: ${esc(f.assessment.review.evidence.join("; "))}</div>` : ""}
+    ${f.assessment.supersededBy ? `<div class="kv"><b>Replaced by</b> ${esc(f.assessment.supersededBy.artifact)} — ${esc(f.assessment.supersededBy.reason)}</div>` : ""}
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
     ${suggestedFixBlock(f)}
     ${referencesLine(f)}
     ${f.lowConfidenceMatch ? `<div class="crit"><div class="cu">⚠ Possible carry-over — confirm manually:</div>
-      <div>This looks like it might be the same issue as prior finding <b>${esc(f.lowConfidenceMatch)}</b>, but the match was not confident (a rename or re-label), so it is counted as <b>new</b> and that prior finding still shows as resolved. Confirm whether they are the same before reporting progress.</div></div>` : ""}
+      <div>Possible prior finding <b>${esc(f.lowConfidenceMatch)}</b>. Identity remains unresolved; this pair does not establish a new or resolved defect.</div></div>` : ""}
+    ${f.baselineReason ? `<div class="kv"><b>Comparison</b> ${esc(f.baselineReason)}</div>` : ""}
     ${f.okWhen || f.notOkWhen ? `<div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
       ${f.okWhen ? `<div><span class="ok">✓ OK when</span> ${esc(f.okWhen)}</div>` : ""}
       ${f.notOkWhen ? `<div><span class="notok">✗ Not OK when</span> ${esc(f.notOkWhen)}</div>` : ""}</div>` : ""}
@@ -180,7 +179,7 @@ function groupCard(g) {
   const withheldLocs = withheld
     .map((f) => `<div><span class="fid">${esc(f.id)}</span> <code>${esc(f.location)}</code></div>`)
     .join("");
-  return `<div class="group">
+  return `<div class="group" data-shape="${findingIdAttribute(JSON.stringify([g.taxonomy, g.severity, g.disposition]))}">
     <div class="group-head">
       <span class="badge" style="background:${sc}">${esc(g.severity)}</span>
       <span class="group-title">${esc(g.taxonomy)}</span>
@@ -203,6 +202,11 @@ function groupCard(g) {
 const BASELINE_BADGE = {
   new: { label: "NEW", c: "#fff", bg: "#b3261e" },
   persistent: { label: "CARRIED OVER", c: "#334155", bg: "#e2e8f0" },
+  unresolved: { label: "UNRESOLVED COMPARISON", c: "#334155", bg: "#e2e8f0" },
+  checkpoint: { label: "SAME-RUN CHECKPOINT", c: "#334155", bg: "#e2e8f0" },
+  "tool-change": { label: "TOOL / RULE CHANGE", c: "#334155", bg: "#e2e8f0" },
+  "scope-change": { label: "SCOPE CHANGE", c: "#334155", bg: "#e2e8f0" },
+  incompatible: { label: "UNCOMPARABLE", c: "#334155", bg: "#e2e8f0" },
 };
 function baselineBadge(f) {
   const b = BASELINE_BADGE[f.baselineStatus];
@@ -213,14 +217,19 @@ function baselineBadge(f) {
 // is the good number and leads; new is the number to act on. A resolved count with no persistent/new
 // still renders, because "you closed everything" is the strongest possible progress statement.
 function baselineBanner(baseline) {
+  if (!baseline.comparison) return `<div class="progress"><b>Uncomparable legacy baseline</b> — engagement, source, producer and scope provenance are missing. Prior summary counts are withheld; they do not establish remediation or regression.</div>`;
   const { resolved, persistent, new: added } = baseline.counts;
-  const since = baseline.priorLabel ? ` since the prior audit (${esc(baseline.priorLabel)})` : " since the prior audit";
+  const c = baseline.comparison;
+  const d = c.denominators;
+  const label = { "source-change": "Source changes", "same-source": "Same source revision", "same-run-checkpoint": "Same engagement checkpoint", "tool-change": "Producer or rule changes", "scope-change": "Assessed scope changes", incompatible: "Comparison not established" }[c.kind];
   return `<div class="progress">
-    <div class="progress-title">Progress${since}</div>
+    <div class="progress-title" data-comparison-kind="${esc(c.kind)}">Comparison: ${esc(label)}${baseline.priorLabel ? ` (${esc(baseline.priorLabel)})` : ""}</div>
+    <div data-comparison-denominators>Prior population ${d.prior}; current population ${d.current}; matched evidence ${d.matched}. Comparable current defects/health findings ${d.comparableCurrent}; comparable prior ${d.comparablePrior}. Unresolved current ${d.unresolvedCurrent}; unresolved prior ${d.unresolvedPrior}.</div>
+    ${c.limitations.map((reason) => `<div class="comparison-limit">${esc(reason)}</div>`).join("")}
     <div class="progress-stats">
-      <div class="pstat"><div class="pnum" style="color:#15803d">${resolved}</div><div class="plabel">Resolved</div></div>
-      <div class="pstat"><div class="pnum" style="color:#334155">${persistent}</div><div class="plabel">Still open</div></div>
-      <div class="pstat"><div class="pnum" style="color:#b3261e">${added}</div><div class="plabel">New</div></div>
+      <div class="pstat"><div class="pnum" style="color:#15803d">${resolved}</div><div class="plabel">Resolved in comparable scope</div></div>
+      <div class="pstat"><div class="pnum" style="color:#334155">${persistent}</div><div class="plabel">Matched current evidence</div></div>
+      <div class="pstat"><div class="pnum" style="color:#b3261e">${added}</div><div class="plabel">New in comparable scope</div></div>
     </div>
   </div>`;
 }
@@ -231,7 +240,7 @@ function baselineBanner(baseline) {
 function resolvedSection(resolved) {
   const rows = resolved.map((x) => `<div class="na"><span class="fid" style="color:#15803d">✓ ${esc(x.id)}</span> <b>${esc(x.title)}</b> — <span style="color:var(--muted)">${esc(x.category)} · ${esc(x.taxonomy)} · <code>${esc(x.location)}</code></span></div>`).join("");
   return `<h2>Resolved since last audit</h2>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Findings from the prior audit that are absent from this run — matched by finding identity (rule/taxonomy + normalized location), robust to line-number churn.</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Prior reviewed defects or actionable health findings absent from comparable, completely assessed current scope. Tool and scope changes and uncertain identity pairs are excluded.</div>
     ${rows}`;
 }
 
@@ -443,17 +452,20 @@ function fixSection(h, findings) {
 }
 
 export function buildHtml(data) {
-  const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
+  const all = prepareFindings(data.findings).map((x) => ({ ...x, _bftb: bftb(x) }));
+  const comparisonErrors = baselineIntegrityErrors(data.baseline, all);
+  if (comparisonErrors.length) throw new Error(`Invalid baseline: ${comparisonErrors.join("; ")}`);
   const byId = new Map(all.map((x) => [x.id, x]));
   if (byId.size !== all.length || all.some((x) => typeof x.id !== "string" || !x.id.trim())) {
     throw new Error("Report findings require nonempty unique identities for navigation");
   }
-  const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
-  const na = all.filter((x) => x.confidence === "N/A"); // checked & ruled out (applicability gate)
+  const population = populationSummary(all);
+  const f = all.filter((x) => ["confirmed", "actionable"].includes(x.assessment.disposition) && !x.reviewFlagOnly);
+  const na = all.filter((x) => x.assessment.disposition === "not-applicable");
   const reviewFlagged = all.filter((x) => (x.reviewFlagColumns?.length ?? 0) > 0); // #459
   const counts = {};
   for (const x of f) counts[x.severity] = (counts[x.severity] || 0) + 1;
-  const sevCount = (s) => f.filter((x) => x.severity === s).length;
+  const sevCount = (s) => f.filter((x) => findingModule(x) === "M1" && x.assessment.disposition === "confirmed" && x.severity === s).length;
   const top = [...f].sort((a, b) => b._bftb - a._bftb).slice(0, 6);
   // #515: a finding on an M3 hotspot is up-ranked among its severity peers — a Critical still leads a
   // hotspot Info, but within a band the hotspot one comes first (it sits in the churny, complex,
@@ -473,6 +485,11 @@ export function buildHtml(data) {
   // #935: same-shape volume rolls up for presentation; every finding stays in the data.
   const findingItems = rollupFindings(sorted);
   const rolledUp = findingItems.filter((x) => x.kind === "group");
+  const separated = ["pending-review", "false-positive", "inventory", "superseded"].map((disposition) => {
+    const members = all.filter((x) => x.assessment.disposition === disposition && !x.reviewFlagOnly);
+    if (!members.length) return "";
+    return `<section data-population="${disposition}"><h2>${DISPOSITION_LABELS[disposition]} (${members.length})</h2><div>These ${members.length} rows are accounted for separately from confirmed defects and current health remediation.</div>${rollupFindings(members).map((item) => item.kind === "group" ? groupCard(item) : findingCard(item.finding)).join("")}</section>`;
+  }).join("");
 
   const legend = Object.entries(counts).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o)
     .map(([s, n]) => `<span class="leg"><i style="background:${SEV[s].c}"></i>${s} ${n}</span>`).join("");
@@ -548,9 +565,10 @@ export function buildHtml(data) {
   .tq-score{font-size:30px;font-weight:800;color:#0f172a;white-space:nowrap}
   .tq-unit{font-size:12px;font-weight:700;color:var(--muted);margin-left:3px}
   .tq-body code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
-  .progress{display:flex;align-items:center;gap:28px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 20px;margin-top:14px}
-  .progress-title{font-size:12px;font-weight:800;color:#15803d;text-transform:uppercase;letter-spacing:.5px}
-  .progress-stats{display:flex;gap:26px}
+  .progress{display:block;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:14px 20px;margin-top:14px}
+  .progress-title{font-size:12px;font-weight:800;color:#334155;margin-bottom:6px}
+  .progress-stats{display:flex;gap:26px;margin-top:10px}
+  .comparison-limit{margin-top:6px}
   .pstat{text-align:center}
   .pnum{font-size:26px;font-weight:800;line-height:1}
   .plabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
@@ -564,17 +582,18 @@ export function buildHtml(data) {
 
     <div class="grid">
       <div class="card">${healthGauge(m.overallHealth)}</div>
-      <div class="card" style="text-align:center">${severityDonut(counts)}<div class="legend" style="justify-content:center">${legend}</div></div>
+      <div class="card" data-chart-population="actionable" data-chart-total="${f.length}" style="text-align:center">${severityDonut(counts)}<div>Current actionable population: ${f.length}</div><div>Confirmed defects + current health findings</div><div class="legend" style="justify-content:center">${legend}</div></div>
       <div class="card" style="flex:1">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tenant isolation</div>
         <div style="font-size:22px;font-weight:800;margin:4px 0 10px">${esc(m.tenantIsolation)} ${tenantIsolationPill(data.coverage)}</div>
-        <div style="display:flex;gap:10px">
+        <div>Confirmed M1 defects only</div><div style="display:flex;gap:10px">
           ${["Critical", "High", "Medium", "Low"].map((s) => `<div style="text-align:center"><div style="font-size:22px;font-weight:800;color:${SEV[s].c}">${sevCount(s)}</div><div style="font-size:10px;color:var(--muted)">${s}</div></div>`).join("")}
         </div>
       </div>
     </div>
 
     ${completenessBanner(data.coverage)}
+    <div class="population-summary" data-population-total="${population.total}"><b>Accounted population: ${population.total}</b> — ${DISPOSITIONS.map((key) => `<span data-disposition="${key}" data-count="${population.counts[key]}">${DISPOSITION_LABELS[key]}: ${population.counts[key]}</span>`).join(" · ")}. Severity and scanner confidence are separate from review status. Current module measurements retain their original scores.</div>
     <div class="headline">${esc(m.headline)}</div>
 
     ${data.baseline ? baselineBanner(data.baseline) : ""}
@@ -583,13 +602,13 @@ export function buildHtml(data) {
     ${bftbBars(top)}
 
     <h2>Action plan</h2>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Everything BFTB &gt; 75, plus every Critical/High security finding. ${action.length === 0 ? "" : ""}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Confirmed defects and current health findings with BFTB &gt; 75 or Critical/High severity. ${actionAll.length} qualifying rows from ${f.length} current actionable rows; pending reviews and inventory remain in their own sections.</div>
     <table class="action"><tr><th>#</th><th>Action</th><th>Why</th><th>BFTB</th><th>Owner</th></tr>
     ${action.length ? action.map((x, i) => `<tr><td>${i + 1}</td><td class="b">${findingLink(x, x.fix)}</td><td>${esc(x.title)} — ${esc(x.severity)}</td><td class="b" style="color:${bftbColor(x._bftb)}">${x._bftb}</td><td>${x.category === "Security" ? "Operator" : "Eng"}</td></tr>`).join("")
       : '<tr><td colspan="5">No critical/high security findings and nothing above BFTB 75.</td></tr>'}
     ${actionWithheld ? `<tr><td colspan="5"><b>+ ${actionWithheld} more qualifying action(s) beyond this table's ${action.length}-row cap</b> — every one appears in the Findings section and in the machine-readable findings.json (#935: a capped table always states what it capped).</td></tr>` : ""}
     </table>
-    ${["Critical", "High"].every((s) => sevCount(s) === 0) ? '<div style="margin-top:8px;font-size:11.5px;color:#15803d;font-weight:700">✓ No critical or high security issues found.</div>' : ""}
+    ${["Critical", "High"].every((s) => sevCount(s) === 0) ? '<div style="margin-top:8px;font-size:11.5px">No Critical/High M1 defects independently confirmed in this population. Pending review and assessment gaps remain separate.</div>' : ""}
   </div>
 
   <div class="page findings">
@@ -605,8 +624,10 @@ export function buildHtml(data) {
     <h2>Findings</h2>
     ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — representatives and linked members in full, the remaining members disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
     ${findingItems.map((item) => (item.kind === "group" ? groupCard(item) : findingCard(item.finding))).join("")}
+    ${separated}
     ${data.fixHandoff ? fixSection(data.fixHandoff, byId) : ""}
-    ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
+    ${data.baseline?.comparison && data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
+    ${data.baseline?.unresolved?.length ? `<h2>Unresolved prior evidence (${data.baseline.unresolved.length})</h2>${data.baseline.unresolved.map((x) => `<div class="na"><b>${esc(x.id)}: ${esc(x.title)}</b> — ${esc(x.baselineReason)} <code>${esc(x.location)}</code></div>`).join("")}` : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${notApplicableSection(na)}
     ${legalTermsSection(data)}
@@ -674,10 +695,13 @@ function evidenceSection(evidence) {
 
 if (isMain) {
   const [, , findingsPath, outDirArg] = process.argv;
-  const data = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
+  const raw = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
+  const findings = prepareFindings(raw.findings);
+  const data = { ...raw, findings, populations: populationSummary(findings) };
   const outDir = outDirArg ?? path.join(path.dirname(findingsPath), "out");
   fs.mkdirSync(outDir, { recursive: true });
   fs.rmSync(path.join(outDir, "report.pdf"), { force: true });
   await renderReport(data, { htmlPath: path.join(outDir, "report.html"), pdfPath: path.join(outDir, "report.pdf"), screenshotPath: path.join(outDir, "page1.png") });
+  fs.writeFileSync(path.join(outDir, "findings.report.json"), JSON.stringify(data, null, 2) + "\n");
   console.log("wrote", path.join(outDir, "report.pdf"));
 }
