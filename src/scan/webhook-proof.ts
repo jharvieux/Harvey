@@ -359,11 +359,38 @@ export function assessWebhookVerification(handler: EdgeFunctionSource, projectSo
   };
   visit(sf);
   // Multiple entry points/calls require separate proof; no verified sibling can clear another.
-  const entryFunctions = sf.statements.filter((stmt) => ts.isFunctionDeclaration(stmt)
-    && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword));
-  const hasOtherEntry = sf.statements.some((stmt) => ts.isExportAssignment(stmt)
-    || (ts.isVariableStatement(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))
-    || ts.isExpressionStatement(stmt));
-  const proved = graph.inert(path) && !hasOtherEntry && assessments.length === 1 && assessments[0]!.verifiedBeforeEffect && entryFunctions.length === 1 && assessments[0]!.caller === entryFunctions[0];
+  const entryFunctions = new Set<ts.FunctionDeclaration>();
+  let hasOtherEntry = false;
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      entryFunctions.add(stmt);
+    } else if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly) {
+      // A second name for the same local function preserves its proof. Reexports
+      // and unresolved values introduce entry surfaces outside that caller proof.
+      if (!stmt.exportClause || !ts.isNamedExports(stmt.exportClause)) {
+        hasOtherEntry = true;
+        continue;
+      }
+      for (const item of stmt.exportClause.elements) {
+        if (item.isTypeOnly) continue;
+        const local = item.propertyName ?? item.name;
+        const resolved = !stmt.moduleSpecifier && ts.isIdentifier(local) ? graph.reference(path, local) : undefined;
+        if (resolved?.path === path) entryFunctions.add(resolved.fn);
+        else {
+          const declaration = !stmt.moduleSpecifier && ts.isIdentifier(local) ? graph.bindings(sf).declaration(local) : undefined;
+          const passiveConstant = declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+            && ts.isVariableDeclarationList(declaration.parent) && Boolean(declaration.parent.flags & ts.NodeFlags.Const)
+            && primitiveValue(declaration.initializer) && !graph.bindings(sf).hasWrite(new Set([local.text]));
+          if (!passiveConstant) hasOtherEntry = true;
+        }
+      }
+    } else if (ts.isExportAssignment(stmt)
+      || (ts.isVariableStatement(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))
+      || ts.isExpressionStatement(stmt)) {
+      hasOtherEntry = true;
+    }
+  }
+  const proved = graph.inert(path) && !hasOtherEntry && assessments.length === 1 && assessments[0]!.verifiedBeforeEffect
+    && entryFunctions.size === 1 && assessments[0]!.caller === [...entryFunctions][0];
   return { verifiedBeforeEffect: proved, provenance: assessments.map((assessment) => assessment.provenance).join("; ") || "Imported verification provenance was not proved; no supported request-to-verifier call was resolved" };
 }

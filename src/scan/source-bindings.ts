@@ -27,6 +27,7 @@ export class SourceBindings {
   }
 
   private symbol(reference: ts.Identifier): ts.Symbol | undefined {
+    if (ts.isExportSpecifier(reference.parent)) return this.checker.getExportSpecifierLocalTargetSymbol(reference.parent);
     return ts.isShorthandPropertyAssignment(reference.parent) && reference.parent.name === reference
       ? this.checker.getShorthandAssignmentValueSymbol(reference.parent)
       : this.checker.getSymbolAtLocation(reference);

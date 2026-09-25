@@ -326,6 +326,38 @@ describe("runSupabaseScan", () => {
       expect(broken.find((f) => f.taxonomy === "Unsigned/unverified webhook handler")?.precisionTier).toBe("review");
     });
 
+    it.each([
+      ["direct unsafe export", "export async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); }", true],
+      ["local unsafe alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe };", true],
+      ["local unsafe default alias", "async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); } export { unsafe as default };", true],
+      ["named unsafe reexport", "export { unsafe } from './unsafe.ts';", true],
+      ["default unsafe reexport", "export { unsafe as default } from './unsafe.ts';", true],
+      ["star unsafe reexport", "export * from './unsafe.ts';", true],
+      ["namespace unsafe reexport", "export * as exposed from './unsafe.ts';", true],
+      ["unsafe arrow alias", "const unsafe = async () => database.entitlements.upsert({ userId: 'forged' }); export { unsafe };", true],
+      ["unsafe default arrow alias", "const unsafe = async () => database.entitlements.upsert({ userId: 'forged' }); export { unsafe as default };", true],
+      ["unsafe expression alias", "const unsafe = async function() { await database.entitlements.upsert({ userId: 'forged' }); }; export { unsafe as default };", true],
+      ["imported unsafe alias", "import { unsafe as imported } from './unsafe.ts'; export { imported as default };", true],
+      ["literal named export", "const version = 'fixture'; export { version };", false],
+      ["same verified default alias", "export { handle as default };", false],
+      ["same verified named alias", "export { handle as verified };", false],
+      ["type-only named export", "type Entry = string; export type { Entry };", false],
+      ["type-only specifier", "type Entry = string; export { type Entry };", false],
+      ["type-only star export", "export type * from './unsafe.ts';", false],
+    ] as const)("accounts for %s in the shipping webhook producer (#2130)", async (_name, appended, review) => {
+      dir = mkdtempSync(join(tmpdir(), "harvey-edge-exports-"));
+      const webhookDir = join(dir, "stripe-webhook");
+      mkdirSync(webhookDir);
+      const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/source-precision/webhook-valid/${name}.ts.txt`, import.meta.url), "utf8");
+      writeFileSync(join(webhookDir, "index.ts"), fixture("handler").replace("./shared.js", "./implementation.ts") + "\n" + appended);
+      writeFileSync(join(webhookDir, "implementation.ts"), fixture("implementation"));
+      writeFileSync(join(webhookDir, "unsafe.ts"), "export async function unsafe() { await database.entitlements.upsert({ userId: 'forged' }); }");
+      const fetchImpl = mockFetch({ advisors: { lints: [] }, authConfig: {}, tables: [], extensions: [], buckets: [], policies: [] });
+      const findings = (await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir: dir })).filter((finding) => finding.taxonomy === "Unsigned/unverified webhook handler");
+      expect(findings).toHaveLength(review ? 1 : 0);
+      if (review) expect(findings[0]!.precisionTier).toBe("review");
+    });
+
     it.each(["wrong-arguments", "conditional-verification", "caller-effect", "fake-verifier"])("delivers an unresolved %s webhook finding through the shipping producer (#2130)", async (variant) => {
       dir = mkdtempSync(join(tmpdir(), "harvey-edge-fns-proof-"));
       const functionsDir = join(dir, "supabase", "functions");
