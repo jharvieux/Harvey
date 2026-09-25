@@ -10,6 +10,22 @@ const TARGET_DIR = join(import.meta.dirname, "..", "targets", "calibration", "su
 const schemaSql = readFileSync(join(TARGET_DIR, "20260708000001_schema.sql"), "utf8");
 const rlsSql = readFileSync(join(TARGET_DIR, "20260708000002_rls.sql"), "utf8");
 
+describe("PostgreSQL policy identity folding (#2129)", () => {
+  it("keeps quoted names distinct and folds bare names before ordered drops", () => {
+    const result = parseLivePolicies([{file: "001.sql", sql: [
+      'CREATE POLICY READ$ALLOWED ON TENANT$ARCHIVE.EVENTS USING (true);',
+      'CREATE POLICY "Read$Allowed" ON tenant$archive.events USING (true);',
+      'DROP POLICY READ$ALLOWED ON tenant$archive.events;',
+      'CREATE POLICY "escaped""policy" ON public."a.b" USING (true);',
+    ].join("\n")}]);
+    expect(result.unparsed).toEqual([]);
+    expect(result.policies.map(({schema, table, name}) => ({schema, table, name}))).toEqual([
+      {schema: "tenant$archive", table: "events", name: "Read$Allowed"},
+      {schema: "public", table: "a.b", name: 'escaped"policy'},
+    ]);
+  });
+});
+
 describe("parseAuthUserRefs", () => {
   it("finds the columns that FK to auth.users (the two-tenant seed must fill these with real user ids)", () => {
     const refs = parseAuthUserRefs(schemaSql).map((r) => `${r.table_name}.${r.column_name}`);
@@ -525,5 +541,19 @@ describe("parseClassifiableColumns (#851/#852 — CREATE + ALTER ADD, recognized
       );
     `;
     expect(parseClassifiableColumns(sql).unknownType).toHaveLength(0);
+  });
+});
+
+
+describe("PostgreSQL migration identifier spellings (#2129)", () => {
+  it("does not collapse quoted uppercase schemas into bare lower-case schemas", () => {
+    expect(parseLiveTableNames('CREATE TABLE PUBLIC.same_name (\n id uuid\n);\nCREATE TABLE "PUBLIC".same_name (\n id uuid\n);')).toEqual([
+      { schema: "public", table: "same_name" }, { schema: "PUBLIC", table: "same_name" },
+    ]);
+  });
+  it("folds bare case, accepts dollars and preserves quoted case", () => {
+    expect(parseLiveTableNames('CREATE TABLE PUBLIC.Missing_Table (\n id uuid\n);\nCREATE TABLE tenant$archive.maintenance_heartbeats (\n id uuid\n);\nCREATE TABLE "ExactSchema"."ExactTable" (\n id uuid\n);')).toEqual([
+      { schema: "public", table: "missing_table" }, { schema: "tenant$archive", table: "maintenance_heartbeats" }, { schema: "ExactSchema", table: "ExactTable" },
+    ]);
   });
 });

@@ -64,6 +64,7 @@ import { runSplinter } from "./supabase-splinter.js";
 import {
   checkMigrationDrift,
   loadMigrations,
+  type DriftComparisonScope,
   type DriftLivePolicy,
   type DriftLiveTable,
   type MigrationFile,
@@ -120,8 +121,43 @@ const DEFINER_FUNCTION_NAMES_SQL = `select p.proname as name from pg_proc p wher
 // whether an installed extension owns the table (pg_depend deptype 'e'). An extension's own tables
 // are legitimately absent from the client's migrations, and without this they read as "someone
 // created a table by hand".
-const DRIFT_TABLES_SQL = `select n.nspname as schema, c.relname as name, c.relrowsecurity as "rlsEnabled", exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e') as "extensionOwned" from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' and n.nspname = 'public';`;
-const DRIFT_POLICIES_SQL = `select schemaname as schema, tablename as "table", policyname as name from pg_policies where schemaname = 'public';`;
+const driftTablesSql = (schema: string): string => `select n.nspname as schema, c.relname as name, c.relrowsecurity as "rlsEnabled", exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e') as "extensionOwned" from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' and n.nspname = '${schema}';`;
+const driftPoliciesSql = (schema: string): string => `select schemaname as schema, tablename as "table", policyname as name from pg_policies where schemaname = '${schema}';`;
+
+// Catalog failure is scoped to one schema; incomplete responses must never become empty truth.
+async function queryDriftCatalog(query: (sql: string) => Promise<unknown>, schemas: string[]): Promise<{ tables: DriftLiveTable[]; policies: DriftLivePolicy[]; scope: DriftComparisonScope }> {
+  const tables: DriftLiveTable[] = [];
+  const policies: DriftLivePolicy[] = [];
+  const scope: DriftComparisonScope = { schemas: [], queriesAttempted: 0, queriesCompleted: 0 };
+  const read = async (sql: string): Promise<unknown> => {
+    scope.queriesAttempted++;
+    const result = await query(sql);
+    scope.queriesCompleted++;
+    return result;
+  };
+  for (const schema of schemas) {
+    try {
+      const visibility = await read(`select n.nspname as schema, has_schema_privilege(current_user, n.oid, 'USAGE') as "catalogAccessible" from pg_namespace n where n.nspname = '${schema}';`);
+      if (!Array.isArray(visibility) || visibility.length !== 1 || visibility[0]?.schema !== schema || visibility[0]?.catalogAccessible !== true) {
+        scope.schemas.push({ schema, status: "unassessed", reason: "schema absent or catalog access not established for the connected role" });
+        continue;
+      }
+      const foundTables = await read(driftTablesSql(schema));
+      const foundPolicies = await read(driftPoliciesSql(schema));
+      if (!Array.isArray(foundTables) || !foundTables.every((t) => t?.schema === schema && typeof t.name === "string" && typeof t.rlsEnabled === "boolean" && typeof t.extensionOwned === "boolean") ||
+          !Array.isArray(foundPolicies) || !foundPolicies.every((p) => p?.schema === schema && typeof p.table === "string" && typeof p.name === "string")) {
+        throw new Error("invalid or foreign schema catalog response");
+      }
+      tables.push(...foundTables as DriftLiveTable[]);
+      policies.push(...foundPolicies as DriftLivePolicy[]);
+      scope.schemas.push({ schema, status: "queried" });
+    } catch {
+      // Do not echo SQL transport errors: a backend response may contain private connection data.
+      scope.schemas.push({ schema, status: "unassessed", reason: "catalog query failed or returned invalid metadata; retry the read-only catalog checks for this schema" });
+    }
+  }
+  return { tables, policies, scope };
+}
 
 // PostgREST config exposes the schema allow-list as `db_schema` (comma-separated).
 // MEASURED 2026-07-28 against a live hosted project (operator-authorized read-only Management API
@@ -153,6 +189,7 @@ interface SupabaseScanOptions {
   // turns on the prod-vs-migration drift comparison; omitting it emits SB-DRIFT-00 as not-assessed
   // rather than leaving the topic out of the report.
   migrationsDir?: string;
+  driftSchemas?: string[]; // explicit authorized drift scope; defaults to public only
   // #1494 — local mode only. The project's OWN PostgREST surface (default local: LOCAL_REST_URL),
   // probed for its exposed-schema allow-list with no Management API credential needed. Omitting it
   // keeps the pre-#1494 behaviour (SB-SCOPE-00 names all three hosted-only checks); supplying it
@@ -260,7 +297,7 @@ function bucketPolicyCounts(rows: { bucket_id: string; count: number }[]): Recor
   return Object.fromEntries(rows.map((r) => [r.bucket_id, Number(r.count)]));
 }
 
-async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, migrations: MigrationFile[], driftReason?: string): Promise<Finding[]> {
+async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, migrations: MigrationFile[], driftReason?: string, driftSchemas: string[] = ["public"]): Promise<Finding[]> {
   const findings: Finding[] = [];
 
   // #671 — read the auth config first so its enabled-methods signal (external_email_enabled /
@@ -311,9 +348,8 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, m
   // The two drift reads are skipped entirely when there is no migration history to compare against —
   // no point spending two round trips on a client's project to feed a comparison with no expectation.
   // checkMigrationDrift is still called either way: it owns the SB-DRIFT-00 row in both cases.
-  const driftTables = migrations.length > 0 ? await managementApiQuery<DriftLiveTable[]>(ref, DRIFT_TABLES_SQL, token, fetchImpl) : [];
-  const driftPolicies = migrations.length > 0 ? await managementApiQuery<DriftLivePolicy[]>(ref, DRIFT_POLICIES_SQL, token, fetchImpl) : [];
-  findings.push(...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason));
+  const drift = migrations.length > 0 ? await queryDriftCatalog((sql) => managementApiQuery(ref, sql, token, fetchImpl), driftSchemas) : undefined;
+  findings.push(...checkMigrationDrift(drift?.tables ?? [], drift?.policies ?? [], migrations, driftReason, drift?.scope));
 
   return findings;
 }
@@ -476,6 +512,7 @@ async function scanLocal(
   driftReason?: string,
   restUrl?: string,
   fetchImpl: typeof fetch = fetch,
+  driftSchemas: string[] = ["public"],
 ): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
@@ -497,8 +534,7 @@ async function scanLocal(
         )
       : [];
 
-    const driftTables = migrations.length > 0 ? ((await sql.unsafe(DRIFT_TABLES_SQL)) as unknown as DriftLiveTable[]) : [];
-    const driftPolicies = migrations.length > 0 ? ((await sql.unsafe(DRIFT_POLICIES_SQL)) as unknown as DriftLivePolicy[]) : [];
+    const drift = migrations.length > 0 ? await queryDriftCatalog((query) => sql.unsafe(query), driftSchemas) : undefined;
 
     const splinterResponse = splinterImpl(connectionString);
     const splinterFindings = parseAdvisorFindings(splinterResponse);
@@ -512,7 +548,7 @@ async function scanLocal(
         : [];
 
     return [
-      ...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason),
+      ...checkMigrationDrift(drift?.tables ?? [], drift?.policies ?? [], migrations, driftReason, drift?.scope),
       ...localScopeFinding(restProbe),
       ...restScopeFindings,
       ...(splinterResponse.failure ? splinterFailureFinding(splinterResponse.failure) : []),
@@ -533,6 +569,10 @@ async function scanLocal(
 }
 
 export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Finding[]> {
+  const driftSchemas = [...new Set(opts.driftSchemas ?? ["public"])];
+  if (driftSchemas.length === 0 || driftSchemas.some((schema) => !/^[a-z_][a-z0-9_$]*$/.test(schema))) {
+    throw new Error("driftSchemas must list authorized, unquoted lower-case PostgreSQL schema names; quoted schema names are not supported by this comparison");
+  }
   // #1280 — loaded once, before either path, so the two modes compare against the same expectation.
   // With no --migrations there is no expectation to compare against, and the scan says so on its way past
   // rather than returning a finding list in which the topic simply does not appear.
@@ -545,12 +585,12 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
 
   let findings: Finding[];
   if (opts.local) {
-    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason, opts.restUrl, opts.fetchImpl ?? fetch);
+    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason, opts.restUrl, opts.fetchImpl ?? fetch, driftSchemas);
   } else {
     if (!opts.projectRef) throw new Error("runSupabaseScan requires projectRef unless local is set");
     const token = opts.managementApiToken ?? process.env.SUPABASE_ACCESS_TOKEN;
     if (!token) throw new Error("Supabase Management API token required (SUPABASE_ACCESS_TOKEN env var or managementApiToken option)");
-    findings = await scanHosted(opts.projectRef, token, opts.fetchImpl ?? fetch, migrations, driftReason);
+    findings = await scanHosted(opts.projectRef, token, opts.fetchImpl ?? fetch, migrations, driftReason, driftSchemas);
   }
 
   if (opts.functionsDir) {
