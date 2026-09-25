@@ -224,7 +224,8 @@ export function prepareVitalsRun(input: {
       copyCurrentCheckout(sourceRoot, scratchRepo);
       // Overlaying additions/modifications onto a HEAD clone is insufficient: a tracked file
       // deleted in the live checkout otherwise survives from HEAD and is audited as current code.
-      const deleted = gitText(sourceRoot, ["diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", "HEAD", "--"]);
+      // diff-index avoids porcelain diff refreshing cached stat data in the client index.
+      const deleted = gitText(sourceRoot, ["diff-index", "--name-only", "--no-renames", "--diff-filter=D", "-z", "HEAD", "--"]);
       if (deleted === undefined) throw new Error("Could not resolve HEAD-to-checkout deletions for the Vitals snapshot");
       for (const path of deleted?.split("\0").filter(Boolean) ?? []) rmSync(join(scratchRepo, path), { recursive: true, force: true });
     } else {

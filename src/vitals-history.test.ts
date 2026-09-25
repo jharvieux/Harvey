@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +27,7 @@ describe("prepareVitalsRun source boundary", () => {
     if (mode === "directory") mkdirSync(join(repo, "src/deleted"));
     writeFileSync(join(repo, deletedPath), "export const deleted = true;\n");
     writeFileSync(join(repo, "src", "modified.ts"), "export const modified = 1;\n");
+    writeFileSync(join(repo, "src", "unchanged.ts"), "export const unchanged = true;\n");
     execFileSync("git", ["add", "."], { cwd: repo });
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo });
     if (mode === "rename") execFileSync("git", ["mv", deletedPath, "src/moved.ts"], { cwd: repo });
@@ -35,6 +36,9 @@ describe("prepareVitalsRun source boundary", () => {
     else rmSync(join(repo, deletedPath));
     writeFileSync(join(repo, "src", "modified.ts"), "export const modified = 2;\n");
     writeFileSync(join(repo, "src", "added.ts"), "export const added = true;\n");
+    // A copied checkout retains index stat data from another filesystem instance.
+    // Keep bytes unchanged while forcing Git to reconsider its cached timestamps.
+    utimesSync(join(repo, "src", "unchanged.ts"), new Date(0), new Date(0));
     const before = digest(join(repo, ".git", "index"));
 
     const prepared = prepareVitalsRun({ targetDir: repo, cacheRoot: cache, toolVersion: "0.2.0" });
