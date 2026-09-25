@@ -87,6 +87,15 @@ describe("secbench-tree preparation CLI (#2106)", () => {
     for (const cls of SECBENCH_CLASSES) expect(existsSync(join(out, cls, "case", "package-lock.json"))).toBe(true);
   });
 
+  it("bounds a large valid concurrency value to the loaded local corpus", () => {
+    const input = corpus();
+    const out = temporary("harvey-secbench-tree-out-");
+    const { result, calls } = run(["--dir", input, "--out", out, "--concurrency", "1000000000"]);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("5/5 lockfiles built.");
+    expect(calls()).toHaveLength(SECBENCH_CLASSES.length);
+  });
+
   it.each(["no-artifact", "fail"] as const)("names every failed entry and refuses a %s run with no generated tree", (mode) => {
     const input = corpus();
     const out = temporary("harvey-secbench-tree-out-");
@@ -101,18 +110,41 @@ describe("secbench-tree preparation CLI (#2106)", () => {
     expect(calls()).toHaveLength(SECBENCH_CLASSES.length);
   });
 
-  it("fails its accounting control when worker construction is reverted to create no workers", () => {
+  it("physical parser reversion turns an invalid concurrency rejection into a failed runtime control", () => {
     const clone = temporary("harvey-secbench-tree-reverted-");
     cpSync(join(REPO_ROOT, "package.json"), join(clone, "package.json"));
     cpSync(join(REPO_ROOT, "src"), join(clone, "src"), { recursive: true });
     symlinkSync(join(REPO_ROOT, "node_modules"), join(clone, "node_modules"), "dir");
     const reverted = join(clone, "src", "cli", "secbench-tree.ts");
     const source = readFileSync(reverted, "utf8");
-    const mutated = source.replace("Array.from({ length: concurrency }", "Array.from({ length: 0 }");
+    const mutated = source.replace('const concurrency = positiveIntegerFlag("--concurrency", 8);', 'const concurrency = Number(arg("--concurrency") ?? 8);');
     expect(mutated).not.toBe(source);
     writeFileSync(reverted, mutated);
-    const { result } = run(["--dir", corpus(), "--out", temporary("harvey-secbench-tree-out-"), "--concurrency", "1"], { cli: reverted });
+    const { result } = run(["--dir", corpus(), "--out", temporary("harvey-secbench-tree-out-"), "--concurrency", "not-a-number"], { cli: reverted });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(1);
     expect(`${result.stdout}${result.stderr}`).toContain("completion accounting failed: 0 generated + 0 named failures = 0, but 5 entries were loaded");
+  });
+
+  it("physical removal of completion accounting lets a partial worker regression report success", () => {
+    const clone = temporary("harvey-secbench-tree-reverted-");
+    cpSync(join(REPO_ROOT, "package.json"), join(clone, "package.json"));
+    cpSync(join(REPO_ROOT, "src"), join(clone, "src"), { recursive: true });
+    symlinkSync(join(REPO_ROOT, "node_modules"), join(clone, "node_modules"), "dir");
+    const reverted = join(clone, "src", "cli", "secbench-tree.ts");
+    const source = readFileSync(reverted, "utf8");
+    const partialWorkers = source.replace("const queue = [...entries];", "const queue = entries.slice(0, 1);");
+    expect(partialWorkers).not.toBe(source);
+    writeFileSync(reverted, partialWorkers);
+    const args = ["--dir", corpus(), "--out", temporary("harvey-secbench-tree-out-"), "--concurrency", "1"];
+    const accounted = run(args, { cli: reverted });
+    expect(accounted.result.status, `${accounted.result.stdout}${accounted.result.stderr}`).toBe(1);
+    expect(`${accounted.result.stdout}${accounted.result.stderr}`).toContain("completion accounting failed: 1 generated + 0 named failures = 1, but 5 entries were loaded");
+
+    const unguarded = partialWorkers.replace("if (completed !== entries.length) {", "if (false) {");
+    expect(unguarded).not.toBe(partialWorkers);
+    writeFileSync(reverted, unguarded);
+    const unchecked = run(["--dir", corpus(), "--out", temporary("harvey-secbench-tree-out-"), "--concurrency", "1"], { cli: reverted });
+    expect(unchecked.result.status, `${unchecked.result.stdout}${unchecked.result.stderr}`).toBe(0);
+    expect(unchecked.result.stdout).toContain("✓ tree usable: 0.0% failures");
   });
 });

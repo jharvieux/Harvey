@@ -125,7 +125,7 @@ async function build(entry: (typeof entries)[number]): Promise<void> {
 
 const queue = [...entries];
 await Promise.all(
-  Array.from({ length: concurrency }, async () => {
+  Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
     for (let next = queue.pop(); next; next = queue.pop()) await build(next);
   }),
 );
