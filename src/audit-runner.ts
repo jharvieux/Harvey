@@ -18,7 +18,7 @@
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { DataClassMap } from "./data-class-escalation.js";
 import type { ProductionProducerBinding } from "./effectiveness-schema.js";
-import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
+import { assertUniqueProducerExecutionReceipts, type CommandExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding, TestQuality } from "./findings.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 
@@ -161,7 +161,7 @@ export function toOutcome(result: ProbeResult): ProbeOutcome {
 export interface RunContext {
   targetDir: string;
   env: EngagementEnv;
-  // Runs a module's CLI. `ok` is the exit status; the engine never parses `output` — a module's
+  // Runs a module's CLI. `ok` requires exit 0 and all declared artifacts; the engine never parses `output` — a module's
   // own runner decides what its output means. `opts.env` (#520) overlays extra variables onto the
   // child's inherited environment, so the M10 live tier can point pii-classify at a different
   // SUPABASE_DB_URL per enumerated project; absent ⇒ the child inherits the parent env unchanged.
@@ -169,7 +169,30 @@ export interface RunContext {
   // parse stdout as JSON. It is where quality-scan reports the jscpd/knip scope counts M4 and M5
   // need to state what they examined — the real runner always supplies it; a test double that does
   // not is telling those probes their tool printed no scope summary, which they report as such.
-  exec: (command: string, args: string[], opts?: { env?: Record<string, string> }) => { ok: boolean; output: string; stderr?: string };
+  exec: (command: string, args: string[], opts?: {
+    env?: Record<string, string>;
+    cwd?: string;
+    timeoutMs?: number;
+    // REASON: Synchronous execution cannot process abort callbacks; cancellation is checked before start only.
+    // KIND: empirical
+    // PROVENANCE: MEASURED 2026-09-25 — the actual child completes before queued AbortController callbacks run.
+    // FALSIFIER: test -f src/probe-exec.ts && test -d node_modules/tsx || exit 127; node --import tsx --input-type=module -e 'try { const {probeExec}=await import("./src/probe-exec.ts"); const c=new AbortController(); setTimeout(()=>c.abort(),1); const r=await probeExec(process.execPath,["-e","setTimeout(()=>process.exit(7),100)"],{signal:c.signal}); process.exit(r.receipt?.outcome.state==="cancelled"?0:1); } catch { process.exit(127); }'
+    // TOUCHES: src/probe-exec.ts, src/audit-runner.ts
+    signal?: AbortSignal;
+    receipt?: {
+      invocationId?: string;
+      attempt?: number;
+      target?: { identity: string; value: unknown };
+      toolchain?: readonly { name: string; version: string; sha256?: string }[];
+      configuration?: { identity: string; value: unknown };
+      artifacts?: readonly { role: "report" | "stdout" | "stderr" | "raw-output" | "other"; path: string }[];
+      measurements?: { completedTests?: number; testsDiscovered?: number; suiteLoadErrors?: number };
+      secretValues?: readonly string[];
+      policyAllowed?: boolean;
+      policyReason?: string;
+      now?: () => string;
+    };
+  }) => { ok: boolean; output: string; stderr?: string; receipt?: CommandExecutionReceipt };
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
   // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in
@@ -469,6 +492,11 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       const message = err instanceof Error ? err.message : String(err);
       failures.push({ module, error: message });
       recorded.push({ module, status: "requires-live-run", reason: `runner failed: ${message}` });
+      try {
+        ctx.retainModuleResult?.(module, [{ kind: "not-assessed", reason: `runner failed: ${message}`, provenance: "TRIED", falsifier: `repair the ${module} runner failure and retain a fresh audit` }]);
+      } catch (retentionError) {
+        failures.push({ module, error: `failed to retain original execution evidence: ${retentionError instanceof Error ? retentionError.message : String(retentionError)}` });
+      }
       continue;
     }
     // #506: a fan-out that produced no outcome would drop the module from the ledger silently — the

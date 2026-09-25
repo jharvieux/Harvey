@@ -13,6 +13,8 @@ import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
+import { MAX_PASS_FUTURE_SKEW_MS } from "./audit-pass-artifact.js";
+import { renderReport } from "../report-template/render.mjs";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -21,6 +23,36 @@ const m5137Meta: ReportMeta = {
   overallHealth: 7, tenantIsolation: "HOLDS", authModel: "oauth", headline: "h", scope: "sc",
   methodology: "m", outOfScope: "none",
 };
+
+describe("specialist rejection disclosure through the client artifact", () => {
+  it.each(["M3", "M3 REDUCED TIER", "M3 UNRANKED", "M7"])("keeps the future prior-pass rejection beside current %s evidence", async (branch) => {
+    const module = branch.startsWith("M3") ? "M3" : "M7";
+    const now = Date.parse("2026-09-24T12:00:00Z");
+    const slot = { module, target: "/target", pass: "current-specialist", generatedAt: new Date(now).toISOString(), priorPasses: [{ pass: "future-specialist", generatedAt: new Date(now + MAX_PASS_FUTURE_SKEW_MS + 1).toISOString(), findings: [{ id: "FUTURE-MUST-NOT-DELIVER" }] }] };
+    const context = ctx({ now, artifactsDir: "/passes", captureDir: "/capture", readFindings: () => [], readArtifact: (path) => path.endsWith(`${module}.pass.json`) ? slot : undefined, exec: (_command, argv) => ({ ...cleanRun(argv), ...(argv.includes("src/cli/hotspot-scan.ts") ? { output: `${cleanOutput(argv)}\n${branch}` } : {}) }) });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    const row = result.recorded.find((recorded) => recorded.module === module)!;
+    const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
+    const dir = mkdtempSync(join(tmpdir(), "rejected-pass-delivery-"));
+    try {
+      const htmlPath = join(dir, "report.html");
+      await renderReport(document, { htmlPath });
+      for (const delivered of [JSON.stringify(row), JSON.stringify(document.coverage), readFileSync(htmlPath, "utf8")]) {
+        expect(delivered).toContain("current-specialist");
+        expect(delivered).toContain("future-specialist");
+        expect(delivered).toContain("future-dated");
+      }
+      expect(document.findings.map((finding) => finding.id)).not.toContain("FUTURE-MUST-NOT-DELIVER");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("discloses a rejected primary M3 pass beside a successful native ranking", () => {
+    const now = Date.parse("2026-09-24T12:00:00Z");
+    const context = ctx({ now, artifactsDir: "/passes", readArtifact: () => ({ module: "M3", target: "/target", pass: "future-primary", generatedAt: new Date(now + MAX_PASS_FUTURE_SKEW_MS + 1).toISOString() }) });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    expect(JSON.stringify(result.recorded.find((row) => row.module === "M3"))).toContain("future-dated");
+  });
+});
 
 // A tool run that produced real, positive evidence for whichever CLI the probe shelled out to.
 // #350: exit 0 is no longer enough — a probe reads the tool's OUTPUT, so the "everything ran
