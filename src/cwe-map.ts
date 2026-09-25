@@ -264,6 +264,10 @@ const SECURITY: Record<string, [string, string | null]> = {
 // First matching rule wins; a taxonomy that matches none is unclassified and fails the enumeration
 // test (fail loud — someone added a detector without a CWE decision).
 const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
+  { match: (t) => t === "RLS-disabled table inventory", reason: "RLS metadata inventory; effective caller grants and intended data visibility are separate evidence, so disabled RLS alone has no common weakness verdict" },
+  { match: (t) => t === "Column-level privilege inventory", reason: "Column grants inventory; supported row policies still apply and an intentional grant is not an authorization bypass" },
+  { match: (t) => t === "Effective database authorization", reason: "Mixed denied, conditional and unrestricted access inventory; the actual state and intended visibility require per-row review, so the taxonomy does not establish one shared weakness" },
+  { match: (t) => t === "SECURITY DEFINER effective authorization context", reason: "Function owner and caller context inventory; actual statements and caller restrictions require review before identifying a weakness" },
   { match: (t) => t.startsWith("M5 —"), reason: "M5 slop / dead-code signal — a maintainability issue, not a security weakness class" },
   { match: (t) => t.startsWith("M6 —"), reason: "M6 maintainability / hand-rolled-reinvention indicator — not a security weakness class" },
   { match: (t) => t.startsWith("M7 —"), reason: "M7 performance signal — not a security weakness class" },
