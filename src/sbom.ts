@@ -1044,7 +1044,7 @@ export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: 
   const deps = collectDependencies(dir);
   // Alias declarations name an install path, not necessarily the package published at that path.
   // licenseScope owns that proof boundary for every supported lockfile format; reuse its accepted
-  // coordinates so the SBOM cannot publish the path key as a different package identity.
+  // coordinates to distinguish the installation path from the published package identity.
   const scope = licenseScope(dir);
   const acceptedCoordinates = new Set(scope.candidates
     .filter((candidate) => candidate.version && !candidate.unresolvedAlias)
