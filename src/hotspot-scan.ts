@@ -642,5 +642,6 @@ export function buildM3PassArtifact(params: {
     summary: `${params.rankedCount} file(s) ranked, ${tierLabel}, ${params.findings.length} finding(s)`,
     findings: params.findings,
     hotspots: params.hotspots,
+    rankedCount: params.rankedCount,
   });
 }
