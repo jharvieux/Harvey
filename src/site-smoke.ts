@@ -21,6 +21,58 @@ export interface RouteProbe {
   status: number;
 }
 
+export interface RedirectDeclaration {
+  source: string;
+  destination: string;
+}
+
+interface RedirectProbe extends RouteProbe {
+  destination: string;
+  location: string | null;
+  finalUrl?: string;
+  finalStatus?: number;
+  error?: string;
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+export async function probeRedirects(base: string, declarations: RedirectDeclaration[]): Promise<RedirectProbe[]> {
+  return Promise.all(declarations.map(async ({ source, destination }) => {
+    const result: RedirectProbe = { path: source, destination, status: 0, location: null };
+    try {
+      const initial = new URL(source, base);
+      const expected = new URL(destination, base);
+      const first = await fetch(initial, { redirect: "manual", signal: AbortSignal.timeout(5_000) });
+      result.status = first.status;
+      result.location = first.headers.get("location");
+      if (!REDIRECT_STATUSES.has(first.status)) throw new Error(`source answered ${first.status}, not a redirect`);
+      if (!result.location) throw new Error("source has no Location header");
+      let current = new URL(result.location, initial);
+      if (current.href !== expected.href) throw new Error(`Location ${current.href} differs from declared ${expected.href}`);
+      const requestIdentity = (url: URL): string => { const copy = new URL(url); copy.hash = ""; return copy.href; };
+      const seen = new Set([requestIdentity(initial)]);
+      // Reaching this bound is a failed assessment, never evidence of a healthy destination.
+      for (let hop = 0; hop < 5; hop++) {
+        if (!["http:", "https:"].includes(current.protocol) || current.username || current.password || current.origin !== expected.origin) throw new Error(`redirect chain leaves declared destination origin at ${current.href}`);
+        if (seen.has(requestIdentity(current))) throw new Error(`redirect loop reaches ${current.href}`);
+        seen.add(requestIdentity(current));
+        result.finalUrl = current.href;
+        const response = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(5_000) });
+        result.finalStatus = response.status;
+        if (response.status === 200) return result;
+        if (!REDIRECT_STATUSES.has(response.status)) throw new Error(`destination ${current.href} answered ${response.status}`);
+        const location = response.headers.get("location");
+        if (!location) throw new Error(`destination ${current.href} redirected without Location`);
+        current = new URL(location, current);
+      }
+      throw new Error("redirect chain exceeds five destination requests");
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+      return result;
+    }
+  }));
+}
+
 export interface SmokeInput {
   /** Paths declared by the repo's sitemap source — the contract the deployment must satisfy. */
   declared: string[];
@@ -33,7 +85,7 @@ export interface SmokeInput {
    * how /intake, the symptom #1308 was filed for, 404ed in production while every other check here
    * stayed green.
    */
-  redirects: RouteProbe[];
+  redirects: RedirectProbe[];
   /**
    * GET /api/scan — the readiness probe. `configured: null` = the deployment has no GET handler.
    * `sandboxSender: null` = this build predates the sender probe, so which sender is in force is
@@ -83,7 +135,7 @@ export function evaluateSmoke(input: SmokeInput): SmokeCheck[] {
   // A redirect that stops redirecting is indistinguishable, to every other check here, from one
   // that was never declared: the sitemap does not list it and no page file backs it. Only the
   // deployment's own answer separates them, so ask for it.
-  const deadRedirects = input.redirects.filter((r) => r.status < 300 || r.status >= 400);
+  const deadRedirects = input.redirects.filter((r) => !REDIRECT_STATUSES.has(r.status) || !r.location || r.finalStatus !== 200 || r.error);
   checks.push({
     name: "declared redirects still redirect",
     status: deadRedirects.length === 0 ? "pass" : "fail",
@@ -91,9 +143,9 @@ export function evaluateSmoke(input: SmokeInput): SmokeCheck[] {
       input.redirects.length === 0
         ? "the repo declares no redirects"
         : deadRedirects.length === 0
-          ? `all ${input.redirects.length} declared redirects answered 3xx`
+          ? `all ${input.redirects.length} declared redirects reached healthy destinations: ${input.redirects.map(r => `${r.path} → ${r.destination} (${r.finalStatus})`).join(", ")}`
           : `${deadRedirects.length} of ${input.redirects.length} did NOT redirect: ${deadRedirects
-              .map((r) => `${r.path} → ${r.status}`)
+              .map((r) => `${r.path} → ${r.status}; declared ${r.destination}: ${r.error ?? `destination was not confirmed healthy (Location ${r.location ?? "missing"}, terminal ${r.finalStatus ?? "unmeasured"})`}`)
               .join(", ")} — a visitor following that path meets a dead end (#1308)`,
   });
 
