@@ -659,7 +659,7 @@ export function runMultiProjectDynamicValidation(opts: {
       now,
       runner: made.runner,
       clientSuite: made.clientSuite,
-      stop: made.stop,
+      stop: () => made.stop(),
       writeArtifact,
     });
     return {
