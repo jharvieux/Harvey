@@ -26,6 +26,7 @@ import { classifyMigrationSql, type TableDataMapEntry } from "../../tools/pii-cl
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
 import { parseDefinerFunctions, parseLivePolicies } from "../migration-sql-parse.js";
+import { classifySqlPlacement } from "../residual-scope.js";
 import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
@@ -1309,6 +1310,15 @@ export function checkUnreadSqlSurfaces(dir: string): Finding[] {
   const unread = unreadSqlFiles(dir);
   if (unread.length === 0) return [];
 
+  const byPlacement = new Map<string, string[]>();
+  for (const file of unread) {
+    const placement = classifySqlPlacement(file);
+    byPlacement.set(placement, [...(byPlacement.get(placement) ?? []), file]);
+  }
+  const supported = [...(byPlacement.get("supabase-migration") ?? []), ...(byPlacement.get("schema-snapshot") ?? [])];
+  const policyParse = parseLivePolicies(supported.map((file) => ({ file, sql: readFileSync(join(dir, file), "utf8") })));
+  const failures = policyParse.unparsed.map((row) => `${row.file}:${row.line} (${row.reason})`);
+
   const NAMED = 8;
   const shown = unread.slice(0, NAMED).join(", ");
   const rest = unread.length > NAMED ? `, and ${unread.length - NAMED} more` : "";
@@ -1323,18 +1333,17 @@ export function checkUnreadSqlSurfaces(dir: string): Finding[] {
       location: "(repo-wide)",
       status: "Open",
       evidence:
-        `M1's static SQL pass reads two surfaces: every \`supabase/migrations/*.sql\` and a root ` +
-        `\`schema.sql\`. ${unread.length} other .sql file(s) are present and were NOT read: ${shown}${rest}. ` +
-        `The RLS-enablement, policy-semantics, SECURITY DEFINER, dynamic-SQL and storage-bucket checks ` +
-        `therefore never saw whatever they contain.`,
+        `M1's current invocation read root \`supabase/migrations/*.sql\` and a root \`schema.sql\`. ${unread.length} other .sql file(s) are present: ${shown}${rest}. ` +
+        `Placement census: ${byPlacement.get("supabase-migration")?.length ?? 0} nested Supabase migration(s), ${byPlacement.get("schema-snapshot")?.length ?? 0} schema snapshot(s), ` +
+        `${byPlacement.get("seed-or-fixture")?.length ?? 0} seed/fixture/dump file(s), and ${byPlacement.get("unrelated-sql")?.length ?? 0} unrelated SQL file(s). ` +
+        `The lifecycle parser examined all ${supported.length} supported nested migration/schema file(s), retained ${policyParse.policies.length} live policy identity/clauses, and retained ${failures.length} parse failure(s)${failures.length ? `: ${failures.join("; ")}` : "."} ` +
+        `This placement parse does not claim the full RLS, SECURITY DEFINER, dynamic-SQL or storage checks ran on a nested project; those require its workspace scan. Unrelated SQL is not treated as deployed schema history.`,
       impact:
         "If any of these files is where the schema actually lives, every static SQL finding in this report " +
         "is drawn from an incomplete picture — a permissive policy or a public storage bucket declared only " +
         "there was never assessed. Counted and named here so their absence cannot be read as a clean result.",
       fix:
-        "If one of these files is the schema, move it to `supabase/migrations/` or a root `schema.sql` (the two " +
-        "layouts Harvey reads) — or say which one it is so the scan can be pointed at it. If they are dumps, " +
-        "seeds or one-off scripts, no action is needed and this row is the record that they were skipped knowingly.",
+        "Run each nested Supabase project from its workspace root for the full static SQL checks. Review retained parse failures before relying on policy semantics. Seeds, fixtures, dumps and unrelated queries remain intentionally outside ordered schema state unless the operator identifies them as deployed schema input.",
       value: 1,
       ease: 4,
       safety: 5,

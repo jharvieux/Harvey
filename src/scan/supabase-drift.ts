@@ -34,7 +34,7 @@ import { isDirectorySafe, readNamesSafe } from "../fs-walk.js";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
-import { parseLivePolicies, parseLiveTableNames, parseMentionedTableNames, parseRlsToggles } from "../migration-sql-parse.js";
+import { parseLivePolicies, parseLiveRlsEnabled, parseLiveTableNames, parseMentionedTableNames, parseRlsToggles } from "../migration-sql-parse.js";
 import { findFreshPass, passSlotCensus } from "../audit-pass-artifact.js";
 
 // One live table as the drift queries return it. `extensionOwned` marks a table pg_depend attributes
@@ -76,15 +76,11 @@ function mentionedTables(migrations: MigrationFile[], schemas: Set<string>): Set
     .filter(t => schemas.has(t.schema)).map(t => key(t.schema, t.table)));
 }
 
-// Last explicit toggle wins; identifier folding happens in the shared SQL reader only.
+// Final explicit toggle wins within the final live table lifecycle. A DROP/re-CREATE clears the
+// old table's RLS expectation; renames and schema moves carry it to the new identity.
 export function expectedRlsEnabled(migrations: MigrationFile[], schemas?: Set<string>): Set<string> {
-  const last = new Map<string, boolean>();
-  for (const { sql } of migrations) {
-    for (const t of parseRlsToggles(sql)) {
-      if (!schemas || schemas.has(t.schema)) last.set(key(t.schema, t.table), t.enabled);
-    }
-  }
-  return new Set([...last.entries()].filter(([, enabled]) => enabled).map(([k]) => k));
+  return new Set(parseLiveRlsEnabled(migrations.map(({ sql }) => sql).join("\n"))
+    .filter((table) => !schemas || schemas.has(table.schema)).map((table) => key(table.schema, table.table)));
 }
 
 function readMigrationFiles(dir: string): MigrationFile[] {

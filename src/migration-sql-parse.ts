@@ -136,9 +136,29 @@ export function parseTableNames(sql: string): { schema: string; table: string }[
   }));
 }
 
-// `DROP TABLE [IF EXISTS] [schema.]table` — group 1/2 schema, 3/4 table. A comma-separated multi-table
-// drop matches only the first table (rare in Supabase migrations; a disclosed limitation).
 const DROP_TABLE = new RegExp(`\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?(?:${IDENT}\\.)?${IDENT}`, "gi");
+const DROP_TABLE_STATEMENT = /\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+)(?:;|$)/gi;
+const ALTER_TABLE_RENAME = new RegExp(`\\balter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+rename\\s+to\\s+${IDENT}`, "gi");
+const ALTER_TABLE_SET_SCHEMA = new RegExp(`\\balter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+set\\s+schema\\s+${IDENT}`, "gi");
+
+function qualifiedIdentity(text: string): { schema: string; table: string } | undefined {
+  const match = new RegExp(`^\\s*(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s*$`, "i").exec(text);
+  if (!match) return undefined;
+  return { schema: match[1] !== undefined || match[2] !== undefined ? identText(match[1], match[2]) : "public", table: identText(match[3], match[4]) };
+}
+
+function commaSeparatedIdentities(text: string): { schema: string; table: string }[] {
+  const parts: string[] = [];
+  let start = 0; let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '"') {
+      if (quoted && text[i + 1] === '"') i++;
+      else quoted = !quoted;
+    } else if (text[i] === "," && !quoted) { parts.push(text.slice(start, i)); start = i + 1; }
+  }
+  parts.push(text.slice(start));
+  return parts.map((part) => qualifiedIdentity(part.trim().replace(/\s+(?:cascade|restrict)\s*$/i, ""))).filter((value): value is { schema: string; table: string } => value !== undefined);
+}
 
 // Drift's unmanaged-table direction needs the identity even when a column body is unreadable.
 const CREATE_TABLE_NAME = new RegExp(`\\bcreate\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
@@ -165,17 +185,63 @@ export function parseRlsToggles(sql: string): { schema: string; table: string; e
 // event per table wins.
 export function parseLiveTableNames(sql: string): { schema: string; table: string }[] {
   sql = stripLineComments(sql);
-  const events: { pos: number; schema: string; table: string; op: "create" | "drop" }[] = [];
+  type Event = { pos: number; schema: string; table: string; op: "create" } | { pos: number; schema: string; table: string; op: "drop" } | { pos: number; schema: string; table: string; op: "rename"; next: string } | { pos: number; schema: string; table: string; op: "schema"; next: string };
+  const events: Event[] = [];
   const ident = (m: RegExpMatchArray) => ({
     schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public",
     table: identText(m[3], m[4]),
   });
-  for (const m of sql.matchAll(CREATE_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "create" });
-  for (const m of sql.matchAll(DROP_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "drop" });
+  for (const m of sql.matchAll(CREATE_TABLE_NAME)) events.push({ pos: m.index!, ...ident(m), op: "create" });
+  for (const m of sql.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) events.push({ pos: m.index!, ...identity, op: "drop" });
+  for (const m of sql.matchAll(ALTER_TABLE_RENAME)) events.push({ pos: m.index!, ...ident(m), op: "rename", next: identText(m[5], m[6]) });
+  for (const m of sql.matchAll(ALTER_TABLE_SET_SCHEMA)) events.push({ pos: m.index!, ...ident(m), op: "schema", next: identText(m[5], m[6]) });
   events.sort((a, b) => a.pos - b.pos);
-  const last = new Map<string, (typeof events)[number]>();
-  for (const e of events) last.set(JSON.stringify([e.schema, e.table]), e);
-  return [...last.values()].filter((e) => e.op === "create").map(({ schema, table }) => ({ schema, table }));
+  const live = new Map<string, { schema: string; table: string }>();
+  const key = (schema: string, table: string) => JSON.stringify([schema, table]);
+  for (const e of events) {
+    const old = key(e.schema, e.table);
+    if (e.op === "drop") live.delete(old);
+    else if (e.op === "create") live.set(old, { schema: e.schema, table: e.table });
+    else if (live.has(old)) {
+      live.delete(old);
+      const moved = e.op === "rename" ? { schema: e.schema, table: e.next } : { schema: e.next, table: e.table };
+      live.set(key(moved.schema, moved.table), moved);
+    }
+  }
+  return [...live.values()];
+}
+
+// Final RLS state shares the table lifecycle. A toggle attached to a table that is later dropped
+// must not survive a same-name re-CREATE, and renames/schema moves carry the state with the table.
+export function parseLiveRlsEnabled(sql: string): { schema: string; table: string }[] {
+  sql = stripLineComments(sql);
+  type Event = { pos: number; op: "create"; schema: string; table: string; ifNotExists: boolean }
+    | { pos: number; op: "drop"; schema: string; table: string }
+    | { pos: number; op: "toggle"; schema: string; table: string; enabled: boolean }
+    | { pos: number; op: "rename" | "schema"; schema: string; table: string; next: string };
+  const events: Event[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE_NAME)) events.push({ pos: m.index!, op: "create", ...tableIdentity(m), ifNotExists: /if\s+not\s+exists/i.test(m[0]) });
+  for (const m of sql.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) events.push({ pos: m.index!, op: "drop", ...identity });
+  for (const m of sql.matchAll(RLS_TOGGLE)) events.push({ pos: m.index!, op: "toggle", ...tableIdentity(m), enabled: m[5]!.toLowerCase() === "enable" });
+  for (const m of sql.matchAll(ALTER_TABLE_RENAME)) events.push({ pos: m.index!, op: "rename", ...tableIdentity(m), next: identText(m[5], m[6]) });
+  for (const m of sql.matchAll(ALTER_TABLE_SET_SCHEMA)) events.push({ pos: m.index!, op: "schema", ...tableIdentity(m), next: identText(m[5], m[6]) });
+  events.sort((a, b) => a.pos - b.pos);
+  const key = (schema: string, table: string) => JSON.stringify([schema, table]);
+  const live = new Map<string, { schema: string; table: string; enabled: boolean }>();
+  for (const event of events) {
+    const old = key(event.schema, event.table);
+    if (event.op === "drop") live.delete(old);
+    else if (event.op === "create") {
+      if (!(event.ifNotExists && live.has(old))) live.set(old, { schema: event.schema, table: event.table, enabled: false });
+    }
+    else if (event.op === "toggle") live.set(old, { schema: event.schema, table: event.table, enabled: event.enabled! });
+    else if (live.has(old)) {
+      const state = live.get(old)!; live.delete(old);
+      if (event.op === "rename") state.table = event.next; else state.schema = event.next;
+      live.set(key(state.schema, state.table), state);
+    }
+  }
+  return [...live.values()].filter((state) => state.enabled).map(({ schema, table }) => ({ schema, table }));
 }
 
 // Columns of each live table's EFFECTIVE definition — the CREATE TABLE currently in force at the end
@@ -546,6 +612,7 @@ const CREATE_POLICY = new RegExp(`\\bcreate\\s+policy\\s+${IDENT}\\s+on\\s+(?:${
 // `drop policy [if exists] <name> on [schema.]<table>` — the statement a later migration uses to
 // remove (or, paired with a fresh CREATE POLICY of the same name, replace) an earlier policy (#937).
 const DROP_POLICY = new RegExp(`\\bdrop\\s+policy\\s+(?:if\\s+exists\\s+)?${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
+const ALTER_POLICY_RENAME = new RegExp(`\\balter\\s+policy\\s+${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+rename\\s+to\\s+${IDENT}`, "gi");
 
 // A policy parsed out of migration SQL, shaped to feed rls-policy-review.ts's reviewPolicy()
 // unchanged — that reviewer takes a policy struct and doesn't care whether the clauses came from
@@ -717,7 +784,11 @@ interface LivePolicySet {
 export function parseLivePolicies(migrations: { file: string; sql: string }[]): LivePolicySet {
   const key = (schema: string, table: string, name: string): string => JSON.stringify([schema, table, name]);
   interface CreateRec { schema: string; table: string; name: string; file: string; line: number; parsed?: ParsedPolicy; unparsed?: UnparsedPolicy }
-  interface Event { seq: number; k: string; op: "create" | "drop"; rec?: CreateRec }
+  type Event = { seq: number; op: "create"; k: string; rec: CreateRec }
+    | { seq: number; op: "drop"; k: string }
+    | { seq: number; op: "rename-policy"; schema: string; table: string; name: string; next: string }
+    | { seq: number; op: "drop-table"; schema: string; table: string }
+    | { seq: number; op: "rename-table" | "set-schema"; schema: string; table: string; next: string };
   const events: Event[] = [];
   let seq = 0;
 
@@ -730,12 +801,26 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
     const parsedByKey = new Map<string, ParsedPolicy>(policies.map((p) => [key(p.schema, p.table, p.name), p]));
     const unparsedByKey = new Map<string, UnparsedPolicy>(unparsed.map((u) => [key(u.schema, u.table, u.name), u]));
 
-    const local: { pos: number; op: "create" | "drop"; schema: string; table: string; name: string }[] = [];
+    type Local = { pos: number; op: "create"; schema: string; table: string; name: string }
+      | { pos: number; op: "drop"; schema: string; table: string; name: string }
+      | { pos: number; op: "rename-policy"; schema: string; table: string; name: string; next: string }
+      | { pos: number; op: "drop-table"; schema: string; table: string }
+      | { pos: number; op: "rename-table" | "set-schema"; schema: string; table: string; next: string };
+    const local: Local[] = [];
     for (const m of clean.matchAll(CREATE_POLICY)) local.push({ pos: m.index!, op: "create", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
     for (const m of clean.matchAll(DROP_POLICY)) local.push({ pos: m.index!, op: "drop", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
+    for (const m of clean.matchAll(ALTER_POLICY_RENAME)) local.push({ pos: m.index!, op: "rename-policy", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]), next: identText(m[7], m[8]) });
+    for (const m of clean.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) local.push({ pos: m.index!, op: "drop-table", ...identity });
+    for (const m of clean.matchAll(ALTER_TABLE_RENAME)) local.push({ pos: m.index!, op: "rename-table", schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public", table: identText(m[3], m[4]), next: identText(m[5], m[6]) });
+    for (const m of clean.matchAll(ALTER_TABLE_SET_SCHEMA)) local.push({ pos: m.index!, op: "set-schema", schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public", table: identText(m[3], m[4]), next: identText(m[5], m[6]) });
     local.sort((a, b) => a.pos - b.pos);
 
     for (const e of local) {
+      if (e.op === "rename-policy") {
+        events.push({ seq: seq++, ...e });
+        continue;
+      }
+      if (!("name" in e)) { events.push({ seq: seq++, ...e }); continue; }
       const k = key(e.schema, e.table, e.name);
       if (e.op === "drop") {
         events.push({ seq: seq++, k, op: "drop" });
@@ -749,7 +834,22 @@ export function parseLivePolicies(migrations: { file: string; sql: string }[]): 
   const live = new Map<string, CreateRec>();
   for (const e of events) {
     if (e.op === "drop") live.delete(e.k);
-    else live.set(e.k, e.rec!);
+    else if (e.op === "create") live.set(e.k, e.rec!);
+    else if (e.op === "rename-policy") {
+      const old = key(e.schema, e.table, e.name); const rec = live.get(old);
+      if (rec) { live.delete(old); rec.name = e.next; if (rec.parsed) rec.parsed.name = e.next; if (rec.unparsed) rec.unparsed.name = e.next; live.set(key(e.schema, e.table, e.next), rec); }
+    } else if (e.op === "drop-table") {
+      for (const [k, rec] of live) if (rec.schema === e.schema && rec.table === e.table) live.delete(k);
+    } else {
+      for (const [k, rec] of [...live]) {
+        if (rec.schema !== e.schema || rec.table !== e.table) continue;
+        live.delete(k);
+        if (e.op === "rename-table") rec.table = e.next; else rec.schema = e.next;
+        if (rec.parsed) { rec.parsed.table = rec.table; rec.parsed.schema = rec.schema; }
+        if (rec.unparsed) { rec.unparsed.table = rec.table; rec.unparsed.schema = rec.schema; }
+        live.set(key(rec.schema, rec.table, rec.name), rec);
+      }
+    }
   }
 
   const out: LivePolicySet = { policies: [], unparsed: [] };

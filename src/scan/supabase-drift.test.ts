@@ -162,6 +162,18 @@ describe("expectedRlsEnabled", () => {
     ];
     expect([...expectedRlsEnabled(migrations)].sort()).toEqual([JSON.stringify(["public", "a"]), JSON.stringify(["public", "c"])]);
   });
+
+  it("does not carry RLS across drop/re-create and follows table identity moves (#2142)", () => {
+    const migrations = [
+      { file: "1.sql", sql: "create table public.a(id uuid); alter table public.a enable row level security; create table public.b(id uuid); alter table public.b enable row level security;" },
+      { file: "2.sql", sql: "drop table public.a; create table public.a(id uuid); alter table public.b rename to c; alter table public.c set schema tenant;" },
+    ];
+    expect([...expectedRlsEnabled(migrations)]).toEqual([JSON.stringify(["tenant", "c"])]);
+  });
+
+  it("keeps RLS across a CREATE TABLE IF NOT EXISTS no-op", () => {
+    expect([...expectedRlsEnabled([{ file: "1.sql", sql: "create table public.a(id uuid); alter table public.a enable row level security; create table if not exists public.a(id uuid);" }])]).toEqual([JSON.stringify(["public", "a"])]);
+  });
 });
 
 describe("loadMigrations", () => {

@@ -628,6 +628,7 @@ export function buildHtml(data) {
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
+    ${residualScopeSection(data.residualScope)}
     ${conservationSection(data.conservation)}
     ${data.auditEvidence?.testQualityByScope?.length > 1
       ? data.auditEvidence.testQualityByScope.map((row) => `<h3>${esc(row.scope.workspace)} — ${esc(row.scope.tier)} / ${esc(row.scope.surface)}</h3>${testQualityBlock({ testQuality: row.testQuality })}`).join("")
@@ -703,6 +704,12 @@ function evidenceSection(evidence) {
     return `<tr><td>${esc(scope.module)} / ${esc(scope.workspace)}</td><td>${esc(scope.tier)} / ${esc(scope.surface)}</td><td>${esc(receipt.generatedAt)}<br>${esc(receipt.producer.name)}@${esc(receipt.producer.version)}<br><code>${esc(receipt.id)}</code></td></tr>`;
   }).join("");
   return `<h2>Current evidence and receipt history</h2><div class="kv">Current coverage above is derived from the newest accepted evidence for each module, workspace, tier and surface. ${evidence.history.length} older receipt(s) are superseded and retained in the JSON history; their old limitations are not current claims. Original raw owning-run outputs are retained unchanged.</div><table class="cov"><tr><th>Module / workspace</th><th>Assessed surface</th><th>Owning-run receipt</th></tr>${rows}</table>`;
+}
+
+export function residualScopeSection(inventory) {
+  if (!inventory?.rows?.length) return "";
+  const rows = inventory.rows.map((row) => `<tr data-residual-scope-id="${esc(row.id)}"><td>${esc(row.domain)}</td><td>${esc(row.title)}<br><code>${esc(row.id)}</code></td><td>${esc(row.status)}</td><td>${row.population.examined} examined / ${row.population.unresolved} unresolved${row.population.parseFailures?.length ? `<br>${row.population.parseFailures.length} parse failure(s)` : ""}</td><td>${esc(row.reason)}<br><b>Provenance:</b> ${esc(row.provenance)}<br><b>Falsifier:</b> ${esc(row.falsifier)}<br><b>Next:</b> ${esc(row.nextStep)}${row.owner ? `<br><b>Owner:</b> ${esc(row.owner)}` : ""}</td></tr>`).join("");
+  return `<h2>Residual assessment scope</h2><div class="kv">Machine inventory schema ${inventory.schemaVersion}; ${inventory.summary.filesExamined} target files examined. ${inventory.summary.unresolved} unresolved population unit(s) remain distinct from confirmed defects.</div><table class="cov"><tr><th>Domain</th><th>Population</th><th>Disposition</th><th>Counts</th><th>Reason, provenance and next step</th></tr>${rows}</table>`;
 }
 
 if (isMain) {

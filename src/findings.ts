@@ -3,6 +3,7 @@
 
 import { completenessStatement, deriveCompleteness, headlineClaimsCompletion } from "./audit-completeness.js";
 import { assessmentErrors, baselineIntegrityErrors, conservationIntegrityErrors, contentIdentity, populationSummary } from "../report-template/dispositions.mjs";
+import { residualScopeErrors, type ResidualScopeInventory } from "./residual-scope.js";
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
@@ -424,6 +425,9 @@ export interface FindingsDocument {
   testQuality?: TestQuality;
   // Operator/counsel-approved limitations & liability wording (#1048).
   legalTerms?: LegalTerms;
+  // Complete residual assessment inventory. It remains separate from defects: unresolved and
+  // intentionally excluded populations are scope claims, with their own owner and falsifier.
+  residualScope?: ResidualScopeInventory;
 }
 
 // Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
@@ -620,6 +624,7 @@ export function validateFindings(data: unknown): ValidationResult {
   if (isRecord(data.meta) && data.meta.auditContext !== undefined) validateAuditContext(data.meta.auditContext, "meta.auditContext", errors);
   if (data.baseline !== undefined) validateBaseline(data.baseline, errors, data.findings);
   if (data.testQuality !== undefined) validateTestQuality(data.testQuality, errors);
+  if (data.residualScope !== undefined) errors.push(...residualScopeErrors(data.residualScope));
   if (data.legalTerms !== undefined && (!isRecord(data.legalTerms) || typeof data.legalTerms.text !== "string" || data.legalTerms.text.trim() === "")) {
     errors.push("legalTerms.text: expected non-empty string — an empty terms block would render as approved-but-blank");
   }

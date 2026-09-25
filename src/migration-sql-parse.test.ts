@@ -349,6 +349,14 @@ describe("parsePolicies", () => {
 });
 
 describe("parseLivePolicies (#937 — drop/replace tracked, only the final live policy survives)", () => {
+  it("folds policy rename and table rename/schema/drop lifecycle (#2142)", () => {
+    const live = parseLivePolicies([
+      { file: "1.sql", sql: "create policy old on public.docs using (true);" },
+      { file: "2.sql", sql: "alter policy old on public.docs rename to current; alter table public.docs rename to records; alter table public.records set schema tenant;" },
+    ]);
+    expect(live.policies.map((p) => [p.schema, p.table, p.name])).toEqual([["tenant", "records", "current"]]);
+    expect(parseLivePolicies([{ file: "3.sql", sql: "create policy p on public.gone using (true); drop table public.gone;" }]).policies).toEqual([]);
+  });
   const leak = "create policy p on public.docs for select using (true);";
   const scoped = "create policy p on public.docs for select using (tenant_id = current_tenant_id());";
 
@@ -449,6 +457,13 @@ describe("parseNotNullColumns (#630 — nullability drives FK omission vs parent
 });
 
 describe("parseLiveTableNames (#640 — DROPped tables excluded, re-CREATE re-includes)", () => {
+  it("folds comma drops, table renames and schema moves in statement order (#2142)", () => {
+    expect(parseLiveTableNames([
+      "create table public.a(id uuid); create table public.b(id uuid);",
+      "drop table public.a, public.b; create table public.c(id uuid);",
+      "alter table public.c rename to d; alter table public.d set schema tenant;",
+    ].join("\n"))).toEqual([{ schema: "tenant", table: "d" }]);
+  });
   it("excludes a table that is created then dropped", () => {
     const live = parseLiveTableNames("create table public.a (\n  id uuid\n);\ncreate table public.b (\n  id uuid\n);\ndrop table if exists public.b;");
     expect(live.map((t) => t.table)).toEqual(["a"]);
