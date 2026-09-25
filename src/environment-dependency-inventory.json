@@ -123367,7 +123367,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 291,
+        "line": 295,
         "path": "src/cwe-map.ts"
       },
       "freshness": {
@@ -366294,8 +366294,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "7f56ed26a67e927be69d330e36fc154b4fd04cca",
-    "commitPayload": "dHJlZSA1OTE1YzU5M2EzODU0YzY1MTU1YjI5MDVjZWU2YzIwODdmZmQ4ZmM0CnBhcmVudCA4MTgzZjEwMWZhMWU1N2E4ODdmNTIwYjEwZGYzYTczMTc2ODMxYTVlCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyMDE2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyMDE2IC0wNTAwCgpCaW5kIGVmZmVjdGl2ZW5lc3Mgc25hcHNob3QgdG8gTTEwIGZpbmRpbmcgaWRlbnRpdGllcyAoIzIxMzQpCg==",
+    "commit": "b66102f7b10f5e488518324e52ef9533389782ba",
+    "commitPayload": "dHJlZSAyOWY5ODQyODVmODliMzFjZDJkN2Q2OGYyOTAxYjQ2NDIwMzE0YjJhCnBhcmVudCA5MWNlMDZiNzc0NGVjYWYyNmU2NDBjNjIyY2ZlY2MzMDY5ZWVkYWU3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyNTg3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzMyNTg3IC0wNTAwCgpSb3V0ZSBNMTAgc2hhcmVkIHNvdXJjZSBpbnB1dHMgdG8gZWZmZWN0aXZlbmVzcyBjaGVja3MgKCMyMTM0KQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -366304,13 +366304,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "067cab0499187411b294c4352067b5b4cb9e2fb9",
+        "gitOid": "c72870f9b3b3837a358a1691a2d424207b210845",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "a00ef5fab13a8a33c0a24ba38e591cde285cc7f2c7b645e70643bdbf1452a77c",
-    "tree": "5915c593a3854c65155b2905cee6c2087ffd8fc4"
+    "populationSha256": "f737db251c0be7f6b245b4b79b28102e1c3792c3273de6ac1f2516decad56bc7",
+    "tree": "29f984285f89b31cd2d7d68f2901b46420314b2a"
   },
   "venues": [
     {
@@ -375584,19 +375584,19 @@
       "sha256": "76f78f232734daf34caf19bba8af74bf21a5b2db2db743dd57c4d4e5e286591d"
     },
     {
-      "bytes": 26250,
+      "bytes": 27136,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "5720a50e65eb089e6ec8176da913878f76e26aea",
+      "gitOid": "5135eca03b67ca1c1281725063b3944e41d884c0",
       "id": "src/cwe-map.ts",
       "kind": "source",
-      "literalCount": 378,
-      "literalSha256": "364dbad76657876bf4f8e14159b70f7fd466da0ef6117f896188e57048c7e8bd",
+      "literalCount": 386,
+      "literalSha256": "3f3187660fed36c07c3fae7b95aac590f2fb3d29e704ecbf94cdac5cda3863b5",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cwe-map.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "8c221380d494775c441c2df3e90a77d75c375695580a57a1c7eafd75b2002254"
+      "sha256": "ee29aa18f76b188403856a92c4d01d52c181a27b150097d9f37ed7dbcc823696"
     },
     {
       "bytes": 9429,
@@ -386174,11 +386174,11 @@
       "sha256": "3ef7c016a503b6e424e015ccd92a19aa55d87923bdb7ab68bc45e5d85d83a0c5"
     },
     {
-      "bytes": 17872,
+      "bytes": 18032,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "90fa69b5aaf0ec90cc3a8ba5e601833e26e8d1d1",
+      "gitOid": "1d8759a1555c0985639fcfb3ad811805fe15dde8",
       "id": "src/heavy-test-workloads.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -386186,7 +386186,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/heavy-test-workloads.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "2060546d1f6938ad08cb73939531e67dd3d871c9c7b93e26e56132e1d12422e2"
+      "sha256": "f97b616b802469e8948bbb889ab4f21e743086352dc351602794be1217f6e109"
     },
     {
       "bytes": 33588,
