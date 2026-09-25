@@ -1,3 +1,5 @@
+// Installed-runner controls share this registered heavy workload and its serialized budget.
+import "../__tests__/mutation-runner-validity.js";
 // #470: the corpus-drift job provisions no Stryker, so it calls this CLI with --detect-only —
 // which must NEVER attempt a Stryker run. These child-process tests are the missing-stryker
 // simulation: the fixture repos have a runner dep in package.json but no stryker binary anywhere,

@@ -2,14 +2,12 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } fr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import type { MutationRunnerValidity, StrykerReport } from "./mutation-scan.js";
-import { assertCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
+import type { MutationRunnerValidity, StrykerReport } from "../mutation-scan.js";
+import { assertCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 
-vi.setConfig({ testTimeout: 30_000 });
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURE = join(ROOT, "src", "__fixtures__", "mutation-runner-validity");
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
