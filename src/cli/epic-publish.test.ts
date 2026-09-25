@@ -87,4 +87,4 @@ it("keeps the actual publish CLI pending until recovered story effects finish (#
     await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done()));
     rmSync(cwd, { recursive: true, force: true });
   }
-}, 45_000);
+});
