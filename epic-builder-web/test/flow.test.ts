@@ -61,7 +61,7 @@ function mockGitHubFetch() {
     const method = init?.method ?? "GET";
     calls.push({ method, url: u });
     const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
-    if (u.includes("/search/issues")) return ok({ items: [] }); // findByMarker: nothing pre-exists
+    if (u.includes("/search/issues")) return ok({ items: [], total_count: 0, incomplete_results: false }); // findByMarker: nothing pre-exists
     if (u.includes("/contents/")) return ok({ content: { html_url: `https://github.com/o/r/blob/main/brief.md` } });
     if (/\/issues\/\d+\/labels$/.test(u)) return ok({});
     if (/\/issues\/\d+$/.test(u) && method === "GET") return ok({ number: 41, html_url: "u", body: "" });
