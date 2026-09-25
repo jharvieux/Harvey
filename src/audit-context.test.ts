@@ -7,6 +7,7 @@ import { auditContextDigest, beginFreshAuditContext } from "./audit-context.js";
 import { diffAgainstBaseline } from "./audit-diff.js";
 import { assembleEngagementDocument } from "./audit-report.js";
 import type { AuditContext, ReportMeta } from "./findings.js";
+import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
@@ -134,5 +135,23 @@ describe("fresh audit execution context", () => {
     expect(context.provenance?.moduleObservations[0]?.instance).toBe("apps/[REDACTED]");
     expect(context.provenance?.observedScopesSha256).toBe(auditContextDigest([["M7", "apps/owned-secret-fixture"]]));
     expect(JSON.stringify(context)).not.toContain("owned-secret-fixture");
+  });
+
+  it("assigns observed implementations without guessing which sibling workspace ran a producer", () => {
+    const options = fixture();
+    const producer = createProducerExecutionReceipt({ executionId: "observed", producerId: "static:M7", implementationId: "src/static.ts#scan", module: "M7", tier: "free", findingFamilyIds: [], findingIds: [], edges: [{ kind: "semantic-call", from: "scan", to: "M7" }] });
+    const single = beginFreshAuditContext(options);
+    single.observeModule("M7", [{ kind: "examined", unitsExamined: 1, scope: "source files", findings: [], detail: "fixture" }]);
+    const bound = single.finish([producer]);
+    const token = JSON.stringify([producer.producerId, producer.implementationId]);
+    expect(Object.keys(bound.producerAssignments!)).toEqual(bound.assessedScope);
+    expect(bound.producerAssignments![bound.assessedScope[0]!]!).toContain(token);
+    const siblings = beginFreshAuditContext(options);
+    for (const instance of ["apps/a", "apps/b"]) siblings.observeModule("M7", [{ kind: "examined", unitsExamined: 1, instance, scope: "source files", findings: [], detail: "fixture" }]);
+    const uncertain = siblings.finish([producer]);
+    expect(Object.keys(uncertain.producerAssignments!).sort()).toEqual(uncertain.assessedScope);
+    expect(Object.values(uncertain.producerAssignments!).flat()).not.toContain(token);
+    expect(uncertain.provenance?.producerIdentityComplete).toBe(false);
+    expect(uncertain.limitations?.join(" ")).toContain("not each workspace");
   });
 });

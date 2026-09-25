@@ -17,7 +17,7 @@ function verifiedFreshContext(context: AuditContext | undefined, evidence: Audit
   const scopes = evidence.current.map((receipt) => [receipt.scope.module, receipt.scope.workspace]);
   if (auditContextDigest(scopes.sort()) !== context.provenance.observedScopesSha256) return undefined;
   for (const receipt of evidence.current) {
-    const owners = receipt.rawArtifacts.filter((artifact) => artifact.sourcePath?.endsWith(`/${receipt.scope.module}-owning-run.json`));
+    const owners = receipt.rawArtifacts.filter((artifact) => artifact.sourcePath && basename(artifact.sourcePath) === `${receipt.scope.module}-owning-run.json`);
     if (owners.length !== 1) return undefined;
     try {
       const owner = JSON.parse(readFileSync(join(bundle, owners[0]!.path), "utf8")) as { freshExecution?: { engagementId?: string; bindingSha256?: string; auditContext?: AuditContext } };

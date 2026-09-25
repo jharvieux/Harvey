@@ -143,13 +143,27 @@ export function beginFreshAuditContext(options: {
       if (options.configuration.connected || options.configuration.dynamic || options.configuration.llm) limitations.push("Live, dynamic or model inputs were requested; a local source digest does not bind their mutable external state.");
       const producerVersions: Record<string, string> = { engine: engineBefore.contentSha256, node: process.version };
       for (const [name, versions] of tools) producerVersions[`launcher:${name}`] = auditContextDigest([...versions].sort());
-      for (const producer of producers) producerVersions[`producer:${producer.producerId}`] = producer.implementationId;
-      const producerIdentityComplete = commandGaps.size === 0 && ![options.configuration.connected, options.configuration.dynamic, options.configuration.llm].some(Boolean);
+      for (const producer of producers) producerVersions[JSON.stringify([producer.producerId, producer.implementationId])] = producer.implementationId;
+      const scopeKey = (row: Observation): string => JSON.stringify([row.module, row.instance, row.status, row.scope]);
+      const producerAssignments: Record<string, string[]> = {};
+      let assignmentsComplete = true;
+      for (const row of observations) {
+        const identities = [JSON.stringify([`audit-runner:${row.module}`, engineBefore.contentSha256]), JSON.stringify(["node", process.version])];
+        const moduleProducers = producers.filter((producer) => producer.module === row.module);
+        if (observations.filter((candidate) => candidate.module === row.module).length === 1) {
+          identities.push(...moduleProducers.map((producer) => JSON.stringify([producer.producerId, producer.implementationId])));
+        } else if (moduleProducers.length) {
+          assignmentsComplete = false;
+          limitations.push(`${row.module}: observed producer receipts identify the module but not each workspace; only the common runner implementation is assigned to sibling scopes.`);
+        }
+        producerAssignments[scopeKey(row)] = [...new Set(identities)].sort();
+      }
+      const producerIdentityComplete = assignmentsComplete && commandGaps.size === 0 && ![options.configuration.connected, options.configuration.dynamic, options.configuration.llm].some(Boolean);
       const revision = beforeRevision;
       const scopeComplete = limitations.length === 0 && producerIdentityComplete && before.complete && after.complete && targetStable && engineBefore.complete && engineAfter.complete && engineStable && inputBindings.every((input) => input.complete);
       return {
         engagementId, kind: "client-audit", target: { id: target, revision: `content:${before.contentSha256}` }, producerVersions,
-        schemaVersion: "finding-dispositions/1", assessedScope: observations.map((row) => JSON.stringify([row.module, row.instance, row.status, row.scope])).sort(), scopeComplete,
+        schemaVersion: "finding-dispositions/1", assessedScope: observations.map(scopeKey).sort(), scopeComplete, producerAssignments,
         limitations: [...new Set(limitations.map(safe))],
         provenance: {
           schema: 1, kind: "fresh-execution", target: { contentSha256: before.contentSha256, ...(revision ? { gitRevision: revision } : {}), complete: before.complete && after.complete, stable: targetStable },

@@ -267,7 +267,7 @@ describe("run-audit CLI export capture", () => {
     expect(baselineEngagement.baseline?.counts.persistent).toBeGreaterThan(0);
     expect(baselineEngagement.baseline?.counts.resolved).toBe(0);
 
-    // Missing strict provenance stays explicitly incompatible and cannot claim remediation.
+    // Require explicit incompatibility when strict provenance is absent.
     delete baseline.auditContext;
     writeFileSync(baselinePath, JSON.stringify(baseline));
     await run([
@@ -285,6 +285,7 @@ describe("run-audit CLI export capture", () => {
     expect(engagement.auditContext?.target.revision).toMatch(/^content:[a-f0-9]{64}$/);
     expect(engagement.auditContext?.provenance?.moduleObservations).toContainEqual(expect.objectContaining({ module: "M7", status: "examined", unitsExamined: expect.any(Number) }));
     expect(engagement.auditContext?.scopeComplete).toBe(false);
+    expect(Object.keys(engagement.auditContext?.producerAssignments ?? {}).sort()).toEqual(engagement.auditContext?.assessedScope);
     expect(sarifOnly.runs[0]?.properties.harveyAuditContext?.target).toEqual(engagement.auditContext?.target);
     expect(sarifOnly.runs[0]?.properties.harveyAuditContext?.engagementId).not.toBe(engagement.auditContext?.engagementId);
     const meta = join(scratch, "forged-context-meta.json");
