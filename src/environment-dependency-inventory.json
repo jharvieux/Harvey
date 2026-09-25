@@ -364580,8 +364580,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "87bc5e7cde6b6e5ecd0ff5c2843000bdfe69074b",
-    "commitPayload": "dHJlZSBhNzIxNTIwNWRjMDYwNDQwZDcwZDA2YTNlMjRiZWI3MjY5MjNkYWQzCnBhcmVudCBmNmI1YjAwNDFlZjRlYTZjYzNhNzRjN2JjYWU3ZmZhODBiMjhjOGQ0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxMDY2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxMjMzIC0wNTAwCgpSZXN1bWUgQXp1cmUgYXR0YWNobWVudCByZWxhdGlvbnMgd2l0aG91dCByZXVwbG9hZCAjMjExMwo=",
+    "commit": "15946fdb63551e0de9baa074c509891aa9545c79",
+    "commitPayload": "dHJlZSA3YzNhYjA5ZjZhNThhYTQzZjY2OTA0MmQ0YzFlMGJjM2Y2ODNkMTFmCnBhcmVudCA0MmRmMzU4M2RiNDgyOTI3MWZjODY4ZDhlYzMyNzZkZmQzMTlhMjU3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxODIxIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzIxODIxIC0wNTAwCgpVc2Ugc2hhcmVkIHRpbWVvdXQgZm9yIEF6dXJlIHB1Ymxpc2hlciBjb250cm9sICgjMjExMykK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364590,13 +364590,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "de18411c8e4ec559c8c1dbe261b77deae100ab13",
+        "gitOid": "f9ba470ce24f604edc390e9c98f2097a27a35e40",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "6c2fa83f5f4757a56b71652a3e3a5d4c2751696440ea395576fe2c799aee7c9c",
-    "tree": "a7215205dc060440d70d06a3e24beb726923dad3"
+    "populationSha256": "67c1735b628b08045d375649d4d7f41bab065555520631c2fd7ba7aadff6376a",
+    "tree": "7c3ab09f6a58aa43f669042d4c1e0bc3f683d11f"
   },
   "venues": [
     {
@@ -371530,19 +371530,19 @@
       "sha256": "5ad9a703c52f41a2c8699435e9b8326cbfede60d501441c5ca366604a4b35b8e"
     },
     {
-      "bytes": 12737,
+      "bytes": 12729,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "73eb7d320a711b6893683edb3a51be656d4a9e0d",
+      "gitOid": "1db83493d2e58d00dd6b3493363aceebff3518cb",
       "id": "src/cli/epic-publish.test.ts",
       "kind": "source",
-      "literalCount": 208,
-      "literalSha256": "3ae2c01f0260b17a9e12d0784c2c96cd054e079019da2a79a38aa36ca9301843",
+      "literalCount": 207,
+      "literalSha256": "ffd0456fee8b657dd641c4ac1a7877ccf1aa9c6350a2f4c716064f47296eec74",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/epic-publish.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ec955735edce8d7a2041def45d5c0cbcd4b395912cfce93fb0e251ca6f9c4447"
+      "sha256": "b07fd76ec1e64b36e75bb0179da37910f749287947c46c24edb5cefe4b4702f2"
     },
     {
       "bytes": 10066,
