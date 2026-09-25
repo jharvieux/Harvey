@@ -41,7 +41,11 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
   afterAll(async () => {
     if (sql) await sql.end();
     if (started) await execute(binary("pg_ctl"), ["-D", join(root, "data"), "-m", "fast", "-w", "stop"]);
-    if (root) rmSync(root, { recursive: true, force: true });
+    if (root && evidence) {
+      rmSync(join(root, "data"), { recursive: true, force: true });
+      rmSync(join(root, "socket"), { recursive: true, force: true });
+      writeFileSync(join(evidence, "runtime-directory.txt"), `${root}\n`);
+    } else if (root) rmSync(root, { recursive: true, force: true });
   });
 
   async function countAs(role: string, query: string) {
@@ -63,7 +67,7 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
     const result = await execute(process.execPath, ["--import", "tsx", "tools/pii-classify.mjs", "--schemas", schemas, "--exposed-schemas", "public,private,pgtenant", "--out", out, "--data-map-out", map, ...extra], { env, maxBuffer: 8 * 1024 * 1024 });
     const findings = JSON.parse(readFileSync(out, "utf8")) as Finding[];
     if (evidence) {
-      writeFileSync(join(evidence, `${name}-findings.json`), JSON.stringify(findings, null, 2));
+      writeFileSync(join(evidence, `${name}-findings.json`), readFileSync(out));
       writeFileSync(join(evidence, `${name}-map.json`), readFileSync(map));
       writeFileSync(join(evidence, `${name}-stdout.log`), result.stdout);
     }
@@ -127,6 +131,7 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
     writeFileSync(file, "// Changed source, retaining the referenced line.\nexport const encryptPatient = value => value;\n");
     const changed = await run("public,private,pgtenant", "source-mismatch", ["--source-root", root, "--encryption-boundaries", manifest]);
     expect(changed.find((f) => f.id === "M10-PROT-00")!.evidence).toContain("did not match file bytes");
+    if (evidence) writeFileSync(join(evidence, "source-boundary-original.mjs.txt"), source);
     if (evidence) writeFileSync(join(evidence, "ciphertext-control.json"), JSON.stringify({ plaintextBytes: Buffer.byteLength("synthetic-ssn"), ciphertextBytes: ciphertext.length, differs: true, sourceSha256: createHash("sha256").update(source).digest("hex"), findingRemainsReview: true, changedSourceRejected: true }, null, 2));
   });
 
@@ -173,7 +178,7 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
       expect(readFileSync(join(destination, "catalog-denied-report.html"), "utf8")).toContain("unexamined unknown schema(s)");
       expect(JSON.parse(readFileSync(join(destination, "catalog-denied-conservation.json"), "utf8"))).toMatchObject({ ok: true, produced: 1, delivered: 2, deliveredFromProduced: 1, synthesized: 1, unaccounted: 0 });
       if (evidence) {
-        writeFileSync(join(evidence, "catalog-denied-findings.json"), JSON.stringify(rows, null, 2));
+        writeFileSync(join(evidence, "catalog-denied-findings.json"), readFileSync(out));
         writeFileSync(join(evidence, "catalog-denied-original-report.json"), JSON.stringify(report, null, 2));
         writeFileSync(join(evidence, "catalog-denied-replay-ownership.json"), JSON.stringify(replay.evidence, null, 2));
       }
