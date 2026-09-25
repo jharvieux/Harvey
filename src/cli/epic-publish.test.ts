@@ -216,4 +216,4 @@ it("persists an Azure upload receipt and resumes only the relation through a loo
     await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done()));
     rmSync(cwd, { recursive: true, force: true });
   }
-}, 60_000);
+});
