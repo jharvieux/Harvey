@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
-import type { DraftSession, ReviewAction } from "./types.js";
+import { SESSION_STATES, type DraftSession, type ReviewAction, type SessionState, type StoryManifestEntry } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter, type ParsedDoc } from "./frontmatter.js";
 
 const ROOT_DIR = ".epic-builder";
@@ -19,6 +19,33 @@ export function slugify(prompt: string): string {
     .slice(0, 5);
   const slug = words.join("-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   return slug || "epic";
+}
+
+export function validateStoryManifest(value: unknown, source = "model"): StoryManifestEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${source} story manifest must contain at least one entry`);
+  }
+  const titles = new Set<string>();
+  const slugs = new Set<string>();
+  return value.map((candidate, index) => {
+    if (!candidate || typeof candidate !== "object") {
+      throw new Error(`${source} story manifest entry ${index + 1} is not an object`);
+    }
+    const entry = candidate as Partial<StoryManifestEntry>;
+    if (typeof entry.title !== "string" || entry.title.trim() === ""
+        || typeof entry.scope !== "string" || entry.scope.trim() === ""
+        || (entry.sizing !== "S" && entry.sizing !== "M" && entry.sizing !== "L")) {
+      throw new Error(`${source} story manifest entry ${index + 1} needs a nonempty title/scope and sizing S, M, or L`);
+    }
+    const titleKey = entry.title.trim().toLocaleLowerCase("en-US");
+    const slug = slugify(entry.title);
+    if (titles.has(titleKey) || slugs.has(slug)) {
+      throw new Error(`${source} story manifest entry ${index + 1} duplicates an earlier title or file slug`);
+    }
+    titles.add(titleKey);
+    slugs.add(slug);
+    return { title: entry.title, scope: entry.scope, sizing: entry.sizing };
+  });
 }
 
 export function workspaceDir(cwd: string, slug: string): string {
@@ -56,7 +83,11 @@ export function createWorkspace(cwd: string, prompt: string): { slug: string; di
 }
 
 export function loadSession(dir: string): DraftSession {
-  return JSON.parse(readFileSync(join(dir, "session.json"), "utf8")) as DraftSession;
+  const parsed = JSON.parse(readFileSync(join(dir, "session.json"), "utf8")) as Partial<DraftSession>;
+  if (!SESSION_STATES.includes(parsed.state as SessionState)) {
+    throw new Error(`session.json has invalid state ${JSON.stringify(parsed.state)}`);
+  }
+  return parsed as DraftSession;
 }
 
 // Atomic: write a temp file then rename, so a crash mid-write can never leave a truncated session.
@@ -68,7 +99,7 @@ export function saveSession(dir: string, session: DraftSession): void {
 }
 
 export function readDraft(dir: string, relPath: string): ParsedDoc {
-  return parseFrontmatter(readFileSync(join(dir, relPath), "utf8"));
+  return parseFrontmatter(readFileSync(join(dir, relPath), "utf8"), { required: true });
 }
 
 export function draftExists(dir: string, relPath: string): boolean {

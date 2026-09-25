@@ -11,13 +11,15 @@ import "../__tests__/mutation-runner-validity.js";
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
 import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
+import { readNamesSafe, statSafe } from "../fs-walk.js";
 import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -592,20 +594,65 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
 
   it("a run killed (SIGTERM) mid-mutation leaves the target checkout byte-identical", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
-    const outPath = join(repo, "m8-out.json");
-    // A test command that blocks for 5s — long enough to guarantee the SIGTERM below lands while
-    // the CLI is mid-mutation (stub already written to its copy, execSync blocked waiting on
-    // this child), simulating the timeout/kill that produced #600.
-    const child = spawn("node_modules/.bin/tsx", [CLI, repo, "--stub-check", "--test-cmd", "node -e 'setTimeout(() => {}, 5000)'", "--out", outPath], {
-      cwd: REPO_ROOT,
-      stdio: "ignore",
+    const control = mkdtempSync(join(tmpdir(), "harvey-mutation-ready-"));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    const baselinePath = join(control, "baseline.json");
+    const readyPath = join(control, "ready.json");
+    writeFileSync(runner, `const fs = require('node:fs');
+const source = fs.readFileSync('src/add.ts', 'utf8');
+if (source === ${JSON.stringify(SUBJECT)}) {
+  fs.writeFileSync(${JSON.stringify(baselinePath)}, JSON.stringify({cwd:process.cwd(),source}));
+} else {
+  if (!source.includes('return undefined;')) process.exit(17);
+  fs.writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({pid:process.pid,cwd:process.cwd(),source}));
+  setInterval(() => {}, 1000);
+}
+`);
+    const child = spawn(process.execPath, ["--import", resolve(REPO_ROOT, "node_modules/tsx/dist/loader.mjs"), CLI, repo, "--stub-check", "--test-cmd", `${process.execPath} ${runner}`], {
+      cwd: REPO_ROOT, stdio: ["ignore", "ignore", "pipe"], detached: true,
       env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
     });
-    const exited = new Promise<void>((done) => child.on("exit", () => done()));
-    await new Promise((r) => setTimeout(r, 1000));
-    child.kill("SIGTERM");
-    await exited;
-    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => done({ code, signal }));
+    });
+    const alive = (pid: number): boolean => {
+      try { process.kill(pid, 0); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+    };
+    const killOwnedGroup = () => {
+      if (!child.pid) return;
+      try { process.kill(-child.pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    };
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(readyPath) && Date.now() < deadline && child.exitCode === null && child.signalCode === null) await new Promise(done => setTimeout(done, 10));
+      expect(existsSync(readyPath), `Mutation never became ready: ${stderr}`).toBe(true);
+      const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as { cwd: string; source: string };
+      const ready = JSON.parse(readFileSync(readyPath, "utf8")) as { pid: number; cwd: string; source: string };
+      expect(baseline.source).toBe(SUBJECT);
+      expect(ready.source).toContain("return undefined;");
+      expect(ready.cwd).toBe(baseline.cwd);
+      expect(realpathSync(ready.cwd)).not.toBe(realpathSync(repo));
+      expect(alive(child.pid!)).toBe(true);
+      expect(alive(ready.pid)).toBe(true);
+      expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+      expect(process.kill(-child.pid!, "SIGTERM")).toBe(true);
+      expect(await exited).toEqual({ code: null, signal: "SIGTERM" });
+      const reapedBy = Date.now() + 5_000;
+      while (alive(ready.pid) && Date.now() < reapedBy) await new Promise(done => setTimeout(done, 10));
+      expect(alive(ready.pid)).toBe(false);
+      expect(alive(child.pid!)).toBe(false);
+      expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+      rmSync(ready.cwd, { recursive: true, force: true });
+    } finally {
+      killOwnedGroup();
+      await exited;
+    }
   });
 });
 
@@ -877,7 +924,7 @@ describe("mutation-scan report-path auto-discovery (#820, child process)", () =>
     expect(existsSync(join(repo, "out", "custom-mutation-report.json"))).toBe(false);
   });
 
-  it("falls back to a glob search of the off-tree scratch dir when the report isn't at the configured path", async () => {
+  it("does not ingest a neighboring report when the invoked reporter path is missing", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
     // A Stryker version that writes its json report somewhere other than the configured fileName —
@@ -885,8 +932,268 @@ describe("mutation-scan report-path auto-discovery (#820, child process)", () =>
     writeFakeStrykerBinaryHonoringConfig(repo, "elsewhere/mutation.json");
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
-    expect(parsed.summary?.overall.totalMutants).toBe(1);
+    const parsed = JSON.parse(out) as { summary?: unknown; moduleRecord: { status: string; note: string } };
+    expect(parsed.summary).toBeUndefined();
+    expect(parsed.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining("mutation report not found") });
+  });
+});
+
+describe("mutation reporter capture provenance (#2137)", () => {
+  const FIXED_TIMESTAMP = new Date(1_700_000_000_000);
+
+  function pinWholeSecondTimestamp(path: string): { size: number; mtimeMs: number } {
+    utimesSync(path, FIXED_TIMESTAMP, FIXED_TIMESTAMP);
+    const { size, mtimeMs } = statSafe(path)!;
+    expect(mtimeMs).toBe(FIXED_TIMESTAMP.getTime());
+    return { size, mtimeMs };
+  }
+
+  async function execute(target: string, output: string, options: { args?: string[]; env?: Record<string, string>; omitOutput?: boolean } = {}) {
+    return await new Promise<{ status: number; stderr: string }>((resolveRun, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", CLI, target, ...(options.omitOutput ? [] : ["--out", output]), ...(options.args ?? [])], { cwd: REPO_ROOT, env: { ...process.env, ...options.env } });
+      let stderr = "";
+      child.stdout.resume();
+      child.stderr.on("data", chunk => { stderr += String(chunk); });
+      child.on("error", reject);
+      child.on("close", status => resolveRun({ status: status ?? 1, stderr }));
+    });
+  }
+
+  function prepared(mode: "healthy" | "missing" | "foreign" | "stale" | "source-change" | "config-stamp-preserved" | "directory-report") {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", reporters: ["html"], htmlReporter: { fileName: "reports/mutation/index.html" } }));
+    mkdirSync(join(repo, "reports/mutation"), { recursive: true });
+    writeFileSync(join(repo, "reports/mutation/index.html"), "previous-report");
+    writeFileSync(join(repo, "foreign.json"), `{ "schemaVersion": "1", "files": {} }`);
+    writeFakeStrykerBinaryHonoringConfig(repo);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    const effect = mode === "missing" ? 'fs.unlinkSync(outPath);'
+      : mode === "foreign" ? 'fs.unlinkSync(outPath); fs.symlinkSync(path.join(process.cwd(), "foreign.json"), outPath);'
+      : mode === "stale" ? 'fs.utimesSync(outPath, new Date(0), new Date(0));'
+      : mode === "source-change" ? 'fs.appendFileSync(path.join(process.cwd(), "src/add.ts"), "// unexpected change");'
+      : mode === "config-stamp-preserved" ? 'const configPath = path.join(process.cwd(), "stryker.config.json"); const stamp = fs.statSync(configPath); fs.writeFileSync(configPath, fs.readFileSync(configPath, "utf8").replace("perTest", "offTest")); fs.utimesSync(configPath, stamp.atime, stamp.mtime);'
+      : mode === "directory-report" ? 'fs.unlinkSync(outPath); fs.mkdirSync(outPath);'
+      : '';
+    writeFileSync(bin, readFileSync(bin, "utf8").replace('process.exit(0);', `
+if (!cfg.reporters.includes("json")) throw new Error("JSON capture disabled");
+fs.mkdirSync(path.dirname(cfg.htmlReporter.fileName), { recursive: true });
+fs.writeFileSync(cfg.htmlReporter.fileName, "current-report");
+${effect}
+process.exit(0);`));
+    const engagement = mkdtempSync(join(tmpdir(), "harvey-m8-engagement-"));
+    dirs.push(engagement);
+    return { repo, output: join(engagement, "m8.json") };
+  }
+
+  it.each(["missing", "foreign", "stale"] as const)("rejects a %s report instead of ingesting a score", async mode => {
+    const { repo, output } = prepared(mode);
+    const result = await execute(repo, output);
+    const artifact = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) as { summary?: unknown; moduleRecord?: { status: string } } : undefined;
+    expect(artifact?.summary).toBeUndefined();
+    if (mode === "missing") expect(artifact?.moduleRecord?.status).toBe("partial");
+    else { expect(result.status).toBe(1); expect(result.stderr).toContain(mode); }
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it.each(["source-change", "export-failure"] as const)("retains completed upstream evidence after %s", async mode => {
+    const { repo, output } = prepared(mode === "source-change" ? mode : "healthy");
+    if (mode === "export-failure") mkdirSync(output);
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(receiptPath).toBeTruthy();
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    assertCommandExecutionReceipt(receipt);
+    expect(receipt.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(receipt.artifacts).toHaveLength(1);
+    expect(existsSync(receipt.artifacts[0]!.path)).toBe(true);
+    expect(JSON.parse(readFileSync(receipt.artifacts[0]!.path, "utf8")).files["src/add.ts"].mutants).toHaveLength(1);
+    if (mode === "source-change") expect(result.stderr).toMatch(/invariant violated/);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it("detects a same-size config mutation even when the producer restores its mtime", async () => {
+    const { repo, output } = prepared("config-stamp-preserved");
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/invariant violated: stryker\.config\.json/);
+    expect(readFileSync(join(repo, "stryker.config.json"), "utf8")).toContain("offTest");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    expect(receipt.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+  });
+
+  it("rejects a pre-existing engagement capture symlink before Stryker can write through it", async () => {
+    const { repo, output } = prepared("healthy");
+    const redirected = join(repo, "capture-redirect");
+    mkdirSync(redirected);
+    symlinkSync(redirected, `${output}.stryker`);
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("resolves inside protected source root");
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe("export const add = (a: number, b: number) => a + b;\n");
+    expect(readNamesSafe(redirected)).toEqual([]);
+  });
+
+  it.each(["tsconfig.json", "package.json", "test-data.json", "reports/mutation/index.html"])("rejects stamp-preserving changes to retained input %s", async file => {
+    const { repo, output } = prepared("healthy");
+    const input = join(repo, file);
+    if (!existsSync(input)) writeFileSync(input, '{"value":"before"}');
+    const original = readFileSync(input, "utf8");
+    const replacement = original.replace(/[a-z]/, letter => letter === "a" ? "b" : "a");
+    const before = pinWholeSecondTimestamp(input);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(input)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("invariant violated");
+    expect(result.stderr).toContain(file);
+    expect(existsSync(output)).toBe(false);
+    expect(statSafe(input)).toMatchObject(before);
+  });
+
+  it.each(["selected config", "external tsconfig"] as const)("rejects stamp-preserving changes to %s outside the target", async mode => {
+    const { repo, output } = prepared("healthy");
+    const external = join(dirname(repo), `${mode.replace(" ", "-")}-${Date.now()}.json`);
+    dirs.push(external);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    let args: string[];
+    if (mode === "selected config") {
+      writeFileSync(external, readFileSync(join(repo, "stryker.config.json"), "utf8"));
+      args = ["--config", external];
+    } else {
+      writeFileSync(external, '{"compilerOptions":{"target":"ES2020"}}');
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ extends: relative(repo, external) }));
+      mkdirSync(join(repo, "node_modules/typescript"), { recursive: true });
+      writeFileSync(join(repo, "node_modules/typescript/package.json"), '{"version":"7.0.2"}');
+      args = [];
+    }
+    const original = readFileSync(external, "utf8");
+    const replacement = original.replace(mode === "selected config" ? "perTest" : "ES2020", mode === "selected config" ? "offTest" : "ES2022");
+    const before = pinWholeSecondTimestamp(external);
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(external)}; const stamp = fs.statSync(input); fs.writeFileSync(input, ${JSON.stringify(replacement)}); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+    const result = await execute(repo, output, { args });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("consumed input is no longer byte-identical");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(JSON.parse(readFileSync(receiptPath!, "utf8")).outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(statSafe(external)).toMatchObject(before);
+  });
+
+  it.each(["extensionless", "array extends", "JSONC", "absolute directory reference", "relative directory reference", "package extends"] as const)("rejects a stamp-preserving change to a compiler-resolved %s config", async shape => {
+    const { repo, output } = prepared("healthy");
+    mkdirSync(join(repo, "node_modules/typescript"), { recursive: true });
+    writeFileSync(join(repo, "node_modules/typescript/package.json"), '{"version":"7.0.2"}');
+
+    let consumed: string;
+    if (shape === "package extends") {
+      consumed = join(repo, "node_modules/owned-config/tsconfig.json");
+      mkdirSync(dirname(consumed), { recursive: true });
+      writeFileSync(join(dirname(consumed), "package.json"), '{"name":"owned-config","version":"1.0.0","tsconfig":"tsconfig.json"}');
+      writeFileSync(join(repo, "tsconfig.json"), '{"extends":"owned-config"}');
+    } else if (shape.endsWith("directory reference")) {
+      const referenceDir = mkdtempSync(join(dirname(repo), "harvey-tsconfig-reference-"));
+      dirs.push(referenceDir);
+      consumed = join(referenceDir, "tsconfig.json");
+      writeFileSync(join(referenceDir, "ref.ts"), "export const value = 1;\n");
+      const reference = shape.startsWith("absolute") ? referenceDir : relative(repo, referenceDir);
+      writeFileSync(join(repo, "tsconfig.json"), JSON.stringify({ compilerOptions: { composite: true }, references: [{ path: reference }] }));
+    } else {
+      consumed = `${repo}-${shape.replace(" ", "-").toLowerCase()}-base.json`;
+      dirs.push(consumed);
+      const reference = shape === "extensionless" ? consumed.slice(0, -".json".length) : consumed;
+      const config = shape === "array extends"
+        ? JSON.stringify({ extends: [reference] })
+        : shape === "JSONC"
+          ? `// compiler config\n{ "extends": ${JSON.stringify(reference)}, }`
+          : JSON.stringify({ extends: reference });
+      writeFileSync(join(repo, "tsconfig.json"), config);
+    }
+    writeFileSync(consumed, '{"compilerOptions":{"target":"ES2020"}}');
+    const before = pinWholeSecondTimestamp(consumed);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `const input = ${JSON.stringify(consumed)}; const stamp = fs.statSync(input); fs.writeFileSync(input, fs.readFileSync(input, "utf8").replace("ES2020", "ES2022")); fs.utimesSync(input, stamp.atime, stamp.mtime); process.exit(0);`));
+
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("consumed input is no longer byte-identical");
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(JSON.parse(readFileSync(receiptPath!, "utf8")).outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(statSafe(consumed)).toMatchObject(before);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("rejects an incremental-file alias before starting the producer", async () => {
+    const { repo, output } = prepared("healthy");
+    const storage = `${output}.stryker`;
+    mkdirSync(storage);
+    const incremental = join(storage, `incremental-${createHash("sha256").update(repo).digest("hex").slice(0, 16)}.json`);
+    symlinkSync(join(repo, "reports/mutation/index.html"), incremental);
+    const result = await execute(repo, output, { args: ["--incremental"] });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("incremental report destination");
+    expect(result.stderr).not.toContain("M8 upstream execution receipt");
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it.each(["symlink", "directory"] as const)("uses a safe alternate receipt when the preferred command receipt is a %s", async mode => {
+    const { repo, output } = prepared("healthy");
+    const bin = join(repo, "node_modules/.bin/stryker");
+    const receipt = 'path.join(path.dirname(process.argv[3]), "command-receipt.json")';
+    const effect = mode === "directory"
+      ? `fs.mkdirSync(${receipt});`
+      : `fs.symlinkSync(${JSON.stringify(join(repo, "reports/mutation/index.html"))}, ${receipt});`;
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `${effect} process.exit(0);`));
+    const result = await execute(repo, output);
+    expect(result.status).toBe(0);
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(receiptPath).toBeTruthy();
+    expect(receiptPath).not.toMatch(/\/target\/command-receipt\.json$/);
+    const saved = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    expect(saved.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+  });
+
+  it("rejects a temporary allocation root inside the target before starting the producer", async () => {
+    const { repo, output } = prepared("healthy");
+    const unsafeTmp = join(repo, "capture-store");
+    mkdirSync(unsafeTmp);
+    const result = await execute(repo, output, { env: { TMPDIR: unsafeTmp }, omitOutput: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("temporary allocation root");
+    expect(result.stderr).not.toContain("M8 upstream execution receipt");
+    expect(readNamesSafe(unsafeTmp).filter(name => !name.startsWith("tsx-"))).toEqual([]);
+  });
+
+  it.each(["existing", "dangling", "late"] as const)("refuses the %s final export alias into the client", async mode => {
+    const { repo, output } = prepared("healthy");
+    const destination = join(repo, "reports/mutation", mode === "dangling" ? "not-yet-present.html" : "index.html");
+    if (mode === "late") {
+      const bin = join(repo, "node_modules/.bin/stryker");
+      writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", `fs.symlinkSync(${JSON.stringify(destination)}, ${JSON.stringify(output)}); process.exit(0);`));
+    } else symlinkSync(destination, output);
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/output destination.*aliases.*target checkout/);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
+    if (mode === "dangling") expect(existsSync(destination)).toBe(false);
+  });
+
+  it("retains a successful command receipt when the declared report is a directory", async () => {
+    const { repo, output } = prepared("directory-report");
+    const result = await execute(repo, output);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/foreign to the invocation capture/);
+    const receiptPath = result.stderr.match(/M8 upstream execution receipt: ([^\n]+)/)?.[1];
+    expect(receiptPath).toBeTruthy();
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as CommandExecutionReceipt;
+    assertCommandExecutionReceipt(receipt);
+    expect(receipt.outcome).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(receipt.artifacts).toEqual([]);
+    expect(receipt.artifactFailures).toEqual([expect.objectContaining({ role: "report", reason: "unreadable", errorCode: "EISDIR" })]);
+    expect(readFileSync(join(repo, "reports/mutation/index.html"), "utf8")).toBe("previous-report");
   });
 });
 
@@ -964,8 +1271,7 @@ describe("mutation-scan leaves the target tree pristine on a full run (#1285, ch
     expect(existsSync(join(repo, ".stryker-tmp"))).toBe(false);
     expect(existsSync(join(repo, "reports"))).toBe(false);
     // ...and the report the summary above was built from came from a scratch dir OUTSIDE the
-    // target, so this is a redirect, not a Stryker that did nothing. (The dir itself is gone by
-    // now: the CLI removes it on exit.)
+    // target. Reports remain available after exit while mutant sandboxes are removed.
     expect(parsed.targetTreeUntouched!.scratchDir.startsWith(repo)).toBe(false);
   });
 
@@ -1302,15 +1608,20 @@ describe("mutation-scan tree walk survives a dangling symlink (#944, child proce
     expect(JSON.parse(out)).toEqual([]); // meaningful suite present — same as the no-symlink case
   });
 
-  it("still walks a RESOLVABLE symlinked directory (regression guard on the fix itself) — the ONLY test file lives behind the link", async () => {
-    const repo = fixtureRepo({}); // no direct test files at all
-    mkdirSync(join(repo, "real-dir"), { recursive: true });
-    writeFileSync(join(repo, "real-dir", "extra.test.ts"), REAL_SPEC);
-    symlinkSync("real-dir", join(repo, "linked-dir"));
-    const { status, out } = await runCli(repo, ["--detect-only"]);
-    expect(status).toBe(0);
-    // If the symlinked dir weren't walked, this repo would have ZERO test files and emit M8-00
-    // (#252) instead of the meaningful-suite empty-array shape.
-    expect(JSON.parse(out)).toEqual([]);
+  it("discovers the only meaningful spec through its symlinked test path (#2092)", async () => {
+    // The source inventory forbids external aliases. Keep the bytes inside the owned
+    // source boundary, under a non-test filename that ordinary test discovery ignores.
+    const repo = fixtureRepo({ "fixtures/spec.fixture": REAL_SPEC });
+    const link = join(repo, "only.test.ts");
+    symlinkSync("fixtures/spec.fixture", link);
+    expect(realpathSync(link)).toBe(realpathSync(join(repo, "fixtures/spec.fixture")));
+    const linked = await runCli(repo, ["--detect-only"]);
+    expect(linked.status).toBe(0);
+    expect(JSON.parse(linked.out)).toEqual([]);
+    rmSync(link);
+    const unlinked = await runCli(repo, ["--detect-only"]);
+    expect(unlinked.status).toBe(0);
+    expect(JSON.parse(unlinked.out)).toMatchObject({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", noSuite: true } });
+    expect(readFileSync(join(repo, "fixtures/spec.fixture"), "utf8")).toBe(REAL_SPEC);
   });
 });

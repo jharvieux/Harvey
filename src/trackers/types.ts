@@ -29,6 +29,8 @@ export interface ItemInput {
 // Minimal patch payload for updateStory: only the fields the epic-builder's publish orchestrator
 // needs to touch after creation. Omitted fields are left untouched by the adapter.
 export interface UpdateStoryPatch {
+  // Append once to the current remote description, preserving client edits on retry.
+  appendBody?: string;
   body?: string;
   labels?: string[];
 }
@@ -53,11 +55,17 @@ export interface TicketWriteback {
 }
 
 export interface Tracker {
+  // Repair metadata after a prior create succeeded. Preserve client descriptions and labels.
+  completeStory?(id: string, input: ItemInput, labels: string[], epicId?: string): Promise<void>;
   createEpic(input: ItemInput): Promise<CreatedRef>;
   createStory(input: ItemInput, epicId: string): Promise<CreatedRef>;
   setLabels(id: string, labels: string[]): Promise<void>;
   setEstimate(id: string, estimate: number): Promise<void>;
   attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef>;
+  // Some trackers upload bytes and link them to the ticket in separate remote writes. When the
+  // upload is durable but the link is not, the publisher persists the upload receipt and resumes
+  // only this relation operation. Adapters with atomic attachment writes omit this method.
+  completeAttachment?(id: string, attached: AttachedRef): Promise<void>;
   // Idempotency recovery (#50, design §8.2 mechanism 2): look up an item already created by a
   // prior run via the hidden marker the epic-builder stamps into every created body (see
   // publish.ts `marker()`). Returns null on no match — never throws for "not found".

@@ -25,15 +25,27 @@ type Row = Record<string, unknown>;
 class FakeSupabase implements SupabaseLike {
   sessions: Row[] = [];
   drafts: Row[] = [];
+  reads: { table: string; columns: string[]; column: string; value: string }[] = [];
   from(table: string) {
+    const fields = table === "epic_sessions" ? ["user_id", "slug", "state", "json"]
+      : table === "epic_drafts" ? ["user_id", "slug", "path", "body"] : undefined;
+    if (!fields) throw new Error(`Unsupported fixture table: ${table}`);
     const rows = table === "epic_sessions" ? this.sessions : this.drafts;
     const pk = (r: Row) =>
       table === "epic_sessions" ? `${r.user_id}/${r.slug}` : `${r.user_id}/${r.slug}/${r.path}`;
     return {
-      select: () => ({
-        eq: (_column: string, value: string) =>
-          Promise.resolve({ data: rows.filter((r) => r.user_id === value), error: null }),
-      }),
+      select: (selection: string) => {
+        const columns = selection.split(",").map(column => column.trim());
+        if (columns.some(column => !fields.includes(column))) throw new Error(`Unsupported fixture selection: ${selection}`);
+        return {
+          eq: (column: string, value: string) => {
+            if (!fields.includes(column)) throw new Error(`Unsupported fixture filter: ${column}`);
+            this.reads.push({ table, columns, column, value });
+            return Promise.resolve({ data: rows.filter(row => row[column] === value)
+              .map(row => Object.fromEntries(columns.map(field => [field, row[field]]))), error: null });
+          },
+        };
+      },
       upsert: (incoming: Row[]) => {
         for (const row of incoming) {
           const i = rows.findIndex((r) => pk(r) === pk(row));
@@ -108,5 +120,47 @@ describe("supabase storage adapter", () => {
     const aliceDir = tmp();
     await store.hydrate(alice, aliceDir);
     expect(listWorkspaces(aliceDir)).toHaveLength(1);
+  });
+
+  it("hydrates both selected tables with the actual owner predicate and distinct tenant content", async () => {
+    const db = new FakeSupabase();
+    const store = supabaseStore(db);
+    const users = ["alice", "bob"];
+    let slug = "";
+    for (const user of users) {
+      const cwd = tmp();
+      slug = seedWorkspace(cwd);
+      const dir = workspaceDir(cwd, slug);
+      const session = loadSession(dir);
+      session.prompt = `${user}'s private session`;
+      writeFile(dir, "session.json", JSON.stringify(session));
+      writeDraft(dir, "epic.md", { data: { kind: "epic", title: `${user}'s private title` }, body: `${user}'s private body` });
+      writeFile(dir, "intake.md", `${user}'s private intake`);
+      await store.flush(user, cwd);
+    }
+    for (const user of users) {
+      db.reads = [];
+      const dst = tmp();
+      await store.hydrate(user, dst);
+      expect(listWorkspaces(dst).map(row => row.slug)).toEqual([slug]);
+      const dir = workspaceDir(dst, slug);
+      expect(loadSession(dir).prompt).toBe(`${user}'s private session`);
+      expect(readDraft(dir, "epic.md")).toEqual({ data: { kind: "epic", title: `${user}'s private title` }, body: `${user}'s private body` });
+      expect(readFileRaw(dir, "intake.md")).toBe(`${user}'s private intake`);
+      expect(db.reads).toEqual([
+        { table: "epic_sessions", columns: ["slug", "json"], column: "user_id", value: user },
+        { table: "epic_drafts", columns: ["slug", "path", "body"], column: "user_id", value: user },
+      ]);
+    }
+  });
+
+  it("models supported filter fields generically and rejects unsupported descriptors", async () => {
+    const db = new FakeSupabase();
+    db.sessions = [{ user_id: "alice", slug: "project", state: "intake", json: {} }, { user_id: "project", slug: "other", state: "done", json: {} }];
+    expect((await db.from("epic_sessions").select("slug, state").eq("slug", "project")).data).toEqual([{ slug: "project", state: "intake" }]);
+    expect((await db.from("epic_sessions").select("slug").eq("user_id", "project")).data).toEqual([{ slug: "other" }]);
+    expect(() => db.from("epic_sessions").select("slug").eq("invented", "alice")).toThrow(/Unsupported fixture filter/);
+    expect(() => db.from("epic_sessions").select("invented")).toThrow(/Unsupported fixture selection/);
+    expect(() => db.from("invented")).toThrow(/Unsupported fixture table/);
   });
 });
