@@ -1,22 +1,14 @@
 // Publish orchestrator (design §8.2–§8.4). Adapters are dumb transport; this owns sequencing
 // (epic -> stories in dependency order -> briefs), idempotency, and partial-failure recovery.
 //
-// Idempotency is belt-and-suspenders (design §8.2):
-//   1. Local record: each artifact's `published` frontmatter block is written immediately after
-//      its create call succeeds, and a re-run skips any artifact that already carries one.
-//   2. Remote marker (#50): when an artifact has no local record, the orchestrator calls
-//      `tracker.findByMarker()` for the hidden marker comment before creating anything. A hit
-//      means a prior run created the item remotely but crashed before the frontmatter write —
-//      the local record is repaired from the found ref instead of creating a duplicate.
-//
-// Brief linking (#50): a story's brief URL is only known after createStory returns, so once
-// attachBrief succeeds the orchestrator calls `tracker.updateStory()` to push a brief link line
-// into the story's remote body (frontmatter alone isn't visible to whoever reads the tracker item).
+// Remote identity and each completed publication stage are recorded separately. A recovered
+// identity proves creation, not completion of labels, links or brief delivery.
 
 import type { Tracker, CreatedRef, ItemInput, AttachedRef } from "../trackers/types.js";
-import type { DraftSession, PublishedRef, StoryState } from "./types.js";
+import type { DraftSession, PublicationProgress, PublishedRef, StoryState } from "./types.js";
 import { draftExists, readDraft, readFileRaw, writeDraft, writeFile } from "./workspace.js";
 import { contentHash, renderStoryBody, renderSummary, type SummaryRow } from "./render.js";
+import { assertTrackerRef, PartialAttachmentWriteError, PartialTrackerWriteError } from "../trackers/recovery.js";
 import type { FrontmatterData } from "./frontmatter.js";
 
 interface PublishOptions {
@@ -52,8 +44,13 @@ function writePublished(data: FrontmatterData, ref: PublishedRef): void {
   data.published = { adapter: ref.adapter, ref: ref.ref, url: ref.url, contentHash: ref.contentHash };
 }
 
-// Publish an already-accepted workspace. Safe to run repeatedly: only creates what has no
-// `published` record yet. On a content-hash mismatch it warns and skips (update is post-MVP, §8.2).
+// Stage receipts distinguish remote creation from completion. Legacy receipts resume
+// metadata and brief stages from their saved remote identity.
+function publication(data: FrontmatterData): PublicationProgress | undefined {
+  const value = data.publication;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as unknown as PublicationProgress : undefined;
+}
+
 export async function publish(
   dir: string,
   session: DraftSession,
@@ -64,97 +61,147 @@ export async function publish(
   const warnings: string[] = [];
   let created = 0;
   let skipped = 0;
+  const save = (file: string, doc: ReturnType<typeof readDraft>): void => {
+    if (persist) writeDraft(dir, file, doc);
+  };
+  const reference = (ref: CreatedRef, hash: string): PublishedRef => ({ adapter: "github", ref: ref.id, url: ref.url, contentHash: hash });
+  const remember = (file: string, doc: ReturnType<typeof readDraft>, ref: PublishedRef): void => {
+    writePublished(doc.data, ref);
+    doc.data.publication = { state: "pending" };
+    save(file, doc);
+  };
+  const completeMetadata = async (ref: PublishedRef, input: ItemInput, labels: string[], epicId?: string): Promise<void> => {
+    if (!tracker.completeStory) throw new Error("Tracker cannot safely resume incomplete publication metadata");
+    await tracker.completeStory(ref.ref, input, labels, epicId);
+  };
 
-  // --- Epic ---
   const epicDoc = readDraft(dir, "epic.md");
-  const epicTitle = String(epicDoc.data.title ?? session.slug);
   const epicHash = contentHash(epicDoc.body);
+  const epicInput = { title: String(epicDoc.data.title ?? session.slug), description: epicDoc.body + marker(session.slug, "epic") };
   let epicRef = readPublished(epicDoc.data);
+  let epicCreated = false;
   if (epicRef) {
-    if (epicRef.contentHash !== epicHash) warnings.push(`epic changed since publish — skipping (re-publish not supported in MVP)`);
+    if (!publication(epicDoc.data) && epicRef.contentHash === epicHash) {
+      epicDoc.data.publication = { state: "pending" };
+      save("epic.md", epicDoc);
+    }
+    if (epicRef.contentHash !== epicHash) {
+      if (publication(epicDoc.data)?.state === "pending") throw new Error("Epic changed during incomplete publication; restore the accepted draft before resuming");
+      warnings.push("epic changed since publish — skipping (re-publish not supported in MVP)");
+    }
     skipped++;
   } else {
     const recovered = await tracker.findByMarker(markerText(session.slug, "epic"));
-    if (recovered) {
-      epicRef = { adapter: "github", ref: recovered.id, url: recovered.url, contentHash: epicHash };
-      if (persist) {
-        writePublished(epicDoc.data, epicRef);
-        writeDraft(dir, "epic.md", epicDoc);
-      }
-      skipped++;
-    } else {
-      const input: ItemInput = { title: epicTitle, description: epicDoc.body + marker(session.slug, "epic") };
-      const ref = await createEpicRef(tracker, input, epicHash);
-      epicRef = ref;
-      if (persist) {
-        await tracker.setLabels(ref.ref, ["epic"]);
-        writePublished(epicDoc.data, ref);
-        writeDraft(dir, "epic.md", epicDoc);
-      }
-      created++;
-    }
+    const remote = recovered ?? await tracker.createEpic(epicInput);
+    epicRef = reference(remote, epicHash);
+    remember("epic.md", epicDoc, epicRef);
+    if (recovered) skipped++;
+    else { created++; epicCreated = true; }
+  }
+  if (persist && publication(epicDoc.data)?.state === "pending") {
+    try {
+      if (epicCreated) await tracker.setLabels(epicRef.ref, ["epic"]);
+      else await completeMetadata(epicRef, epicInput, ["epic"]);
+      epicDoc.data.publication = { state: "complete" };
+      save("epic.md", epicDoc);
+    } catch (error) { throw new PartialTrackerWriteError({ id: epicRef.ref, url: epicRef.url }, "epic labels", error); }
   }
 
-  // --- Stories, in dependency (sequence) order ---
   const ordered = [...session.stories].filter((s) => s.status !== "skipped").sort(bySequence(dir));
   const storyRefs: { file: string; ref: PublishedRef }[] = [];
   const refByStorySlug = new Map<string, PublishedRef>();
-
   for (const story of ordered) {
     const doc = readDraft(dir, story.file);
-    const storyTitle = String(doc.data.title ?? story.file);
     const bodyHash = contentHash(doc.body);
+    const slug = storySlug(story.file);
+    const depSlugs = Array.isArray(doc.data.dependsOn) ? doc.data.dependsOn : [];
+    const depRefs = depSlugs.map(s => refByStorySlug.get(s)).filter((r): r is PublishedRef => r !== undefined).map(r => `#${r.ref}`);
+    const input = { title: String(doc.data.title ?? story.file), description: renderStoryBody(doc.body, depRefs) + marker(session.slug, slug) };
     let ref = readPublished(doc.data);
+    let storyCreated = false;
     if (ref) {
-      if (ref.contentHash !== bodyHash) warnings.push(`${story.file} changed since publish — skipping`);
+      if (!publication(doc.data) && ref.contentHash === bodyHash) {
+        doc.data.publication = { state: "pending", ...(typeof doc.data.brief === "string" ? { briefUrl: doc.data.brief } : {}) };
+        save(story.file, doc);
+      }
+      if (ref.contentHash !== bodyHash) {
+        if (publication(doc.data)?.state === "pending") throw new Error(`${story.file} changed during incomplete publication; restore the accepted draft before resuming`);
+        warnings.push(`${story.file} changed since publish — skipping`);
+      }
       skipped++;
     } else {
-      const slug = storySlug(story.file);
       const recovered = await tracker.findByMarker(markerText(session.slug, slug));
-      if (recovered) {
-        ref = { adapter: "github", ref: recovered.id, url: recovered.url, contentHash: bodyHash };
-        if (persist) {
-          writePublished(doc.data, ref);
-          writeDraft(dir, story.file, doc);
+      if (recovered) { ref = reference(recovered, bodyHash); skipped++; }
+      else {
+        try { ref = reference(await tracker.createStory(input, epicRef.ref), bodyHash); }
+        catch (error) {
+          if (error instanceof PartialTrackerWriteError) remember(story.file, doc, reference(error.ref, bodyHash));
+          throw error;
         }
-        skipped++;
-      } else {
-        const depSlugs = Array.isArray(doc.data.dependsOn) ? doc.data.dependsOn : [];
-        const depRefs = depSlugs
-          .map((s) => refByStorySlug.get(s))
-          .filter((r): r is PublishedRef => r !== undefined)
-          .map((r) => `#${r.ref}`);
-        const body = renderStoryBody(doc.body, depRefs) + marker(session.slug, slug);
-        const createdRef: CreatedRef = await tracker.createStory({ title: storyTitle, description: body }, epicRef.ref);
-        ref = { adapter: "github", ref: createdRef.id, url: createdRef.url, contentHash: bodyHash };
-        if (persist) {
-          const sizing = String(doc.data.sizing ?? "M");
-          await tracker.setLabels(ref.ref, ["story", `size:${sizing}`]);
-          const brief = readBrief(dir, story.file);
-          if (brief) {
-            const attached: AttachedRef = await tracker.attachBrief(ref.ref, brief);
-            (doc.data as FrontmatterData).brief = attached.url;
-            const linked = `${body}\n\n📄 Implementation brief: ${attached.url}\n`;
-            await tracker.updateStory(ref.ref, { body: linked });
-          }
-          writePublished(doc.data, ref);
-          writeDraft(dir, story.file, doc);
-        }
+        storyCreated = true;
         created++;
       }
+      remember(story.file, doc, ref);
     }
-    refByStorySlug.set(storySlug(story.file), ref);
+    const progress = publication(doc.data);
+    if (persist && progress?.state === "pending") {
+      let stage = "story metadata";
+      try {
+        if (progress.metadata !== "complete") {
+          const labels = ["story", `size:${String(doc.data.sizing ?? "M")}`];
+          if (storyCreated) await tracker.setLabels(ref.ref, labels);
+          else await completeMetadata(ref, input, labels, epicRef.ref);
+          progress.metadata = "complete";
+          save(story.file, doc);
+        }
+        const brief = readBrief(dir, story.file);
+        if (brief) {
+          stage = "brief attachment";
+          if (!progress.briefUrl) {
+            try {
+              const attached = await tracker.attachBrief(ref.ref, brief);
+              progress.briefUrl = assertTrackerRef({ id: ref.ref, url: attached.url }).url;
+              progress.briefAttachment = "complete";
+              doc.data.brief = progress.briefUrl;
+              save(story.file, doc);
+            } catch (error) {
+              if (error instanceof PartialAttachmentWriteError) {
+                progress.briefUrl = assertTrackerRef({ id: ref.ref, url: error.attachedRef.url }).url;
+                progress.briefAttachment = "pending";
+                doc.data.brief = progress.briefUrl;
+                save(story.file, doc);
+                stage = "brief attachment relation";
+              }
+              throw error;
+            }
+          }
+          if (progress.briefAttachment === "pending") {
+            stage = "brief attachment relation";
+            if (!tracker.completeAttachment) throw new Error("Tracker cannot resume an incomplete attachment relation");
+            await tracker.completeAttachment(ref.ref, { url: progress.briefUrl });
+            progress.briefAttachment = "complete";
+            save(story.file, doc);
+          }
+          stage = "brief link";
+          await tracker.updateStory(ref.ref, { appendBody: `📄 Implementation brief: ${progress.briefUrl}` });
+        }
+        progress.state = "complete";
+        save(story.file, doc);
+      } catch (error) {
+        throw new PartialTrackerWriteError(
+          { id: ref.ref, url: ref.url },
+          stage,
+          error,
+          error instanceof PartialAttachmentWriteError ? error.attachedRef : undefined,
+        );
+      }
+    }
+    refByStorySlug.set(slug, ref);
     storyRefs.push({ file: story.file, ref });
   }
-
   const summary = buildSummary(dir, session, epicRef, storyRefs, warnings);
   if (persist) writeFile(dir, "summary.md", summary);
   return { epicRef, storyRefs, created, skipped, summary };
-}
-
-async function createEpicRef(tracker: Tracker, input: ItemInput, hash: string): Promise<PublishedRef> {
-  const ref: CreatedRef = await tracker.createEpic(input);
-  return { adapter: "github", ref: ref.id, url: ref.url, contentHash: hash };
 }
 
 function bySequence(dir: string): (a: StoryState, b: StoryState) => number {

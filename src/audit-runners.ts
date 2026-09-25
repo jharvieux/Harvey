@@ -260,6 +260,7 @@ const M2_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
 const M3_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
   binding({ id: "analytics:m3-facts", modules: ["M3"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/hotspot-scan.ts", "toFactFindings")], findingFamilies: [family("M3", "M3-TRUCKFACTOR-*", "Knowledge risk (truck-factor-1)"), family("M3", "M3-COUPLING-*", "Coupling (co-change)"), family("M3", "M3-AIPROV-*", "AI provenance (AI-authored, high-churn)"), family("M3", "M3-TREND-*", "Codebase health trend (degrading)"), family("M3", "M3-KNOWLEDGE-00", "M3 — Knowledge risk coverage", "coverage-disclosure")] }),
   binding({ id: "disclosure:m3-input-scope", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/hotspot-scan.ts", "capScopeFinding")], findingFamilies: [family("M3", "M3-SCOPE-00", "M3 — Input scope", "coverage-disclosure")] }),
+  binding({ id: "disclosure:m3-signal-availability", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/vitals-history.ts", "vitalsAvailabilityFinding")], findingFamilies: [family("M3", "M3-AVAILABILITY-00", "M3 — Signal availability", "coverage-disclosure")] }),
   binding({ id: "synthesizer:m3-hotspot-cross-reference", modules: ["M3"], tiers: ["free"], populationClass: "synthesizer", implementations: [impl("src/hotspot-scan.ts", "crossReferenceHotspots", "synthesizer"), impl("src/hotspot-scan.ts", "enrichFindingsWithHotspots", "synthesizer")] }),
 ]);
 
@@ -451,6 +452,19 @@ const artifactFindings = (artifact: Record<string, unknown> | undefined): Findin
   if (Array.isArray(artifact.findings)) return artifact.findings as Finding[];
   if (artifact.finding && typeof artifact.finding === "object") return [artifact.finding as Finding];
   return [];
+};
+
+// A live M3 capture and a fresh specialist pass may bind the same Vitals report. Preserve distinct
+// same-ID evidence for the collision guard, while collapsing the byte-identical copy so a valid
+// history comparison reaches the client exactly once.
+const uniqueEvidence = (findings: Finding[]): Finding[] => {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = JSON.stringify(finding);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
 // Runs a module's CLI and returns the raw result plus a printable command for the ledger's detail.
@@ -853,7 +867,7 @@ const m3: ModuleRunner = {
         kind: "examined",
         detail: ran.detail,
         findings: ran.findings ?? [],
-        unitsExamined: 1,
+        unitsExamined: artifact.rankedCount ?? artifact.hotspots?.length ?? 1,
         scope: "recorded M3 vitals pass artifact",
         ...(artifact.hotspots?.length ? { hotspots: artifact.hotspots } : {}),
       };
@@ -866,7 +880,8 @@ const m3: ModuleRunner = {
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
       const rankedTier = (over: Partial<Examined>): ProbeResult => {
         const result: Examined = { kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over };
-        return pass.fresh ? foldPassInto(result, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : pass.reason ? rejectedPassNote(result, pass.reason) : result;
+        const recorded = pass.fresh ? foldPassInto(result, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : pass.reason ? rejectedPassNote(result, pass.reason) : result;
+        return recorded.kind === "examined" ? { ...recorded, findings: uniqueEvidence(recorded.findings) } : recorded;
       };
       // #807: the CLI dropped to its reduced Harvey-side tier (vitals not installed) — a churn×
       // complexity ranking only, no coupling/knowledge-risk/AI-provenance. Keyed off the stdout
@@ -895,6 +910,15 @@ const m3: ModuleRunner = {
     // #530: surface the pass artifact's top-K ranking so the cross-module enrichment (#515) fires
     // in the common vitals-off-PATH flow too, not only when M3 was captured in-process.
     const pass = findFreshPass(ctx, "M3");
+    if (ok && ranked === 0 && /M3 hotspot table/.test(output)) {
+      const currentAvailability = output.match(/Current signal availability: ([^\n]+)/)?.[1];
+      return {
+        kind: "not-assessed",
+        reason: withRejectedPass(`the current live Vitals capture ranked 0 files under ${ctx.targetDir}; retained prior artifacts cannot supersede this measured empty attempt${currentAvailability ? `; ${currentAvailability}` : ""}`, pass.fresh ? undefined : pass.reason),
+        provenance: "MEASURED",
+        falsifier: command,
+      };
+    }
     if (pass.fresh) return fromPass(pass.artifact);
     const base = !ok
       ? `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}`

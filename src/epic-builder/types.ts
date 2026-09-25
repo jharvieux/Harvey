@@ -4,16 +4,19 @@
 // setLabels / setEstimate / attachBrief — not the aspirational TrackerAdapter sketched in §8.1
 // (which had init/findByMarker/marker args that the shipped adapters never grew). See publish.ts.
 
-export type SessionState =
-  | "intake"
-  | "clarify"
-  | "epic-draft"
-  | "epic-review"
-  | "stories-fan-out"
-  | "stories-review"
-  | "publish"
-  | "summary"
-  | "done";
+export const SESSION_STATES = [
+  "intake",
+  "clarify",
+  "epic-draft",
+  "epic-review",
+  "stories-fan-out",
+  "stories-review",
+  "publish",
+  "summary",
+  "done",
+] as const;
+
+export type SessionState = (typeof SESSION_STATES)[number];
 
 type ArtifactStatus = "draft" | "in-review" | "accepted" | "skipped";
 
@@ -33,6 +36,15 @@ export interface PublishedRef {
   ref: string; // adapter-native id, e.g. "jharvieux/Harvey#42"
   url: string;
   contentHash: string; // sha256 of body at publish time
+}
+
+export interface PublicationProgress {
+  state: "pending" | "complete";
+  metadata?: "complete";
+  briefUrl?: string;
+  // Absent is the legacy state: briefUrl was written only after attachBrief completed. New
+  // two-write adapters record pending after upload and complete only after the ticket relation.
+  briefAttachment?: "pending" | "complete";
 }
 
 export interface DraftSession {

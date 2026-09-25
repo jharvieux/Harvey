@@ -90,9 +90,9 @@ describe("GitHubTracker", () => {
     const { tracker } = harness((call) => {
       expect(call.method).toBe("GET");
       expect(call.url).toContain("/search/issues?q=");
-      const q = decodeURIComponent(call.url.split("?q=")[1] ?? "");
-      expect(q).toBe('repo:acme/app in:body "<!-- epic-builder:csv-export/epic -->"');
-      return { items: [{ number: 41, html_url: "https://github.com/acme/app/issues/41", body: "..." }] };
+      const q = new URL(call.url).searchParams.get("q");
+      expect(q).toBe('repo:acme/app is:issue in:body "<!-- epic-builder:csv-export/epic -->"');
+      return { incomplete_results: false, total_count: 1, items: [{ repository_url: "https://api.github.com/repos/acme/app", number: 41, html_url: "https://github.com/acme/app/issues/41", body: "<!-- epic-builder:csv-export/epic -->" }] };
     });
 
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
@@ -100,7 +100,7 @@ describe("GitHubTracker", () => {
   });
 
   it("returns null from findByMarker when the search has no hits", async () => {
-    const { tracker } = harness(() => ({ items: [] }));
+    const { tracker } = harness(() => ({ items: [], total_count: 0, incomplete_results: false }));
     const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
     expect(ref).toBeNull();
   });

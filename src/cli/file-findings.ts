@@ -21,7 +21,7 @@
 // privilege token setup and exit). Script alias: `pnpm file-findings`.
 
 import "./sync-stdio.js";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDirectorySafe } from "../fs-walk.js";
 import { GitHubTracker } from "../trackers/github.js";
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
 
   const valueFlags = new Set([
     "--target", "--tracker", "--grouping", "--engagement", "--category", "--interval",
-    "--max-retries", "--config", "--auth-intake",
+    "--max-retries", "--config", "--auth-intake", "--out",
   ]);
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   const [path] = positional;
   const targetArg = flag(args, "--target");
   if (!path || !targetArg) {
-    throw new Error("usage: file-findings <findings.json> --target <repo-root> --tracker github|jira|azure [--grouping flat|grouped] [--engagement <label>] [--category <name>] [--connected] [--update] [--interval <ms>] [--max-retries <n>] [--config <file>] [--confirm]  |  file-findings --auth-intake <tracker>");
+    throw new Error("usage: file-findings <findings.json> --target <repo-root> --tracker github|jira|azure [--grouping flat|grouped] [--engagement <label>] [--category <name>] [--connected] [--update] [--interval <ms>] [--max-retries <n>] [--config <file>] [--out <result.json>] [--confirm]  |  file-findings --auth-intake <tracker>");
   }
 
   const resolvedTarget = resolve(targetArg);
@@ -185,6 +185,13 @@ async function main(): Promise<void> {
   const kind = flag(args, "--tracker") ?? cfg.tracker;
   if (!kind) throw new Error("--tracker is required to file (github|jira|azure)");
   const res = await fileFindings(makeTracker(kind), findings, opts);
+  const out = resolve(flag(args, "--out") ?? `${path}.tickets.json`);
+  writeFileSync(out, `${JSON.stringify(res, null, 2)}\n`);
+  if (res.failed.length) {
+    process.exitCode = 1;
+    for (const failure of res.failed) console.error(`Ticket ${failure.ref?.id ?? failure.marker}: ${failure.stage} failed — ${failure.error}`);
+  }
+  console.log(`Ticket result saved to ${out}`);
   console.log(`filed ${res.created.length}, ${update ? `updated ${res.updated.length}` : `skipped ${res.skipped.length}`} already-present; epics: ${res.epicsCreated} created, ${res.epicsReused} reused.`);
   printExcluded(res.excluded);
 }

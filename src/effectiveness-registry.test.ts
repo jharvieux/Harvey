@@ -18,7 +18,7 @@ const REPO_ROOT = new URL("..", import.meta.url).pathname;
 // Binds the semantic producer/family/venue inventory, including OSV selected-input
 // assessment routes and the aggregate calibration disclosure positive (#2033),
 // plus the scheduled venue times (#2002).
-const EXPECTED_INVENTORY_SHA = "29434981279689763c77fa05612f8cd2c36fac91625a97f2911f66d86541d57e";
+const EXPECTED_INVENTORY_SHA = "3697f66e0d81b468d49066520b8ab123e8581fe98aa42bf1be8f67c359fd8b02";
 const CENSUS_SLICE_MS = 10_000;
 const CENSUS_SLICE_COUNT = 8;
 const PARENT_INVENTORY_GETTER = ["get", "Effectiveness", "Inventory"].join("");
