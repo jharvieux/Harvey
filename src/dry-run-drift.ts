@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 import ts from "typescript";
 import { DETERMINISTIC_DRY_RUN_FILES, validateDryRunFamily } from "./dry-run-artifacts.js";
@@ -23,6 +23,10 @@ function repoPath(repoRoot: string, absolute: string): string {
   return relative(repoRoot, absolute).split("\\").join("/");
 }
 
+function crossesLink(repoRoot: string, absolute: string): boolean {
+  return realpathSync(absolute) !== resolve(realpathSync(repoRoot), repoPath(repoRoot, absolute));
+}
+
 function resolveLocalSpecifier(repoRoot: string, importer: string, specifier: string): string | undefined {
   if (!specifier.startsWith(".")) return undefined;
   const base = resolve(repoRoot, dirname(importer), specifier);
@@ -35,6 +39,7 @@ function resolveLocalSpecifier(repoRoot: string, importer: string, specifier: st
 function registerUrlInput(repoRoot: string, importer: string, specifier: string, closure: DryRunDependencyClosure): void {
   const absolute = resolve(repoRoot, dirname(importer), specifier);
   const path = repoPath(repoRoot, absolute).replace(/\/$/, "");
+  if (existsSync(absolute) && crossesLink(repoRoot, absolute)) closure.unresolved.push(`${importer} -> linked input: ${specifier}`);
   if (specifier.endsWith("/") || (existsSync(absolute) && statSync(absolute).isDirectory())) closure.trees.add(path);
   else if (existsSync(absolute)) closure.files.add(path);
   else closure.unresolved.push(`${importer} -> ${specifier}`);
@@ -63,6 +68,7 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
       continue;
     }
     closure.files.add(file);
+    if (crossesLink(repoRoot, absolute)) closure.unresolved.push(`${file}: linked source inputs are not statically closed`);
     const source = readFileSync(absolute, "utf8");
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     const imports: string[] = [];
@@ -97,6 +103,7 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
       } else if (!existsSync(absoluteInput)) {
         unresolved(node, `missing input: ${value}`);
       } else {
+        if (crossesLink(repoRoot, absoluteInput)) unresolved(node, `linked input: ${value}`);
         if (statSync(absoluteInput).isDirectory()) closure.trees.add(path);
         else closure.files.add(path);
         if (executable && SOURCE_EXTENSION.test(path)) pending.push(path);

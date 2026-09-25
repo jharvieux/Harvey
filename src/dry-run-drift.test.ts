@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -48,6 +48,7 @@ describe("dry-run PR relevance", () => {
   it("executes the shipping selector against literal, computed, indirect and child-process data inputs", () => {
     const sources = [
       'import { readFileSync } from "node:fs"; console.log(readFileSync("docs/input.md", "utf8"));',
+      'import { readFileSync } from "node:fs"; console.log(readFileSync("tools/input-link.md", "utf8"));',
       'import { readFileSync as read } from "node:fs"; const input = "docs/input.md"; console.log(read(input, "utf8"));',
       'import { readFileSync } from "node:fs"; const read = readFileSync; console.log(read("docs/input.md", "utf8"));',
       'import * as fs from "node:fs"; const read = fs.readFileSync.bind(fs); console.log(read("docs/input.md", "utf8"));',
@@ -91,6 +92,7 @@ function runShippingFilter(source: string, changed: string, executeProducer = fa
   writeFileSync(join(repo, "src/producer.ts"), "export {};\n");
   writeFileSync(join(repo, "tools/producer.mjs"), 'import { readFileSync } from "node:fs"; console.log(readFileSync("docs/input.md", "utf8"));');
   writeFileSync(join(repo, "docs/input.md"), "before\n");
+  symlinkSync("../docs/input.md", join(repo, "tools/input-link.md"));
   writeFileSync(join(repo, "unclassified.bin"), "before\n");
   const git = (args: string[]): string => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
   for (const args of [["init", "-q"], ["config", "user.email", "fixture@example.test"], ["config", "user.name", "Fixture"], ["add", "."], ["commit", "-qm", "base"]]) git(args);
