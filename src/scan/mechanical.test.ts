@@ -51,7 +51,7 @@ const { discoverMechanicalCorpusOwnership, runMechanicalScan, runMechanicalScanD
 const { MechanicalScanContext } = await import("./mechanical-context.js");
 const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
-const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
+const { executeMechanicalPhase, mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 const { buildSemgrepCommandSemanticReceipt } = await import("./semgrep-family-cache.js");
 const { buildCoverageMatrix } = await import("./calibration.js");
 const { b2DepsEntries } = await import("./calibration/b2-deps.entries.js");
@@ -375,6 +375,32 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
           ]);
           expect(new Set(record.examinedUnitIdentities.map((unit) => `${unit.kind}\0${unit.identity}`)).size, detector).toBe(record.examinedUnitIdentities.length);
         }
+      } finally { context.dispose(); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["unresolved local paths", { "@local/shared": "file:packages/first" }, { "@local/shared": "file:../second" }],
+    ["different npm alias targets", { alias: "npm:react@^18.0.0" }, { alias: "npm:preact@^10.0.0" }],
+  ])("keeps %s unique through all strict dependency receipts", async (_label, rootDependencies, memberDependencies) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-mechanical-unresolved-identities-"));
+    try {
+      mkdirSync(join(root, "packages/consumer"), { recursive: true });
+      const pkg = { name: "root", private: true, workspaces: ["packages/*"], dependencies: rootDependencies };
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(root, "packages/consumer/package.json"), JSON.stringify({ name: "consumer", dependencies: memberDependencies }));
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline fixture" }, skipNetworkChecks: true }, "supply");
+        for (const detector of ["curated-dependency-cves", "resolved-install-scripts", "dependency-license", "supply-chain-scope"]) {
+          const record = result.records.find((candidate) => candidate.detector === detector)!;
+          expect(new Set(record.examinedUnitIdentities.map((unit) => `${unit.kind}\0${unit.identity}`)).size, detector).toBe(record.examinedUnitIdentities.length);
+        }
+        await expect(executeMechanicalPhase("dependency-advisory", undefined, () => ({
+          findings: result.findings,
+          producers: result.records,
+          scope: { unitsExamined: 2, description: "two unresolved dependency declarations" },
+        }))).resolves.toBeDefined();
       } finally { context.dispose(); }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

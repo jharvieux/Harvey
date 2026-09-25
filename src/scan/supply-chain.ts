@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyMetadataEvidence, type DependencyMetadataOutcomeStatus, type DependencyRangeEvidence, type Finding } from "../findings.js";
-import { dependencyRangeEdge, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
+import { dependencyRangeEdge, licenseCandidateIdentity, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 import { inventoryOsvInputs, type OsvAssessment, type OsvInputInventory } from "./dependencies.js";
 
@@ -735,6 +735,7 @@ export async function checkLicenseCompliance(
   for (const candidate of ordered) coordinateCounts.set(baseCoordinate(candidate), (coordinateCounts.get(baseCoordinate(candidate)) ?? 0) + 1);
   const coordinateOf = (candidate: LicenseCandidate): string => {
     const base = baseCoordinate(candidate);
+    if (candidate.unresolvedAlias) return licenseCandidateIdentity(candidate);
     return candidate.localMetadata && (coordinateCounts.get(base) ?? 0) > 1 ? `${base}@local:${candidate.localMetadata.manifest}` : base;
   };
   type Resolved = { candidate: LicenseCandidate; licenseId?: string; source: string; outcome: DependencyMetadataEvidence["outcomes"][number]; installScript?: boolean };

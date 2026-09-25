@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readNamesSafe } from "../fs-walk.js";
 import type { DependencyMetadataEvidence } from "../findings.js";
-import { parsePackageLock, parsePnpmLock, parseYarnLock, type LicenseCandidate, type LicenseScope } from "../sbom.js";
+import { licenseCandidateIdentity, parsePackageLock, parsePnpmLock, parseYarnLock, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
@@ -484,6 +484,20 @@ describe("checkLicenseCompliance", () => {
       "@local/shared@local:packages/first/package.json",
       "@local/shared@local:packages/second/package.json",
     ]);
+  });
+
+  it("keeps distinct unresolved origins and alias targets addressable in client metadata", async () => {
+    const candidates: LicenseCandidate[] = [
+      { name: "@local/shared", direct: true, unresolvedAlias: { declared: "file:packages/first", ownerPath: "package.json" } },
+      { name: "@local/shared", direct: true, unresolvedAlias: { declared: "file:../second", ownerPath: "packages/consumer/package.json" } },
+      { name: "alias", direct: true, unresolvedAlias: { declared: "npm:react@^18", targetName: "react", range: "^18" } },
+      { name: "alias", direct: true, unresolvedAlias: { declared: "npm:preact@^10", targetName: "preact", range: "^10" } },
+    ];
+    const findings = await checkLicenseCompliance(scope(candidates), { skipRegistry: true, emitAssessment: true });
+    const outcomes = findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes ?? [];
+    expect(outcomes.map((outcome) => outcome.coordinate).sort()).toEqual(candidates.map(licenseCandidateIdentity).sort());
+    expect(new Set(outcomes.map((outcome) => outcome.coordinate)).size).toBe(candidates.length);
+    expect(outcomes.every((outcome) => outcome.status === "unresolved-identity" && outcome.provenance.length > 0)).toBe(true);
   });
 
   it("uses registry script metadata when present and says unsupported when that source omits scripts", async () => {

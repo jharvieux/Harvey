@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ajv } from "ajv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
+import { buildSbom, collectDependencies, licenseCandidateIdentity, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 import { checkLicenseCompliance } from "./scan/supply-chain.js";
 import { buildHtml } from "../report-template/render.mjs";
 
@@ -435,6 +435,25 @@ describe("licenseScope (#1213)", () => {
       license: "MIT",
     }));
     expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-COPYLEFT-@local/config");
+    expect((buildSbom(dir).bom as { compositions: { aggregate: string }[] }).compositions[0]?.aggregate).toBe("complete");
+  });
+
+  it("keeps a pnpm local link but marks a missing selected registry package incomplete", () => {
+    mkdirSync(join(dir, "packages/config"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"], dependencies: { "@local/config": "*", ordinary: "^1.0.0" } }));
+    writeFileSync(join(dir, "packages/config/package.json"), JSON.stringify({ name: "@local/config", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "pnpm-lock.yaml"), [
+      "lockfileVersion: '9.0'", "importers:", "  .:", "    dependencies:",
+      "      '@local/config':", "        specifier: '*'", "        version: link:packages/config",
+      "      ordinary:", "        specifier: ^1.0.0", "        version: 1.0.0", "packages: {}", "",
+    ].join("\n"));
+
+    const dependencies = collectDependencies(dir);
+    expect(dependencies).toMatchObject({ source: "pnpm-lock.yaml", completeness: "incomplete" });
+    expect(dependencies.note).toContain("1 of 1 entries");
+    const exported = buildSbom(dir) as { bom: { compositions: { aggregate: string }[] }; warning?: string };
+    expect(exported.bom.compositions[0]?.aggregate).toBe("incomplete");
+    expect(exported.warning).toContain("MISSING from this BOM");
   });
 
   it("deduplicates repeated declarations of the same proved local manifest", () => {
@@ -464,6 +483,20 @@ describe("licenseScope (#1213)", () => {
     ]);
   });
 
+  it("binds unresolved candidate identities to declaration origin and target", () => {
+    expect([
+      licenseCandidateIdentity({ name: "alias", direct: true, unresolvedAlias: { declared: "npm:react@^18", targetName: "react", range: "^18" } }),
+      licenseCandidateIdentity({ name: "alias", direct: true, unresolvedAlias: { declared: "npm:preact@^10", targetName: "preact", range: "^10" } }),
+      licenseCandidateIdentity({ name: "@local/shared", direct: true, unresolvedAlias: { declared: "file:packages/first", ownerPath: "package.json" } }),
+      licenseCandidateIdentity({ name: "@local/shared", direct: true, unresolvedAlias: { declared: "file:../second", ownerPath: "packages/consumer/package.json" } }),
+    ]).toEqual([
+      'alias@unresolved:[null,"npm:react@^18"]',
+      'alias@unresolved:[null,"npm:preact@^10"]',
+      '@local/shared@unresolved:["package.json","file:packages/first"]',
+      '@local/shared@unresolved:["packages/consumer/package.json","file:../second"]',
+    ]);
+  });
+
   it("does not bind or query a same-name workspace manifest when a local path points elsewhere", async () => {
     mkdirSync(join(dir, "packages/collision"), { recursive: true });
     mkdirSync(join(dir, "packages/other"), { recursive: true });
@@ -475,7 +508,7 @@ describe("licenseScope (#1213)", () => {
     const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, emitAssessment: true });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({
-      coordinate: "collision",
+      coordinate: 'collision@unresolved:["package.json","file:packages/other"]',
       status: "unresolved-identity",
       provenance: "package.json",
     }));

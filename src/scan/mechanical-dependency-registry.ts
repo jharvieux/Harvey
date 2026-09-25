@@ -123,8 +123,11 @@ function dependencyExaminedUnits(producer: string, selected: readonly unknown[])
       return semanticExaminedUnits(producer, "declared-dependency", [`${value.manifest}#${value.name}`]);
     }
     if ("name" in value && typeof value.name === "string") {
-      if ("localMetadata" in value && value.localMetadata && typeof value.localMetadata === "object" &&
-          "manifest" in value.localMetadata && typeof value.localMetadata.manifest === "string") {
+      const localCandidate = "localMetadata" in value && value.localMetadata && typeof value.localMetadata === "object" &&
+        "manifest" in value.localMetadata && typeof value.localMetadata.manifest === "string";
+      const unresolvedCandidate = "unresolvedAlias" in value && value.unresolvedAlias && typeof value.unresolvedAlias === "object" &&
+        "declared" in value.unresolvedAlias && typeof value.unresolvedAlias.declared === "string";
+      if (localCandidate || unresolvedCandidate) {
         return semanticExaminedUnits(producer, "resolved-dependency", [licenseCandidateIdentity(value as Parameters<typeof licenseCandidateIdentity>[0])]);
       }
       const version = "version" in value && typeof value.version === "string" ? value.version : "unresolved";

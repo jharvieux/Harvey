@@ -546,6 +546,7 @@ export function parsePackageLock(text: string): ParsedLock {
 export function parsePnpmLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
   const installations = new Map<string, DependencyInstallation>();
+  const selectedPackages = new Map<string, { name: string; selected: string }>();
   try {
     const lock: unknown = parseYaml(text);
     if (isRecord(lock)) {
@@ -559,12 +560,18 @@ export function parsePnpmLock(text: string): ParsedLock {
           for (const [name, rawDependency] of Object.entries(dependencies)) {
             if (!validPackageName(name)) continue;
             const selected = isRecord(rawDependency) ? rawDependency.version : rawDependency;
-            if (typeof selected !== "string" || !selected.startsWith("link:")) continue;
+            const path = posix.join(ownerDir, "node_modules", name);
+            if (typeof selected !== "string") continue;
+            if (!selected.startsWith("link:")) {
+              installations.delete(path);
+              selectedPackages.set(path, { name, selected });
+              continue;
+            }
+            selectedPackages.delete(path);
             const target = selected.slice("link:".length);
             if (!target || posix.isAbsolute(target)) continue;
             const localPath = posix.normalize(posix.join(ownerDir, target));
             if (localPath.startsWith("../")) continue;
-            const path = posix.join(ownerDir, "node_modules", name);
             installations.set(path, { path, localPath });
           }
         }
@@ -602,6 +609,13 @@ export function parsePnpmLock(text: string): ParsedLock {
       current = undefined;
       unmatched++;
     }
+  }
+  for (const { name, selected } of selectedPackages.values()) {
+    const alias = npmAliasTarget(selected);
+    const selectedName = alias?.name ?? name;
+    const rawVersion = alias?.range ?? selected;
+    const version = /^([0-9][^:(]*)/.exec(rawVersion)?.[1];
+    if (!version || !out.has(`${selectedName}@${version}`)) unmatched++;
   }
   return { components: [...out.values()], installations: [...installations.values()], licenseOrigins: [...out.values()].map((component) => ({ component, explicitName: true })), unresolvedLockAliases: [], unmatched, ranges: pnpmRanges(text) };
 }
@@ -825,6 +839,7 @@ export interface LicenseCandidate {
 /** Stable receipt identity for one metadata candidate, including proved local provenance. */
 export function licenseCandidateIdentity(candidate: LicenseCandidate): string {
   if (candidate.localMetadata) return `${candidate.name}@local:${candidate.localMetadata.manifest}`;
+  if (candidate.unresolvedAlias) return `${candidate.name}@unresolved:${JSON.stringify([candidate.unresolvedAlias.ownerPath ?? null, candidate.unresolvedAlias.declared])}`;
   return `${candidate.name}@${candidate.version ?? "unresolved"}`;
 }
 
