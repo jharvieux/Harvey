@@ -1,0 +1,396 @@
+// Deliberately bounded source proof. Unsupported verifier algorithms or caller control flow
+// remain review candidates; a method/function name is never a cryptographic certificate.
+import ts from "typescript";
+import { collectPathAliases, resolveImport } from "../detectors/app-router.js";
+import type { SourceInput } from "../detectors/common.js";
+import type { EdgeFunctionSource } from "./supabase-config.js";
+import { SourceBindings } from "./source-bindings.js";
+
+interface ResolvedFunction { path: string; sf: ts.SourceFile; fn: ts.FunctionDeclaration }
+interface Proof { verifiedBeforeEffect: boolean; provenance: string }
+type Input = "request" | "rawBody" | "signatureHeader" | "secret";
+
+// This one supported algorithm is the source-evidenced AoP implementation at
+// 956f1990, packages/shared/src/stripe.ts:25-70. Compare the complete runtime AST,
+// including HMAC key/input, header extraction, rejection paths and comparison. An
+// additional/changed statement, unresolved declaration, or altered input invalidates it.
+const STRIPE_HMAC = `async function verify(rawBody, signatureHeader, secret, toleranceSeconds = 300, nowMs = Date.now()) {
+  if (!signatureHeader) return false;
+  const parts = {};
+  for (const kv of signatureHeader.split(',')) {
+    const [k, v] = kv.split('=');
+    if (k && v) parts[k] = v;
+  }
+  const timestamp = parts.t;
+  const v1 = parts.v1;
+  if (!timestamp || !v1) return false;
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isFinite(timestampSeconds)) return false;
+  if (Math.abs(nowMs / 1000 - timestampSeconds) > toleranceSeconds) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signatureBytes = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(\`\${timestamp}.\${rawBody}\`));
+  const expected = Array.from(new Uint8Array(signatureBytes)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return timingSafeEqual(expected, v1);
+}`;
+const CONSTANT_TIME_COMPARE = `function compare(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}`;
+
+function parse(path: string, text: string): ts.SourceFile {
+  return ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+}
+
+function runtimeShape(text: string): string {
+  const js = ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+  const fn = parse("proof.js", js).statements.find(ts.isFunctionDeclaration);
+  if (!fn) return "";
+  const shape = (node: ts.Node): unknown => {
+    if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNumericLiteral(node)
+      || ts.isRegularExpressionLiteral(node) || ts.isTemplateLiteralToken(node)) return [node.kind, node.text];
+    const children: unknown[] = [];
+    ts.forEachChild(node, (child) => { children.push(shape(child)); });
+    return [node.kind, children];
+  };
+  // Function names, export modifiers and types do not affect the proven algorithm.
+  return JSON.stringify([fn.parameters.map(shape), fn.body ? shape(fn.body) : null]);
+}
+
+class SourceGraph {
+  readonly files: Map<string, SourceInput>;
+  readonly paths: Set<string>;
+  readonly aliases: ReturnType<typeof collectPathAliases>;
+  private readonly parsed = new Map<string, ts.SourceFile>();
+  private readonly scopes = new Map<ts.SourceFile, SourceBindings>();
+  constructor(sources: readonly SourceInput[]) {
+    this.files = new Map(sources.map((source) => [source.path, source]));
+    this.paths = new Set(this.files.keys());
+    this.aliases = collectPathAliases([...sources]);
+  }
+  source(path: string): ts.SourceFile | undefined {
+    const file = this.files.get(path);
+    if (!file) return undefined;
+    if (!this.parsed.has(path)) this.parsed.set(path, parse(file.path, file.text));
+    return this.parsed.get(path);
+  }
+  bindings(sf: ts.SourceFile): SourceBindings {
+    if (!this.scopes.has(sf)) this.scopes.set(sf, new SourceBindings(sf));
+    return this.scopes.get(sf)!;
+  }
+  inert(path: string, seen = new Set<string>()): boolean {
+    if (seen.has(path)) return false;
+    const sf = this.source(path);
+    if (!sf) return false;
+    const dependencies = new Set([...seen, path]);
+    return this.bindings(sf).inertModule((specifier) => {
+      const target = this.importPath(path, specifier);
+      return Boolean(target && this.inert(target, dependencies));
+    });
+  }
+  reference(path: string, name: ts.Identifier, seen = new Set<string>()): ResolvedFunction | undefined {
+    const sf = this.source(path);
+    if (!sf) return undefined;
+    const declaration = this.bindings(sf).declaration(name);
+    if (declaration && ts.isFunctionDeclaration(declaration) && declaration.body) return { path, sf, fn: declaration };
+    if (!declaration || !ts.isImportSpecifier(declaration) || declaration.isTypeOnly) return undefined;
+    const clause = declaration.parent.parent;
+    const imported = clause.parent;
+    if (clause.isTypeOnly || !ts.isImportDeclaration(imported) || !ts.isStringLiteral(imported.moduleSpecifier)) return undefined;
+    const target = this.importPath(path, imported.moduleSpecifier.text);
+    return target ? this.resolve(target, declaration.propertyName?.text ?? declaration.name.text, true, seen) : undefined;
+  }
+  importPath(from: string, specifier: string): string | undefined {
+    const standard = resolveImport(from, specifier, this.paths, this.aliases);
+    if (standard) return standard;
+    const configs = [...this.files.values()].filter((file) => file.path === "deno.json" || file.path.endsWith("/deno.json"))
+      .filter((file) => !file.path.includes("/") || from.startsWith(file.path.slice(0, file.path.lastIndexOf("/") + 1)))
+      .sort((a, b) => b.path.length - a.path.length);
+    for (const file of configs) {
+      try {
+        const mapped = (JSON.parse(file.text) as { imports?: Record<string, string> }).imports?.[specifier];
+        if (mapped) return resolveImport(file.path, mapped, this.paths, this.aliases);
+      } catch { /* Invalid configuration cannot establish provenance. */ }
+    }
+    return undefined;
+  }
+  resolve(path: string, name: string, exported = false, seen = new Set<string>()): ResolvedFunction | undefined {
+    const key = `${path}:${name}:${exported}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const sf = this.source(path);
+    if (!sf) return undefined;
+    for (const stmt of sf.statements) {
+      if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name && stmt.body
+        && (!exported || stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))) {
+        return this.bindings(sf).declaration(stmt.name) === stmt ? { path, sf, fn: stmt } : undefined;
+      }
+      if (!exported && ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)
+        && stmt.importClause?.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+        const item = stmt.importClause.namedBindings.elements.find((element) => element.name.text === name);
+        const target = item ? this.importPath(path, stmt.moduleSpecifier.text) : undefined;
+        if (item && target) return this.resolve(target, item.propertyName?.text ?? item.name.text, true, seen);
+      }
+      if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+        const item = stmt.exportClause.elements.find((element) => element.name.text === name);
+        if (!item || item.isTypeOnly) continue;
+        const target = stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier) ? this.importPath(path, stmt.moduleSpecifier.text) : path;
+        const local = item.propertyName ?? item.name;
+        if (target) return stmt.moduleSpecifier
+          ? this.resolve(target, item.propertyName?.text ?? item.name.text, true, seen)
+          : ts.isIdentifier(local) ? this.reference(path, local, seen) : undefined;
+      }
+    }
+    return undefined;
+  }
+}
+
+function unwrapped(expr: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isNonNullExpression(expr)) expr = expr.expression;
+  return expr;
+}
+function property(expr: ts.Expression, receiver: string, name: string): boolean {
+  expr = unwrapped(expr);
+  return ts.isPropertyAccessExpression(expr) && !expr.questionDotToken && ts.isIdentifier(expr.expression)
+    && expr.expression.text === receiver && expr.name.text === name;
+}
+function fieldName(node: ts.PropertyName): string | undefined {
+  return ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : undefined;
+}
+function objectFields(object: ts.ObjectLiteralExpression): Map<string, ts.Expression> | undefined {
+  const fields = new Map<string, ts.Expression>();
+  for (const field of object.properties) {
+    if (!ts.isPropertyAssignment(field) && !ts.isShorthandPropertyAssignment(field)) return undefined;
+    const name = fieldName(field.name);
+    if (!name || fields.has(name) || (ts.isShorthandPropertyAssignment(field) && field.objectAssignmentInitializer)) return undefined;
+    fields.set(name, ts.isPropertyAssignment(field) ? field.initializer : field.name);
+  }
+  return fields;
+}
+function primitiveValue(expr: ts.Expression): boolean {
+  expr = unwrapped(expr);
+  if (ts.isStringLiteral(expr) || ts.isNumericLiteral(expr)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(expr.kind)) return true;
+  return ts.isIdentifier(expr) && expr.text === "undefined";
+}
+function pureValue(expr: ts.Expression): boolean {
+  expr = unwrapped(expr);
+  if (primitiveValue(expr)) return true;
+  // Restrict returned/passed data to passive values: async returns adopt thenables,
+  // and consumers can invoke conversion hooks or nested callbacks.
+  if (ts.isArrayLiteralExpression(expr)) return expr.elements.every(pureValue);
+  if (ts.isObjectLiteralExpression(expr)) return Boolean(objectFields(expr) && [...objectFields(expr)!.values()].every(pureValue));
+  return false;
+}
+
+function effectCallback(expr: ts.Expression, bindings: SourceBindings): boolean {
+  expr = unwrapped(expr);
+  if (!ts.isArrowFunction(expr) && !ts.isFunctionExpression(expr)) return pureValue(expr);
+  if (expr.parameters.some((parameter) => !ts.isIdentifier(parameter.name) || parameter.initializer || parameter.dotDotDotToken)) return false;
+  let effect: ts.Node = expr.body;
+  if (ts.isBlock(effect)) {
+    if (effect.statements.length !== 1) return false;
+    const statement = effect.statements[0]!;
+    if (!ts.isReturnStatement(statement) && !ts.isExpressionStatement(statement)) return false;
+    if (!statement.expression) return false;
+    effect = statement.expression;
+  }
+  if (ts.isAwaitExpression(effect)) effect = effect.expression;
+  if (!ts.isCallExpression(effect) || effect.questionDotToken || !ts.isPropertyAccessExpression(effect.expression)) return false;
+  let receiver: ts.Expression = effect.expression.expression;
+  while (ts.isPropertyAccessExpression(receiver) && !receiver.questionDotToken) receiver = receiver.expression;
+  if (!ts.isIdentifier(receiver)) return false;
+  const external = bindings.declaration(receiver);
+  if (!external || !ts.isVariableDeclaration(external) || external.initializer
+    || !ts.isVariableDeclarationList(external.parent) || !ts.isVariableStatement(external.parent.parent)
+    || !external.parent.parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return false;
+  const data = (value: ts.Expression): boolean => {
+    value = unwrapped(value);
+    if (ts.isIdentifier(value)) return expr.parameters.includes(bindings.declaration(value) as ts.ParameterDeclaration);
+    if (ts.isObjectLiteralExpression(value)) {
+      const fields = objectFields(value);
+      return Boolean(fields && [...fields.values()].every(data));
+    }
+    return pureValue(value);
+  };
+  return effect.arguments.every(data);
+}
+
+function requestInput(expr: ts.Expression, inputs: ReadonlyMap<ts.Declaration, Input>, bindings: SourceBindings): Input | undefined {
+  expr = unwrapped(expr);
+  const input = (name: ts.Identifier): Input | undefined => {
+    const declaration = bindings.declaration(name);
+    return declaration ? inputs.get(declaration) : undefined;
+  };
+  if (ts.isIdentifier(expr)) return input(expr);
+  if (ts.isAwaitExpression(expr)) {
+    const call = expr.expression;
+    if (ts.isCallExpression(call) && call.arguments.length === 0 && ts.isPropertyAccessExpression(call.expression)
+      && ts.isIdentifier(call.expression.expression) && input(call.expression.expression) === "request"
+      && call.expression.name.text === "text" && !call.questionDotToken) return "rawBody";
+    return undefined;
+  }
+  if (ts.isCallExpression(expr) && expr.arguments.length === 1 && ts.isStringLiteral(expr.arguments[0]!)) {
+    if (ts.isPropertyAccessExpression(expr.expression) && expr.expression.name.text === "get"
+      && ts.isPropertyAccessExpression(expr.expression.expression) && expr.expression.expression.name.text === "headers"
+      && ts.isIdentifier(expr.expression.expression.expression) && input(expr.expression.expression.expression) === "request"
+      && expr.arguments[0].text.toLowerCase() === "stripe-signature") return "signatureHeader";
+    if (expr.expression.getText() === "Deno.env.get" && expr.arguments[0].text.length > 0) return "secret";
+  }
+  if (ts.isPropertyAccessExpression(expr) && expr.expression.getText() === "process.env") return "secret";
+  return undefined;
+}
+
+function constantDeclaration(stmt: ts.Statement): ts.VariableDeclaration | undefined {
+  if (!ts.isVariableStatement(stmt) || !(stmt.declarationList.flags & ts.NodeFlags.Const)
+    || stmt.declarationList.declarations.length !== 1) return undefined;
+  return stmt.declarationList.declarations[0];
+}
+
+function provenVerifier(graph: SourceGraph, resolved: ResolvedFunction): boolean {
+  if (runtimeShape(resolved.fn.getText(resolved.sf)) !== runtimeShape(STRIPE_HMAC)) return false;
+  const returned = resolved.fn.body!.statements.at(-1);
+  if (!returned || !ts.isReturnStatement(returned) || !returned.expression || !ts.isCallExpression(returned.expression)
+    || !ts.isIdentifier(returned.expression.expression)) return false;
+  const comparator = graph.reference(resolved.path, returned.expression.expression);
+  if (!comparator || runtimeShape(comparator.fn.getText(comparator.sf)) !== runtimeShape(CONSTANT_TIME_COMPARE)) return false;
+  const primitives = new Set(["crypto", "TextEncoder", "Uint8Array", "Array", "Math", "Number", "Date"]);
+  const bindings = graph.bindings(resolved.sf);
+  if (comparator.path !== resolved.path) return false;
+  return bindings.unboundWithin(resolved.fn, primitives) && bindings.unboundWithin(comparator.fn, primitives)
+    && !bindings.hasWrite(new Set([...primitives, "timingSafeEqual", resolved.fn.name!.text]))
+    && graph.inert(resolved.path);
+}
+
+function provesHelper(graph: SourceGraph, helper: ResolvedFunction): boolean {
+  const { fn } = helper;
+  const parameter = fn.parameters[0];
+  if (fn.parameters.length !== 1 || !parameter || !ts.isIdentifier(parameter.name) || parameter.initializer
+    || !fn.body || fn.body.statements.length < 2) return false;
+  const declared = constantDeclaration(fn.body.statements[0]!);
+  if (!declared || !ts.isIdentifier(declared.name) || !declared.initializer || !ts.isAwaitExpression(declared.initializer)
+    || !ts.isCallExpression(declared.initializer.expression)) return false;
+  const parameterName = parameter.name.text;
+  const verify = declared.initializer.expression;
+  if (!ts.isIdentifier(verify.expression) || verify.expression.text === parameter.name.text || verify.questionDotToken
+    || verify.arguments.length < 3 || verify.arguments.length > 5) return false;
+  if (!["rawBody", "signatureHeader", "secret"].every((name, i) => property(verify.arguments[i]!, parameterName, name))) return false;
+  // Only omitted/default tolerance and time are covered by the source certificate.
+  if (verify.arguments[3] && (!ts.isIdentifier(verify.arguments[3]) || verify.arguments[3].text !== "undefined")) return false;
+  if (verify.arguments[4] && !(ts.isIdentifier(verify.arguments[4]) && verify.arguments[4].text === "undefined")
+    && !property(verify.arguments[4], parameterName, "nowMs")) return false;
+  const guard = fn.body.statements[1]!;
+  if (!ts.isIfStatement(guard) || guard.elseStatement || !ts.isPrefixUnaryExpression(guard.expression)
+    || guard.expression.operator !== ts.SyntaxKind.ExclamationToken || !ts.isIdentifier(guard.expression.operand)
+    || guard.expression.operand.text !== declared.name.text) return false;
+  const rejection = ts.isBlock(guard.thenStatement) && guard.thenStatement.statements.length === 1
+    ? guard.thenStatement.statements[0] : guard.thenStatement;
+  if (!rejection || !ts.isReturnStatement(rejection) || (rejection.expression && !pureValue(rejection.expression))) return false;
+  // Keep the supported post-verification path explicit. Unknown setup/helper calls
+  // here could replace dependencies before a subsequent request reaches verification.
+  if (!fn.body.statements.slice(2).every((statement) => {
+    if (ts.isReturnStatement(statement)) return !statement.expression || pureValue(statement.expression);
+    if (!ts.isExpressionStatement(statement) || !ts.isAwaitExpression(statement.expression)) return false;
+    const effect = statement.expression.expression;
+    return ts.isCallExpression(effect) && ts.isPropertyAccessExpression(effect.expression)
+      && property(effect.expression, parameterName, effect.expression.name.text)
+      && !effect.questionDotToken && effect.arguments.every(pureValue);
+  })) return false;
+  const verifier = graph.reference(helper.path, verify.expression);
+  const bindings = graph.bindings(helper.sf);
+  return Boolean(verifier && bindings.unboundWithin(fn, new Set(["undefined"]))
+    && graph.inert(helper.path) && !bindings.hasWrite(new Set([verify.expression.text, fn.name!.text])) && provenVerifier(graph, verifier));
+}
+
+function provesCaller(fn: ts.FunctionLikeDeclaration, call: ts.CallExpression, bindings: SourceBindings): boolean {
+  if (!fn.body || !ts.isBlock(fn.body) || fn.parameters.length !== 1 || !ts.isIdentifier(fn.parameters[0]!.name)
+    || fn.parameters[0]!.initializer || fn.parameters[0]!.dotDotDotToken) return false;
+  if (!bindings.unboundWithin(fn, new Set(["Deno", "process", "Error", "undefined"]))
+    || (ts.isIdentifier(call.expression) && bindings.hasWrite(new Set([call.expression.text])))) return false;
+  const inputs = new Map<ts.Declaration, Input>([[fn.parameters[0]!, "request"]]);
+  const guardedSecrets = new Set<ts.Declaration>();
+  for (const stmt of fn.body.statements) {
+    if (ts.isReturnStatement(stmt) && stmt.expression) {
+      const returned = ts.isAwaitExpression(stmt.expression) ? stmt.expression.expression : stmt.expression;
+      if (returned !== call || call.arguments.length !== 1 || !ts.isObjectLiteralExpression(call.arguments[0]!)) return false;
+      const fields = objectFields(call.arguments[0]);
+      const secret = fields?.get("secret");
+      if (!secret || !ts.isIdentifier(secret) || !guardedSecrets.has(bindings.declaration(secret)!)) return false;
+      if (!fields || fields.has("nowMs") || !["rawBody", "signatureHeader", "secret"].every((name) => fields.has(name) && requestInput(fields.get(name)!, inputs, bindings) === name)) return false;
+      return [...fields].every(([name, expr]) => ["rawBody", "signatureHeader", "secret"].includes(name) || effectCallback(expr, bindings));
+    }
+    if (ts.isIfStatement(stmt) && !stmt.elseStatement && ts.isPrefixUnaryExpression(stmt.expression)
+      && stmt.expression.operator === ts.SyntaxKind.ExclamationToken && ts.isIdentifier(stmt.expression.operand)
+      && inputs.get(bindings.declaration(stmt.expression.operand)!) === "secret") {
+      const exit = ts.isBlock(stmt.thenStatement) && stmt.thenStatement.statements.length === 1 ? stmt.thenStatement.statements[0] : stmt.thenStatement;
+      const rejects = exit && ((ts.isReturnStatement(exit) && (!exit.expression || pureValue(exit.expression)))
+        || (ts.isThrowStatement(exit) && ts.isNewExpression(exit.expression) && ts.isIdentifier(exit.expression.expression)
+          && exit.expression.expression.text === "Error" && (exit.expression.arguments?.length ?? 0) <= 1
+          && (!exit.expression.arguments?.[0] || primitiveValue(exit.expression.arguments[0]))));
+      if (!rejects) return false;
+      guardedSecrets.add(bindings.declaration(stmt.expression.operand)!);
+      continue;
+    }
+    const declaration = constantDeclaration(stmt);
+    if (!declaration || !ts.isIdentifier(declaration.name) || bindings.declaration(declaration.name) !== declaration || !declaration.initializer) return false;
+    const value = requestInput(declaration.initializer, inputs, bindings);
+    if (!value) return false;
+    inputs.set(declaration, value);
+  }
+  return false;
+}
+
+export function assessWebhookVerification(handler: EdgeFunctionSource, projectSources: readonly SourceInput[]): Proof {
+  const path = handler.path ?? `${handler.name}.ts`;
+  const graph = new SourceGraph([...projectSources.filter((source) => source.path !== path), { path, text: handler.content }]);
+  const sf = graph.source(path)!;
+  const assessments: (Proof & { caller?: ts.Node })[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.arguments.some((arg) => ts.isObjectLiteralExpression(arg)
+      && ["rawBody", "signatureHeader", "secret"].every((name) => objectFields(arg)?.has(name)))) {
+      let enclosing: ts.Node | undefined = node.parent;
+      while (enclosing && !ts.isFunctionDeclaration(enclosing) && !ts.isArrowFunction(enclosing) && !ts.isFunctionExpression(enclosing)) enclosing = enclosing.parent;
+      const helper = graph.reference(path, node.expression);
+      const proved = Boolean(helper && enclosing && provesCaller(enclosing as ts.FunctionLikeDeclaration, node, graph.bindings(sf)) && provesHelper(graph, helper));
+      assessments.push({ caller: enclosing, verifiedBeforeEffect: proved, provenance: `called ${node.expression.text}(rawBody, signatureHeader, secret)${helper ? `, resolved to ${helper.path}; signature verification ${proved ? "guards and precedes every effect in the supported caller and helper" : "does not provably guard and precede every effect with the actual request inputs and an evidenced verifier"}` : ", but the import or verifier implementation could not be resolved"}` });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  // Multiple entry points/calls require separate proof; no verified sibling can clear another.
+  const entryFunctions = new Set<ts.FunctionDeclaration>();
+  let hasOtherEntry = false;
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      entryFunctions.add(stmt);
+    } else if (ts.isExportDeclaration(stmt) && !stmt.isTypeOnly) {
+      // A second name for the same local function preserves its proof. Reexports
+      // and unresolved values introduce entry surfaces outside that caller proof.
+      if (!stmt.exportClause || !ts.isNamedExports(stmt.exportClause)) {
+        hasOtherEntry = true;
+        continue;
+      }
+      for (const item of stmt.exportClause.elements) {
+        if (item.isTypeOnly) continue;
+        const local = item.propertyName ?? item.name;
+        const resolved = !stmt.moduleSpecifier && ts.isIdentifier(local) ? graph.reference(path, local) : undefined;
+        if (resolved?.path === path) entryFunctions.add(resolved.fn);
+        else {
+          const declaration = !stmt.moduleSpecifier && ts.isIdentifier(local) ? graph.bindings(sf).declaration(local) : undefined;
+          const passiveConstant = declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+            && ts.isVariableDeclarationList(declaration.parent) && Boolean(declaration.parent.flags & ts.NodeFlags.Const)
+            && primitiveValue(declaration.initializer) && !graph.bindings(sf).hasWrite(new Set([local.text]));
+          if (!passiveConstant) hasOtherEntry = true;
+        }
+      }
+    } else if (ts.isExportAssignment(stmt)
+      || (ts.isVariableStatement(stmt) && stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword))
+      || ts.isExpressionStatement(stmt)) {
+      hasOtherEntry = true;
+    }
+  }
+  const proved = graph.inert(path) && !hasOtherEntry && assessments.length === 1 && assessments[0]!.verifiedBeforeEffect
+    && entryFunctions.size === 1 && assessments[0]!.caller === [...entryFunctions][0];
+  return { verifiedBeforeEffect: proved, provenance: assessments.map((assessment) => assessment.provenance).join("; ") || "Imported verification provenance was not proved; no supported request-to-verifier call was resolved" };
+}

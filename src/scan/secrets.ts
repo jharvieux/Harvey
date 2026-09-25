@@ -27,11 +27,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import ts from "typescript";
+import { isTestSourcePath } from "../detectors/load-sources.js";
 import { statSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { relativizeScanScope } from "./scan-scope.js";
+import { SourceBindings } from "./source-bindings.js";
 
 const GITLEAKS_CONFIG = new URL("./rules/gitleaks-supabase.toml", import.meta.url).pathname;
 // Rules whose match alone is ~100%-precision (no live verification needed): the decoded
@@ -138,6 +141,9 @@ export interface GitleaksResult {
   Description?: string;
   File: string;
   StartLine?: number;
+  StartColumn?: number;
+  EndLine?: number;
+  EndColumn?: number;
   Commit?: string;
   Match?: string;
   Secret?: string;
@@ -209,6 +215,172 @@ export function parseTruffleHogFindings(results: TruffleHogResult[], scope: stri
 // id-assigning map so reruns produce identical ids for the same finding.
 function gitleaksSortKey(r: GitleaksResult): string {
   return `${r.File} ${String(r.StartLine ?? 0).padStart(10, "0")} ${r.RuleID} ${r.Match ?? r.Secret ?? ""}`;
+}
+
+// The only supported encoding helper is the complete pure byte-to-base64 algorithm
+// used by AoP's generated-key fixture. Names alone (e.g. encode(pkcs8)) prove nothing.
+const BYTE_ENCODER_BODY = `function base64UrlFromBytes(bytes) {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+}`;
+
+function keyProofShape(source: string): string {
+  const emitted = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+  const file = ts.createSourceFile("proof.js", emitted, ts.ScriptTarget.Latest, true);
+  const fn = file.statements.find(ts.isFunctionDeclaration);
+  const serialize = (node: ts.Node): unknown => {
+    if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isRegularExpressionLiteral(node)
+      || ts.isNumericLiteral(node)) return [node.kind, node.text];
+    const children: unknown[] = [];
+    ts.forEachChild(node, (child) => { children.push(serialize(child)); });
+    return [node.kind, children];
+  };
+  return fn?.body ? JSON.stringify([fn.parameters.map(serialize), serialize(fn.body)]) : "";
+}
+
+function credentialReference(node: ts.Node, name: string): ts.Identifier | undefined {
+  if (ts.isIdentifier(node) && node.text === name) return node;
+  return ts.forEachChild(node, (child) => credentialReference(child, name));
+}
+
+function keyImport(source: ts.SourceFile, specifier: string): ts.SourceFile | undefined {
+  if (!specifier.startsWith(".")) return undefined;
+  const path = resolve(dirname(source.fileName), specifier);
+  const stem = path.replace(/\.js$/, "");
+  const target = [path, `${stem}.ts`, `${stem}.js`].find((candidate) => statSafe(candidate)?.isFile());
+  return target ? ts.createSourceFile(target, readFileSync(target, "utf8"), ts.ScriptTarget.Latest, true) : undefined;
+}
+
+function inertKeyModule(source: ts.SourceFile, entry?: ts.Statement, seen = new Set<string>()): boolean {
+  if (seen.has(source.fileName)) return false;
+  const visited = new Set([...seen, source.fileName]);
+  return new SourceBindings(source).inertModule((specifier) => {
+    const dependency = keyImport(source, specifier);
+    return Boolean(dependency && inertKeyModule(dependency, undefined, visited));
+  }, entry);
+}
+
+function supportedKeyEntry(fn: ts.FunctionLikeDeclaration, bindings: SourceBindings): ts.Statement | undefined {
+  if (fn.parameters.length || !ts.isCallExpression(fn.parent) || fn.parent.arguments.length !== 2
+    || fn.parent.arguments[1] !== fn || !ts.isStringLiteral(fn.parent.arguments[0]!)
+    || !ts.isExpressionStatement(fn.parent.parent) || !ts.isSourceFile(fn.parent.parent.parent)) return undefined;
+  const registration = fn.parent.expression;
+  const root = ts.isIdentifier(registration) && ["it", "test"].includes(registration.text) ? registration
+    : ts.isPropertyAccessExpression(registration) && registration.name.text === "test"
+      && ts.isIdentifier(registration.expression) && registration.expression.text === "Deno" ? registration.expression : undefined;
+  return root && bindings.unboundWithin(root, new Set([root.text])) ? fn.parent.parent : undefined;
+}
+
+function isProvedByteEncoder(sf: ts.SourceFile, reference: ts.Identifier, bindings: SourceBindings): boolean {
+  let source = sf;
+  let declaration = bindings.declaration(reference);
+  if (declaration && ts.isImportSpecifier(declaration)) {
+    const clause = declaration.parent.parent;
+    const stmt = clause.parent;
+    if (declaration.isTypeOnly || clause.isTypeOnly || !ts.isImportDeclaration(stmt)
+      || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.moduleSpecifier.text.startsWith(".")) return false;
+    const imported = keyImport(sf, stmt.moduleSpecifier.text);
+    if (!imported || !inertKeyModule(imported)) return false;
+    source = imported;
+    const localName = declaration.propertyName?.text ?? declaration.name.text;
+    const fn = source.statements.find((stmt): stmt is ts.FunctionDeclaration => ts.isFunctionDeclaration(stmt)
+      && stmt.name?.text === localName && Boolean(stmt.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)));
+    bindings = new SourceBindings(source);
+    declaration = fn?.name ? bindings.declaration(fn.name) : undefined;
+  }
+  if (!declaration || !ts.isFunctionDeclaration(declaration) || !declaration.body) return false;
+  const primitives = new Set(["String", "btoa"]);
+  return bindings.unboundWithin(declaration.body, primitives) && !bindings.hasWrite(new Set([...primitives, declaration.name!.text]))
+    && keyProofShape(declaration.getText(source)) === keyProofShape(BYTE_ENCODER_BODY);
+}
+
+function generatedPrivateKeyFixtureProvenance(r: GitleaksResult): string | undefined {
+  // History findings must never be explained by a different working-tree revision.
+  if (r.RuleID !== "private-key" || r.Commit || !r.StartLine || !r.Match || !existsSync(r.File)) return undefined;
+  if (!isTestSourcePath(relativizeScanScope(r.File))) return undefined;
+  const text = readFileSync(r.File, "utf8");
+  const sf = ts.createSourceFile(r.File, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const matches: ts.TemplateExpression[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isTemplateExpression(node) && node.getText(sf).slice(1, -1) === r.Match) {
+      const position = sf.getLineAndCharacterOfPosition(node.getStart(sf) + 1);
+      // Gitleaks group columns differ from the PEM start by one in the real 8.30.1
+      // output. Full Match + line + unique AST span binds identity without that offset.
+      if (position.line + 1 === r.StartLine) matches.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (matches.length !== 1) return undefined;
+  const pem = matches[0]!;
+  if (pem.head.text !== "-----BEGIN PRIVATE KEY-----\n" || pem.templateSpans.length !== 1
+    || pem.templateSpans[0]!.literal.text !== "\n-----END PRIVATE KEY-----") return undefined;
+  if (!ts.isVariableDeclaration(pem.parent) || pem.parent.initializer !== pem) return undefined;
+  const statement = pem.parent.parent.parent;
+  if (!ts.isVariableStatement(statement) || !ts.isBlock(statement.parent)) return undefined;
+  const block = statement.parent;
+  if (!ts.isArrowFunction(block.parent) && !ts.isFunctionExpression(block.parent) && !ts.isFunctionDeclaration(block.parent)) return undefined;
+  const index = block.statements.indexOf(statement);
+  const constant = (node: ts.Statement | undefined): ts.VariableDeclaration | undefined => {
+    if (!node || !ts.isVariableStatement(node) || !(node.declarationList.flags & ts.NodeFlags.Const)
+      || node.declarationList.declarations.length !== 1) return undefined;
+    const declaration = node.declarationList.declarations[0]!;
+    return ts.isIdentifier(declaration.name) ? declaration : undefined;
+  };
+  const generated = constant(block.statements[index - 2]);
+  const exported = constant(block.statements[index - 1]);
+  if (!generated?.initializer || !exported?.initializer || !constant(statement)) return undefined;
+  const bindings = new SourceBindings(sf);
+  const entry = supportedKeyEntry(block.parent, bindings);
+  if (!entry || !inertKeyModule(sf, entry)
+    || !block.statements.slice(0, index - 2).every((statement) => bindings.inertStatement(statement))) return undefined;
+  // After materialization, allow inert declarations or handing this exact PEM to
+  // the external test consumer. Keep local setup/mutators out of repeated runs too.
+  if (!block.statements.slice(index + 1).every((tail) => {
+    if (bindings.inertStatement(tail)) return true;
+    if (!ts.isExpressionStatement(tail)) return false;
+    const expression = ts.isAwaitExpression(tail.expression) ? tail.expression.expression : tail.expression;
+    return ts.isCallExpression(expression) && !expression.questionDotToken && ts.isIdentifier(expression.expression)
+      && !bindings.declaration(expression.expression) && expression.arguments.length === 1
+      && ts.isIdentifier(expression.arguments[0]!) && bindings.declaration(expression.arguments[0]) === pem.parent;
+  })) return undefined;
+  if (!ts.isIdentifier(generated.name) || !ts.isIdentifier(exported.name)
+    || bindings.declaration(generated.name) !== generated || bindings.declaration(exported.name) !== exported) return undefined;
+  const awaitedCall = (expr: ts.Expression): ts.CallExpression | undefined =>
+    ts.isAwaitExpression(expr) && ts.isCallExpression(expr.expression) ? expr.expression : undefined;
+  const generateCall = awaitedCall(generated.initializer);
+  const exportCall = awaitedCall(exported.initializer);
+  if (!generateCall || !exportCall || generateCall.expression.getText(sf) !== "crypto.subtle.generateKey"
+    || exportCall.expression.getText(sf) !== "crypto.subtle.exportKey" || generateCall.arguments.length !== 3 || exportCall.arguments.length !== 2) return undefined;
+  const algorithm = generateCall.arguments[0]!;
+  if (!ts.isObjectLiteralExpression(algorithm) || algorithm.properties.length !== 2
+    || !algorithm.properties.every((prop) => ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)
+      && ts.isStringLiteral(prop.initializer) && ((prop.name.text === "name" && prop.initializer.text === "ECDSA")
+        || (prop.name.text === "namedCurve" && prop.initializer.text === "P-256")))) return undefined;
+  if (generateCall.arguments[1]!.kind !== ts.SyntaxKind.TrueKeyword) return undefined;
+  const usages = generateCall.arguments[2]!;
+  if (!ts.isArrayLiteralExpression(usages) || usages.elements.length !== 2
+    || usages.elements.some((item, i) => !ts.isStringLiteral(item) || item.text !== ["sign", "verify"][i])) return undefined;
+  const key = exportCall.arguments[1]!;
+  if (!ts.isStringLiteral(exportCall.arguments[0]!) || exportCall.arguments[0].text !== "pkcs8"
+    || !ts.isPropertyAccessExpression(key) || !ts.isIdentifier(key.expression) || key.name.text !== "privateKey"
+    || bindings.declaration(key.expression) !== generated) return undefined;
+  const pkcs8 = exported.name.getText(sf);
+  // Adjacent immutable bindings prevent unrelated generation, reassignment, aliases and
+  // intervening calls from being mistaken for the exported key's source.
+  const interpolation = pem.templateSpans[0]!.expression;
+  const expected = `function interpolate() { return base64UrlFromBytes(new Uint8Array(${pkcs8})).replace(/-/g, '+').replace(/_/g, '/'); }`;
+  const encoder = credentialReference(interpolation, "base64UrlFromBytes");
+  const exportedReference = credentialReference(interpolation, pkcs8);
+  if (keyProofShape(`function interpolate() { return ${interpolation.getText(sf)}; }`) !== keyProofShape(expected)
+    || !exportedReference || bindings.declaration(exportedReference) !== exported
+    || !encoder || !isProvedByteEncoder(sf, encoder, bindings)) return undefined;
+  // Shadowing/mutation of the platform functions or proven helper invalidates the certificate.
+  const primitives = new Set(["crypto", "Uint8Array"]);
+  if (![generateCall, exportCall, interpolation].every((node) => bindings.unboundWithin(node, primitives))
+    || bindings.hasWrite(new Set([...primitives, "String", "btoa", encoder.text]))) return undefined;
+  return `the exact matched PEM interpolation is bound to crypto.subtle.generateKey(ECDSA/P-256) -> exportKey(pkcs8, ${generated.name.getText(sf)}.privateKey) -> ${pkcs8}, followed by a source-proved byte encoder in one supported test callback with inert module initialization and setup`;
 }
 
 // #1078 — the two suppressions that used to happen inside the gitleaks config, where they left no
@@ -310,7 +482,9 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     .sort((a, b) => gitleaksSortKey(a).localeCompare(gitleaksSortKey(b)))
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
-      const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;
+      const generatedPrivateKeyFixture = generatedPrivateKeyFixtureProvenance(r);
+      const unresolvedKeyTemplate = r.RuleID === "private-key" && !generatedPrivateKeyFixture && (r.Match ?? "").includes("${");
+      const high = !unresolvedKeyTemplate && HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey && !generatedPrivateKeyFixture;
       // #934: doc/example context only reclassifies a hit that would otherwise be a graded
       // Critical — review-tier matches are already out of the free grade and keep their tier.
       const docContext = high && isDocExamplePath(r.File);
@@ -318,21 +492,29 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
       return mechanicalFinding({
         id: `SEC-GL-${scope}-${i + 1}`,
         title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
-        severity: docContext ? "Low" : high ? "Critical" : "High",
+        severity: generatedPrivateKeyFixture || docContext ? "Low" : high ? "Critical" : "High",
         category: "Secret exposure",
         taxonomy: docContext ? DOC_CONTEXT_CREDENTIAL_TAXONOMY : high ? "Committed credential" : "Possible committed credential",
         location: `[${scope}] ${r.File}${r.StartLine ? `:${r.StartLine}` : ""}${r.Commit ? ` (commit ${r.Commit.slice(0, 12)})` : ""}`,
-        evidence: testIdpPrivateKey
+        evidence: generatedPrivateKeyFixture
+          ? `${evidence} Down-ranked from Critical with source-bound provenance: ${generatedPrivateKeyFixture}. This is still reported for review; test paths alone never suppress a credential.`
+          : testIdpPrivateKey
           ? `${evidence} Down-ranked from Critical: this file also carries a test/example SAML IdP marker (ENTITY_ID / *.example.com) in a CI workflow — treat as a test fixture, confirm before escalating.`
           : docContext
             ? `${evidence} Reclassified from Critical (#934): the file sits in documentation/example-deployment content (docs, contrib, an example/sample file, or a *.dev.yml compose), where a credential-format match is overwhelmingly a shipped placeholder/default, not an application secret.`
-            : evidence,
-        impact: docContext
+            : unresolvedKeyTemplate
+              ? `${evidence} The matched source contains template interpolation, but its exact generated-key provenance was not proved; retain exposure review and confirm whether any committed credential contributes to the value.`
+              : evidence,
+        impact: generatedPrivateKeyFixture
+          ? "A private-key-shaped value generated at test runtime from an ephemeral keypair, not a committed deployable credential. Confirm the dataflow remains generated and nonproduction."
+          : docContext
           ? "A default/placeholder-shaped credential in docs or an example deployment file. Not graded as a live secret — but a committed default does get deployed by whoever copies this file, so confirm it is a placeholder and that your own deployment rotated it."
           : high
             ? (HIGH_PRECISION_IMPACT[r.RuleID] ?? DEFAULT_HIGH_IMPACT)
             : "Pattern match on a potential secret; confirm before treating as a live credential.",
-        fix: docContext
+        fix: generatedPrivateKeyFixture
+          ? "No rotation is needed if the source-bound generation path is intact. Keep the fixture generated at runtime; if a static key replaces it, treat that new finding as a committed credential."
+          : docContext
           ? "If this is a real credential, rotate it and remove it; if it is the intended placeholder, keep an obviously-fake value and a rotate-me instruction next to it."
           : "Rotate the credential if live, remove from source/history, and add to .gitignore.",
         precisionTier: high ? "high" : "review",

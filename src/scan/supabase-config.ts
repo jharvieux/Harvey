@@ -3,6 +3,8 @@
 // and Edge Function secret/webhook-signature hygiene. See src/scan/supabase.ts for how each
 // input is fetched (Management API / direct SQL against the project).
 
+import type { SourceInput } from "../detectors/common.js";
+import { assessWebhookVerification } from "./webhook-proof.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -259,6 +261,8 @@ export function checkDangerousExtensions(extensions: ExtensionInfo[]): Finding[]
 export interface EdgeFunctionSource {
   name: string;
   content: string;
+  /** Target-relative entrypoint path. Required for cross-file verifier proof. */
+  path?: string;
 }
 
 const HARDCODED_SECRET_HINT = /(SUPABASE_SERVICE_ROLE_KEY\s*=\s*["'][^"']|service_role["']?\s*:\s*["'][^"']{10,}|Authorization["']?\s*:\s*["']Bearer\s+sk_)/;
@@ -517,21 +521,21 @@ export function checkColumnGrantsToClientRoles(grants: ColumnGrant[]): Finding[]
   );
 }
 
-const SIGNATURE_CHECK_HINT = /(verifyWebhookSignature|constructEvent|x-webhook-signature|hmac|createHmac|timingSafeEqual)/i;
-
-export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding[] {
+export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[], projectSources: readonly SourceInput[] = []): Finding[] {
   return fns
-    .filter((f) => /webhook/i.test(f.name) && !SIGNATURE_CHECK_HINT.test(f.content))
-    .map((f) =>
+    .filter((f) => /webhook/i.test(f.name))
+    .map((f) => ({ f, imported: assessWebhookVerification(f, projectSources) }))
+    .filter(({ imported }) => !imported.verifiedBeforeEffect)
+    .map(({ f, imported }) =>
       mechanicalFinding({
         id: `SB-EDGE-WEBHOOK-${f.name}`,
-        title: `Webhook handler "${f.name}" has no signature-verification hint`,
+        title: `Webhook handler "${f.name}" has no proved signature-verification guard`,
         severity: "High",
         category: "Supabase config",
         taxonomy: "Unsigned/unverified webhook handler",
         location: `edge function: ${f.name}`,
-        evidence: `No HMAC/signature-check pattern found in ${f.name}, whose name implies it's a webhook receiver.`,
-        impact: "An unsigned webhook endpoint accepts forged events from anyone who finds the URL.",
+        evidence: `Signature verification was not proved in ${f.name}; ${imported.provenance}. The call remains a review candidate because the request-to-verifier data flow and verification-before-effect order were not proved.`,
+        impact: "Without a verified signature guard, forged webhook events can reach application effects.",
         fix: "Verify the provider's webhook signature (HMAC) before trusting the payload.",
         precisionTier: "review",
       }),
