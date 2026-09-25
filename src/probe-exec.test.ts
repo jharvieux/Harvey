@@ -105,7 +105,10 @@ describe("probeExec command execution receipts", () => {
   });
 
   it("rejects contradictory command outcomes while accepting a coherent timeout", () => {
-    const receipt = (outcome: Parameters<typeof createCommandExecutionReceipt>[0]["outcome"]) => () => createCommandExecutionReceipt({
+    const receipt = (
+      outcome: Parameters<typeof createCommandExecutionReceipt>[0]["outcome"],
+      outputCompleteness?: Parameters<typeof createCommandExecutionReceipt>[0]["outputCompleteness"],
+    ) => () => createCommandExecutionReceipt({
       invocationId: "outcome-control",
       command: { executable: process.execPath, argv: [], cwd: root },
       target: { identity: "fixture-target", value: { revision: "abc123" } },
@@ -114,16 +117,29 @@ describe("probeExec command execution receipts", () => {
       startedAt: "2026-09-25T00:00:00.000Z",
       finishedAt: "2026-09-25T00:00:01.000Z",
       outcome,
+      ...(outputCompleteness ? { outputCompleteness } : {}),
     });
 
     expect(receipt({ state: "timed-out", exitCode: 0, signal: null, errorCode: "ETIMEDOUT" })).toThrow(/timed-out.*exit code/i);
     expect(receipt({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOENT" })).toThrow(/spawn-failed.*signal/i);
     expect(receipt({ state: "exited", exitCode: 0, signal: null, errorCode: "EIO" })).toThrow(/exited.*error/i);
     expect(receipt({ state: "exited", exitCode: 0, observedExitCode: 7, signal: null })).toThrow(/observed interrupted exit code/i);
+    expect(receipt(
+      { state: "output-limit-exceeded", exitCode: null, observedExitCode: 7, signal: "SIGTERM", errorCode: "ENOBUFS" },
+      { stdout: "truncated", stderr: "unknown" },
+    )).toThrow(/observed exit code.*signal/i);
+    expect(receipt({ state: "timed-out", exitCode: null, observedExitCode: 7, signal: "SIGTERM", errorCode: "ETIMEDOUT" })).toThrow(/observed exit code.*signal/i);
 
     const timeout = receipt({ state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" })();
     expect(timeout.outcome.state).toBe("timed-out");
     expect(commandReceiptSucceeded(timeout)).toBe(false);
+    const handledTimeout = receipt({ state: "timed-out", exitCode: null, observedExitCode: 7, signal: null, errorCode: "ETIMEDOUT" })();
+    expect(commandReceiptSucceeded(handledTimeout)).toBe(false);
+    const handledOutputLimit = receipt(
+      { state: "output-limit-exceeded", exitCode: null, observedExitCode: 7, signal: null, errorCode: "ENOBUFS" },
+      { stdout: "truncated", stderr: "unknown" },
+    )();
+    expect(commandReceiptSucceeded(handledOutputLimit)).toBe(false);
   });
 
   it("discloses synchronous cancellation limits and preserves the real completed exit", async () => {

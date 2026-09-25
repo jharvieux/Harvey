@@ -308,7 +308,9 @@ export function assertCommandExecutionReceipt(value: unknown): asserts value is 
   if (receipt.outcome.observedExitCode !== undefined && !Number.isInteger(receipt.outcome.observedExitCode)) throw new Error("command execution receipt observed exit code is malformed");
   if (receipt.outcome.signal !== null && (typeof receipt.outcome.signal !== "string" || !receipt.outcome.signal.trim())) throw new Error("command execution receipt signal is malformed");
   if (receipt.outcome.errorCode !== undefined && (typeof receipt.outcome.errorCode !== "string" || !receipt.outcome.errorCode.trim())) throw new Error("command execution receipt error code is malformed");
+  if (legacy && receipt.outcome.observedExitCode !== undefined) throw new Error("schema-2 command receipt cannot contain an observed exit code");
   if (!legacy && receipt.outcome.observedExitCode !== undefined && !["timed-out", "output-limit-exceeded"].includes(receipt.outcome.state)) throw new Error(`${receipt.outcome.state} command receipt cannot claim an observed interrupted exit code`);
+  if (!legacy && receipt.outcome.observedExitCode !== undefined && receipt.outcome.signal !== null) throw new Error(`${receipt.outcome.state} command receipt cannot claim both an observed exit code and a signal`);
   if (legacy) {
     if (receipt.outcome.state === "exited" && (!Number.isInteger(receipt.outcome.exitCode) || receipt.outcome.signal !== null)) throw new Error("exited command receipt needs a numeric exit and no signal");
     if (receipt.outcome.state === "signaled" && (receipt.outcome.exitCode !== null || !receipt.outcome.signal)) throw new Error("signaled command receipt needs a signal and no exit code");

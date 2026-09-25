@@ -100,5 +100,10 @@ describe("CommandExecutionReceipt", () => {
     delete (legacyBody.stderr as Record<string, unknown>).sha256Scope;
     const legacy = { ...legacyBody, sha256: digest(legacyBody) };
     expect(() => assertCommandExecutionReceipt(legacy)).not.toThrow();
+
+    const legacyWithObservedBody = structuredClone(legacyBody);
+    (legacyWithObservedBody.outcome as Record<string, unknown>).observedExitCode = 7;
+    const legacyWithObserved = { ...legacyWithObservedBody, sha256: digest(legacyWithObservedBody) };
+    expect(() => assertCommandExecutionReceipt(legacyWithObserved)).toThrow(/schema-2.*observed exit code/i);
   });
 });
