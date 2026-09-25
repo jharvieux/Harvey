@@ -364996,8 +364996,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "0dbba34c30481cc1822159f0dd10e4e3c9236b70",
-    "commitPayload": "dHJlZSAwNjM2NDdjYzYxYzczY2Q0YzViMzNhYWNlMTBhZDA2Yzg5MjU4YzUxCnBhcmVudCBjNjhlOGQ2OWQyYThiN2VkYzRlNDMwNmNjZmU1YzhkZmY1ODgwYWJkCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2Njk0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA2Njk0IC0wNTAwCgpQcmVzZXJ2ZSB3ZWJob29rIHNjYW4gcm9vdCBib3VuZHMgcmVmcyAjMjEzMAo=",
+    "commit": "cb837434f5acefcb86e68fe0a64b137598638b1e",
+    "commitPayload": "dHJlZSAzOTQ1NDRkNGUzODlmZmQxMzNiMjE0NDdiOWJmOWZkZTVhZjlhNDY2CnBhcmVudCBjZTFjYjliYjQ3YmZkNjlhYmIxNzM4MGI1ZjkyNzJiZDQ0ZjA3YTE0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3MjYyIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA3MjYyIC0wNTAwCgpLZWVwIHByZWNpc2lvbiBsb2dpYyBjbGFpbS1uZXV0cmFsIHJlZnMgIzIxMzAK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -365006,13 +365006,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "e218a9017a9117f1f83f052592cdcd3fecdf39da",
+        "gitOid": "2aaa4d3f513f9ea418de2ab1e41fbfffac5f6a28",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "ad813dd9e80e0f8e43531905181d42765339e6a5b1c362b3f54cff863b30a6a7",
-    "tree": "063647cc61c73cd4c5b33aace10ad06c89258c51"
+    "populationSha256": "6eaab8b499353b6cfb58adb7d8375aa2bc6f89b997d5fc43fe6baaedfac9d4aa",
+    "tree": "394544d4e389ffd133b21447b9bf9fde5af9a466"
   },
   "venues": [
     {
@@ -391911,11 +391911,11 @@
       "sha256": "0d8708ad64a2699328dc1ce3f5b0ccc578930e8f4506121e8f7bba7fd8832e4b"
     },
     {
-      "bytes": 41529,
+      "bytes": 41469,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "2bdb88471a36f0e62802a9420835f82f72db3182",
+      "gitOid": "2cae4588a96c0b1781ac85e5b5a20e29770c93d3",
       "id": "src/scan/supabase-config.ts",
       "kind": "source",
       "literalCount": 246,
@@ -391923,7 +391923,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-config.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "350c1a9efcefd6d572d7b66f89f4dbc6603b25515650d76fc8d379a427334d18"
+      "sha256": "c54d9e4d4bd38b9686fdc4adebf6ee8086718716edcd55f342d30c7347926cc1"
     },
     {
       "bytes": 15118,
