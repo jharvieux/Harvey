@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 import { copyFilteredSourceTree } from "./source-copy.js";
-import { readStaticConfigObject } from "./source-inventory.js";
 import { mutationWorkspaceFinding, type MutationWorkspace, type MutationWorkspacePlan } from "./mutation-workspace.js";
 import { detectDryRunFailure, detectTestEnv, noTestSuiteFinding, summarizeMutationReport, toReportRows, type StrykerReport } from "./mutation-scan.js";
 import { createCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
@@ -110,12 +109,11 @@ function vitestConfig(copy: string, workspace: MutationWorkspace): string {
   const configPath = workspace.runnerConfig ? join(copy, workspace.runnerConfig) : undefined;
   if (configPath && (!inside(copy, configPath) || !existsSync(configPath))) throw new Error(`Runner configuration is missing or outside the copied repository: ${workspace.runnerConfig}`);
   const imported = configPath ? `import original from ${JSON.stringify(`./${posix(relative(cwd, configPath))}`)};` : "const original = {};";
-  const root = configPath ? dirname(configPath) : join(copy, workspace.directory);
   const sources = workspace.selectedSources.map(source => `./${posix(relative(cwd, join(copy, source)))}`);
   const invocation = posix(relative(cwd, join(copy, workspace.configurationDirectory)));
   const runnerOptions = workspace.configuration.vitest as { dir?: unknown } | undefined;
   if (runnerOptions?.dir !== undefined && typeof runnerOptions.dir !== "string") throw new Error("Vitest dir must be a statically declared directory string");
-  writeFileSync(path, `${imported}\nimport { resolve } from 'node:path';\nexport default async env => {\n const config = await (typeof original === 'function' ? original(env) : original);\n const originalCwd = resolve(__dirname, ${JSON.stringify(invocation)});\n const root = config.root === undefined ? resolve(__dirname, ${JSON.stringify(`./${posix(relative(cwd, root))}/`)}) : resolve(originalCwd, config.root);\n const directory = ${JSON.stringify(runnerOptions?.dir)} ?? config.test?.dir;\n return {...config, root, test: {...config.test, ...(directory === undefined ? {} : {dir: resolve(originalCwd, directory)}), related: ${JSON.stringify(sources)}.map(path => resolve(__dirname, path)), passWithNoTests: false, coverage: {...config.test?.coverage, enabled: false}}};\n};\n`);
+  writeFileSync(path, `${imported}\nimport { resolve, relative, isAbsolute, sep } from 'node:path';\nimport { writeFileSync } from 'node:fs';\nexport default async env => {\n const config = await (typeof original === 'function' ? original(env) : original);\n const originalCwd = resolve(__dirname, ${JSON.stringify(invocation)});\n const repository = resolve(__dirname, ${JSON.stringify(posix(relative(cwd, copy)))});\n if (config.root !== undefined && typeof config.root !== 'string') throw new Error('Vitest root must resolve to a directory string');\n const root = config.root === undefined ? originalCwd : resolve(originalCwd, config.root);\n const directory = ${JSON.stringify(runnerOptions?.dir)} ?? config.test?.dir;\n if (directory !== undefined && typeof directory !== 'string') throw new Error('Vitest dir must resolve to a directory string');\n const dir = directory === undefined ? root : resolve(originalCwd, directory);\n for (const value of [root, dir]) { const part = relative(repository, value); if (isAbsolute(part) || part === '..' || part.startsWith('..' + sep)) throw new Error('Vitest root/dir resolves outside the isolated repository'); }\n writeFileSync(resolve(__dirname, ${JSON.stringify(`${basename(path)}.native.json`)}), JSON.stringify({ root, dir }));\n return {...config, root, test: {...config.test, dir, related: ${JSON.stringify(sources)}.map(path => resolve(__dirname, path)), passWithNoTests: false, coverage: {...config.test?.coverage, enabled: false}}};\n};\n`);
   return path;
 }
 
@@ -154,10 +152,6 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       nativeConfig = vitestConfig(copy, workspace);
       writeFileSync(join(storage, "effective-vitest.ts.txt"), readFileSync(nativeConfig));
       config.vitest = { ...(config.vitest as object ?? {}), configFile: posix(relative(cwd, nativeConfig)), related: true };
-      const originalConfig = workspace.runnerConfig ? readStaticConfigObject(join(copy, workspace.runnerConfig)).value : undefined;
-      const directory = (config.vitest as { dir?: unknown }).dir ?? (originalConfig?.test as { dir?: unknown } | undefined)?.dir;
-      // Stryker supplies its own dir option; preserve the native directory relative to its sandbox.
-      if (typeof directory === "string") (config.vitest as { dir?: string }).dir = posix(relative(cwd, resolve(copy, workspace.configurationDirectory, directory))) || ".";
       const vitest = versions.find(row => row.name === "vitest")!;
       if (!vitest.directory) return stop("discovery-failed", "Vitest is not installed in the workspace or its ancestors; native related-test discovery did not run");
       const bin = join(vitest.directory, "vitest.mjs");
@@ -169,6 +163,12 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       try { const parsed: unknown = JSON.parse(readFileSync(discoveryFile, "utf8")); if (!Array.isArray(parsed)) throw new Error("not an array"); rows = parsed; }
       catch { return stop("discovery-failed", `Native related-test discovery produced no readable population (exit ${discovery.exit}); inspect discovery receipt`); }
       if (discovery.exit !== 0) return stop("discovery-failed", `Native related-test discovery failed (exit ${discovery.exit}); ${rows.length} discovered test cases are not a completed measurement`);
+      // Native evaluation owns root/dir semantics, including portable import.meta expressions.
+      const observedConfigPath = `${nativeConfig}.native.json`;
+      const observedConfig = parseJson(observedConfigPath);
+      if (typeof observedConfig?.root !== "string" || typeof observedConfig.dir !== "string" || !inside(copy, observedConfig.root) || !inside(copy, observedConfig.dir)) return stop("discovery-failed", "Native Vitest root/dir did not resolve inside the isolated repository");
+      (config.vitest as { dir?: string }).dir = posix(relative(cwd, observedConfig.dir)) || ".";
+      writeFileSync(join(storage, "native-vitest-directories.json"), JSON.stringify(observedConfig, null, 2) + "\n");
       result.relatedTests = [...new Set(rows.flatMap(row => typeof row.file === "string" ? [posix(relative(copy, row.file))] : []))].sort();
       result.projects = [...new Set(rows.flatMap(row => typeof row.projectName === "string" ? [row.projectName] : []))].sort();
       if (rows.length === 0 || result.relatedTests.length === 0) return stop(workspace.candidateTests.length === 0 ? "no-tests" : "discovery-failed", `Native runner found zero related tests for ${workspace.selectedSources.length} selected production files; ${workspace.candidateTests.length === 0 ? "no candidate test files exist for this configuration" : "this is incomplete discovery, not proof of a missing suite"}`);
@@ -177,6 +177,7 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       const baseline = command(process.execPath, [bin, "related", "--run", "--config", nativeConfig, "--reporter=json", "--outputFile", baselineFile, ...workspace.selectedSources.map(path => join(copy, path))], cwd, join(storage, "baseline"), plan, workspace, versions, baselineFile);
       result.receipts.push(baseline.receipt);
       assertCopiedInputs(plan, copy);
+      if (JSON.stringify(parseJson(observedConfigPath)) !== JSON.stringify(observedConfig)) return stop("discovery-failed", "Native Vitest root/dir changed between discovery and baseline; no mutation score is certified");
       const baselineReport = parseJson(baselineFile);
       result.testCount = typeof baselineReport?.numPassedTests === "number" ? baselineReport.numPassedTests : 0;
       if (baseline.exit !== 0 || result.testCount === 0 || baselineReport?.success !== true) return stop("dry-run-failed", `Native unmutated related-test baseline failed or completed zero tests (exit ${baseline.exit}, passed ${result.testCount}); no mutation score is certified`);

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEntriesSafe } from '../src/fs-walk.ts';
 import { validateFindings } from '../src/findings.ts';
@@ -23,8 +23,9 @@ function fixture(name, members, mode = 'normal') {
     put(dir, `${member}/src/subject.ts`, 'export function subject(a:number,b:number) { return a + b; }\n');
     put(dir, `${member}/test/subject.test.ts`, `import {test,expect} from 'vitest';\n${mode==='zero-related'&&member.endsWith('rag') ? 'const subject=(a:number,b:number)=>a+b;' : "import {subject} from '../src/subject';"}\ntest('adds',()=>expect(subject(2,3)).toBe(5));\n`);
     put(dir, `${member}/test/unrelated.test.ts`, "import {test,expect} from 'vitest';test('unrelated must not execute',()=>expect(0).toBe(1));\n");
-    put(dir, `${member}/vitest.config.ts`, "export default {test:{include:['test/**/*.test.ts']}};\n");
     const localConfig=name.startsWith('aop');
+    // Repository-invoked fixtures explicitly choose their package root.
+    put(dir, `${member}/vitest.config.ts`, `export default {${localConfig?"":`root:${JSON.stringify(member)},`}test:{include:['test/**/*.test.ts']}};\n`);
     put(dir, localConfig ? `${member}/stryker.config.json` : `stryker.${member.replaceAll('/','-')}.config.json`, {testRunner:'vitest',plugins:['@stryker-mutator/vitest-runner'],coverageAnalysis:'perTest',vitest:{configFile:localConfig?'vitest.config.ts':`${member}/vitest.config.ts`},mutate:[localConfig?'src/**/*.ts':`${member}/src/**/*.ts`],reporters:['html'],thresholds:{break:null}});
     put(dir, `${member}/reports/mutation/index.html`, 'PREVIOUS REPORT');
   }
@@ -98,7 +99,7 @@ assert.equal(readFileSync(prior,'utf8'),'{}');
 assert.deepEqual(overridePlan.mutationWorkspacePlan.workspaces.find(row=>row.id==='workspace:apps/main').selectedSources,['apps/main/src/subject.ts']);
 assert.deepEqual(overridePlan.mutationWorkspacePlan.workspaces.find(row=>row.id==='workspace:apps/rag').unselectedSources,['apps/rag/src/subject.ts']);
 const configurationControls=[];
-for(const variant of ['relative-root','absolute-root','dir-local','dir-root','config-test-dir','dynamic-test-dir','explicit-package','alternate-build']) {
+for(const variant of ['relative-root','absolute-root','dir-local','dir-root','config-test-dir','dynamic-test-dir','explicit-package','alternate-build','repo-omitted-cross','portable-root-dir']) {
  const target=fixture(`aop-config-${variant}`,['apps/rag']);
  const local=join(target,'apps/rag'),configPath=join(local,'stryker.config.json');
  const config=JSON.parse(readFileSync(configPath,'utf8'));
@@ -114,32 +115,38 @@ for(const variant of ['relative-root','absolute-root','dir-local','dir-root','co
   if(!variant.endsWith('test-dir'))config.vitest.dir=variant==='dir-root'?'apps/rag/test/unit':'test/unit';
  }
  put(target,'apps/rag/vitest.config.ts',vitest);
- if(variant==='dir-root') {
+ if(variant==='portable-root-dir') {
+  put(target,'apps/rag/vitest.config.ts',"import {fileURLToPath} from 'node:url'; export default {root:fileURLToPath(new URL('./nested/',import.meta.url)),test:{dir:fileURLToPath(new URL('./nested/test/',import.meta.url)),include:['**/*.test.ts']}};\n");
+  put(target,'apps/rag/nested/test/subject.test.ts',"import {test,expect} from 'vitest'; import {subject} from '../../src/subject'; test('portable',()=>expect(subject(2,3)).toBe(5));\n");
+ }
+ if(variant==='repo-omitted-cross') {
+  put(target,'apps/rag/vitest.config.ts',"export default {test:{include:['**/*.test.ts']}};\n");
+  put(target,'test/cross.test.ts',"import {test,expect} from 'vitest'; import {subject} from '../apps/rag/src/subject'; test('cross-package',()=>expect(subject(4,5)).toBe(9));\n");
+ }
+ if(variant==='dir-root'||variant==='repo-omitted-cross') {
   rmSync(configPath);config.vitest.configFile='apps/rag/vitest.config.ts';config.mutate=['apps/rag/src/**/*.ts'];put(target,'stryker.config.json',config);
  } else put(target,'apps/rag/stryker.config.json',config);
  if(variant==='alternate-build')put(target,'apps/rag/stryker.blocked.config.json',{...config,buildCommand:'node -e "process.exit(23)"'});
  const nativePath=join(root,`${variant}.native.json`);
  const nativeArgv=[join(runtime,'node_modules/vitest/vitest.mjs'),'related','--run','--config',join(local,'vitest.config.ts'),'--reporter=json','--outputFile',nativePath,...(config.vitest.dir?['--dir',config.vitest.dir]:[]),join(local,'src/subject.ts')];
- const nativeCwd=variant==='dir-root'?target:local;
+ const nativeCwd=variant==='dir-root'||variant==='repo-omitted-cross'?target:local;
  const native=spawnSync(process.execPath,nativeArgv,{cwd:nativeCwd,encoding:'utf8'});
  put(root,`${variant}.native.stdout`,native.stdout??'');put(root,`${variant}.native.stderr`,native.stderr??'');
  assert.equal(native.status,0,native.stderr);
- const nativeResult=JSON.parse(readFileSync(nativePath,'utf8'));assert.equal(nativeResult.numPassedTests,1,'Original native configuration must select exactly the intended related unit test');
+ const nativeResult=JSON.parse(readFileSync(nativePath,'utf8'));assert.equal(nativeResult.numPassedTests,variant==='repo-omitted-cross'?2:1,'Original native configuration must select exactly the intended related test population');
  const execution=run(`configuration-${variant}`,target,variant==='explicit-package'?['--config',configPath]:[]);
  const rows=execution.artifact.workspaces.filter(row=>row.id.startsWith('workspace:apps/rag'));
- if(variant==='dynamic-test-dir') {
-  assert.equal(rows.length,1);assert.equal(rows[0].state,'discovery-failed');
-  assert(rows[0].reason.includes('outside native related discovery'));
-  assert.equal(execution.artifact.workspaceCoverage.complete,false);assert(!execution.artifact.summary,'An unproved test population cannot contribute a mutation score');
- } else if(variant==='alternate-build') {
+ if(variant==='alternate-build') {
   assert.deepEqual(rows.map(row=>row.state).sort(),['complete','discovery-failed']);
   assert(rows.find(row=>row.state==='discovery-failed').reason.includes('buildCommand'));
   assert.equal(execution.artifact.workspaceCoverage.complete,false,'An unadapted build contract cannot borrow its sibling result');
  } else {assert.equal(rows.length,1);assert.equal(rows[0].state,'complete',rows[0].reason);assert.equal(execution.artifact.workspaceCoverage.complete,true);}
  const complete=rows.find(row=>row.state==='complete');
  if(complete) {
-  assert.equal(complete.relatedTests.length,1);assert.equal(complete.testCount,nativeResult.numPassedTests);
-  assert.equal(Object.keys(complete.artifact.rawReport.testFiles).length,1,'Stryker must observe the same native test population');
+  const nativeFiles=nativeResult.testResults.map(test=>relative(target,test.name)).sort();
+  assert.deepEqual([...complete.relatedTests].sort(),nativeFiles,'Discovery must retain the original native test files, including cross-package imports');
+  assert.equal(complete.testCount,nativeResult.numPassedTests);
+  assert.deepEqual(Object.keys(complete.artifact.rawReport.testFiles).sort(),nativeFiles,'Stryker must observe the same original native test population');
  }
  configurationControls.push({variant,artifact:execution.path,native:{argv:nativeArgv,cwd:nativeCwd,exitCode:native.status,path:nativePath,passed:nativeResult.numPassedTests},states:rows.map(row=>({id:row.id,state:row.state,testCount:row.testCount,relatedTests:row.relatedTests}))});
  rmSync(target,{recursive:true,force:true});
