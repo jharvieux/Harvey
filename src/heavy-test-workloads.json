@@ -179,7 +179,10 @@
         "src/stub-worktree.ts",
         "src/stub-worktree.test.ts",
         "src/corpus-scanner-scope.ts",
-        "src/corpus-scanner-scope.test.ts"
+        "src/corpus-scanner-scope.test.ts",
+        "src/__tests__/mutation-runner-validity.ts",
+        "src/__fixtures__/mutation-runner-validity/",
+        "src/producer-execution-receipt.ts"
       ]
     },
     {
@@ -332,7 +335,8 @@
         "tools/pii-classify.mjs",
         "src/source-inventory.ts",
         "src/source-copy.ts",
-        "report-template/"
+        "report-template/",
+        "src/secret-redact.ts"
       ]
     },
     {
@@ -408,7 +412,8 @@
         "tools/pii-classify.mjs",
         "src/source-inventory.ts",
         "src/source-copy.ts",
-        "report-template/"
+        "report-template/",
+        "src/secret-redact.ts"
       ]
     },
     {
