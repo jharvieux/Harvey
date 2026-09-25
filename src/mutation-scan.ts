@@ -15,6 +15,7 @@
 
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 export type MutantStatus =
   | "Killed"
@@ -35,6 +36,9 @@ export interface StrykerMutant {
   location: { start: { line: number; column: number }; end: { line: number; column: number } };
   coveredBy?: string[];
   killedBy?: string[];
+  /** Number of tests the runner completed while this mutant was active. Stryker 9.6.1 emits
+   * this for executed mutants. A `Survived` result is not test evidence unless this is positive. */
+  testsCompleted?: number;
   // #1100: MEASURED against a real `npx stryker run` capture (targets/calibration/test-quality,
   // Stryker 9.6.1) — upstream's mutation-testing-report-schema.json describes it as "loaded once
   // during initialization" (a module-level mutant Stryker can only run once for the whole suite,
@@ -67,6 +71,7 @@ export interface StrykerFileReport {
 
 export interface StrykerReport {
   schemaVersion?: string;
+  framework?: { name?: string; version?: string };
   thresholds?: { high: number; low: number };
   files: Record<string, StrykerFileReport>;
   // #1076: "Free-format object that represents the configuration used to run mutation testing"
@@ -78,6 +83,165 @@ export interface StrykerReport {
   config?: Record<string, unknown>;
   // #1100: keyed by test file path — see StrykerTestFile above.
   testFiles?: Record<string, StrykerTestFile>;
+}
+
+export interface NativeMutationComparison {
+  command: string[];
+  selectedTests: string[];
+  exitCode: number | null;
+  signal: string | null;
+  completedTests: number;
+  suiteErrors: string[];
+  stdoutSha256: string;
+  stderrSha256: string;
+  receipt?: CommandExecutionReceipt;
+}
+
+export interface MutationRunnerValidityIssue {
+  file: string;
+  mutantId: string;
+  reportedStatus: "Survived";
+  effectiveStatus: "RuntimeError";
+  testsCompleted: number | null;
+  suiteErrors: string[];
+  reason: string;
+  nativeComparison?: NativeMutationComparison;
+}
+
+export interface MutationRunnerValidity {
+  schemaVersion: 1;
+  status: "valid" | "uncheckable";
+  completedTestEvidence: {
+    killed: number;
+    survived: number;
+    zeroCompletedSurvivors: number;
+    missingCompletedCountSurvivors: number;
+  };
+  issues: MutationRunnerValidityIssue[];
+}
+
+/** Carry the effective runner limitation wherever the mutation measurement is consumed. */
+export function mutationRunnerValidityReason(artifact: unknown): string | undefined {
+  if (!artifact || typeof artifact !== "object") return undefined;
+  const validity = (artifact as { runnerValidity?: MutationRunnerValidity }).runnerValidity;
+  if (validity?.status !== "uncheckable") return undefined;
+  const reasons = [...new Set(validity.issues.map((issue) => issue.reason))];
+  return `Mutation runner results are uncheckable for ${validity.issues.length} mutant(s): ${reasons.join(" ")} [MEASURED from completed-test evidence; falsifier: repair suite loading and rerun the affected mutants with positive completed-test counts].`;
+}
+
+interface MutationStability {
+  schemaVersion: 1;
+  status: "not-assessed" | "stable" | "unstable";
+  reason: string;
+  invocationIds: string[];
+  comparedMutants: number;
+  changes: { file: string; mutantId: string; previous: MutantStatus | null; current: MutantStatus | null }[];
+}
+
+/** Compare the full mutant population only after source, selection and tool identities match. */
+export function compareMutationRuns(current: { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt }, previous?: { rawReport: StrykerReport; executionReceipt?: CommandExecutionReceipt }): MutationStability {
+  if (!previous) return { schemaVersion: 1, status: "not-assessed", reason: "Mutation status stability was not assessed: no prior bound invocation was supplied. Falsifier: rerun the same source and selection with --compare-run <retained M8 artifact>.", invocationIds: current.executionReceipt ? [current.executionReceipt.invocationId] : [], comparedMutants: 0, changes: [] };
+  for (const run of [current, previous]) {
+    assertCommandExecutionReceipt(run.executionReceipt);
+    if (!run.executionReceipt.comparisonIdentity || run.executionReceipt.artifactFailures.length || run.executionReceipt.outcome.state !== "exited" || !run.rawReport?.files) throw new Error("Mutation comparison requires complete original command, report and comparison identities");
+  }
+  const receipt = current.executionReceipt!, prior = previous.executionReceipt!;
+  if (receipt.invocationId === prior.invocationId) throw new Error("Mutation comparison requires two distinct command invocations");
+  for (const key of ["sourceSha256", "selectionSha256", "toolchainSha256"] as const) if (receipt.comparisonIdentity![key] !== prior.comparisonIdentity![key]) throw new Error(`Mutation comparison ${key} mismatch; source, selection and tools must match exactly`);
+  const population = (report: StrykerReport) => {
+    const effective = validateMutationRunnerReport(report).report;
+    const entries = Object.entries(effective.files).flatMap(([file, entry]) => entry.mutants.map((mutant) => [JSON.stringify([file, mutant.location, mutant.mutatorName, mutant.replacement ?? null]), { file, mutantId: mutant.id, status: mutant.status }] as const));
+    const unique = new Map(entries);
+    if (unique.size !== entries.length || unique.size === 0) throw new Error("Mutation comparison needs a nonempty, unambiguous mutant population");
+    return unique;
+  };
+  const currentPopulation = population(current.rawReport), previousPopulation = population(previous.rawReport);
+  const keys = [...new Set([...currentPopulation.keys(), ...previousPopulation.keys()])].sort();
+  const changes = keys.flatMap((key) => {
+    const currentMutant = currentPopulation.get(key), previousMutant = previousPopulation.get(key);
+    return currentMutant?.status === previousMutant?.status ? [] : [{ file: (currentMutant ?? previousMutant)!.file, mutantId: (currentMutant ?? previousMutant)!.mutantId, previous: previousMutant?.status ?? null, current: currentMutant?.status ?? null }];
+  });
+  return { schemaVersion: 1, status: changes.length ? "unstable" : "stable", reason: changes.length ? `Mutation status is unstable: ${changes.length} of ${keys.length} mutant outcomes changed across two bound invocations. Affected mutants: ${changes.map((change) => `${change.file}#${change.mutantId} ${change.previous ?? "absent"}→${change.current ?? "absent"}`).join("; ")}. Repeat these mutants under the same timeout policy before treating their score as settled.` : `All ${keys.length} mutant outcomes matched across these two bound invocations; this comparison does not establish future stability.`, invocationIds: [prior.invocationId, receipt.invocationId], comparedMutants: keys.length, changes };
+}
+
+/**
+ * Stryker 9.6.1's Vitest adapter can return `Complete` after a suite-load failure collected no
+ * tests. Core then records a static mutant as `Survived` with `testsCompleted: 0`. Keep the raw
+ * report untouched for provenance, but score a cloned effective report where a survivor without
+ * positive completed-test evidence is an explicit RuntimeError (uncheckable), never test quality.
+ */
+export function validateMutationRunnerReport(
+  report: StrykerReport,
+  nativeComparisons: ReadonlyMap<string, NativeMutationComparison> = new Map(),
+): { report: StrykerReport; validity: MutationRunnerValidity } {
+  const effective = structuredClone(report);
+  const issues: MutationRunnerValidityIssue[] = [];
+  let killed = 0;
+  let survived = 0;
+  let zeroCompletedSurvivors = 0;
+  let missingCompletedCountSurvivors = 0;
+
+  for (const [file, fileReport] of Object.entries(effective.files)) {
+    for (const mutant of fileReport.mutants) {
+      if (mutant.status === "Killed") killed++;
+      if (mutant.status !== "Survived") continue;
+      const completed = mutant.testsCompleted;
+      if (Number.isSafeInteger(completed) && Number(completed) > 0) {
+        survived++;
+        continue;
+      }
+      if (completed === 0) zeroCompletedSurvivors++;
+      else missingCompletedCountSurvivors++;
+      const nativeComparison = nativeComparisons.get(`${file}\0${mutant.id}`);
+      const suiteErrors = nativeComparison?.suiteErrors ?? [];
+      const count = completed === undefined ? "no completed-test count" : `${completed} completed tests`;
+      const comparison = nativeComparison
+        ? ` Native ${nativeComparison.command[0]} exited ${nativeComparison.exitCode ?? nativeComparison.signal ?? "without status"} after ${nativeComparison.completedTests} completed tests${suiteErrors.length ? `: ${suiteErrors.join(" | ")}` : "."}`
+        : " No native comparison was bound to this replayed report.";
+      const reason = `Runner reported Survived with ${count}; the result is uncheckable because survival requires at least one completed test.${comparison}`;
+      mutant.status = "RuntimeError";
+      mutant.statusReason = reason;
+      issues.push({
+        file,
+        mutantId: mutant.id,
+        reportedStatus: "Survived",
+        effectiveStatus: "RuntimeError",
+        testsCompleted: completed ?? null,
+        suiteErrors,
+        reason,
+        ...(nativeComparison ? { nativeComparison } : {}),
+      });
+    }
+  }
+
+  return {
+    report: effective,
+    validity: {
+      schemaVersion: 1,
+      status: issues.length ? "uncheckable" : "valid",
+      completedTestEvidence: { killed, survived, zeroCompletedSurvivors, missingCompletedCountSurvivors },
+      issues,
+    },
+  };
+}
+
+/** Apply one Stryker report replacement to the exact one-based source range it names. */
+export function applyReportedMutation(source: string, mutant: StrykerMutant): string {
+  if (mutant.replacement === undefined) throw new Error(`mutant ${mutant.id} has no replacement`);
+  const lines = source.split("\n");
+  const { start, end } = mutant.location;
+  if (start.line < 1 || end.line < start.line || !lines[start.line - 1] || !lines[end.line - 1]) {
+    throw new Error(`mutant ${mutant.id} has an out-of-range source location`);
+  }
+  const before = lines.slice(0, start.line - 1).join("\n") + (start.line > 1 ? "\n" : "");
+  const startLine = lines[start.line - 1]!;
+  const endLine = lines[end.line - 1]!;
+  const selected = start.line === end.line
+    ? startLine.slice(start.column - 1, end.column - 1)
+    : [startLine.slice(start.column - 1), ...lines.slice(start.line, end.line - 1), endLine.slice(0, end.column - 1)].join("\n");
+  if (!selected.length) throw new Error(`mutant ${mutant.id} names an empty source range`);
+  const after = endLine.slice(end.column - 1) + (end.line < lines.length ? `\n${lines.slice(end.line).join("\n")}` : "");
+  return `${before}${startLine.slice(0, start.column - 1)}${mutant.replacement}${after}`;
 }
 
 interface StrykerPhaseDurations {
@@ -351,8 +515,10 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
     reportRows?: TestQualityRow[];
     scope?: MutationScope;
     lineCoverage?: TestQuality["lineCoverage"];
+    mutationStability?: MutationStability;
   };
   if (!a.summary?.overall || !Array.isArray(a.reportRows)) return undefined;
+  const runnerReason = mutationRunnerValidityReason(artifact);
   const survivors = a.summary.survivingMutants ?? [];
   return {
     mutationScore: a.summary.overall.mutationScore,
@@ -363,8 +529,8 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
       : {}),
     coveredScope: a.summary.coveredScope ?? [],
     // An UNVERIFIABLE scope is not a whole-repo claim: only a verified, unscoped run earns `true`.
-    wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped),
-    scopeNote: a.scope?.note ?? "the scan reported no mutate-scope verdict — treat the score as covering only the listed files",
+    wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped && !runnerReason && a.mutationStability?.status !== "unstable"),
+    scopeNote: [a.scope?.note ?? "the scan reported no mutate-scope verdict — treat the score as covering only the listed files", runnerReason, a.mutationStability?.reason].filter(Boolean).join(". "),
     rows: a.reportRows,
     lineCoverage: a.lineCoverage ?? { status: "partial", reason: "the scan reported no line-coverage verdict (#819)" },
     survivors: survivors.slice(0, SURVIVOR_LIST_MAX).map((s) => ({ file: s.file, line: s.line, mutator: s.mutatorName, hotspot: s.hotspot })),

@@ -103,6 +103,7 @@ import { deliverAuditReplay } from "../audit-replay-delivery.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { probeExec } from "../probe-exec.js";
+import type { CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
@@ -237,14 +238,38 @@ const env: EngagementEnv = {
 const captureDir = findingsOut || sarifOut || retainDir ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
 const replayBinding = retainDir ? createAuditReplayBinding(targetDir, { env, schemaHint: schemaHint ?? null, schemaHints, apps: appList, supabaseRefs: supabaseRefsArg, allowTargetInstall: args.includes("--allow-target-install"), runtime: { node: process.version, platform: process.platform, arch: process.arch }, environmentSha256: createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b)))).digest("hex") }) : undefined;
 const retainedPasses: AuditEvidenceInput[] = [];
-let commandReceipts: { command: string; args: string[]; result: ReturnType<RunContext["exec"]> }[] = [];
+let commandReceipts: CommandExecutionReceipt[] = [];
+
+const commandArtifacts = (argv: readonly string[], cwd = process.cwd()): { role: "report"; path: string }[] => {
+  const artifacts: { role: "report"; path: string }[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const [flag, inline] = argv[i]!.split(/=(.*)/s);
+    if (["--out", "--findings-out", "--sarif-out", "--sbom-out"].includes(flag!)) {
+      const path = inline ?? argv[i + 1];
+      if (path) artifacts.push({ role: "report", path: resolve(cwd, path) });
+    }
+  }
+  return artifacts;
+};
 
 const ctx: RunContext = {
   targetDir,
   env,
   exec: (command, argv, options) => {
-    const result = probeExec(command, argv, options);
-    if (retainDir) commandReceipts.push({ command, args: argv, result });
+    const result = probeExec(command, argv, {
+      ...options,
+      receipt: {
+        ...options?.receipt,
+        target: { identity: "audit-target", value: { path: targetDir, revision: replayBinding?.target.revision ?? null, treeSha256: replayBinding?.target.sha256 ?? null } },
+        toolchain: [{ name: command, version: replayBinding?.engine.sha256 ?? process.version }],
+        configuration: { identity: "audit-command-effective-input", value: { argv, env, options: options?.env ? Object.keys(options.env).sort() : [] } },
+        artifacts: [...(options?.receipt?.artifacts ?? []), ...commandArtifacts(argv, options?.cwd)],
+      },
+    });
+    if (retainDir) {
+      if (!result.receipt) throw new Error(`command ${command} completed without a versioned execution receipt`);
+      commandReceipts.push(result.receipt);
+    }
     return result;
   },
   exists: existsSync,
@@ -273,7 +298,8 @@ const ctx: RunContext = {
   isGitRepoRoot,
   ...(retainDir ? { retainModuleResult: ((module, reports) => {
     const raw = join(captureDir!, `${module}-owning-run.json`);
-    writeFileSync(raw, `${JSON.stringify({ module, reports, commands: commandReceipts }, null, 2)}\n`);
+    const commandExecution = commandReceipts.length > 0 ? { kind: "command" } : { kind: "in-process", reason: "This module completed without invoking a child command." };
+    writeFileSync(raw, `${JSON.stringify({ module, reports, commandExecution, commandExecutionReceipts: commandReceipts }, null, 2)}\n`);
     commandReceipts = [];
     const artifacts = [raw, ...readEntriesLstatSafe(captureDir!).filter(({ name }) => new RegExp(`^${module}(?:[.-])`).test(name) && name !== `${module}-owning-run.json`).map(({ path }) => path)];
     for (const result of reports) retainedPasses.push({ scope: { module, workspace: result.instance ?? ".", tier: "orchestrated", surface: "module", wholeModule: true }, generatedAt: new Date().toISOString(), producer: { name: `audit-runner:${module}`, version: replayBinding!.engine.sha256 }, result, rawArtifacts: artifacts });
