@@ -842,6 +842,7 @@ export function licenseScope(dir: string): LicenseScope {
   const unresolved = new Map<string, LicenseCandidate>();
   const directResolved = new Set<string>();
   const ordinaryDeclaredNames = new Set<string>();
+  const localWorkspaceNames = new Set<string>();
   const uncertainAliasPaths = new Set<string>();
   const ordinaryProvenPaths = new Set<string>();
   const aliasCandidate = (name: string, declared: string, direct: boolean, ownerPath?: string): LicenseCandidate => {
@@ -876,7 +877,13 @@ export function licenseScope(dir: string): LicenseScope {
           // Ordinary declarations retain their existing name-based reach.
           ordinaryDeclaredNames.add(name);
           const matches = componentsByName.get(name) ?? [];
-          if (matches.length === 0) unresolved.set(`ordinary\u0000${name}`, { name, direct: true, ...(localMetadata.has(name) ? { localMetadata: localMetadata.get(name) } : {}) });
+          const local = typeof specifier === "string" && /^(workspace|link|portal):/.test(specifier) ? localMetadata.get(name) : undefined;
+          if (local) {
+            localWorkspaceNames.add(name);
+            unresolved.set(`ordinary\u0000${name}`, { name, direct: true, localMetadata: local });
+            continue;
+          }
+          if (matches.length === 0) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
           for (const component of matches) directResolved.add(`${component.name}\u0000${component.version}`);
           if (npmTree) {
             const installation = visibleInstallation(installations, manifest.label, name);
@@ -915,6 +922,7 @@ export function licenseScope(dir: string): LicenseScope {
     // The manifest-only inventory records declaration specifiers in `version`; an npm:
     // value is not an installed version or a license lookup coordinate.
     if (deps.source === "package.json" && typeof c.version === "string" && c.version.startsWith("npm:")) continue;
+    if (deps.source === "package.json" && localWorkspaceNames.has(c.name)) continue;
     if (origin.aliasSpecifier && !origin.explicitName) {
       if (![...unresolved.values()].some((candidate) => candidate.name === c.name && candidate.unresolvedAlias?.declared === origin.aliasSpecifier)) {
         unresolved.set(`yarn\u0000${c.name}\u0000${origin.aliasSpecifier}`, aliasCandidate(c.name, origin.aliasSpecifier, false));
@@ -925,16 +933,15 @@ export function licenseScope(dir: string): LicenseScope {
     accepted.set(`${c.name}\u0000${c.version}`, c);
   }
   for (const name of ordinaryDeclaredNames) {
-    if (![...accepted.values()].some((component) => component.name === name)) unresolved.set(`ordinary\u0000${name}`, { name, direct: true, ...(localMetadata.has(name) ? { localMetadata: localMetadata.get(name) } : {}) });
+    const key = `ordinary\u0000${name}`;
+    if (![...accepted.values()].some((component) => component.name === name) && !unresolved.has(key)) unresolved.set(key, { name, direct: true });
   }
   for (const c of accepted.values()) {
-    const local = localMetadata.get(c.name);
     candidates.push({
       name: c.name,
-      ...(c.version && !(local && deps.source === "package.json") ? { version: c.version } : {}),
+      ...(c.version ? { version: c.version } : {}),
       ...(c.license ? { license: c.license } : {}),
       ...(c.hasInstallScript !== undefined ? { hasInstallScript: c.hasInstallScript } : {}),
-      ...(local ? { localMetadata: local } : {}),
       direct: directResolved.has(`${c.name}\u0000${c.version}`),
     });
   }

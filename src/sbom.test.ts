@@ -347,6 +347,14 @@ describe("licenseScope (#1213)", () => {
     expect(findings.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence?.outcomes).toContainEqual(expect.objectContaining({ coordinate: "@local/private", status: "private-unpublished", provenance: "packages/private/package.json#license", installScriptAssessment: "present" }));
   });
 
+  it("does not substitute workspace metadata for an unrelated registry package with the same name", () => {
+    mkdirSync(join(dir, "packages/collision"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"] }));
+    writeFileSync(join(dir, "packages/collision/package.json"), JSON.stringify({ name: "collision", private: true, license: "MIT" }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/collision": { name: "collision", version: "1.0.0", license: "GPL-3.0" } } }));
+    expect(licenseScope(dir).candidates).toContainEqual({ name: "collision", version: "1.0.0", license: "GPL-3.0", direct: false });
+  });
+
   it("carries the whole tree, marking which packages a manifest actually declared", () => {
     writeFileSync(
       join(dir, "package-lock.json"),
