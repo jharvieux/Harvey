@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs } from "./effectiveness-route-graph.js";
+import { discoverEffectivenessRouteGraph, discoverEffectivenessRouteGraphs, discoverEffectivenessVenueRouteGraphs } from "./effectiveness-route-graph.js";
 import { createProducerExecutionReceipt, PRODUCER_ROUTE_EDGE_KINDS } from "./producer-execution-receipt.js";
 
 const roots: string[] = [];
@@ -76,7 +76,7 @@ describe("schema-v3 route graph", () => {
     }
   });
 
-  it("discloses mutable, over-limit and reassigned-property aliases without guessing routes", () => {
+  it("discloses ambiguous aliases and suppresses guessed routes in venue mode", () => {
     const cases = {
       "const through mutable": {
         source: "import { produce } from './producer.ts'; let first = produce; const alias = first; alias();\n",
@@ -101,6 +101,48 @@ describe("schema-v3 route graph", () => {
       expect(runNode(root, ["src/root.ts"]).executed, name).toBe(testCase.executed);
       expect(graph.routes, name).toEqual([]);
       expect(graph.unresolvedFindingDispatches.join("\n"), name).toContain(testCase.diagnostic);
+      const venueGraph = discoverEffectivenessVenueRouteGraphs(root, [implementation], ["src/root.ts"])[0]!;
+      expect(venueGraph.routes, `${name}: venue`).toEqual([]);
+      expect(venueGraph.unresolvedFindingDispatches, `${name}: venue reporting disabled`).toEqual([]);
+    }
+  });
+
+  it("applies property-alias provenance to reachable calls and callback registry receipts", () => {
+    const producer = "export interface Finding { id:string; taxonomy:string; severity:string; location:string }\nexport function produce(): Finding[] { console.log('PRODUCER_EXECUTED'); return [{id:'x',taxonomy:'x',severity:'Low',location:'x'}]; }\n";
+    const reassignedCall = "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; const alias=obj.run; alias();\n";
+    const reachableRoot = fixture("import './consumer.ts';\n");
+    writeFileSync(join(reachableRoot, "src", "producer.ts"), producer);
+    writeFileSync(join(reachableRoot, "src", "consumer.ts"), reassignedCall);
+    expect(runNode(reachableRoot, ["src/root.ts"]).executed).toBe(false);
+    for (const detectUnknown of [true, false]) {
+      const graph = discoverEffectivenessRouteGraph(reachableRoot, [implementation], ["src/root.ts"], { detectUnknown });
+      expect(graph.routes, `reachable reassigned call, detectUnknown=${detectUnknown}`).toEqual([]);
+    }
+
+    const callbacks = {
+      immutable: {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; function invoke(fn:()=>Finding[]){fn();} invoke(obj.run);\n",
+        executed: true,
+        routes: 1,
+      },
+      reassigned: {
+        source: "import { produce, type Finding } from './producer.ts'; const obj={run:produce}; obj.run=(): Finding[]=>[]; function invoke(fn:()=>Finding[]){fn();} invoke(obj.run);\n",
+        executed: false,
+        routes: 0,
+      },
+    };
+    for (const [name, testCase] of Object.entries(callbacks)) {
+      const root = fixture(testCase.source);
+      writeFileSync(join(root, "src", "producer.ts"), producer);
+      expect(runNode(root, ["src/root.ts"]).executed, `${name}: execution`).toBe(testCase.executed);
+      const graph = discoverEffectivenessRouteGraph(root, [implementation], ["src/root.ts"]);
+      expect(graph.routes, `${name}: production`).toHaveLength(testCase.routes);
+      const venueGraph = discoverEffectivenessVenueRouteGraphs(root, [implementation], ["src/root.ts"])[0]!;
+      expect(venueGraph.routes, `${name}: venue`).toHaveLength(testCase.routes);
+      if (name === "reassigned") {
+        expect(graph.unresolvedFindingDispatches.join("\n")).toContain("finding-bearing registry reference has ambiguous producer identity");
+        expect(venueGraph.unresolvedFindingDispatches).toEqual([]);
+      }
     }
   });
 

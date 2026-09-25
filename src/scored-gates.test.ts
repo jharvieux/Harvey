@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -189,28 +189,36 @@ esac
 exit 0
 `);
     chmodSync(join(bin, "pnpm"), 0o755);
+    symlinkSync("/usr/bin/env", join(bin, "env"));
     const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
     const cases = {
-      direct: "pnpm validate:x",
-      quoted: "pnpm 'validate:x' --json",
-      env: 'env CI=1 pnpm run "validate:x" -- --json',
-      command: "command pnpm validate:x --json",
-      exec: 'exec pnpm exec tsx "src/cli/validate-x.ts" --json',
-      "env then command": "env command pnpm validate:x",
-      "quoted assignment word": '"CI=1" pnpm validate:x',
-      "command assignment operand": "command CI=1 pnpm validate:x",
-      "double-quoted ordinary backslash": 'pnpm "validate\\:x"',
-      "uncalled function": "unused() {\n  pnpm validate:x\n}",
-      "false shell conditional": "if false; then\n  pnpm validate:x\nfi",
+      direct: { script: "pnpm validate:x", expected: true },
+      quoted: { script: "pnpm 'validate:x' --json", expected: true },
+      env: { script: 'env CI=1 pnpm run "validate:x" -- --json', expected: true },
+      command: { script: "command pnpm validate:x --json", expected: true },
+      exec: { script: 'exec pnpm exec tsx "src/cli/validate-x.ts" --json', expected: true },
+      "nested env": { script: "env env pnpm validate:x", expected: true },
+      "command then env": { script: "command env CI=1 pnpm validate:x", expected: true },
+      "exec then env": { script: "exec env CI=1 pnpm validate:x", expected: true },
+      "env then command": { script: "env command pnpm validate:x", expected: false },
+      "env then exec": { script: "env exec pnpm validate:x", expected: false },
+      "exec then command": { script: "exec command pnpm validate:x", expected: false },
+      "quoted assignment word": { script: '"CI=1" pnpm validate:x', expected: false },
+      "command assignment operand": { script: "command CI=1 pnpm validate:x", expected: false },
+      "double-quoted ordinary backslash": { script: 'pnpm "validate\\:x"', expected: false },
+      "uncalled function": { script: "unused() {\n  pnpm validate:x\n}", expected: false },
+      "false shell conditional": { script: "if false; then\n  pnpm validate:x\nfi", expected: false },
     };
     try {
-      for (const [name, script] of Object.entries(cases)) {
+      for (const [name, testCase] of Object.entries(cases)) {
+        const { script, expected } = testCase;
         rmSync(marker, { force: true });
         spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
           encoding: "utf8",
-          env: { ...process.env, HARVEY_GATE_MARKER: marker, PATH: `${bin}:${process.env.PATH ?? ""}` },
+          env: { HARVEY_GATE_MARKER: marker, PATH: bin },
         });
         const executed = existsSync(marker);
+        expect(executed, `${name}: Bash marker`).toBe(expected);
         const indented = script.split("\n").map((line) => `          ${line}`).join("\n");
         const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${indented}`;
         const accepted = checkScoredGates(
@@ -219,7 +227,7 @@ exit 0
           [],
           [],
         ).length === 0;
-        expect(accepted, `${name}: checker/Bash marker mismatch`).toBe(executed);
+        expect(accepted, `${name}: checker recognition`).toBe(expected);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

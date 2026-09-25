@@ -314,9 +314,9 @@ interface ShellToken {
 /**
  * Tokenize the shell subset whose execution semantics this gate can prove. Quotes, escapes, line
  * continuations, command separators and pipelines are supported. Command substitutions, backticks,
- * heredocs and incomplete quotes make that simple command ambiguous, so text inside them cannot
- * establish cadence. Complex shell syntax may still run a gate, but it must be replaced with one of
- * the supported direct forms before this checker will accept it.
+ * heredocs and incomplete quotes make that simple command ambiguous, so this checker rejects text
+ * inside them as cadence evidence. Complex shell syntax may still run a gate, but it must be
+ * replaced with one of the supported direct forms before this checker will accept it.
  */
 function shellCommands(script: string): ShellCommand[] | undefined {
   const commands: ShellCommand[] = [];
@@ -436,18 +436,23 @@ const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * or `exec` wrappers, followed by an exact `pnpm <script>`, `pnpm run <script>`, or
  * `pnpm exec tsx src/cli/<gate>.ts` command. Individual tokens may be quoted and trailing arguments
  * are allowed. Wrapper options and indirect shells/eval are intentionally unsupported and fail
- * closed because their execution semantics cannot be inferred from a matching string.
+ * closed because they are outside this parser's supported execution subset.
  */
 function commandInvokesGate(command: ShellCommand, gate: ScoredGate): boolean {
   if (command.ambiguous) return false;
   const tokens = [...command.tokens];
   while (tokens[0]?.assignment) tokens.shift();
-  while (["env", "command", "exec"].includes(tokens[0]?.value ?? "")) {
+  let shellBuiltinsAvailable = true;
+  while (tokens[0]?.value === "env"
+    || (shellBuiltinsAvailable && ["command", "exec"].includes(tokens[0]?.value ?? ""))) {
     const wrapper = tokens.shift()!.value;
     if (tokens.at(0)?.value === "--") tokens.shift();
     // `env` parses assignment operands. Bash's `command` and `exec` builtins do not: after either
     // wrapper, `CI=1` is a command name and must not be normalized into an environment prefix.
     if (wrapper === "env") while (tokens[0]?.assignment) tokens.shift();
+    // `env` and `exec` dispatch their operand as an external executable. Shell builtins such as
+    // `command` and `exec` are therefore wrappers only while Bash itself still owns dispatch.
+    if (wrapper === "env" || wrapper === "exec") shellBuiltinsAvailable = false;
   }
   if (tokens[0]?.value !== "pnpm") return false;
   if (tokens[1]?.value === gate.script) return true;

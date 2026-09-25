@@ -562,6 +562,11 @@ function typeContainsFinding(checker: ts.TypeChecker, type: ts.Type, seen = new 
   return properties.has("id") && properties.has("taxonomy") && properties.has("severity") && properties.has("location");
 }
 
+function callableReturnsFinding(checker: ts.TypeChecker, node: ts.Expression): boolean {
+  return checker.getTypeAtLocation(node).getCallSignatures()
+    .some((signature) => typeContainsFinding(checker, checker.getReturnTypeOfSignature(signature)));
+}
+
 function programForSources(sources: readonly string[], oldProgram?: ts.Program): ts.Program {
   return ts.createProgram({
     rootNames: [...sources],
@@ -735,11 +740,15 @@ function routeGraphForReachability(
         const identity = symbolIdentity(root, checker, expressionSymbol(checker, node.expression))
           ?? (signature?.declaration ? symbolIdentity(root, checker, checker.getSymbolAtLocation((signature.declaration as ts.NamedDeclaration).name ?? signature.declaration)) : undefined);
         const findingBearing = typeContainsFinding(checker, checker.getTypeAtLocation(node));
-        if (ambiguousAlias
-          && options.detectUnknown !== false
-          && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
-          && findingBearing) {
-          unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing call has ambiguous producer identity`);
+        if (ambiguousAlias) {
+          // Unknown-producer reporting is optional for venue graphs. A known ambiguous alias is
+          // excluded from registered-route evidence in every mode; the toggle controls only the
+          // diagnostic attached to that exclusion.
+          if (options.detectUnknown !== false
+            && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
+            && findingBearing) {
+            unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing call has ambiguous producer identity`);
+          }
         } else if (identity) {
           const target = `${identity.file}#${identity.symbol}`;
           const id = `call:${consumerFile}->${target}`;
@@ -762,18 +771,27 @@ function routeGraphForReachability(
       if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
         && ((ts.isCallExpression(node.parent) && node.parent.arguments.includes(node))
           || (ts.isNewExpression(node.parent) && node.parent.arguments?.includes(node) === true))) {
-        const identity = symbolIdentity(root, checker, expressionSymbol(checker, node));
-        if (identity) {
-          const target = `${identity.file}#${identity.symbol}`;
-          if (implementationByIdentity.has(target)) {
-            const id = `registry:${consumerFile}->${target}`;
-            calls.set(id, { id, kind: "registry", consumerFile, targetFile: identity.file, targetSymbol: identity.symbol });
-            const rootId = (reachability.rootsByFile.get(source.fileName) ?? [])
-              .map((entry) => repoRelative(root, entry))
-              .filter((entry): entry is string => !!entry)
-              .sort(byText)[0] ?? consumerFile;
-            const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
-            live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "registry" }]);
+        const ambiguousAlias = localAliasAmbiguity(checker, node);
+        if (ambiguousAlias) {
+          if (options.detectUnknown !== false
+            && (rootIds.has(consumerFile) || registeredFiles.has(consumerFile))
+            && callableReturnsFinding(checker, node)) {
+            unresolved.add(`${consumerFile}#${ambiguousAlias}: finding-bearing registry reference has ambiguous producer identity`);
+          }
+        } else {
+          const identity = symbolIdentity(root, checker, expressionSymbol(checker, node));
+          if (identity) {
+            const target = `${identity.file}#${identity.symbol}`;
+            if (implementationByIdentity.has(target)) {
+              const id = `registry:${consumerFile}->${target}`;
+              calls.set(id, { id, kind: "registry", consumerFile, targetFile: identity.file, targetSymbol: identity.symbol });
+              const rootId = (reachability.rootsByFile.get(source.fileName) ?? [])
+                .map((entry) => repoRelative(root, entry))
+                .filter((entry): entry is string => !!entry)
+                .sort(byText)[0] ?? consumerFile;
+              const commandIds = (reachability.commandReceiptsByFile.get(source.fileName) ?? []).map((receipt) => receipt.id);
+              live.set(target, [...(live.get(target) ?? []), { rootId, receiptId: id, callReceiptIds: [...commandIds, id], kind: "registry" }]);
+            }
           }
         }
       }
