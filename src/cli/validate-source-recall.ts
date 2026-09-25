@@ -5,7 +5,7 @@
 //
 //   pnpm exec tsx src/cli/validate-source-recall.ts            # scan targets/calibration, score source tier
 //   pnpm exec tsx src/cli/validate-source-recall.ts --dir <p>  # score another labeled corpus
-//   pnpm exec tsx src/cli/validate-source-recall.ts --json     # emit the raw matrix as JSON
+//   pnpm exec tsx src/cli/validate-source-recall.ts --json     # emit the JSON matrix and the same gate verdict
 //   pnpm exec tsx src/cli/validate-source-recall.ts --real     # #960: real-code tier (below)
 //
 // This number is REPORTED DISTINCTLY (never blended) from the SecBench/SCA number (0 there by
@@ -115,9 +115,21 @@ function loadLeakFixtures(kind: "positive" | "negative"): SourceInput[] {
 const leakFindings = [...detectAppRouterFindings(loadLeakFixtures("positive")), ...detectAppRouterFindings(loadLeakFixtures("negative"))];
 const m9Matrix = scoreM9SourceRecall([...findings, ...leakFindings]);
 
+const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
+const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
+const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier !== "high" && !r.pass);
+const m9NegFps = m9Matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
+const m9HighMisses = m9Matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
+const gatePass = negFps.length === 0 && highMisses.length === 0 && m9NegFps.length === 0 && m9HighMisses.length === 0;
+
+// #1509's second-order defect: like the calibration gate, this one rides inside a shard behind an
+// `if: matrix.shard == 2`. Emitted before the verdict — a failing gate still reached its measuring
+// phase, and that is the thing the workflow asserts.
+recordMeasured("source-recall-gate", matrix.rows.length + m9Matrix.rows.length, "request→sink and M9 source answer-key fixtures scored");
+
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ sourceTier: matrix, m9SourceTier: m9Matrix }, null, 2));
-  process.exit(0);
+  console.log(JSON.stringify({ ok: gatePass, sourceTier: matrix, m9SourceTier: m9Matrix }, null, 2));
+  process.exit(gatePass ? 0 : 1);
 }
 
 const mark = (r: MatrixRow): string => (r.pass ? "PASS" : "FAIL");
@@ -146,10 +158,6 @@ console.log(
     "  crypto/config/RLS-schema tiers). Corpus + in/out rationale: docs/design/source-detector-recall.md.",
 );
 
-const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
-const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
-const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier !== "high" && !r.pass);
-
 if (reviewMisses.length) {
   console.log(`\nRecall gaps (the measurement — reported, non-fatal): ${reviewMisses.map((r) => r.id).join(", ")}`);
 }
@@ -163,15 +171,6 @@ console.log(
     `neither detector is a request→sink taint flow (${M9_SOURCE_TIER_IDS.length} answer-key entries).`,
 );
 
-const m9NegFps = m9Matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
-const m9HighMisses = m9Matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
-
-// #1509's second-order defect: like the calibration gate, this one rides inside a shard behind an
-// `if: matrix.shard == 2`. Emitted before the verdict — a failing gate still reached its measuring
-// phase, and that is the thing the workflow asserts.
-recordMeasured("source-recall-gate", matrix.rows.length + m9Matrix.rows.length, "request→sink and M9 source answer-key fixtures scored");
-
-const gatePass = negFps.length === 0 && highMisses.length === 0 && m9NegFps.length === 0 && m9HighMisses.length === 0;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives on source-tier negatives: ${negFps.map((r) => r.id).join(", ")}`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier source positives no longer caught at high: ${highMisses.map((r) => r.id).join(", ")}`);

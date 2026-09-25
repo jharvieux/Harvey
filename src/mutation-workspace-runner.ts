@@ -85,13 +85,27 @@ function command(bin: string, argv: string[], cwd: string, output: string, plan:
   const declared = detectTestEnv(plan.files.filter(file => /(?:package\.json|(?:vitest|jest)\.(?:config|setup)\.[cm]?[jt]s|\.github\/workflows\/[^/]+\.ya?ml)$/.test(file.path)).map(file => ({ path: file.path, text: readFileSync(join(plan.root, file.path), "utf8") })));
   const result = spawnSync(bin, argv, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...Object.fromEntries(declared.map(row => [row.key, row.value])), CI: "true" } });
   const stdout = result.stdout ?? "", stderr = result.stderr ?? "";
+  const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
   writeFileSync(`${output}.stdout`, stdout); writeFileSync(`${output}.stderr`, stderr);
   const receipt = createCommandExecutionReceipt({
     invocationId: randomUUID(), command: { executable: bin, argv, cwd },
     target: { identity: `${plan.root}#${workspace.id}`, value: { sourceSha256: plan.sourceSha256, sources: workspace.selectedSources } },
     configuration: { identity: workspace.id, value: workspace }, toolchain,
     startedAt, finishedAt: new Date().toISOString(), stdout, stderr,
-    outcome: result.error ? { state: "spawn-failed", exitCode: null, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException).code } : { state: result.signal ? "signaled" : "exited", exitCode: result.status, signal: result.signal },
+    outcome: errorCode === "ENOBUFS"
+      ? { state: "output-limit-exceeded", exitCode: null, ...(typeof result.status === "number" ? { observedExitCode: result.status } : {}), signal: result.signal, errorCode }
+      : errorCode === "ETIMEDOUT"
+        ? { state: "timed-out", exitCode: null, ...(typeof result.status === "number" ? { observedExitCode: result.status } : {}), signal: result.signal, errorCode }
+        : result.error
+          ? { state: "spawn-failed", exitCode: null, signal: result.signal, ...(errorCode ? { errorCode } : {}) }
+          : { state: result.signal ? "signaled" : "exited", exitCode: result.status, signal: result.signal },
+    ...(errorCode === "ENOBUFS" ? {
+      outputCompleteness: stdout && !stderr
+        ? { stdout: "truncated" as const, stderr: "unknown" as const }
+        : stderr && !stdout
+          ? { stdout: "unknown" as const, stderr: "truncated" as const }
+          : { stdout: "unknown" as const, stderr: "unknown" as const },
+    } : {}),
     artifacts: [{ role: "stdout", path: `${output}.stdout` }, { role: "stderr", path: `${output}.stderr` }, ...(report ? [{ role: "report" as const, path: report }] : [])],
   });
   writeFileSync(`${output}.receipt.json`, JSON.stringify(receipt, null, 2) + "\n");

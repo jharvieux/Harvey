@@ -1,12 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
+  assertCommandExecutionReceipt,
   assertProducerExecutionReceipt,
+  commandReceiptSucceeded,
+  createCommandExecutionReceipt,
   createProducerExecutionReceipt,
   extendProducerExecutionReceipt,
+  LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA,
   receiptHasRoute,
   semgrepProducerExecutionReceipts,
 } from "./producer-execution-receipt.js";
+
+const canonical = (value: unknown): unknown => Array.isArray(value)
+  ? value.map(canonical)
+  : value && typeof value === "object"
+    ? Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+      .map(([key, item]) => [key, canonical(item)]))
+    : value;
+
+const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 
 const runtime = () => createProducerExecutionReceipt({
   executionId: "run-1:dynamic.bola",
@@ -59,5 +73,73 @@ describe("ProducerExecutionReceipt", () => {
     expect(semgrepProducerExecutionReceipts(receipt)).toMatchObject([{ producerId: "semgrep:local:fixture-rule", findingFamilyIds: ["fixture-rule"] }]);
     expect(() => semgrepProducerExecutionReceipts({ ...receipt, ownershipSha256: "0".repeat(64) })).toThrow(/ownership digest/);
     expect(() => semgrepProducerExecutionReceipts({ ...receipt, status: "failed" })).toThrow(/successful Semgrep/);
+  });
+});
+
+describe("CommandExecutionReceipt", () => {
+  it("keeps historical overflow schema-2 receipts readable while schema 3 states hash scope", () => {
+    const current = createCommandExecutionReceipt({
+      invocationId: "legacy-control",
+      command: { executable: process.execPath, argv: [], cwd: process.cwd() },
+      target: { identity: "fixture", value: "fixture" },
+      toolchain: [{ name: "node", version: process.version }],
+      configuration: { identity: "fixture", value: "fixture" },
+      startedAt: "2026-09-25T00:00:00.000Z",
+      finishedAt: "2026-09-25T00:00:01.000Z",
+      outcome: { state: "exited", exitCode: 0, signal: null },
+    });
+    expect(current.schema).toBe(3);
+    expect(current.stdout).toMatchObject({ completeness: "complete", sha256Scope: "captured-bytes" });
+
+    const legacyBody = structuredClone(current) as unknown as Record<string, unknown>;
+    delete legacyBody.sha256;
+    legacyBody.schema = LEGACY_COMMAND_EXECUTION_RECEIPT_SCHEMA;
+    legacyBody.outcome = { state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOBUFS" };
+    delete (legacyBody.stdout as Record<string, unknown>).completeness;
+    delete (legacyBody.stdout as Record<string, unknown>).sha256Scope;
+    delete (legacyBody.stderr as Record<string, unknown>).completeness;
+    delete (legacyBody.stderr as Record<string, unknown>).sha256Scope;
+    const signedLegacy = (outcome: Record<string, unknown>) => {
+      const body = { ...structuredClone(legacyBody), outcome };
+      return { ...body, sha256: digest(body) };
+    };
+    const succeeded = (receipt: unknown): boolean => {
+      assertCommandExecutionReceipt(receipt);
+      return commandReceiptSucceeded(receipt);
+    };
+    const legacy = signedLegacy({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOBUFS" });
+    expect(() => assertCommandExecutionReceipt(legacy)).not.toThrow();
+
+    const legacyWithObserved = signedLegacy({ state: "spawn-failed", exitCode: null, observedExitCode: 7, signal: "SIGTERM", errorCode: "ENOBUFS" });
+    expect(() => assertCommandExecutionReceipt(legacyWithObserved)).toThrow(/schema-2.*observed exit code/i);
+
+    const valid = [
+      { state: "exited", exitCode: 0, signal: null },
+      { state: "signaled", exitCode: null, signal: "SIGTERM" },
+      { state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" },
+      { state: "spawn-failed", exitCode: null, signal: null, errorCode: "ENOENT" },
+      { state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" },
+      { state: "policy-denied", exitCode: null, signal: null, errorCode: "POLICY_DENIED" },
+      { state: "cancelled", exitCode: null, signal: null, errorCode: "ABORT_ERR" },
+      { state: "unknown-exit", exitCode: null, signal: null },
+    ];
+    for (const outcome of valid) expect(() => assertCommandExecutionReceipt(signedLegacy(outcome))).not.toThrow();
+    expect(succeeded(signedLegacy(valid[0]!))).toBe(true);
+    for (const outcome of valid.slice(1)) expect(succeeded(signedLegacy(outcome))).toBe(false);
+
+    const invalid = [
+      { state: "exited", exitCode: 0, signal: null, errorCode: "ENOBUFS" },
+      { state: "signaled", exitCode: null, signal: "SIGTERM", errorCode: "EIO" },
+      { state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "EIO" },
+      { state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOENT" },
+      { state: "policy-denied", exitCode: null, signal: "SIGTERM", errorCode: "POLICY_DENIED" },
+      { state: "cancelled", exitCode: null, signal: null, errorCode: "EIO" },
+      { state: "unknown-exit", exitCode: null, signal: null, errorCode: "EIO" },
+    ];
+    for (const outcome of invalid) {
+      const receipt = signedLegacy(outcome);
+      expect(() => assertCommandExecutionReceipt(receipt)).toThrow(/command receipt/);
+      expect(() => succeeded(receipt)).toThrow(/command receipt/);
+    }
   });
 });

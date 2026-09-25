@@ -26,6 +26,7 @@ type ProbeExecOptions = NonNullable<Parameters<RunContext["exec"]>[2]>;
 function terminalState(result: ReturnType<typeof spawnSync>): CommandTerminalState {
   const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ETIMEDOUT") return "timed-out";
+  if (code === "ENOBUFS") return "output-limit-exceeded";
   if (result.error) return "spawn-failed";
   if (typeof result.status === "number") return "exited";
   if (result.signal) return "signaled";
@@ -41,9 +42,13 @@ function finalizeReceipt(
   stdout: string,
   stderr: string,
   state: CommandTerminalState,
-  status: number | null,
+  observedStatus: number | null,
   signal: string | null,
   errorCode?: string,
+  outputCompleteness?: {
+    stdout: "complete" | "truncated" | "unknown";
+    stderr: "complete" | "truncated" | "unknown";
+  },
 ): CommandExecutionReceipt {
   const cwd = opts.cwd ?? process.cwd();
   return createCommandExecutionReceipt({
@@ -55,11 +60,18 @@ function finalizeReceipt(
     configuration: opts.receipt?.configuration ?? { identity: "sanitized-argv", value: argv },
     startedAt,
     finishedAt,
-    outcome: { state, exitCode: status, signal, ...(errorCode ? { errorCode } : {}) },
+    outcome: {
+      state,
+      exitCode: state === "exited" ? observedStatus : null,
+      ...(["timed-out", "output-limit-exceeded"].includes(state) && typeof observedStatus === "number" ? { observedExitCode: observedStatus } : {}),
+      signal,
+      ...(errorCode ? { errorCode } : {}),
+    },
     timeoutPolicy: { timeoutMs: opts.timeoutMs ?? null, killSignal: "SIGTERM" },
     cancellationPolicy: "pre-start-only",
     stdout,
     stderr,
+    ...(outputCompleteness ? { outputCompleteness } : {}),
     artifacts: opts.receipt?.artifacts,
     measurements: opts.receipt?.measurements,
     secretValues: opts.receipt?.secretValues,
@@ -95,6 +107,13 @@ export const probeExec: RunContext["exec"] = (command, argv, opts) => {
   const stdout = r.stdout ?? "";
   const stderr = r.stderr ?? "";
   const state = terminalState(r);
+  const outputCompleteness = state === "output-limit-exceeded"
+    ? stdout && !stderr
+      ? { stdout: "truncated" as const, stderr: "unknown" as const }
+      : stderr && !stdout
+        ? { stdout: "unknown" as const, stderr: "truncated" as const }
+        : { stdout: "unknown" as const, stderr: "unknown" as const }
+    : undefined;
   const receipt = finalizeReceipt(
     command,
     argv,
@@ -104,9 +123,10 @@ export const probeExec: RunContext["exec"] = (command, argv, opts) => {
     stdout,
     stderr,
     state,
-    state === "exited" ? r.status : null,
+    r.status,
     r.signal,
     (r.error as NodeJS.ErrnoException | undefined)?.code,
+    outputCompleteness,
   );
   // A tool that exits non-zero or is not installed is a real outcome the probe must judge, not an
   // orchestrator crash — hand it back and let the module's probe describe it.

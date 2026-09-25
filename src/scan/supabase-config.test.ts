@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import type { SourceInput } from "../detectors/common.js";
 import { describe, expect, it } from "vitest";
+import { buildHtml } from "../../report-template/render.mjs";
+import { assembleEngagementDocument } from "../audit-report.js";
+import type { ReportMeta } from "../findings.js";
+import { runSupabaseScan } from "./supabase.js";
 import {
   AUTH_CONFIG_FIELDS,
   checkAuthConfig,
@@ -256,6 +260,74 @@ describe("checkDangerousExtensions", () => {
 
   it("does not flag an extension outside the dangerous set", () => {
     expect(checkDangerousExtensions([{ name: "pgcrypto", schema: "extensions", installed_version: "1.3" }])).toEqual([]);
+  });
+});
+
+describe("extension capability posture through scanner, assembly and report (#2209)", () => {
+  const meta: ReportMeta = {
+    client: "Owned extension fixture", subtitle: "Capability inventory", date: "2026-09-25",
+    commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 7,
+    tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Extension capabilities",
+    scope: "Owned Management API responses", methodology: "Read-only catalog fixture",
+    outOfScope: "Live projects and callable exploit paths",
+  };
+  const limitation = "No attacker-controlled URL, executable function grant, or reachable caller path is established by extension presence.";
+  const impact = "This is capability inventory, not a demonstrated outbound-access or SSRF finding. A concrete callable path and controllable destination require separate evidence.";
+
+  it.each([true, false])("retains installed=%s pg_net/http posture in each rendered finding", async (installed) => {
+    const queries: string[] = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const path = new URL(String(url));
+      expect(path.origin).toBe("https://api.supabase.com");
+      expect(path.pathname).toMatch(/^\/v1\/projects\/owned-extension-fixture\//);
+      if (path.pathname.endsWith("/config/auth")) return Response.json({});
+      if (path.pathname.endsWith("/advisors/security")) return Response.json({ lints: [] });
+      if (path.pathname.endsWith("/postgrest")) return Response.json({ db_schema: "public" });
+      expect(path.pathname).toBe("/v1/projects/owned-extension-fixture/database/query");
+      expect(init?.method).toBe("POST");
+      const { query, read_only } = JSON.parse(String(init?.body)) as { query: string; read_only: boolean };
+      expect(read_only).toBe(true);
+      queries.push(query);
+      if (query.includes("from pg_extension;")) return Response.json([
+        { name: "pgcrypto", schema: "extensions", installed_version: "1.3" },
+        ...(installed ? [
+          { name: "pg_net", schema: "extensions", installed_version: "0.20.3" },
+          { name: "http", schema: "extensions", installed_version: "1.6" },
+        ] : []),
+      ]);
+      return Response.json([]);
+    };
+    const findings = await runSupabaseScan({
+      projectRef: "owned-extension-fixture", managementApiToken: "owned-fixture-token", fetchImpl,
+    });
+    expect(queries.filter((query) => query.includes("from pg_extension;"))).toHaveLength(1);
+    const document = assembleEngagementDocument([
+      { module: "M1", status: "partial", detail: "Owned extension catalog examined", reason: "Fixture does not exercise callable paths" },
+    ], { connected: true, dynamic: false, llm: false }, findings, meta);
+    const html = buildHtml(document);
+    const expectedIds = installed ? ["SB-EXT-pg_net", "SB-EXT-http"] : [];
+    for (const rows of [findings, document.findings]) {
+      expect(rows.filter((finding) => finding.id.startsWith("SB-EXT-")).map((finding) => finding.id)).toEqual(expectedIds);
+    }
+    for (const name of ["pg_net", "http"]) {
+      const id = `SB-EXT-${name}`;
+      if (!installed) {
+        expect(html).not.toContain(`data-finding-id="${id}"`);
+        continue;
+      }
+      for (const rows of [findings, document.findings]) {
+        const finding = rows.find((row) => row.id === id)!;
+        expect(finding).toMatchObject({ severity: "Info", precisionTier: "review", impact });
+        expect(finding.evidence).toContain(limitation);
+        expect(finding.evidence).toContain(`${name}@${name === "pg_net" ? "0.20.3" : "1.6"} is installed.`);
+      }
+      const card = html.split('<div class="finding"').find((part) => part.includes(`data-finding-id="${id}"`));
+      expect(card).toBeDefined();
+      expect(card).toMatch(/class="badge"[^>]*>Info<\/span>/);
+      expect(card).toContain(limitation);
+      expect(card).toContain(impact);
+      expect(card).toContain("Review: unreviewed.");
+    }
   });
 });
 

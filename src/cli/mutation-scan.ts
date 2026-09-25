@@ -1136,6 +1136,10 @@ interface CommandObservation {
   outcome: { state: CommandTerminalState; exitCode: number | null; signal: string | null; errorCode?: string };
   stdout: string;
   stderr: string;
+  outputCompleteness?: {
+    stdout: "complete" | "truncated" | "unknown";
+    stderr: "complete" | "truncated" | "unknown";
+  };
   expectedReportPath: string;
   configuration: unknown;
   comparisonIdentity: NonNullable<CommandExecutionReceipt["comparisonIdentity"]>;
@@ -1173,6 +1177,7 @@ function finalizeStrykerReceipt(report?: StrykerReport, measurements?: CommandEx
     outcome: execution.outcome,
     stdout: execution.stdout,
     stderr: execution.stderr,
+    ...(execution.outputCompleteness ? { outputCompleteness: execution.outputCompleteness } : {}),
     artifacts: [{ role: "report", path: artifact }],
     comparisonIdentity: execution.comparisonIdentity,
     ...(measurements ? { measurements } : {}),
@@ -1252,18 +1257,30 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   process.stderr.write(stdout);
   process.stderr.write(stderr);
   const errorCode = (child.error as NodeJS.ErrnoException | undefined)?.code;
-  const outcome = child.error
+  const outcome = errorCode === "ENOBUFS"
+    ? { state: "output-limit-exceeded" as const, exitCode: null, ...(typeof child.status === "number" ? { observedExitCode: child.status } : {}), signal: child.signal, errorCode }
+    : errorCode === "ETIMEDOUT"
+    ? { state: "timed-out" as const, exitCode: null, ...(typeof child.status === "number" ? { observedExitCode: child.status } : {}), signal: child.signal, errorCode }
+    : child.error
     ? { state: "spawn-failed" as const, exitCode: null, signal: child.signal, ...(errorCode ? { errorCode } : {}) }
     : child.status !== null
     ? { state: "exited" as const, exitCode: child.status, signal: null }
     : child.signal
       ? { state: "signaled" as const, exitCode: null, signal: child.signal }
       : { state: "unknown-exit" as const, exitCode: null, signal: null };
+  const outputCompleteness = errorCode === "ENOBUFS"
+    ? stdout && !stderr
+      ? { stdout: "truncated" as const, stderr: "unknown" as const }
+      : stderr && !stdout
+        ? { stdout: "unknown" as const, stderr: "truncated" as const }
+        : { stdout: "unknown" as const, stderr: "unknown" as const }
+    : undefined;
   const execution: CommandObservation = {
     invocationId: randomUUID(), executable: strykerBin, argv: strykerArgs, cwd, startedAt, finishedAt: new Date().toISOString(), outcome, stdout, stderr,
     expectedReportPath: resolve(cwd, reporterFileNameFromConfig(cfgPath) ?? "reports/mutation/mutation.json"),
     configuration,
     comparisonIdentity,
+    ...(outputCompleteness ? { outputCompleteness } : {}),
   };
   strykerExecution = execution;
   // Retain upstream completion before pristine checks, parsing, or final export can fail.
@@ -1486,7 +1503,11 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
   const artifact = receiptArtifactPath && existsSync(resultPath)
     ? (() => { mkdirSync(dirname(receiptArtifactPath), { recursive: true }); writeFileSync(receiptArtifactPath, readFileSync(resultPath)); return receiptArtifactPath; })()
     : undefined;
-  const outcome = errorCode
+  const outcome = errorCode === "ENOBUFS"
+    ? { state: "output-limit-exceeded" as const, exitCode: null, ...(typeof exitCode === "number" ? { observedExitCode: exitCode } : {}), signal, errorCode }
+    : errorCode === "ETIMEDOUT"
+    ? { state: "timed-out" as const, exitCode: null, ...(typeof exitCode === "number" ? { observedExitCode: exitCode } : {}), signal, errorCode }
+    : errorCode
     ? { state: "spawn-failed" as const, exitCode: null, signal, errorCode }
     : exitCode !== null
     ? { state: "exited" as const, exitCode, signal: null }
@@ -1504,6 +1525,13 @@ function compareMutantWithNativeVitest(file: string, mutant: StrykerReport["file
     outcome,
     stdout,
     stderr,
+    ...(errorCode === "ENOBUFS" ? {
+      outputCompleteness: stdout && !stderr
+        ? { stdout: "truncated" as const, stderr: "unknown" as const }
+        : stderr && !stdout
+          ? { stdout: "unknown" as const, stderr: "truncated" as const }
+          : { stdout: "unknown" as const, stderr: "unknown" as const },
+    } : {}),
     artifacts: [{ role: "report", path: artifact ?? resultPath }],
     measurements: {
       completedTests,

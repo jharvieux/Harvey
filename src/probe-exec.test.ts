@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { probeExec } from "./probe-exec.js";
 import {
   assertCommandExecutionReceipt,
   commandReceiptSucceeded,
+  createCommandExecutionReceipt,
   verifyCommandExecutionReceiptArtifacts,
 } from "./producer-execution-receipt.js";
 
@@ -54,6 +56,90 @@ describe("probeExec command execution receipts", () => {
     expect(cancelled.ok).toBe(false);
     expect(cancelled.receipt?.outcome.state).toBe("cancelled");
     expect(cancelled.receipt?.cancellationPolicy).toBe("pre-start-only");
+  });
+
+  it("records a real output-limit interruption as truncated execution, not a spawn failure", () => {
+    const secret = "overflow-secret";
+    const interrupted = probeExec(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))", secret],
+      receiptOptions({ invocationId: "output-limit", secretValues: [secret] }),
+    );
+
+    expect(interrupted.ok).toBe(false);
+    expect(interrupted.receipt?.outcome).toMatchObject({
+      state: "output-limit-exceeded",
+      exitCode: null,
+      errorCode: "ENOBUFS",
+    });
+    expect(interrupted.receipt?.outcome.signal).toBeTruthy();
+    expect(interrupted.receipt?.stdout).toMatchObject({
+      completeness: "truncated",
+      sha256Scope: "captured-bytes",
+    });
+    expect(interrupted.receipt?.stdout.bytes).toBeGreaterThan(0);
+    expect(interrupted.receipt?.stderr).toMatchObject({
+      completeness: "unknown",
+      sha256Scope: "captured-bytes",
+    });
+    expect(commandReceiptSucceeded(interrupted.receipt!)).toBe(false);
+    expect(JSON.stringify(interrupted.receipt)).not.toContain(secret);
+  });
+
+  it("retains a native exit observed after an output-limit interrupt without inventing success", () => {
+    const script = "process.stdout.on('error', () => {}); process.on('SIGTERM', () => process.exit(7)); process.stdout.write('x'.repeat(2 * 1024 * 1024)); setInterval(() => {}, 1000)";
+    const raw = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    expect(raw.error).toMatchObject({ code: "ENOBUFS" });
+    expect(raw.status).not.toBeNull();
+
+    const interrupted = probeExec(process.execPath, ["-e", script], receiptOptions({ invocationId: "output-limit-handler" }));
+    expect(interrupted.receipt?.outcome).toMatchObject({
+      state: "output-limit-exceeded",
+      exitCode: null,
+      observedExitCode: raw.status,
+      signal: raw.signal,
+      errorCode: "ENOBUFS",
+    });
+    expect(interrupted.ok).toBe(false);
+    expect(commandReceiptSucceeded(interrupted.receipt!)).toBe(false);
+  });
+
+  it("rejects contradictory command outcomes while accepting a coherent timeout", () => {
+    const receipt = (
+      outcome: Parameters<typeof createCommandExecutionReceipt>[0]["outcome"],
+      outputCompleteness?: Parameters<typeof createCommandExecutionReceipt>[0]["outputCompleteness"],
+    ) => () => createCommandExecutionReceipt({
+      invocationId: "outcome-control",
+      command: { executable: process.execPath, argv: [], cwd: root },
+      target: { identity: "fixture-target", value: { revision: "abc123" } },
+      toolchain: [{ name: "node", version: process.version }],
+      configuration: { identity: "fixture-config", value: { mode: "test" } },
+      startedAt: "2026-09-25T00:00:00.000Z",
+      finishedAt: "2026-09-25T00:00:01.000Z",
+      outcome,
+      ...(outputCompleteness ? { outputCompleteness } : {}),
+    });
+
+    expect(receipt({ state: "timed-out", exitCode: 0, signal: null, errorCode: "ETIMEDOUT" })).toThrow(/timed-out.*exit code/i);
+    expect(receipt({ state: "spawn-failed", exitCode: null, signal: "SIGTERM", errorCode: "ENOENT" })).toThrow(/spawn-failed.*signal/i);
+    expect(receipt({ state: "exited", exitCode: 0, signal: null, errorCode: "EIO" })).toThrow(/exited.*error/i);
+    expect(receipt({ state: "exited", exitCode: 0, observedExitCode: 7, signal: null })).toThrow(/observed interrupted exit code/i);
+    expect(receipt(
+      { state: "output-limit-exceeded", exitCode: null, observedExitCode: 7, signal: "SIGTERM", errorCode: "ENOBUFS" },
+      { stdout: "truncated", stderr: "unknown" },
+    )).toThrow(/observed exit code.*signal/i);
+    expect(receipt({ state: "timed-out", exitCode: null, observedExitCode: 7, signal: "SIGTERM", errorCode: "ETIMEDOUT" })).toThrow(/observed exit code.*signal/i);
+
+    const timeout = receipt({ state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" })();
+    expect(timeout.outcome.state).toBe("timed-out");
+    expect(commandReceiptSucceeded(timeout)).toBe(false);
+    const handledTimeout = receipt({ state: "timed-out", exitCode: null, observedExitCode: 7, signal: null, errorCode: "ETIMEDOUT" })();
+    expect(commandReceiptSucceeded(handledTimeout)).toBe(false);
+    const handledOutputLimit = receipt(
+      { state: "output-limit-exceeded", exitCode: null, observedExitCode: 7, signal: null, errorCode: "ENOBUFS" },
+      { stdout: "truncated", stderr: "unknown" },
+    )();
+    expect(commandReceiptSucceeded(handledOutputLimit)).toBe(false);
   });
 
   it("discloses synchronous cancellation limits and preserves the real completed exit", async () => {

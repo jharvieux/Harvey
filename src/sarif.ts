@@ -247,6 +247,10 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         assessment: f.assessment,
         origin: f.origin,
         location: f.location,
+        // Rules are shared by taxonomy, but impact and remediation describe this occurrence.
+        // Keeping them here prevents the first result for a rule from overwriting later guidance.
+        ...(f.impact ? { impact: f.impact } : {}),
+        ...(f.fix ? { fix: f.fix } : {}),
         ...(f.dependencyRangeEvidence ? { dependencyRangeEvidence: f.dependencyRangeEvidence } : {}),
         ...(f.dependencyMetadataEvidence ? { dependencyMetadataEvidence: f.dependencyMetadataEvidence } : {}),
         ...(f.note ? { note: f.note } : {}),

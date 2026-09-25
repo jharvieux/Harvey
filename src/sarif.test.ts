@@ -326,6 +326,29 @@ describe("SARIF independent export contract (#2100)", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("preserves each same-rule impact and remediation after serialization and reordering", () => {
+    const rows = [
+      finding({ id: "workflow-200", taxonomy: "M2 — Business logic / workflow state-machine bypass", impact: "A successful response persists an unauthorized state transition.", fix: "Validate every transition before persisting it." }),
+      finding({ id: "workflow-500", taxonomy: "M2 — Business logic / workflow state-machine bypass", location: "src/workflow.ts:29", impact: "A failed response still persists an unauthorized state transition.", fix: "Rollback the transition when the downstream response fails." }),
+    ];
+    const expected = new Map(rows.map(({ id, impact, fix }) => [id, { impact, fix }]));
+    const consume = (input: Finding[]) => {
+      const serialized = JSON.parse(JSON.stringify(toSarif(input, { coverage: RAN })));
+      expect(validateSarif210(serialized)).toMatchObject({ valid: true, errors: [] });
+      expect(consumerErrors(serialized)).toEqual([]);
+      expect(serialized.runs[0].tool.driver.rules).toHaveLength(1);
+      expect(serialized.runs[0].results.every((result: { properties: { note?: unknown } }) => result.properties.note === undefined)).toBe(true);
+      const details = new Map(serialized.runs[0].results.map((result: { properties: { harveyId: string; impact?: string; fix?: string } }) => [
+        result.properties.harveyId,
+        { impact: result.properties.impact, fix: result.properties.fix },
+      ]));
+      expect(details).toEqual(expected);
+      return details;
+    };
+
+    expect(consume(rows)).toEqual(consume([...rows].reverse()));
+  });
+
   it("validates empty and optional shapes without inventing results or locations", () => {
     const serialized = JSON.parse(JSON.stringify(toSarif([], { coverage: RAN })));
     expect(validateSarif210(serialized)).toMatchObject({ valid: true, errors: [] });

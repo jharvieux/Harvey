@@ -63,7 +63,20 @@ if (mode !== "lockfile" && mode !== "source") {
   process.exit(2);
 }
 const workRoot: string = out;
-const concurrency = Number(arg("--concurrency") ?? 8);
+function positiveIntegerFlag(flag: "--concurrency", fallback: number): number {
+  const raw = arg(flag);
+  if (process.argv.includes(flag) && (raw === undefined || raw.startsWith("--"))) {
+    console.error(`${flag}: expected a finite positive integer value.`);
+    process.exit(2);
+  }
+  const value = Number(raw ?? fallback);
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    console.error(`${flag}: expected a finite positive integer value; received ${JSON.stringify(raw)}.`);
+    process.exit(2);
+  }
+  return value;
+}
+const concurrency = positiveIntegerFlag("--concurrency", 8);
 const maxFailurePct = Number(arg("--max-failure-pct") ?? 5);
 
 const fs = { listDir: readNamesSafe, readText: (p: string) => readFileSync(p, "utf8"), exists: existsSync };
@@ -112,17 +125,27 @@ async function build(entry: (typeof entries)[number]): Promise<void> {
 
 const queue = [...entries];
 await Promise.all(
-  Array.from({ length: Math.max(1, concurrency) }, async () => {
+  Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
     for (let next = queue.pop(); next; next = queue.pop()) await build(next);
   }),
 );
 
 const artefact = mode === "lockfile" ? "lockfile" : "installed target-package source";
+const completed = generated + failures.length;
 console.log(`SecBench ${mode} tree — ${SECBENCH_REPO} @ ${SECBENCH_PIN.slice(0, 10)} → ${workRoot}`);
 console.log(`${generated}/${entries.length} ${artefact}s built.`);
 if (failures.length) {
   console.log(`\n${failures.length} entr${failures.length === 1 ? "y" : "ies"} produced no ${artefact} (named, never silently dropped):`);
   for (const f of failures.sort((a, b) => a.key.localeCompare(b.key))) console.log(`  ${f.key} — ${f.why}`);
+}
+
+if (completed !== entries.length) {
+  console.error(`\n✗ completion accounting failed: ${generated} generated + ${failures.length} named failures = ${completed}, but ${entries.length} entries were loaded.`);
+  process.exit(1);
+}
+if (generated === 0) {
+  console.error(`\n✗ no ${artefact} was generated; refusing to call an empty tree usable.`);
+  process.exit(1);
 }
 
 const failurePct = (failures.length / entries.length) * 100;
