@@ -15,7 +15,7 @@ afterEach(() => {
 const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
 describe("prepareVitalsRun source boundary", () => {
-  it("preserves additions and modifications, removes tracked deletions, and does not refresh the client index", () => {
+  it.each(["unstaged", "staged", "rename", "directory", "spaced"])("preserves the live checkout after %s deletion without refreshing the client index", mode => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-vitals-source-"));
     const cache = mkdtempSync(join(tmpdir(), "harvey-vitals-cache-"));
     roots.push(repo, cache);
@@ -23,18 +23,24 @@ describe("prepareVitalsRun source boundary", () => {
     execFileSync("git", ["config", "user.email", "fixture@example.test"], { cwd: repo });
     execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo });
     mkdirSync(join(repo, "src"));
-    writeFileSync(join(repo, "src", "deleted.ts"), "export const deleted = true;\n");
+    const deletedPath = mode === "spaced" ? " deleted.ts" : mode === "directory" ? "src/deleted/file.ts" : "src/deleted.ts";
+    if (mode === "directory") mkdirSync(join(repo, "src/deleted"));
+    writeFileSync(join(repo, deletedPath), "export const deleted = true;\n");
     writeFileSync(join(repo, "src", "modified.ts"), "export const modified = 1;\n");
     execFileSync("git", ["add", "."], { cwd: repo });
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo });
-    rmSync(join(repo, "src", "deleted.ts"));
+    if (mode === "rename") execFileSync("git", ["mv", deletedPath, "src/moved.ts"], { cwd: repo });
+    else if (mode === "staged" || mode === "spaced") execFileSync("git", ["rm", "--", deletedPath], { cwd: repo });
+    else if (mode === "directory") execFileSync("git", ["rm", "-r", "--", "src/deleted"], { cwd: repo });
+    else rmSync(join(repo, deletedPath));
     writeFileSync(join(repo, "src", "modified.ts"), "export const modified = 2;\n");
     writeFileSync(join(repo, "src", "added.ts"), "export const added = true;\n");
     const before = digest(join(repo, ".git", "index"));
 
     const prepared = prepareVitalsRun({ targetDir: repo, cacheRoot: cache, toolVersion: "0.2.0" });
     try {
-      expect(() => readFileSync(join(prepared.targetDir, "src", "deleted.ts"))).toThrow();
+      expect(() => readFileSync(join(prepared.targetDir, deletedPath))).toThrow();
+      if (mode === "rename") expect(readFileSync(join(prepared.targetDir, "src/moved.ts"), "utf8")).toContain("deleted");
       expect(readFileSync(join(prepared.targetDir, "src", "modified.ts"), "utf8")).toContain("= 2");
       expect(readFileSync(join(prepared.targetDir, "src", "added.ts"), "utf8")).toContain("added");
       expect(digest(join(repo, ".git", "index"))).toBe(before);

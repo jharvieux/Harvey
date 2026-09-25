@@ -126,7 +126,8 @@ const noGitLocks = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
 
 const gitText = (cwd: string, args: string[]): string | undefined => {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: noGitLocks }).trim();
+    const output = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: noGitLocks });
+    return args.includes("-z") ? output : output.trim();
   } catch {
     return undefined;
   }
@@ -223,7 +224,8 @@ export function prepareVitalsRun(input: {
       copyCurrentCheckout(sourceRoot, scratchRepo);
       // Overlaying additions/modifications onto a HEAD clone is insufficient: a tracked file
       // deleted in the live checkout otherwise survives from HEAD and is audited as current code.
-      const deleted = gitText(sourceRoot, ["ls-files", "--deleted", "-z"]);
+      const deleted = gitText(sourceRoot, ["diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", "HEAD", "--"]);
+      if (deleted === undefined) throw new Error("Could not resolve HEAD-to-checkout deletions for the Vitals snapshot");
       for (const path of deleted?.split("\0").filter(Boolean) ?? []) rmSync(join(scratchRepo, path), { recursive: true, force: true });
     } else {
       mkdirSync(scratchRepo, { recursive: true });

@@ -37,7 +37,7 @@ export interface RecordedPass {
   // produced. Surfaced by the m3 probe so the cross-module enrichment (#515) also fires when M3 ran
   // via a pass artifact (vitals off PATH during run-audit), not only the in-process capture path.
   hotspots?: string[];
-  /** Number of current source files that the M3 capture ranked. Zero cannot prove M3 ran. */
+  /** Number of current source files ranked by M3; pass receipts require a positive count. */
   rankedCount?: number;
   /** A measured M8 table travels with the pass, not only with a fresh mutation invocation. */
   testQuality?: TestQuality;
