@@ -152,6 +152,58 @@ function deliverable(): FindingsDocument {
   return assembleEngagementDocument(RECORDED, ENV, findings, META);
 }
 
+describe("fresh audit context delivery (#2136)", () => {
+  const sha = (character: string): string => character.repeat(64);
+  const context: NonNullable<FindingsDocument["auditContext"]> = {
+    engagementId: "engagement-fresh-001",
+    kind: "client-audit",
+    target: { id: "customer-app", revision: "release-2026-09-25" },
+    producerVersions: { harvey: "2.4.0" },
+    schemaVersion: "1",
+    assessedScope: ["application source", "committed dependency manifests"],
+    scopeComplete: false,
+    limitations: ["Dynamic authorization checks were unavailable <during capture> & require a connected rerun."],
+    provenance: {
+      schema: 1,
+      kind: "fresh-execution",
+      target: { contentSha256: sha("a"), gitRevision: sha("b"), complete: true, stable: true },
+      engine: { contentSha256: sha("c"), complete: true, stable: false },
+      configurationSha256: sha("d"),
+      inputBindings: [
+        { role: "source", identity: "customer-app@release", sha256: sha("e"), complete: true },
+        { role: "runtime", identity: "connected probes", sha256: sha("f"), complete: false },
+      ],
+      moduleObservations: [
+        { module: "M1", instance: "source", status: "examined", unitsExamined: 12, scope: "tenant access paths" },
+        { module: "M7", instance: "dynamic", status: "not-assessed", unitsExamined: 0, scope: "authorization behavior", reason: "No connected test account was available." },
+      ],
+      commandReceiptSha256: [sha("1")],
+      producerIdentityComplete: false,
+      retainedBindingSha256: sha("2"),
+    },
+  };
+
+  it("renders fresh provenance and concrete limitations without requiring a baseline", () => {
+    const document = { ...deliverable(), auditContext: context };
+    const retainedJson = JSON.stringify(document);
+    const html = buildHtml(document);
+    expect(JSON.stringify(document)).toBe(retainedJson);
+    expect(html).toContain("Audit evidence context");
+    expect(html).toContain("Partial for the stated scope");
+    expect(html).toContain("Dynamic authorization checks were unavailable &lt;during capture&gt; &amp; require a connected rerun.");
+    expect(html).toContain("No connected test account was available.");
+    expect(html).toContain("Complete at capture; source was changing");
+    expect(html).toContain("Producer identity</b><br>Incomplete");
+    expect(html).toContain("customer-app@release");
+    expect(html).toContain("does not claim that unexamined areas have no issues");
+    expect(html).not.toContain("<during capture>");
+  });
+
+  it("keeps legacy reports without audit context compatible", () => {
+    expect(buildHtml(deliverable())).not.toContain("Audit evidence context");
+  });
+});
+
 describe("dependency URL delivery (#1774)", () => {
   const spellings = [
     ["valid", "https://canary-user:canary-password@example.invalid/repo?token=canary-query"],

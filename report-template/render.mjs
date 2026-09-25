@@ -255,6 +255,54 @@ function baselineBanner(baseline) {
   </div>`;
 }
 
+function digestLabel(value) {
+  return `${value.slice(0, 12)}…${value.slice(-8)}`;
+}
+
+function evidenceState(binding) {
+  if (!binding.complete) return "Incomplete";
+  return binding.stable ? "Complete and stable" : "Complete at capture; source was changing";
+}
+
+function auditContextSection(context) {
+  if (!context) return "";
+  const provenance = context.provenance;
+  const observations = provenance?.moduleObservations ?? [];
+  const gaps = observations.filter((row) => row.status !== "examined");
+  const limitations = context.limitations ?? [];
+  const scopeStatus = context.scopeComplete ? "Complete for the stated scope" : "Partial for the stated scope";
+  const scopeClass = context.scopeComplete ? "context-complete" : "context-partial";
+  const limitationRows = limitations.length
+    ? limitations.map((reason) => `<div class="context-limit"><b>Scope limitation</b> ${esc(reason)}</div>`).join("")
+    : context.scopeComplete ? "" : '<div class="context-limit"><b>Scope limitation</b> This audit context is partial; consult the machine-readable report for the retained evidence record.</div>';
+  const bindingRows = provenance?.inputBindings.map((binding) => `<tr>
+    <td>${esc(binding.role)}</td><td>${esc(binding.identity)}</td><td>${binding.complete ? "Complete" : "Incomplete"}</td><td><code>${esc(digestLabel(binding.sha256))}</code></td>
+  </tr>`).join("") ?? "";
+  const observationRows = observations.map((row) => `<tr>
+    <td>${esc(row.module)} / ${esc(row.instance)}</td><td>${esc(row.status)}</td><td>${row.unitsExamined}</td><td>${esc(row.scope)}${row.reason ? `<br><b>Reason:</b> ${esc(row.reason)}` : ""}</td>
+  </tr>`).join("");
+  return `<section class="audit-context" data-audit-context="${esc(context.kind)}">
+    <h2>Audit evidence context</h2>
+    <div class="context-summary">
+      <span class="context-status ${scopeClass}">${scopeStatus}</span>
+      <div><b>${esc(context.target.id)}</b> at <code>${esc(context.target.revision)}</code></div>
+      <div>${esc(context.assessedScope.join("; "))}</div>
+      <div class="context-note">This section describes what the audit examined and where evidence is incomplete. It is separate from findings and does not claim that unexamined areas have no issues.</div>
+    </div>
+    ${limitationRows}
+    ${provenance ? `<details class="context-details"><summary>Evidence identity and module observations</summary>
+      <div class="context-grid">
+        <div><b>Target source</b><br>${esc(evidenceState(provenance.target))}<br><code>${esc(digestLabel(provenance.target.contentSha256))}</code>${provenance.target.gitRevision ? `<br>Git ${esc(provenance.target.gitRevision)}` : ""}</div>
+        <div><b>Harvey engine</b><br>${esc(evidenceState(provenance.engine))}<br><code>${esc(digestLabel(provenance.engine.contentSha256))}</code></div>
+        <div><b>Producer identity</b><br>${provenance.producerIdentityComplete ? "Complete" : "Incomplete"}<br><code>config ${esc(digestLabel(provenance.configurationSha256))}</code></div>
+      </div>
+      <div class="context-note">${observations.length} module observation(s): ${observations.length - gaps.length} examined, ${gaps.length} not assessed or legacy. ${provenance.commandReceiptSha256.length} command receipt(s) retained.${provenance.retainedBindingSha256 ? ` Retained evidence binding <code>${esc(digestLabel(provenance.retainedBindingSha256))}</code>.` : ""}</div>
+      ${bindingRows ? `<h3>Input bindings</h3><table class="cov"><tr><th>Role</th><th>Identity</th><th>Coverage</th><th>Content identity</th></tr>${bindingRows}</table>` : '<div class="context-limit"><b>Input bindings</b> No input bindings were recorded.</div>'}
+      ${observationRows ? `<h3>Module observations</h3><table class="cov"><tr><th>Module / instance</th><th>Status</th><th>Units</th><th>Scope / reason</th></tr>${observationRows}</table>` : '<div class="context-limit"><b>Module observations</b> No module observations were recorded.</div>'}
+    </details>` : '<div class="context-limit"><b>Execution provenance</b> No fresh-execution binding accompanies this report.</div>'}
+  </section>`;
+}
+
 // Resolved findings — closed since the prior audit. Listed so the client sees exactly what improved,
 // not just a count. These come from the baseline, not the current run, and are not in the findings
 // body above.
@@ -601,6 +649,16 @@ export function buildHtml(data) {
   .progress-title{font-size:12px;font-weight:800;color:#334155;margin-bottom:6px}
   .progress-stats{display:flex;gap:26px;margin-top:10px}
   .comparison-limit{margin-top:6px}
+  .audit-context{margin-top:18px}
+  .context-summary{border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .context-status{display:inline-block;border-radius:999px;padding:2px 9px;margin-bottom:6px;font-size:10px;font-weight:800}
+  .context-complete{background:#dcfce7;color:#166534}.context-partial{background:#fef3c7;color:#92400e}
+  .context-note{color:var(--muted);font-size:11px;margin-top:6px}
+  .context-limit{background:#fffbeb;border-left:3px solid #f59e0b;padding:7px 10px;margin-top:7px;font-size:11px;overflow-wrap:anywhere}
+  .context-details{margin-top:9px;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+  .context-details summary{cursor:pointer;font-weight:700;color:#334155}
+  .context-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px}
+  .context-grid>div{background:#f8fafc;border-radius:6px;padding:8px;font-size:10.5px;overflow-wrap:anywhere}
   .pstat{text-align:center}
   .pnum{font-size:26px;font-weight:800;line-height:1}
   .plabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
@@ -647,6 +705,7 @@ export function buildHtml(data) {
     <h2>Scope &amp; methodology</h2>
     <div class="kv"><b>Reviewed</b> ${esc(m.scope)}</div>
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
+    ${auditContextSection(data.auditContext ?? m.auditContext)}
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
     ${residualScopeSection(data.residualScope)}
