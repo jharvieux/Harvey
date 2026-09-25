@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NOT_SCORED, SCORED_GATES, checkScoredGates, discoverValidateClis, loadGateInputs, type GateInputs, type ScoredGate } from "./scored-gates.js";
 
@@ -111,8 +115,8 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
     const base = ['on:', '  pull_request:', '    paths:', '      - "docs/**"', 'jobs:', '  x:', '    steps:'].join("\n");
     const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
     for (const step of ["      - run: pnpm exec tsx src/cli/validate-x.ts", "      - run: pnpm validate:x"]) {
-      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }));
-      expect(v.join("\n"), step).not.toContain("there invokes src/cli/validate-x.ts");
+      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }), [], []);
+      expect(v, step).toEqual([]);
     }
   });
 
@@ -170,6 +174,55 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
       const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${command.split("\n").map((line) => `          ${line}`).join("\n")}`;
       const violations = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence }));
       expect(violations.join("\n"), command).not.toContain("no supported shell command");
+    }
+  });
+
+  it("matches the supported shell subset to real Bash execution of the target gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "scored-gate-shell-"));
+    const bin = join(root, "bin");
+    const marker = join(root, "target-executed");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), `#!/bin/sh
+case "$1:$2:$3" in
+  validate:x:*|run:validate:x:*|exec:tsx:src/cli/validate-x.ts) printf executed > "$HARVEY_GATE_MARKER" ;;
+esac
+exit 0
+`);
+    chmodSync(join(bin, "pnpm"), 0o755);
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const cases = {
+      direct: "pnpm validate:x",
+      quoted: "pnpm 'validate:x' --json",
+      env: 'env CI=1 pnpm run "validate:x" -- --json',
+      command: "command pnpm validate:x --json",
+      exec: 'exec pnpm exec tsx "src/cli/validate-x.ts" --json',
+      "env then command": "env command pnpm validate:x",
+      "quoted assignment word": '"CI=1" pnpm validate:x',
+      "command assignment operand": "command CI=1 pnpm validate:x",
+      "double-quoted ordinary backslash": 'pnpm "validate\\:x"',
+      "uncalled function": "unused() {\n  pnpm validate:x\n}",
+      "false shell conditional": "if false; then\n  pnpm validate:x\nfi",
+    };
+    try {
+      for (const [name, script] of Object.entries(cases)) {
+        rmSync(marker, { force: true });
+        spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+          encoding: "utf8",
+          env: { ...process.env, HARVEY_GATE_MARKER: marker, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        const executed = existsSync(marker);
+        const indented = script.split("\n").map((line) => `          ${line}`).join("\n");
+        const yml = `jobs:\n  x:\n    steps:\n      - run: |\n${indented}`;
+        const accepted = checkScoredGates(
+          inputs({ workflows: { ".github/workflows/x.yml": yml } }),
+          gate({ cadence }),
+          [],
+          [],
+        ).length === 0;
+        expect(accepted, `${name}: checker/Bash marker mismatch`).toBe(executed);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

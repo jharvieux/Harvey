@@ -301,8 +301,14 @@ function collectRunScripts(doc: unknown): string[] {
 }
 
 interface ShellCommand {
-  readonly tokens: readonly string[];
+  readonly tokens: readonly ShellToken[];
   readonly ambiguous: boolean;
+}
+
+interface ShellToken {
+  readonly value: string;
+  /** Bash recognizes assignments only when the name and `=` are unquoted and unescaped. */
+  readonly assignment: boolean;
 }
 
 /**
@@ -314,9 +320,11 @@ interface ShellCommand {
  */
 function shellCommands(script: string): ShellCommand[] | undefined {
   const commands: ShellCommand[] = [];
-  let tokens: string[] = [];
+  let tokens: ShellToken[] = [];
   let token = "";
   let tokenStarted = false;
+  let assignmentNamePlain = true;
+  let sawPlainEquals = false;
   let quote: "single" | "double" | undefined;
   let ambiguous = false;
   let sawAmbiguousShape = false;
@@ -328,9 +336,14 @@ function shellCommands(script: string): ShellCommand[] | undefined {
 
   const finishToken = (): void => {
     if (!tokenStarted) return;
-    tokens.push(token);
+    tokens.push({
+      value: token,
+      assignment: assignmentNamePlain && sawPlainEquals && SHELL_ASSIGNMENT.test(token),
+    });
     token = "";
     tokenStarted = false;
+    assignmentNamePlain = true;
+    sawPlainEquals = false;
   };
   const finishCommand = (): void => {
     finishToken();
@@ -348,11 +361,27 @@ function shellCommands(script: string): ShellCommand[] | undefined {
       tokenStarted = true;
       continue;
     }
+    if (quote === "double") {
+      if (char === '"') quote = undefined;
+      else if (char === "\\") {
+        if (next === "\n") index += 1;
+        else if (next !== undefined && ["$", "`", '"', "\\"].includes(next)) {
+          token += next;
+          index += 1;
+        } else token += char;
+      } else {
+        if ((char === "$" && next === "(") || char === "`") markAmbiguous();
+        token += char;
+      }
+      tokenStarted = true;
+      continue;
+    }
     if (char === "\\") {
       if (next === "\n") {
         index += 1;
         continue;
       }
+      if (!sawPlainEquals) assignmentNamePlain = false;
       if (next !== undefined) {
         token += next;
         tokenStarted = true;
@@ -360,26 +389,20 @@ function shellCommands(script: string): ShellCommand[] | undefined {
       }
       continue;
     }
-    if (quote === "double") {
-      if (char === '"') quote = undefined;
-      else {
-        if ((char === "$" && next === "(") || char === "`") markAmbiguous();
-        token += char;
-      }
-      tokenStarted = true;
-      continue;
-    }
     if (char === "'") {
+      if (!sawPlainEquals) assignmentNamePlain = false;
       quote = "single";
       tokenStarted = true;
       continue;
     }
     if (char === '"') {
+      if (!sawPlainEquals) assignmentNamePlain = false;
       quote = "double";
       tokenStarted = true;
       continue;
     }
-    if ((char === "$" && next === "(") || char === "`" || (char === "<" && next === "<")) markAmbiguous();
+    if ((char === "$" && next === "(") || char === "`" || (char === "<" && next === "<")
+      || char === "(" || char === ")" || char === "{" || char === "}") markAmbiguous();
     if (char === "#" && !tokenStarted) {
       while (index + 1 < script.length && script[index + 1] !== "\n") index += 1;
       continue;
@@ -390,15 +413,19 @@ function shellCommands(script: string): ShellCommand[] | undefined {
       continue;
     }
     if (char === ";" || char === "|" || char === "&") {
+      if ((char === "|" || char === "&") && next === char) markAmbiguous();
       finishCommand();
       if (next === char) index += 1;
       continue;
     }
+    if (char === "=" && !sawPlainEquals) sawPlainEquals = true;
     token += char;
     tokenStarted = true;
   }
   if (quote) return undefined;
   finishCommand();
+  const compound = new Set(["!", "case", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if", "select", "then", "until", "while"]);
+  if (commands.some((command) => compound.has(command.tokens[0]?.value ?? ""))) sawAmbiguousShape = true;
   return sawAmbiguousShape ? commands.map((command) => ({ ...command, ambiguous: true })) : commands;
 }
 
@@ -414,18 +441,20 @@ const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function commandInvokesGate(command: ShellCommand, gate: ScoredGate): boolean {
   if (command.ambiguous) return false;
   const tokens = [...command.tokens];
-  while (tokens[0] && SHELL_ASSIGNMENT.test(tokens[0])) tokens.shift();
-  while (tokens[0] === "env" || tokens[0] === "command" || tokens[0] === "exec") {
-    tokens.shift();
-    if (tokens.at(0) === "--") tokens.shift();
-    while (tokens[0] && SHELL_ASSIGNMENT.test(tokens[0])) tokens.shift();
+  while (tokens[0]?.assignment) tokens.shift();
+  while (["env", "command", "exec"].includes(tokens[0]?.value ?? "")) {
+    const wrapper = tokens.shift()!.value;
+    if (tokens.at(0)?.value === "--") tokens.shift();
+    // `env` parses assignment operands. Bash's `command` and `exec` builtins do not: after either
+    // wrapper, `CI=1` is a command name and must not be normalized into an environment prefix.
+    if (wrapper === "env") while (tokens[0]?.assignment) tokens.shift();
   }
-  if (tokens[0] !== "pnpm") return false;
-  if (tokens[1] === gate.script) return true;
-  if (tokens[1] === "run" && tokens[2] === gate.script) return true;
-  return tokens[1] === "exec"
-    && tokens[2] === "tsx"
-    && tokens[3] === `src/cli/${gate.id}.ts`;
+  if (tokens[0]?.value !== "pnpm") return false;
+  if (tokens[1]?.value === gate.script) return true;
+  if (tokens[1]?.value === "run" && tokens[2]?.value === gate.script) return true;
+  return tokens[1]?.value === "exec"
+    && tokens[2]?.value === "tsx"
+    && tokens[3]?.value === `src/cli/${gate.id}.ts`;
 }
 
 function workflowRunScripts(yml: string): string[] | undefined {
