@@ -34,7 +34,9 @@ describe("report finding navigation", () => {
     expect(new Set(ids).size).toBe(fixture.findings.length);
     expect(ids.every((id) => /^finding-[a-f0-9]+$/.test(id ?? ""))).toBe(true);
     expect(buildHtml(allLinked)).toContain('data-finding-id="quoted&quot;&lt;&amp;&gt; / 雪"');
-    expect(() => buildHtml({ ...fixture, findings: [fixture.findings[0]!, fixture.findings[0]!] })).toThrow(/unique identities/);
+    const repeated = destinations(buildHtml({ ...fixture, findings: [fixture.findings[0]!, fixture.findings[0]!] }));
+    expect(repeated).toHaveLength(2);
+    expect(new Set(repeated.map(([, id]) => id)).size).toBe(2);
   });
 
   it("rejects a deleted, ambiguous or misbound destination in the emitted report", () => {

@@ -162,6 +162,18 @@ describe("expectedRlsEnabled", () => {
     ];
     expect([...expectedRlsEnabled(migrations)].sort()).toEqual([JSON.stringify(["public", "a"]), JSON.stringify(["public", "c"])]);
   });
+
+  it("does not carry RLS across drop/re-create and follows table identity moves (#2142)", () => {
+    const migrations = [
+      { file: "1.sql", sql: "create table public.a(id uuid); alter table public.a enable row level security; create table public.b(id uuid); alter table public.b enable row level security;" },
+      { file: "2.sql", sql: "drop table public.a; create table public.a(id uuid); alter table public.b rename to c; alter table public.c set schema tenant;" },
+    ];
+    expect([...expectedRlsEnabled(migrations)]).toEqual([JSON.stringify(["tenant", "c"])]);
+  });
+
+  it("keeps RLS across a CREATE TABLE IF NOT EXISTS no-op", () => {
+    expect([...expectedRlsEnabled([{ file: "1.sql", sql: "create table public.a(id uuid); alter table public.a enable row level security; create table if not exists public.a(id uuid);" }])]).toEqual([JSON.stringify(["public", "a"])]);
+  });
 });
 
 describe("loadMigrations", () => {
@@ -293,5 +305,19 @@ describe("readDriftPassEvidence", () => {
     const empty = mkdtempSync(join(tmpdir(), "harvey-drift-pass-"));
     dirs.push(empty);
     expect(readDriftPassEvidence(empty, "/repo", NOW)).toBeUndefined();
+  });
+});
+
+describe("final lifecycle identities in the shipping drift comparison", () => {
+  it.each([
+    ["alter table public.a rename to b;", "public", "b"],
+    ["alter table public.a set schema tenant;", "tenant", "a"],
+    ["alter table public.a rename to b; alter table public.b set schema tenant;", "tenant", "b"],
+  ])("does not label rebuilt renamed/moved tables unmanaged: %s", (transition, schema, name) => {
+    const migrations = migration(`create table public.a(id uuid); create policy p on public.a using (true); alter table public.a enable row level security; ${transition}`);
+    const findings = checkMigrationDrift([{ schema, name, rlsEnabled: true, extensionOwned: false }], [{ schema, table: name, name: "p" }], migrations, undefined, { schemas: [{ schema: "public", status: "queried" }, { schema: "tenant", status: "queried" }], queriesAttempted: 2, queriesCompleted: 2 });
+    expect(findings.map(row => row.id)).toEqual(["SB-DRIFT-00"]);
+    const missing = checkMigrationDrift([], [], migrations, undefined, { schemas: [{ schema, status: "queried" }], queriesAttempted: 1, queriesCompleted: 1 });
+    expect(missing.some(row => row.id.startsWith("SB-DRIFT-TABLE-MISSING"))).toBe(true);
   });
 });

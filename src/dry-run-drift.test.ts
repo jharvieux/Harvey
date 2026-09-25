@@ -50,23 +50,20 @@ describe("dry-run PR relevance", () => {
     expect(result.output).toContain("reason=proved-unrelated-docs\n");
   });
 
-  it("executes the shipping selector against literal, computed, indirect and child-process data inputs", async () => {
-    const sources = [
-      'import { readFileSync } from "node:fs"; console.log(readFileSync("docs/input.md", "utf8"));',
-      'import { readFileSync } from "node:fs"; console.log(readFileSync("tools/input-link.md", "utf8"));',
-      'import { readFileSync as read } from "node:fs"; const input = "docs/input.md"; console.log(read(input, "utf8"));',
-      'import { readFileSync } from "node:fs"; const read = readFileSync; console.log(read("docs/input.md", "utf8"));',
-      'import * as fs from "node:fs"; const read = fs.readFileSync.bind(fs); console.log(read("docs/input.md", "utf8"));',
-      'const fs = await import("node:fs"); const method = "readFileSync"; console.log(fs[method]("docs/input.md", "utf8"));',
-      'const module = process.env.PRODUCER; await import(module);',
-      'import { execFileSync as launch } from "node:child_process"; console.log(launch(process.execPath, ["tools/producer.mjs"], { encoding: "utf8" }));',
-    ];
-    for (const source of sources) {
-      const result = await runShippingFilter(source, "docs/input.md", true);
-      expect(result.before?.trim(), source).toBe("before");
-      expect(result.after?.trim(), source).toBe("after");
-      expect(result.output, source).toContain("relevant=true\n");
-    }
+  it.each([
+    'import { readFileSync } from "node:fs"; console.log(readFileSync("docs/input.md", "utf8"));',
+    'import { readFileSync } from "node:fs"; console.log(readFileSync("tools/input-link.md", "utf8"));',
+    'import { readFileSync as read } from "node:fs"; const input = "docs/input.md"; console.log(read(input, "utf8"));',
+    'import { readFileSync } from "node:fs"; const read = readFileSync; console.log(read("docs/input.md", "utf8"));',
+    'import * as fs from "node:fs"; const read = fs.readFileSync.bind(fs); console.log(read("docs/input.md", "utf8"));',
+    'const fs = await import("node:fs"); const method = "readFileSync"; console.log(fs[method]("docs/input.md", "utf8"));',
+    'const module = process.env.PRODUCER; await import(module);',
+    'import { execFileSync as launch } from "node:child_process"; console.log(launch(process.execPath, ["tools/producer.mjs"], { encoding: "utf8" }));',
+  ])("executes the shipping selector for data input %s", async (source) => {
+    const result = await runShippingFilter(source, "docs/input.md", true);
+    expect(result.before?.trim(), source).toBe("before");
+    expect(result.after?.trim(), source).toBe("after");
+    expect(result.output, source).toContain("relevant=true\n");
   });
 
   it("does not certify operating docs when the current producer has unresolved runtime inputs", () => {
@@ -82,23 +79,22 @@ describe("dry-run PR relevance", () => {
     expect(result.output).toContain("relevant=true\n");
   });
 
-  it("regenerates for filesystem metadata and existence dependencies outside the modeled reads", async () => {
-    for (const api of ["statSync", "lstatSync"]) {
-      const result = await runShippingFilter(`import { ${api} as inspect } from "node:fs"; console.log(inspect("docs/input.md").size);`, "docs/input.md", true);
-      expect(result.before?.trim()).toBe("7");
-      expect(result.after?.trim()).toBe("6");
-      expect(result.output, api).toContain("relevant=true\n");
-    }
-    for (const source of [
-      'import { existsSync as present } from "node:fs"; console.log(present("docs/new.md"));',
-      'import * as fs from "node:fs"; console.log(fs.existsSync("docs/new.md"));',
-      'import * as fs from "node:fs"; console.log(fs["existsSync"]("docs/new.md"));',
-    ]) {
-      const result = await runShippingFilter(source, "docs/new.md", true);
-      expect(result.before?.trim()).toBe("false");
-      expect(result.after?.trim()).toBe("true");
-      expect(result.output).toContain("relevant=true\n");
-    }
+  it.each(["statSync", "lstatSync"])("regenerates for filesystem metadata from %s", async (api) => {
+    const result = await runShippingFilter(`import { ${api} as inspect } from "node:fs"; console.log(inspect("docs/input.md").size);`, "docs/input.md", true);
+    expect(result.before?.trim()).toBe("7");
+    expect(result.after?.trim()).toBe("6");
+    expect(result.output, api).toContain("relevant=true\n");
+  });
+
+  it.each([
+    'import { existsSync as present } from "node:fs"; console.log(present("docs/new.md"));',
+    'import * as fs from "node:fs"; console.log(fs.existsSync("docs/new.md"));',
+    'import * as fs from "node:fs"; console.log(fs["existsSync"]("docs/new.md"));',
+  ])("regenerates for filesystem existence input %s", async (source) => {
+    const result = await runShippingFilter(source, "docs/new.md", true);
+    expect(result.before?.trim()).toBe("false");
+    expect(result.after?.trim()).toBe("true");
+    expect(result.output).toContain("relevant=true\n");
   });
 
   it("executes the shipping selector for known producer and unknown-path changes", async () => {

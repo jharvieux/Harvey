@@ -136,9 +136,29 @@ export function parseTableNames(sql: string): { schema: string; table: string }[
   }));
 }
 
-// `DROP TABLE [IF EXISTS] [schema.]table` — group 1/2 schema, 3/4 table. A comma-separated multi-table
-// drop matches only the first table (rare in Supabase migrations; a disclosed limitation).
 const DROP_TABLE = new RegExp(`\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?(?:${IDENT}\\.)?${IDENT}`, "gi");
+const DROP_TABLE_STATEMENT = /\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+)(?:;|$)/gi;
+const ALTER_TABLE_RENAME = new RegExp(`\\balter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+rename\\s+to\\s+${IDENT}`, "gi");
+const ALTER_TABLE_SET_SCHEMA = new RegExp(`\\balter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+set\\s+schema\\s+${IDENT}`, "gi");
+
+function qualifiedIdentity(text: string): { schema: string; table: string } | undefined {
+  const match = new RegExp(`^\\s*(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s*$`, "i").exec(text);
+  if (!match) return undefined;
+  return { schema: match[1] !== undefined || match[2] !== undefined ? identText(match[1], match[2]) : "public", table: identText(match[3], match[4]) };
+}
+
+function commaSeparatedIdentities(text: string): { schema: string; table: string }[] {
+  const parts: string[] = [];
+  let start = 0; let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '"') {
+      if (quoted && text[i + 1] === '"') i++;
+      else quoted = !quoted;
+    } else if (text[i] === "," && !quoted) { parts.push(text.slice(start, i)); start = i + 1; }
+  }
+  parts.push(text.slice(start));
+  return parts.map((part) => qualifiedIdentity(part.trim().replace(/\s+(?:cascade|restrict)\s*$/i, ""))).filter((value): value is { schema: string; table: string } => value !== undefined);
+}
 
 // Drift's unmanaged-table direction needs the identity even when a column body is unreadable.
 const CREATE_TABLE_NAME = new RegExp(`\\bcreate\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
@@ -165,17 +185,63 @@ export function parseRlsToggles(sql: string): { schema: string; table: string; e
 // event per table wins.
 export function parseLiveTableNames(sql: string): { schema: string; table: string }[] {
   sql = stripLineComments(sql);
-  const events: { pos: number; schema: string; table: string; op: "create" | "drop" }[] = [];
+  type Event = { pos: number; schema: string; table: string; op: "create" } | { pos: number; schema: string; table: string; op: "drop" } | { pos: number; schema: string; table: string; op: "rename"; next: string } | { pos: number; schema: string; table: string; op: "schema"; next: string };
+  const events: Event[] = [];
   const ident = (m: RegExpMatchArray) => ({
     schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public",
     table: identText(m[3], m[4]),
   });
-  for (const m of sql.matchAll(CREATE_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "create" });
-  for (const m of sql.matchAll(DROP_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "drop" });
+  for (const m of sql.matchAll(CREATE_TABLE_NAME)) events.push({ pos: m.index!, ...ident(m), op: "create" });
+  for (const m of sql.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) events.push({ pos: m.index!, ...identity, op: "drop" });
+  for (const m of sql.matchAll(ALTER_TABLE_RENAME)) events.push({ pos: m.index!, ...ident(m), op: "rename", next: identText(m[5], m[6]) });
+  for (const m of sql.matchAll(ALTER_TABLE_SET_SCHEMA)) events.push({ pos: m.index!, ...ident(m), op: "schema", next: identText(m[5], m[6]) });
   events.sort((a, b) => a.pos - b.pos);
-  const last = new Map<string, (typeof events)[number]>();
-  for (const e of events) last.set(JSON.stringify([e.schema, e.table]), e);
-  return [...last.values()].filter((e) => e.op === "create").map(({ schema, table }) => ({ schema, table }));
+  const live = new Map<string, { schema: string; table: string }>();
+  const key = (schema: string, table: string) => JSON.stringify([schema, table]);
+  for (const e of events) {
+    const old = key(e.schema, e.table);
+    if (e.op === "drop") live.delete(old);
+    else if (e.op === "create") live.set(old, { schema: e.schema, table: e.table });
+    else if (live.has(old)) {
+      live.delete(old);
+      const moved = e.op === "rename" ? { schema: e.schema, table: e.next } : { schema: e.next, table: e.table };
+      live.set(key(moved.schema, moved.table), moved);
+    }
+  }
+  return [...live.values()];
+}
+
+// Final RLS state shares the table lifecycle. A toggle attached to a table that is later dropped
+// must not survive a same-name re-CREATE, and renames/schema moves carry the state with the table.
+export function parseLiveRlsEnabled(sql: string): { schema: string; table: string }[] {
+  sql = stripLineComments(sql);
+  type Event = { pos: number; op: "create"; schema: string; table: string; ifNotExists: boolean }
+    | { pos: number; op: "drop"; schema: string; table: string }
+    | { pos: number; op: "toggle"; schema: string; table: string; enabled: boolean }
+    | { pos: number; op: "rename" | "schema"; schema: string; table: string; next: string };
+  const events: Event[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE_NAME)) events.push({ pos: m.index!, op: "create", ...tableIdentity(m), ifNotExists: /if\s+not\s+exists/i.test(m[0]) });
+  for (const m of sql.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) events.push({ pos: m.index!, op: "drop", ...identity });
+  for (const m of sql.matchAll(RLS_TOGGLE)) events.push({ pos: m.index!, op: "toggle", ...tableIdentity(m), enabled: m[5]!.toLowerCase() === "enable" });
+  for (const m of sql.matchAll(ALTER_TABLE_RENAME)) events.push({ pos: m.index!, op: "rename", ...tableIdentity(m), next: identText(m[5], m[6]) });
+  for (const m of sql.matchAll(ALTER_TABLE_SET_SCHEMA)) events.push({ pos: m.index!, op: "schema", ...tableIdentity(m), next: identText(m[5], m[6]) });
+  events.sort((a, b) => a.pos - b.pos);
+  const key = (schema: string, table: string) => JSON.stringify([schema, table]);
+  const live = new Map<string, { schema: string; table: string; enabled: boolean }>();
+  for (const event of events) {
+    const old = key(event.schema, event.table);
+    if (event.op === "drop") live.delete(old);
+    else if (event.op === "create") {
+      if (!(event.ifNotExists && live.has(old))) live.set(old, { schema: event.schema, table: event.table, enabled: false });
+    }
+    else if (event.op === "toggle") live.set(old, { schema: event.schema, table: event.table, enabled: event.enabled! });
+    else if (live.has(old)) {
+      const state = live.get(old)!; live.delete(old);
+      if (event.op === "rename") state.table = event.next; else state.schema = event.next;
+      live.set(key(state.schema, state.table), state);
+    }
+  }
+  return [...live.values()].filter((state) => state.enabled).map(({ schema, table }) => ({ schema, table }));
 }
 
 // Columns of each live table's EFFECTIVE definition — the CREATE TABLE currently in force at the end
@@ -546,6 +612,7 @@ const CREATE_POLICY = new RegExp(`\\bcreate\\s+policy\\s+${IDENT}\\s+on\\s+(?:${
 // `drop policy [if exists] <name> on [schema.]<table>` — the statement a later migration uses to
 // remove (or, paired with a fresh CREATE POLICY of the same name, replace) an earlier policy (#937).
 const DROP_POLICY = new RegExp(`\\bdrop\\s+policy\\s+(?:if\\s+exists\\s+)?${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}`, "gi");
+const ALTER_POLICY_RENAME = new RegExp(`\\balter\\s+policy\\s+${IDENT}\\s+on\\s+(?:${IDENT}\\s*\\.\\s*)?${IDENT}\\s+rename\\s+to\\s+${IDENT}`, "gi");
 
 // A policy parsed out of migration SQL, shaped to feed rls-policy-review.ts's reviewPolicy()
 // unchanged — that reviewer takes a policy struct and doesn't care whether the clauses came from
@@ -588,18 +655,17 @@ interface ParsedPolicySet {
 // truncate it. Returns the inner text, or null if the parens never balance.
 function readBalanced(sql: string, open: number): string | null {
   let depth = 0;
-  let inString = false;
+  let quote: string | undefined;
   for (let i = open; i < sql.length; i++) {
     const c = sql[i];
-    if (inString) {
-      // '' is an escaped quote inside a literal, not a terminator.
-      if (c === "'") {
-        if (sql[i + 1] === "'") i++;
-        else inString = false;
+    if (quote) {
+      if (c === quote) {
+        if (sql[i + 1] === quote) i++;
+        else quote = undefined;
       }
       continue;
     }
-    if (c === "'") inString = true;
+    if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {
       depth--;
@@ -613,22 +679,68 @@ function readBalanced(sql: string, open: number): string | null {
 // function body or literal doesn't end it). Returns null if unterminated.
 function statementText(sql: string, start: number): string | null {
   let depth = 0;
-  let inString = false;
+  let quote: string | undefined;
+  let dollar: string | undefined;
+  let commentDepth = 0;
   for (let i = start; i < sql.length; i++) {
     const c = sql[i];
-    if (inString) {
-      if (c === "'") {
-        if (sql[i + 1] === "'") i++;
-        else inString = false;
+    if (commentDepth) {
+      if (sql.startsWith("/*", i)) { commentDepth++; i++; }
+      else if (sql.startsWith("*/", i)) { commentDepth--; i++; }
+      continue;
+    }
+    if (dollar) {
+      if (sql.startsWith(dollar, i)) { i += dollar.length - 1; dollar = undefined; }
+      continue;
+    }
+    if (quote) {
+      if (c === quote) {
+        if (sql[i + 1] === quote) i++;
+        else quote = undefined;
       }
       continue;
     }
-    if (c === "'") inString = true;
+    if (sql.startsWith("/*", i)) { commentDepth++; i++; continue; }
+    if (sql.startsWith("--", i)) { while (i < sql.length && sql[i] !== "\n") i++; continue; }
+    if (c === "$") {
+      const tag = /^\$(?:[a-zA-Z_][a-zA-Z0-9_]*)?\$/.exec(sql.slice(i))?.[0];
+      if (tag) { dollar = tag; i += tag.length - 1; continue; }
+    }
+    if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
-    else if (c === ")") depth--;
+    else if (c === ")") { if (--depth < 0) return null; }
     else if (c === ";" && depth === 0) return sql.slice(start, i);
   }
   return null;
+}
+
+/** Structural bounds for the supported static identity reader, not PostgreSQL syntax validation. */
+export function schemaSqlParseFailures(sql: string): { line: number; reason: string }[] {
+  const clean = stripLineComments(sql);
+  const failures: { line: number; reason: string }[] = [];
+  let offset = 0;
+  while (offset < clean.length) {
+    const tail = clean.slice(offset);
+    if (!tail.replace(/\/\*[\s\S]*?\*\//g, "").trim()) break;
+    const line = clean.slice(0, offset).split("\n").length;
+    const statement = statementText(clean, offset);
+    if (statement === null) {
+      failures.push({ line, reason: "Unterminated statement, quote, comment or unbalanced parentheses; static schema identity parsing is unresolved." });
+      break;
+    }
+    const header = statement.replace(/\/\*[\s\S]*?\*\//g, " ").trim();
+    if (/^create\s+(?:unlogged\s+|temporary\s+|temp\s+)?table\b/i.test(header)) {
+      const match = new RegExp(`^${CREATE_TABLE_NAME.source}`, "i").exec(header);
+      if (!match || !/^\s*\(/.test(header.slice(match[0].length))) failures.push({ line, reason: "CREATE TABLE is outside the supported named parenthesized declaration shape; its structure was not established." });
+    }
+    if (/^create\s+policy\b/i.test(header)) {
+      const parsed = parsePolicies(`${header};`);
+      if (!parsed.policies.length || parsed.unparsed.length) failures.push({ line, reason: parsed.unparsed[0]?.reason ?? "CREATE POLICY is outside the supported identity/clause shape." });
+    }
+    if (/^(?:do|execute)\b/i.test(header)) failures.push({ line, reason: "Procedural or dynamic SQL may change schema state; the static lifecycle reader does not execute it." });
+    offset += statement.length + 1;
+  }
+  return failures;
 }
 
 const FOR_CMD = /\bfor\s+(all|select|insert|update|delete)\b/i;
@@ -717,39 +829,71 @@ interface LivePolicySet {
 export function parseLivePolicies(migrations: { file: string; sql: string }[]): LivePolicySet {
   const key = (schema: string, table: string, name: string): string => JSON.stringify([schema, table, name]);
   interface CreateRec { schema: string; table: string; name: string; file: string; line: number; parsed?: ParsedPolicy; unparsed?: UnparsedPolicy }
-  interface Event { seq: number; k: string; op: "create" | "drop"; rec?: CreateRec }
+  type Event = { seq: number; op: "create"; k: string; rec: CreateRec }
+    | { seq: number; op: "drop"; k: string }
+    | { seq: number; op: "rename-policy"; schema: string; table: string; name: string; next: string }
+    | { seq: number; op: "drop-table"; schema: string; table: string }
+    | { seq: number; op: "rename-table" | "set-schema"; schema: string; table: string; next: string };
   const events: Event[] = [];
   let seq = 0;
 
   for (const { file, sql } of migrations) {
     const clean = stripLineComments(sql);
-    const { policies, unparsed } = parsePolicies(sql);
-    // Index this file's creates by identity. Within a file the LAST create of an identity is the
-    // one that survives (an earlier one is dropped+recreated, or is an illegal duplicate), and it
-    // is exactly the clause set that must be live — so last-in-source (= map insertion order) wins.
-    const parsedByKey = new Map<string, ParsedPolicy>(policies.map((p) => [key(p.schema, p.table, p.name), p]));
-    const unparsedByKey = new Map<string, UnparsedPolicy>(unparsed.map((u) => [key(u.schema, u.table, u.name), u]));
 
-    const local: { pos: number; op: "create" | "drop"; schema: string; table: string; name: string }[] = [];
+    type Local = { pos: number; op: "create"; schema: string; table: string; name: string }
+      | { pos: number; op: "drop"; schema: string; table: string; name: string }
+      | { pos: number; op: "rename-policy"; schema: string; table: string; name: string; next: string }
+      | { pos: number; op: "drop-table"; schema: string; table: string }
+      | { pos: number; op: "rename-table" | "set-schema"; schema: string; table: string; next: string };
+    const local: Local[] = [];
     for (const m of clean.matchAll(CREATE_POLICY)) local.push({ pos: m.index!, op: "create", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
     for (const m of clean.matchAll(DROP_POLICY)) local.push({ pos: m.index!, op: "drop", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]) });
+    for (const m of clean.matchAll(ALTER_POLICY_RENAME)) local.push({ pos: m.index!, op: "rename-policy", name: identText(m[1], m[2]), schema: m[3] !== undefined || m[4] !== undefined ? identText(m[3], m[4]) : "public", table: identText(m[5], m[6]), next: identText(m[7], m[8]) });
+    for (const m of clean.matchAll(DROP_TABLE_STATEMENT)) for (const identity of commaSeparatedIdentities(m[1]!)) local.push({ pos: m.index!, op: "drop-table", ...identity });
+    for (const m of clean.matchAll(ALTER_TABLE_RENAME)) local.push({ pos: m.index!, op: "rename-table", schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public", table: identText(m[3], m[4]), next: identText(m[5], m[6]) });
+    for (const m of clean.matchAll(ALTER_TABLE_SET_SCHEMA)) local.push({ pos: m.index!, op: "set-schema", schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public", table: identText(m[3], m[4]), next: identText(m[5], m[6]) });
     local.sort((a, b) => a.pos - b.pos);
 
     for (const e of local) {
+      if (e.op === "rename-policy") {
+        events.push({ seq: seq++, ...e });
+        continue;
+      }
+      if (!("name" in e)) { events.push({ seq: seq++, ...e }); continue; }
       const k = key(e.schema, e.table, e.name);
       if (e.op === "drop") {
         events.push({ seq: seq++, k, op: "drop" });
         continue;
       }
       const line = clean.slice(0, e.pos).split("\n").length;
-      events.push({ seq: seq++, k, op: "create", rec: { schema: e.schema, table: e.table, name: e.name, file, line, parsed: parsedByKey.get(k), unparsed: unparsedByKey.get(k) } });
+      // Bind the body to this occurrence before a later rename can reuse its original name.
+      const statement = statementText(clean, e.pos);
+      const parsed = statement === null
+        ? { policies: [], unparsed: [{ schema: e.schema, table: e.table, name: e.name, reason: "statement has no terminating ';' — could not read its clauses" }] }
+        : parsePolicies(`${statement};`);
+      events.push({ seq: seq++, k, op: "create", rec: { schema: e.schema, table: e.table, name: e.name, file, line, parsed: parsed.policies[0], unparsed: parsed.unparsed[0] } });
     }
   }
 
   const live = new Map<string, CreateRec>();
   for (const e of events) {
     if (e.op === "drop") live.delete(e.k);
-    else live.set(e.k, e.rec!);
+    else if (e.op === "create") live.set(e.k, e.rec!);
+    else if (e.op === "rename-policy") {
+      const old = key(e.schema, e.table, e.name); const rec = live.get(old);
+      if (rec) { live.delete(old); rec.name = e.next; if (rec.parsed) rec.parsed.name = e.next; if (rec.unparsed) rec.unparsed.name = e.next; live.set(key(e.schema, e.table, e.next), rec); }
+    } else if (e.op === "drop-table") {
+      for (const [k, rec] of live) if (rec.schema === e.schema && rec.table === e.table) live.delete(k);
+    } else {
+      for (const [k, rec] of [...live]) {
+        if (rec.schema !== e.schema || rec.table !== e.table) continue;
+        live.delete(k);
+        if (e.op === "rename-table") rec.table = e.next; else rec.schema = e.next;
+        if (rec.parsed) { rec.parsed.table = rec.table; rec.parsed.schema = rec.schema; }
+        if (rec.unparsed) { rec.unparsed.table = rec.table; rec.unparsed.schema = rec.schema; }
+        live.set(key(rec.schema, rec.table, rec.name), rec);
+      }
+    }
   }
 
   const out: LivePolicySet = { policies: [], unparsed: [] };

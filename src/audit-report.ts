@@ -13,6 +13,8 @@ import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./a
 import { type DataClassMap, dataClassJoinNotAssessed, escalateFindingsByDataClass } from "./data-class-escalation.js";
 import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
+import { populationSummary, prepareFindings } from "../report-template/dispositions.mjs";
+import { conservationLedger } from "./conservation-ledger.js";
 
 // The derived coverage report's rows, projected onto the report schema's CoverageRow.
 export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv): CoverageRow[] {
@@ -59,14 +61,15 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 // mutation tier's per-module measurement is a client-facing deliverable section, and an assembler
 // that dropped it left the scanner computing numbers with nowhere to go.
 export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap, testQuality?: TestQuality): FindingsDocument {
-  const deduped = dedupeFindings(findings);
+  const deduped = prepareFindings(dedupeFindings(findings));
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
   const weighted = dataMap
     ? escalateFindingsByDataClass(enriched, dataMap)
     : enriched.some((finding) => finding.id === "M10-ESCALATION-00")
       ? enriched
       : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
-  return { meta, coverage: coverageLedger(recorded, env), findings: weighted, ...(testQuality ? { testQuality } : {}) };
+  const prepared = prepareFindings(weighted);
+  return { meta, coverage: coverageLedger(recorded, env), findings: prepared, populations: populationSummary(prepared), conservation: conservationLedger(findings, prepared), ...(meta.identityMigrations ? { identityMigrations: meta.identityMigrations } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 // The M10 rows' own words for why nothing was classified — quoted into M10-ESCALATION-00 so the
