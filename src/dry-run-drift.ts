@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 import ts from "typescript";
 import { DETERMINISTIC_DRY_RUN_FILES, validateDryRunFamily } from "./dry-run-artifacts.js";
@@ -35,18 +35,28 @@ function resolveLocalSpecifier(repoRoot: string, importer: string, specifier: st
 function registerUrlInput(repoRoot: string, importer: string, specifier: string, closure: DryRunDependencyClosure): void {
   const absolute = resolve(repoRoot, dirname(importer), specifier);
   const path = repoPath(repoRoot, absolute).replace(/\/$/, "");
-  if (specifier.endsWith("/") || (existsSync(absolute) && !extname(absolute))) closure.trees.add(path);
+  if (specifier.endsWith("/") || (existsSync(absolute) && statSync(absolute).isDirectory())) closure.trees.add(path);
   else if (existsSync(absolute)) closure.files.add(path);
   else closure.unresolved.push(`${importer} -> ${specifier}`);
+}
+
+const FILE_READS = new Set(["readFile", "readFileSync", "createReadStream", "open", "openSync", "opendir", "opendirSync", "readdir", "readdirSync", "glob", "globSync"]);
+const PROCESS_CALLS = new Set(["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync", "fork"]);
+const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|tsx|jsx)$/;
+
+function literal(node: ts.Node | undefined): string | undefined {
+  return node && (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 }
 
 /** Derive the producer's local module graph and literal file/directory inputs from its real entrypoint. */
 export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyClosure {
   const closure: DryRunDependencyClosure = { files: new Set(), trees: new Set(), unresolved: [] };
   const pending: string[] = [...ENTRYPOINTS];
+  const visited = new Set<string>();
   while (pending.length > 0) {
     const file = pending.pop()!;
-    if (closure.files.has(file)) continue;
+    if (visited.has(file)) continue;
+    visited.add(file);
     const absolute = resolve(repoRoot, file);
     if (!existsSync(absolute)) {
       closure.unresolved.push(file);
@@ -57,23 +67,118 @@ export function discoverDryRunDependencies(repoRoot: string): DryRunDependencyCl
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     const imports: string[] = [];
     const urlInputs: string[] = [];
+    const inputBindings = new Map<string, string>();
+    const inputNamespaces = new Set<string>();
+    const unresolved = (node: ts.Node, reason: string): void => {
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      closure.unresolved.push(`${file}:${line}: ${reason}`);
+    };
+    // Track imported aliases as well as namespace calls. An escaped input capability is not a
+    // closed dependency graph: we deliberately regenerate rather than infer a runtime argument.
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+      const module = statement.moduleSpecifier.text;
+      if (!/^(?:node:)?(?:fs(?:\/promises)?|child_process)$/.test(module)) continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (statement.importClause?.name) inputNamespaces.add(statement.importClause.name.text);
+      if (bindings && ts.isNamespaceImport(bindings)) inputNamespaces.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const binding of bindings.elements) {
+          const api = (binding.propertyName ?? binding.name).text;
+          if (FILE_READS.has(api) || PROCESS_CALLS.has(api)) inputBindings.set(binding.name.text, api);
+        }
+      }
+    }
+    const localInput = (node: ts.Node, value: string, executable = false): void => {
+      const absoluteInput = resolve(repoRoot, value);
+      const path = repoPath(repoRoot, absoluteInput);
+      if (path === ".." || path.startsWith("../")) {
+        unresolved(node, `input outside repository: ${value}`);
+      } else if (!existsSync(absoluteInput)) {
+        unresolved(node, `missing input: ${value}`);
+      } else {
+        if (statSync(absoluteInput).isDirectory()) closure.trees.add(path);
+        else closure.files.add(path);
+        if (executable && SOURCE_EXTENSION.test(path)) pending.push(path);
+      }
+    };
     const inspect = (node: ts.Node): void => {
+      if (ts.isImportEqualsDeclaration(node)) unresolved(node, "import-equals runtime module inputs");
       if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) imports.push(node.moduleSpecifier.text);
-      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]!)) imports.push(node.arguments[0]!.text);
-      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL" && node.arguments?.length === 2 && ts.isStringLiteral(node.arguments[0]!)) {
+      if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) {
+          const specifier = literal(node.arguments[0]);
+          if (specifier === undefined) unresolved(node, "computed module import");
+          else {
+            imports.push(specifier);
+            if (specifier.startsWith("node:")) unresolved(node, "dynamically acquired builtin inputs");
+          }
+        }
+        const callee = node.expression;
+        let api: string | undefined;
+        if (ts.isIdentifier(callee)) api = inputBindings.get(callee.text);
+        else if (ts.isPropertyAccessExpression(callee)) {
+          api = callee.name.text;
+          if (ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text) && !FILE_READS.has(api) && !PROCESS_CALLS.has(api)) api = undefined;
+        } else if (ts.isElementAccessExpression(callee) && ts.isIdentifier(callee.expression) && inputNamespaces.has(callee.expression.text)) {
+          api = literal(callee.argumentExpression);
+          if (api === undefined) unresolved(node, "computed input operation");
+        }
+        if (api && FILE_READS.has(api)) {
+          const input = literal(node.arguments[0]);
+          if (input === undefined) unresolved(node, `computed ${api} input`);
+          else localInput(node, input);
+        } else if (api && PROCESS_CALLS.has(api)) {
+          // Even a known external executable can read cwd/config/environment-selected inputs.
+          // Follow literal local scripts too, but never claim those describe the whole process.
+          unresolved(node, `${api} runtime inputs are not statically closed`);
+          const args = node.arguments[1];
+          const candidates = [literal(node.arguments[0]), ...(args && ts.isArrayLiteralExpression(args) ? args.elements.map(literal) : [])];
+          for (const candidate of candidates) {
+            if (candidate && SOURCE_EXTENSION.test(candidate)) localInput(node, candidate, true);
+          }
+        }
+      }
+      if (ts.isIdentifier(node) && inputBindings.has(node.text) && !ts.isImportSpecifier(node.parent)
+        && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
+        unresolved(node, `input capability ${node.text} is passed indirectly`);
+      }
+      if (ts.isIdentifier(node) && inputNamespaces.has(node.text)
+        && !ts.isNamespaceImport(node.parent) && !ts.isImportClause(node.parent)
+        && !((ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) && node.parent.expression === node)) {
+        unresolved(node, `input namespace ${node.text} is passed indirectly`);
+      }
+      if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
+        && ts.isIdentifier(node.expression) && inputNamespaces.has(node.expression.text)
+        && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
+        unresolved(node, `input operation on ${node.expression.text} is passed indirectly`);
+      }
+      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL" && node.arguments?.length === 2) {
+        const specifier = literal(node.arguments[0]);
         const second = node.arguments[1]!.getText(sourceFile).replaceAll(/\s/g, "");
-        if (second === "import.meta.url" && node.arguments[0]!.text.startsWith(".")) urlInputs.push(node.arguments[0]!.text);
+        if (second === "import.meta.url") {
+          if (specifier?.startsWith(".")) urlInputs.push(specifier);
+          else if (specifier === undefined) unresolved(node, "computed import-relative URL input");
+        }
       }
       ts.forEachChild(node, inspect);
     };
     inspect(sourceFile);
     for (const specifier of imports) {
-      if (!specifier.startsWith(".")) continue;
+      if (!specifier.startsWith(".")) {
+        // Package code is pinned by the lockfile, but its runtime input choices are not described
+        // by this local graph. Do not use a missing edge to certify an unrelated-docs no-op.
+        if (!specifier.startsWith("node:")) closure.unresolved.push(`${file} -> external module inputs: ${specifier}`);
+        continue;
+      }
       const resolved = resolveLocalSpecifier(repoRoot, file, specifier);
       if (!resolved) closure.unresolved.push(`${file} -> ${specifier}`);
       else pending.push(repoPath(repoRoot, resolved));
     }
-    for (const specifier of urlInputs) registerUrlInput(repoRoot, file, specifier, closure);
+    for (const specifier of urlInputs) {
+      registerUrlInput(repoRoot, file, specifier, closure);
+      if (SOURCE_EXTENSION.test(specifier)) pending.push(repoPath(repoRoot, resolve(repoRoot, dirname(file), specifier)));
+    }
   }
 
   // These are runtime-selected inputs rather than imports: the calibration target copied into the
