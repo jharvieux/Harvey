@@ -37,6 +37,25 @@ describe("validateFindings", () => {
 });
 
 describe("validateFindings — mechanical scan fields", () => {
+  it("validates complete dependency metadata outcomes and rejects inconsistent receipts", () => {
+    const dependencyMetadataEvidence = {
+      schemaVersion: 1 as const, population: 1, processed: 1, cacheHits: 0, registryRequests: 0, complete: true,
+      outcomes: [{ coordinate: "workspace-pkg", status: "local-manifest" as const, provenance: "packages/pkg/package.json#license/scripts", license: "MIT", hasInstallScript: false, installScriptAssessment: "absent" as const }],
+    };
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence }] }).errors).toEqual([]);
+    for (const broken of [
+      { ...dependencyMetadataEvidence, schemaVersion: 2 },
+      { ...dependencyMetadataEvidence, processed: 0 },
+      { ...dependencyMetadataEvidence, population: 2, complete: true },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], status: "guessed" }] },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], installScriptAssessment: "maybe" }] },
+      { ...dependencyMetadataEvidence, outcomes: [{ ...dependencyMetadataEvidence.outcomes[0], hasInstallScript: true, installScriptAssessment: "absent" }] },
+    ]) expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: broken }] }).errors.join("\n")).toContain("dependencyMetadataEvidence");
+    const malformed = { ...dependencyMetadataEvidence, complete: false, outcomes: [{ coordinate: "registry-pkg@1.0.0", status: "malformed-metadata" as const, provenance: "https://registry.npmjs.org/registry-pkg/1.0.0", installScriptAssessment: "unsupported" as const, detail: "scripts.install must be a string" }] };
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: malformed }] }).errors).toEqual([]);
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0], dependencyMetadataEvidence: { ...malformed, complete: true } }] }).errors.join("\n")).toContain("incompatible with complete receipt");
+  });
+
   it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {
     for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz",
       "repository https://example.invalid", '"https://example.invalid"', "https://safe.invalid/path/https://example.invalid/repo", "https://safe.invalid/repo#https://example.invalid/repo",

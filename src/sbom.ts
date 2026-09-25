@@ -68,6 +68,8 @@ interface DependencyInstallation {
   // Resolved published packages carry their identity here.
   name?: string;
   version?: string;
+  /** Repo-relative workspace directory proven by a package-lock `link` entry. */
+  localPath?: string;
 }
 
 interface LicenseOrigin {
@@ -361,40 +363,52 @@ function packageLockRanges(lock: Record<string, unknown>): DependencyRangeScope 
 
 function pnpmRanges(text: string): DependencyRangeScope {
   const scope = rangeScope("pnpm-lock.yaml", "pnpm", "unknown");
-  scope.status = "present-but-unread";
-  scope.unsupported = 1;
   try {
     const value: unknown = parseYaml(text);
     if (!isRecord(value)) throw new Error("missing YAML mapping");
     scope.sourceVersion = typeof value.lockfileVersion === "string" || typeof value.lockfileVersion === "number" ? String(value.lockfileVersion) : "unknown";
     let malformedMaps = 0;
-    const mapValues = (map: unknown): unknown[] => {
+    const mapEntries = (map: unknown): [string, unknown][] => {
       if (map === undefined) return [];
       if (!isRecord(map)) { malformedMaps++; return []; }
-      return Object.values(map);
+      return Object.entries(map);
     };
-    let specifiers = mapValues(value.specifiers).length;
-    const importers = value.importers === undefined ? [value] : mapValues(value.importers);
-    for (const importer of importers) {
+    const importers: [string, unknown][] = value.importers === undefined ? [[".", value]] : mapEntries(value.importers);
+    let orphanSpecifiers = 0;
+    for (const [importerPath, importer] of importers) {
       if (!isRecord(importer)) { malformedMaps++; continue; }
-      specifiers += importer === value ? 0 : mapValues(importer.specifiers).length;
+      const legacySpecifiers = isRecord(importer.specifiers) ? importer.specifiers : {};
+      const consumedLegacySpecifiers = new Set<string>();
+      if (importer.specifiers !== undefined && !isRecord(importer.specifiers)) malformedMaps++;
       for (const section of RANGE_SECTIONS) {
-        for (const dependency of mapValues(importer[section])) {
-          if (isRecord(dependency) && Object.hasOwn(dependency, "specifier")) specifiers++;
+        for (const [name, dependency] of mapEntries(importer[section])) {
+          scope.examined++;
+          const specifier = isRecord(dependency) && typeof dependency.specifier === "string"
+            ? dependency.specifier
+            : typeof legacySpecifiers[name] === "string" ? legacySpecifiers[name] : undefined;
+          if (typeof legacySpecifiers[name] === "string") consumedLegacySpecifiers.add(name);
+          if (!validPackageName(name) || specifier === undefined) { scope.unread++; continue; }
+          const ownerPath = importerPath === "." ? "package.json" : `${importerPath.replace(/^\.\//, "")}/package.json`;
+          scope.edges.push(dependencyRangeEdge({ source: scope.source, format: scope.format, sourceVersion: scope.sourceVersion,
+            ownerPath, ownerName: importerPath, name, range: specifier, section, direct: true }));
         }
       }
+      orphanSpecifiers += Object.keys(legacySpecifiers).filter((name) => !consumedLegacySpecifiers.has(name)).length;
     }
     let resolvedReferences = 0;
     for (const section of ["packages", "snapshots"]) {
-      for (const entry of mapValues(value[section])) {
+      for (const [, entry] of mapEntries(value[section])) {
         if (!isRecord(entry)) { malformedMaps++; continue; }
-        resolvedReferences += RANGE_SECTIONS.reduce((count, field) => count + mapValues(entry[field]).length, 0);
-        scope.excluded.peer += mapValues(entry.peerDependencies).length;
+        resolvedReferences += RANGE_SECTIONS.reduce((count, field) => count + mapEntries(entry[field]).length, 0);
+        scope.excluded.peer += mapEntries(entry.peerDependencies).length;
       }
     }
-    scope.unread = specifiers + malformedMaps;
-    scope.examined = scope.unread;
-    scope.detail = `pnpm ${scope.sourceVersion}: ${specifiers} importer/root specifier value(s) are present but unread by the lockfile range consumer; root/workspace manifests remain authoritative for direct declarations. ${malformedMaps} malformed map ${malformedMaps === 1 ? "boundary was" : "boundaries were"} counted as unread input units, not guessed dependency edges. ${resolvedReferences} package/snapshot dependency reference(s) were observed, not promoted from resolved identities to declared ranges. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints. No pnpm transitive range edges are admitted.`;
+    scope.unread += resolvedReferences + malformedMaps + orphanSpecifiers;
+    scope.examined += resolvedReferences + malformedMaps + orphanSpecifiers;
+    scope.unsupported = resolvedReferences > 0 ? 1 : 0;
+    scope.edges.sort((a, b) => a.identity.localeCompare(b.identity));
+    scope.status = scope.unread > 0 ? "partial" : "read";
+    scope.detail = `pnpm ${scope.sourceVersion}: ${scope.edges.length} importer/root specifier value(s) were validated and admitted as declaration edges. ${orphanSpecifiers} orphan importer/root specifier value(s) had no dependency declaration to bind and remain present but unread. ${malformedMaps} malformed map ${malformedMaps === 1 ? "boundary was" : "boundaries were"} counted as present but unread input units, not guessed dependency edges. ${resolvedReferences} package/snapshot dependency reference(s) lack declaration specifiers and remain explicitly present but unread; resolved versions were not substituted as ranges. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints.`;
   } catch {
     scope.status = "unreadable";
     scope.examined = scope.unread = 1;
@@ -445,6 +459,7 @@ export function parsePackageLock(text: string): ParsedLock {
     license?: unknown;
     integrity?: string;
     link?: boolean;
+    resolved?: unknown;
     hasInstallScript?: boolean;
     dependencies?: Record<string, unknown>;
   }
@@ -470,7 +485,7 @@ export function parsePackageLock(text: string): ParsedLock {
       ...(meta.dev ? { dev: true } : {}),
       ...(license ? { license } : {}),
       ...(meta.integrity ? { integrity: meta.integrity } : {}),
-      ...(meta.hasInstallScript ? { hasInstallScript: true } : {}),
+      ...(typeof meta.hasInstallScript === "boolean" ? { hasInstallScript: meta.hasInstallScript } : {}),
     };
     out.set(`${name}@${meta.version ?? ""}`, component);
     licenseOrigins.push({ component, path, explicitName: typeof meta.name === "string" && validPackageName(meta.name) });
@@ -481,8 +496,13 @@ export function parsePackageLock(text: string): ParsedLock {
     // "" is the root project itself, not a dependency; it is the BOM's subject, not a component.
     // A `link: true` entry is a workspace symlink, not a published artifact — also not a component.
     if (path === "") continue;
-    installations.set(path, { path });
-    if (!isRecord(meta)) { unmatched++; continue; }
+    if (!isRecord(meta)) { installations.set(path, { path }); unmatched++; continue; }
+    installations.set(path, {
+      path,
+      ...(meta.link === true && typeof meta.resolved === "string" && !posix.isAbsolute(meta.resolved) && !posix.normalize(meta.resolved).startsWith("../")
+        ? { localPath: posix.normalize(meta.resolved).replace(/^\.\//, "") }
+        : {}),
+    });
     if (meta.link) continue;
     const pathName = path.replace(/^(?:.*\/)?node_modules\//, "");
     if (!pathName || !meta.version) {
@@ -759,11 +779,18 @@ export interface LicenseCandidate {
   license?: string;
   // Declared in a manifest (any of dependencies/devDependencies/optionalDependencies/
   // peerDependencies) rather than reached only through the resolved tree. Ordering, not
-  // filtering: the registry-lookup budget is spent on declared packages first.
+  // filtering: declared packages are processed first in each bounded metadata run.
   direct: boolean;
   // #1351 — carried from SbomComponent so checkDependencyInstallScripts can read the whole
   // resolved tree (npm only; see SbomComponent's comment on the same field).
   hasInstallScript?: boolean;
+  /** Metadata read from a package owned by this target. It outranks registry metadata. */
+  localMetadata?: {
+    manifest: string;
+    private: boolean;
+    license?: string;
+    hasInstallScript: boolean;
+  };
 }
 
 export interface LicenseScope {
@@ -794,8 +821,8 @@ export interface LicenseScope {
 // #1232: the DECLARED half now comes from every workspace member's manifest, not the root's alone.
 // That is not a coverage change — the root lockfile already resolves each member's packages, so
 // they were candidates either way — but it fixes the two things that follow from the label: the
-// registry-lookup budget is spent declared-first, so a monorepo's own 200 dependencies no longer
-// lose the cap to the transitive tail, and a copyleft row no longer tells a client a package they
+// registry population is processed declared-first, so a monorepo's own dependencies are recorded
+// before the transitive tail, and a copyleft row no longer tells a client a package they
 // directly chose was "reached only through the resolved dependency tree".
 export function licenseScope(dir: string): LicenseScope {
   const deps = collectDependencies(dir);
@@ -808,14 +835,55 @@ export function licenseScope(dir: string): LicenseScope {
     componentsByName.set(component.name, entries);
   }
   const npmTree = deps.source === "package-lock.json";
+  type LocalPackage = { name: string; dir: string; metadata: NonNullable<LicenseCandidate["localMetadata"]> };
+  const localPackagesByName = new Map<string, LocalPackage[]>();
+  const localPackagesByDir = new Map<string, LocalPackage>();
+  for (const manifest of workspace.manifests) {
+    if (!manifest.name) continue;
+    try {
+      const raw = JSON.parse(readFileSync(join(dir, manifest.label), "utf8")) as { private?: unknown; license?: unknown; scripts?: unknown };
+      const scripts = isRecord(raw.scripts) ? raw.scripts : undefined;
+      const local: LocalPackage = { name: manifest.name, dir: posix.dirname(manifest.label), metadata: {
+        manifest: manifest.label,
+        private: raw.private === true,
+        ...(typeof raw.license === "string" ? { license: raw.license } : {}),
+        hasInstallScript: scripts !== undefined && ["preinstall", "install", "postinstall"].some((name) => typeof scripts[name] === "string"),
+      } };
+      localPackagesByDir.set(local.dir, local);
+      localPackagesByName.set(local.name, [...(localPackagesByName.get(local.name) ?? []), local]);
+    } catch {
+      // collectWorkspaceManifests already records unreadable manifests in the scope receipt.
+    }
+  }
   const unresolved = new Map<string, LicenseCandidate>();
   const directResolved = new Set<string>();
   const ordinaryDeclaredNames = new Set<string>();
+  const localWorkspaceNames = new Set<string>();
   const uncertainAliasPaths = new Set<string>();
   const ordinaryProvenPaths = new Set<string>();
   const aliasCandidate = (name: string, declared: string, direct: boolean, ownerPath?: string): LicenseCandidate => {
     const target = npmAliasTarget(declared);
     return { name, direct, unresolvedAlias: { declared, ...(target ? { targetName: target.name, range: target.range } : {}), ...(ownerPath ? { ownerPath } : {}) } };
+  };
+  const localDeclaration = (manifest: string, name: string, specifier: string, installation?: DependencyInstallation): LocalPackage | undefined => {
+    if (specifier.startsWith("workspace:")) {
+      const matches = localPackagesByName.get(name) ?? [];
+      return matches.length === 1 ? matches[0] : undefined;
+    }
+    const localPrefix = /^(?:file|link|portal):(.*)$/.exec(specifier);
+    if (localPrefix) {
+      const target = localPrefix[1]!;
+      if (target.length === 0 || posix.isAbsolute(target)) return undefined;
+      const targetDir = posix.normalize(posix.join(posix.dirname(manifest), target));
+      if (targetDir.startsWith("../")) return undefined;
+      const local = localPackagesByDir.get(targetDir);
+      return local?.name === name ? local : undefined;
+    }
+    if (installation?.localPath) {
+      const local = localPackagesByDir.get(installation.localPath);
+      return local?.name === name ? local : undefined;
+    }
+    return undefined;
   };
   for (const manifest of workspace.manifests) {
     for (const section of [...RANGE_SECTIONS, "peerDependencies"] as const) {
@@ -845,10 +913,24 @@ export function licenseScope(dir: string): LicenseScope {
           // Ordinary declarations retain their existing name-based reach.
           ordinaryDeclaredNames.add(name);
           const matches = componentsByName.get(name) ?? [];
+          const installation = npmTree ? visibleInstallation(installations, manifest.label, name) : undefined;
+          const local = typeof specifier === "string" ? localDeclaration(manifest.label, name, specifier, installation) : undefined;
+          if (local) {
+            localWorkspaceNames.add(name);
+            // A root and one or more workspace consumers can all declare the same owned package.
+            // The metadata population is the proved package manifest, not the number of incoming
+            // declarations, so bind repeated references to one stable local identity.
+            unresolved.set(`local\u0000${local.metadata.manifest}`, { name, direct: true, localMetadata: local.metadata });
+            continue;
+          }
+          if (typeof specifier === "string" && (/^(?:workspace|file|link|portal):/.test(specifier) || installation?.localPath)) {
+            localWorkspaceNames.add(name);
+            unresolved.set(`ordinary\u0000${manifest.label}\u0000${name}`, aliasCandidate(name, specifier, true, manifest.label));
+            continue;
+          }
           if (matches.length === 0) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
           for (const component of matches) directResolved.add(`${component.name}\u0000${component.version}`);
           if (npmTree) {
-            const installation = visibleInstallation(installations, manifest.label, name);
             if (installation?.version && installation.name === name && typeof specifier === "string" && aliasVersionMatches(installation.version, specifier)) ordinaryProvenPaths.add(installation.path);
           }
         }
@@ -881,9 +963,11 @@ export function licenseScope(dir: string): LicenseScope {
   const accepted = new Map<string, SbomComponent>();
   for (const origin of deps.licenseOrigins) {
     const c = origin.component;
+    if (origin.path && localPackagesByDir.has(origin.path)) continue;
     // The manifest-only inventory records declaration specifiers in `version`; an npm:
     // value is not an installed version or a license lookup coordinate.
     if (deps.source === "package.json" && typeof c.version === "string" && c.version.startsWith("npm:")) continue;
+    if (deps.source === "package.json" && localWorkspaceNames.has(c.name)) continue;
     if (origin.aliasSpecifier && !origin.explicitName) {
       if (![...unresolved.values()].some((candidate) => candidate.name === c.name && candidate.unresolvedAlias?.declared === origin.aliasSpecifier)) {
         unresolved.set(`yarn\u0000${c.name}\u0000${origin.aliasSpecifier}`, aliasCandidate(c.name, origin.aliasSpecifier, false));
@@ -894,14 +978,15 @@ export function licenseScope(dir: string): LicenseScope {
     accepted.set(`${c.name}\u0000${c.version}`, c);
   }
   for (const name of ordinaryDeclaredNames) {
-    if (![...accepted.values()].some((component) => component.name === name)) unresolved.set(`ordinary\u0000${name}`, { name, direct: true });
+    const key = `ordinary\u0000${name}`;
+    if (![...accepted.values()].some((component) => component.name === name) && ![...unresolved.values()].some((candidate) => candidate.name === name)) unresolved.set(key, { name, direct: true });
   }
   for (const c of accepted.values()) {
     candidates.push({
       name: c.name,
       ...(c.version ? { version: c.version } : {}),
       ...(c.license ? { license: c.license } : {}),
-      ...(c.hasInstallScript ? { hasInstallScript: true } : {}),
+      ...(c.hasInstallScript !== undefined ? { hasInstallScript: c.hasInstallScript } : {}),
       direct: directResolved.has(`${c.name}\u0000${c.version}`),
     });
   }

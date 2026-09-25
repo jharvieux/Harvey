@@ -1,4 +1,6 @@
 import type { Finding } from "../findings.js";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { dependencyRangeEdge, licenseScope } from "../sbom.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, runOsvScanner, type OsvScanResult, type OsvAssessment, type OsvExecutionReceipt, inventoryOsvInputs, validateOsvAssessment } from "./dependencies.js";
@@ -131,7 +133,7 @@ function dependencyExaminedUnits(producer: string, selected: readonly unknown[])
 function dependencyState(input: DependencyInput): DependencyState {
   const workspace = input.context.workspace;
   const declared = input.pkg ? workspace.manifests.flatMap((manifest) =>
-    (["dependencies", "devDependencies"] as const).flatMap((section) => Object.entries(manifest[section] ?? {}).map(([name, range]) => ({
+    (["dependencies", "devDependencies", "optionalDependencies"] as const).flatMap((section) => Object.entries(manifest[section] ?? {}).map(([name, range]) => ({
       manifest: manifest.label, name, range,
       edge: dependencyRangeEdge({ source: manifest.label, format: "package-json", sourceVersion: "unversioned",
         ownerPath: manifest.label, ownerName: manifest.name ?? manifest.label, name, range, section, direct: true }),
@@ -142,9 +144,10 @@ function dependencyState(input: DependencyInput): DependencyState {
   const workspaceInternalNames = [...new Set(declared.filter(isWorkspaceInternal).map((dependency) => dependency.name))];
   const declaredNames = [...new Set(declared.filter((dependency) => !isWorkspaceInternal(dependency)).map((dependency) => dependency.name))];
   const license = licenseScope(input.scanDir);
-  const rangeDeclarations = [...declared, ...license.rangeScopes.flatMap((scope) => scope.edges.map((edge) => ({
-    manifest: edge.source, name: edge.name, range: edge.range, edge,
-  })))];
+  const manifestKeys = new Set(declared.map(({ edge }) => `${edge.ownerPath}\0${edge.section}\0${edge.name}`));
+  const rangeDeclarations = [...declared, ...license.rangeScopes.flatMap((scope) => scope.edges
+    .filter((edge) => !edge.direct || !manifestKeys.has(`${edge.ownerPath}\0${edge.section}\0${edge.name}`))
+    .map((edge) => ({ manifest: edge.source, name: edge.name, range: edge.range, edge })))];
   const allNames = [...new Set([...declaredNames, ...license.candidates.map((candidate) => candidate.name)])];
   return { ...input, emittedFindings: {}, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
 }
@@ -187,8 +190,8 @@ export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Obj
   definition({ id: "manifest-install-scripts", order: 80, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkInstallScripts" }, taxonomies: ["Install lifecycle script"], applicableFiles: manifests, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ context }) => checkInstallScripts(context.workspace.manifests) }),
   definition({ id: "resolved-install-scripts", order: 90, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkDependencyInstallScripts" }, taxonomies: ["Install lifecycle script (dependency)"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license }) => checkDependencyInstallScripts(license.candidates) }),
   definition({ id: "dependency-slopsquat", order: 100, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkSlopsquat" }, additionalImplementations: [{ file: "src/scan/supply-chain.ts", exportName: "slopsquatCoverageFinding" }], taxonomies: ["Slopsquatted/hallucinated dependency", "Coverage — npm-registry existence check not assessed"], applicableFiles: population("declared external registry package names", ({ declaredNames }) => declaredNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ declaredNames, skipNetworkChecks }) => skipNetworkChecks ? [slopsquatCoverageFinding(declaredNames, NETWORK_SKIPPED_REASON)] : checkSlopsquat(declaredNames) }),
-  definition({ id: "dependency-license", order: 110, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLicenseCompliance" }, taxonomies: ["Unknown/missing dependency license", "Copyleft license conflict", "Coverage — dependency license not assessed"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license, skipNetworkChecks }) => checkLicenseCompliance(license, { skipRegistry: skipNetworkChecks }) }),
-  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg, license }) => Boolean(pkg) || license.rangeScopes.length > 0, invoke: ({ license, declared, declaredNames, workspaceInternalNames, osv }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, manifestDeclarations: declared.length, workspaceInternalNames, osvAssessment: osv.assessment })] }),
+  definition({ id: "dependency-license", order: 110, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLicenseCompliance" }, taxonomies: ["Unknown/missing dependency license", "Copyleft license conflict", "Install lifecycle script (dependency)", "Coverage — dependency metadata assessment", "Coverage — dependency license not assessed"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license, skipNetworkChecks }) => checkLicenseCompliance(license, { skipRegistry: skipNetworkChecks, cacheDir: join(tmpdir(), "harvey-dependency-metadata-v1"), emitAssessment: true }) }),
+  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg, license }) => Boolean(pkg) || license.rangeScopes.length > 0, invoke: ({ license, declared, declaredNames, workspaceInternalNames, osv, emittedFindings }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, manifestDeclarations: declared.length, workspaceInternalNames, osvAssessment: osv.assessment, dependencyMetadataEvidence: emittedFindings["dependency-license"]?.find((finding) => finding.id === "SUP-METADATA-00")?.dependencyMetadataEvidence })] }),
   definition({ id: "lockfile-presence", order: 130, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLockfilePresence" }, taxonomies: ["Missing lockfile"], applicableFiles: population("supported lockfile paths", ({ context }) => context.paths.filter((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|npm-shrinkwrap\.json)$/.test(path))), countExaminedUnits: () => 1, examinedUnitIdentities: () => semanticExaminedUnits("lockfile-presence", "semantic-check", ["supported-lockfile-presence"]), invoke: ({ scanDir, osv, context }) => checkLockfilePresence(scanDir, scanDir, osv.assessment?.inventory ?? inventoryOsvInputs(scanDir, context.paths)) }),
 ]);
 
