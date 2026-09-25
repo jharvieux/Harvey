@@ -551,21 +551,37 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
 
   it("reaps a cancelled CLI group before its disposable tool fixture can write again", async () => {
     const record = join(temporary("harvey-preflight-cancel-record-"), "lifecycle.json");
+    const stagedWrite = `${record}.writing`;
     const pending = invoke(temporary("harvey-preflight-cancel-cache-"), [], {
       HARVEY_PREFLIGHT_HANG: "semgrep",
       HARVEY_PREFLIGHT_CANCEL_RECORD: record,
+      HARVEY_PREFLIGHT_CANCEL_STAGED_WRITE: stagedWrite,
     });
     const invocation = [...activeInvocations][0];
     expect(invocation).toBeDefined();
     expect(await invocation!.firstByte).toBe(true);
     await waitForFile(record);
+    await waitForFile(stagedWrite);
+    const first = readFileSync(record, "utf8");
+    const receipt = JSON.parse(first) as { version: number; toolPid: number; descendantPid: number; beat: number };
+    expect(receipt.version).toBe(1);
+    expect(receipt.beat).toBe(1);
+    const { toolPid, descendantPid } = receipt;
+    expect(Number.isSafeInteger(toolPid) && toolPid > 1).toBe(true);
+    expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
+    expect(toolPid).not.toBe(descendantPid);
+    expect(toolPid).not.toBe(process.pid);
+    expect(descendantPid).not.toBe(process.pid);
+    expect(process.kill(toolPid, 0)).toBe(true);
+    expect(process.kill(descendantPid, 0)).toBe(true);
+    const staged = JSON.parse(readFileSync(stagedWrite, "utf8")) as { staged: string; beat: number };
+    expect(staged).toEqual({ staged: `${record}.tmp`, beat: 2 });
+    expect(() => JSON.parse(readFileSync(staged.staged, "utf8"))).toThrow(SyntaxError);
     await terminateAndReap(invocation!);
     const result = await pending;
     expect(result.status, result.output).not.toBe(0);
-    const first = readFileSync(record, "utf8");
-    const { toolPid, descendantPid } = JSON.parse(first) as { toolPid: number; descendantPid: number };
-    expect(() => process.kill(toolPid, 0)).toThrow();
-    expect(() => process.kill(descendantPid, 0)).toThrow();
+    expect(() => process.kill(toolPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    expect(() => process.kill(descendantPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     await wait(75);
     expect(readFileSync(record, "utf8")).toBe(first);
   });

@@ -456,6 +456,7 @@ describe("buildM3PassArtifact + write → derive round trip (#1364)", () => {
     const findings = toFactFindings(report);
     const full = buildM3PassArtifact({ targetDir: "/t", findings, hotspots: ["core/checkout.ts"], rankedCount: 3, tier: "full", generatedAt: "2026-07-27T00:00:00Z" });
     expect(full.summary).toContain("full vitals");
+    expect(full.rankedCount).toBe(3);
     const reduced = buildM3PassArtifact({ targetDir: "/t", findings: [], hotspots: [], rankedCount: 0, tier: "reduced", generatedAt: "2026-07-27T00:00:00Z" });
     expect(reduced.summary).toContain("reduced tier");
     const unranked = buildM3PassArtifact({ targetDir: "/t", findings: [], hotspots: [], rankedCount: 5, tier: "unranked", generatedAt: "2026-07-27T00:00:00Z" });

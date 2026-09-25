@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,14 +19,17 @@ let jiraBaseUrl: string;
 let requestCount = 0;
 let createCount = 0;
 let storedMarker: string | undefined;
+let storedDescription: unknown;
+let storedLabels: string[] = [];
+let failNextLabels = false;
 
-function runCli(args: string[]): Promise<{ out: string; code: number }> {
+function runCli(args: string[], baseUrl = jiraBaseUrl): Promise<{ out: string; code: number }> {
   return new Promise((done, reject) => {
     const child = spawn("node", ["--import", "tsx", join(REPO_ROOT, "src/cli/file-findings.ts"), ...args], {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        JIRA_BASE_URL: jiraBaseUrl,
+        JIRA_BASE_URL: baseUrl,
         JIRA_EMAIL: "test@example.com",
         JIRA_API_TOKEN: "local-test-token",
         JIRA_PROJECT_KEY: "TEST",
@@ -71,14 +74,19 @@ beforeAll(async () => {
   server = createServer((request, response) => {
     requestCount++;
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/rest/api/3/search") {
+    if (request.method === "GET" && url.pathname === "/rest/api/3/search/jql") {
       const jql = url.searchParams.get("jql") ?? "";
       const matches = storedMarker !== undefined && jql.includes(storedMarker);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ issues: matches ? [{ key: "TEST-1" }] : [] }));
+      response.end(JSON.stringify({issues: matches ? [{key: "TEST-1", fields: {project: {key: "TEST"}, description: storedDescription}}] : [], isLast: true}));
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/rest/api/3/issue/TEST-1") {
+      response.writeHead(200, {"content-type": "application/json"});
+      response.end(JSON.stringify({fields: {description: storedDescription, labels: storedLabels}}));
+      return;
+    }
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => { body += chunk; });
@@ -86,9 +94,15 @@ beforeAll(async () => {
       if (request.method === "POST" && url.pathname === "/rest/api/3/issue") {
         createCount++;
         storedMarker = /<!-- harvey-finding:[0-9a-f]+ -->/.exec(body)?.[0];
+        storedDescription = JSON.parse(body).fields.description;
+        storedLabels = [];
         response.writeHead(201, { "content-type": "application/json" });
         response.end(JSON.stringify({ key: "TEST-1" }));
       } else if (request.method === "PUT" && url.pathname === "/rest/api/3/issue/TEST-1") {
+        const fields = JSON.parse(body).fields;
+        if (fields.labels && failNextLabels) {failNextLabels = false; response.writeHead(500); response.end("label failure"); return;}
+        if (fields.labels) storedLabels = fields.labels;
+        if (fields.description) storedDescription = fields.description;
         response.writeHead(204);
         response.end();
       } else {
@@ -109,6 +123,61 @@ afterAll(async () => {
 });
 
 describe("file-findings CLI binds identities to an explicit repository root (#1899 partial)", () => {
+  it("persists created epics when a later category fails and recovers grouped filing", async () => {
+    const remote = new Map<string, { description: unknown; labels: string[] }>();
+    let epicLookups = 0;
+    let failSecond = true;
+    const owned = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const send = (value: unknown, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      if (url.pathname === "/rest/api/3/search/jql") {
+        const marker = url.searchParams.get("jql")?.match(/<!-- harvey-[^>]+ -->/)?.[0] ?? "";
+        if (marker.includes("harvey-epic:") && ++epicLookups === 2 && failSecond) { failSecond = false; send({ error: "category lookup failed" }, 500); return; }
+        send({ issues: [...remote].filter(([, fields]) => JSON.stringify(fields.description).includes(marker)).map(([key, fields]) => ({ key, fields: { ...fields, project: { key: "TEST" } } })), isLast: true });
+        return;
+      }
+      const key = url.pathname.split("/").at(-1)!;
+      if (request.method === "GET") { send({ fields: remote.get(key) }); return; }
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => {
+        const payload = JSON.parse(body);
+        if (request.method === "POST") {
+          const created = `TEST-${remote.size + 1}`;
+          remote.set(created, { description: payload.fields.description, labels: [] }); send({ key: created }, 201);
+        } else {
+          Object.assign(remote.get(key)!, payload.fields); response.writeHead(204); response.end();
+        }
+      });
+    });
+    await new Promise<void>(done => owned.listen(0, "127.0.0.1", done));
+    try {
+      const address = owned.address();
+      if (!address || typeof address === "string") throw new Error("owned Jira fixture did not bind");
+      const base = JSON.parse(readFileSync(findingsPath, "utf8")).findings[0];
+      const input = join(dir, "two-categories.json");
+      const output = join(dir, "epic-partial-result.json");
+      writeFileSync(input, JSON.stringify({ findings: [base, { ...base, id: "F-OTHER", category: "Reliability", taxonomy: "M5 — Missing error handling", location: "src/a.ts:2" }] }));
+      const args = [input, "--target", target, "--tracker", "jira", "--connected", "--confirm", "--interval", "0", "--max-retries", "0", "--out", output];
+      const first = await runCli(args, `http://127.0.0.1:${address.port}`);
+      expect(first.code, first.out).toBe(1);
+      const partial = JSON.parse(readFileSync(output, "utf8"));
+      expect(partial.epics).toMatchObject([{ ref: { id: "TEST-1" }, status: "created" }]);
+      expect(partial.failed.map((failure: { stage: string }) => failure.stage)).toEqual(["epic lookup", "epic prerequisite"]);
+      expect(partial.created).toHaveLength(1);
+      const second = await runCli(args, `http://127.0.0.1:${address.port}`);
+      expect(second.code, second.out).toBe(0);
+      const recovered = JSON.parse(readFileSync(output, "utf8"));
+      expect(recovered.failed).toEqual([]);
+      expect(recovered.epicsReused).toBe(1);
+      expect(recovered.epicsCreated).toBe(1);
+      expect(recovered.skipped).toHaveLength(1);
+      expect(remote.size).toBe(4);
+    } finally {
+      await new Promise<void>((done, reject) => owned.close(error => error ? reject(error) : done()));
+    }
+  });
+
   it("collapses relative, absolute, and symlink aliases through the real Jira adapter", async () => {
     const before = requestCount;
     const result = await runCli([
@@ -123,8 +192,36 @@ describe("file-findings CLI binds identities to an explicit repository root (#18
     expect(result.code).toBe(0);
     expect(result.out).toContain("filed 1, skipped 2 already-present");
     expect(createCount).toBe(1);
-    expect(requestCount - before).toBe(5); // 3 marker reads + 1 create + 1 label update, all loopback.
+    expect(requestCount - before).toBe(8); // Three marker reads, one create, one label write and three recovery reads, all loopback.
     expect(storedMarker).toMatch(/^<!-- harvey-finding:[0-9a-f]+ -->$/);
+  });
+
+  it("persists partial creation and recovers after a remote label failure without replacing client prose", async () => {
+    storedMarker = undefined; storedDescription = undefined; storedLabels = []; createCount = 0; failNextLabels = true;
+    const input = join(dir, "one-finding.json");
+    const output = join(dir, "partial-result.json");
+    const findings = JSON.parse(readFileSync(findingsPath, "utf8")).findings;
+    writeFileSync(input, JSON.stringify({findings: [findings[0]]}));
+    const args = [input, "--target", target, "--tracker", "jira", "--grouping", "flat", "--connected", "--confirm", "--interval", "0", "--max-retries", "0", "--out", output];
+    const first = await runCli(args);
+    expect(first.code).toBe(1);
+    const recorded = JSON.parse(readFileSync(output, "utf8"));
+    expect(recorded.created).toHaveLength(1);
+    expect(recorded.failed).toHaveLength(1);
+    expect(recorded.failed[0].ref.id).toBe("TEST-1");
+    expect(createCount).toBe(1);
+    (storedDescription as {content: unknown[]}).content.push({type: "paragraph", content: [{type: "text", text: "Client annotation"}]});
+    storedLabels.push("client-priority");
+    const second = await runCli(args);
+    expect(second.code, second.out).toBe(0);
+    const recovered = JSON.parse(readFileSync(output, "utf8"));
+    expect(recovered.created).toHaveLength(0);
+    expect(recovered.skipped).toHaveLength(1);
+    expect(recovered.failed).toEqual([]);
+    expect(createCount).toBe(1);
+    expect(JSON.stringify(storedDescription)).toContain("Client annotation");
+    expect(storedLabels).toContain("client-priority");
+    expect(storedLabels).toContain("harvey");
   });
 
   it.each([

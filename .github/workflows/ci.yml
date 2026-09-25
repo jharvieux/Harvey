@@ -171,6 +171,7 @@ jobs:
         timeout-minutes: 5
         run: |
           pnpm exec playwright install --with-deps chromium
+          pnpm test:site-forms
           python3 -m venv "$RUNNER_TEMP/report-pdf-venv"
           "$RUNNER_TEMP/report-pdf-venv/bin/pip" install pypdf==6.10.0
           HARVEY_PDF_PYTHON="$RUNNER_TEMP/report-pdf-venv/bin/python" node tools/report-pdf-acceptance.mjs "$RUNNER_TEMP/report-pdf-acceptance"

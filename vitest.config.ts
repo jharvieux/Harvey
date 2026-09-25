@@ -28,6 +28,8 @@ const BASE_EXCLUDE = [
   // So exclude site's build/deps dirs, not the tree.
   "site/node_modules/**",
   "site/.next/**",
+  // Dedicated Next/Chromium suite runs in CI after browser installation via test:site-forms.
+  "src/__tests__/site-browser-journeys.browser.test.ts",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
   ".claude/**",
   // pnpm 11's global-virtual-store fallback can materialize a full project snapshot under a local
