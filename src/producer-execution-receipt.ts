@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { AuditModule } from "./audit-coverage.js";
+import { statSafe } from "./fs-walk.js";
 import type { SemgrepExecutionPlanReceipt } from "./scan/semgrep-family-cache.js";
 import { assertSuccessfulSemgrepExecutionReceipt } from "./scan/semgrep-family-cache.js";
 
@@ -270,7 +271,8 @@ export function verifyCommandExecutionReceiptArtifacts(receipt: CommandExecution
   assertCommandExecutionReceipt(receipt);
   for (const artifact of receipt.artifacts) {
     if (!existsSync(artifact.path)) throw new Error(`command receipt artifact is missing: ${artifact.path}`);
-    const stat = statSync(artifact.path);
+    const stat = statSafe(artifact.path);
+    if (!stat) throw new Error(`command receipt artifact cannot be read: ${artifact.path}`);
     const digest = createHash("sha256").update(readFileSync(artifact.path)).digest("hex");
     if (stat.size !== artifact.bytes || digest !== artifact.sha256) throw new Error(`command receipt artifact changed after invocation ${receipt.invocationId}: ${artifact.path}`);
   }
