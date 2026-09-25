@@ -48,7 +48,7 @@
     "authoritativeRecords": 2243,
     "authoritativeUnresolved": 1523,
     "authoritativeVenues": 108,
-    "candidateVenues": 2567,
+    "candidateVenues": 2568,
     "classes": [
       {
         "accepted": 0,
@@ -66,15 +66,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 243,
-        "candidateRows": 838,
+        "candidateRows": 839,
         "dependencyClass": "runtime",
         "dynamic": 1,
         "emptyReason": null,
         "pinned": 1,
         "recorded": 4,
-        "rows": 1081,
-        "unresolved": 1075,
-        "whollyUnbound": 1076
+        "rows": 1082,
+        "unresolved": 1076,
+        "whollyUnbound": 1077
       },
       {
         "accepted": 0,
@@ -92,15 +92,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 31,
-        "candidateRows": 769,
+        "candidateRows": 770,
         "dependencyClass": "database",
         "dynamic": 8,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 1,
-        "rows": 800,
-        "unresolved": 792,
-        "whollyUnbound": 799
+        "rows": 801,
+        "unresolved": 793,
+        "whollyUnbound": 800
       },
       {
         "accepted": 0,
@@ -196,26 +196,26 @@
       {
         "accepted": 0,
         "authoritativeRecords": 1116,
-        "candidateRows": 2678,
+        "candidateRows": 2679,
         "dependencyClass": "unresolved",
         "dynamic": 0,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 0,
-        "rows": 3794,
-        "unresolved": 3794,
-        "whollyUnbound": 3794
+        "rows": 3795,
+        "unresolved": 3795,
+        "whollyUnbound": 3795
       }
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7354,
+    "noAssertions": 7357,
     "opaqueVenues": 3,
-    "residualRows": 2678,
-    "rows": 8505,
+    "residualRows": 2679,
+    "rows": 8508,
     "schemaAssertions": 10,
-    "venues": 2678,
-    "vocabularyCandidates": 3584
+    "venues": 2679,
+    "vocabularyCandidates": 3586
   },
   "reconciliations": [
     {
@@ -310424,11 +310424,122 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "database",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 10,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#content-hint:database:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runtime",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 1,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#content-hint:runtime:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "residual-unresolved",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unclassified-content",
+      "dependencyClass": "unresolved",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "whole-content",
+        "line": 1,
+        "path": "src/scan/supabase-drift-scope.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/scan/supabase-drift-scope.test.ts#whole-content:unresolved:unclassified-content",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "A byte-complete candidate, not a claim that this file is measured evidence. Unlabelled numeric/string measurements and environment dependencies cannot be exhaustively classified statically. Regeneration does not accept or bind them.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/scan/supabase-drift-scope.test.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "clock",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 233,
+        "line": 239,
         "path": "src/scan/supabase-drift.test.ts"
       },
       "freshness": {
@@ -310576,7 +310687,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 321,
+        "line": 340,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -310650,7 +310761,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 316,
+        "line": 335,
         "path": "src/scan/supabase-drift.ts"
       },
       "freshness": {
@@ -311686,7 +311797,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 418,
+        "line": 454,
         "path": "src/scan/supabase.ts"
       },
       "freshness": {
@@ -364025,8 +364136,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "eb54b4a82f168efe3a606fe4323172be61b28de4",
-    "commitPayload": "dHJlZSAxOGI4YzFiYTk0YmE3MjdlM2I0ZTc4ZTA3Y2E3NTMzNGNjNTkxY2MyCnBhcmVudCA3ZGZkMTZhODJlY2JhMzdkMzkwNjc5NzI2MzE2NmM5YmM1ODI3OTI4CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMjk4OTY0IC0wNTAwCgpPd24gdGhlIHdhdGNoZXIgdGVzdCBvdXRwdXQgYXJ0aWZhY3QgKCMyMTgzKQo=",
+    "commit": "8c5414000887128c00726919608065110d3998c8",
+    "commitPayload": "dHJlZSA3NGYwYTgyYzE3ODcwNTEyODc2NWU4MmZlZWJmNTM4NDFkNGY3OTk2CnBhcmVudCBiYzA1Y2VmNDVjNGEyZTM0YjhjNTUyMWU3Y2FjYTFlOTE5NDM1YTJhCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA1NjU3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA1NjU3IC0wNTAwCgpDb21wYXJlIG1hdGNoaW5nIGF1dGhvcml6ZWQgc2NoZW1hIHBvcHVsYXRpb25zIGZvciAjMjEyOQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364035,13 +364146,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "e7f8ea2dae4d92230e85b099027969c0e5f0310c",
+        "gitOid": "e218a9017a9117f1f83f052592cdcd3fecdf39da",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "21f69545eec4a8f9b3888b4f9aa310171a73b3951340210967bc76dd35883699",
-    "tree": "18b8c1ba94ba727e3b4e78e07ca75334cc591cc2"
+    "populationSha256": "5d797f3c81f18791983605932aa628f6838dbae54cc90ea99bf1fd5df64f2a5b",
+    "tree": "74f0a82c178705128765e82feebf53841d4f7996"
   },
   "venues": [
     {
@@ -371905,19 +372016,19 @@
       "sha256": "e6638f1110701c8691ec69bae2d1082c8cbd28d624aec64e12e66b77a305db95"
     },
     {
-      "bytes": 6140,
+      "bytes": 6490,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "db5d407f99707949cffd01ea8d28f308196be940",
+      "gitOid": "3a06f88518807cf4bf3177047ef8759559b8ab89",
       "id": "src/cli/scan.ts",
       "kind": "source",
-      "literalCount": 51,
-      "literalSha256": "0af98d729f34bfb31af569a846f2f5b35c97d9dd635cadbf07e789b61bdf7c8f",
+      "literalCount": 56,
+      "literalSha256": "45776bc7f232a319bb9e1e11621ee3dc69fa45d86e159fc745d654ea6f0b34cf",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/scan.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "d150b892d168681c8b87fd65554db55b065083c8612cbc02d868f4b6d00c9944"
+      "sha256": "c9f729f693c6e9e3a815c751260df80d9e6c6d20e088e1c7498df7d47fc473dd"
     },
     {
       "bytes": 7674,
@@ -390790,34 +390901,49 @@
       "sha256": "50248f56fa2550413094becc00d2d847d96d886355981438bc136eb7fa19d351"
     },
     {
-      "bytes": 15118,
+      "bytes": 8160,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "862a7064b61aff361cbda77a4fd787ae3cd4c113",
+      "gitOid": "9d6df4c62e6b77936f6f6bc8cdfd9b42486eec03",
+      "id": "src/scan/supabase-drift-scope.test.ts",
+      "kind": "source",
+      "literalCount": 138,
+      "literalSha256": "5e12504bbb73a38e17c8e102ef640dc8b4c358e4e83162c0d0bf5ce5709583cd",
+      "owner": "#1906 discovery; #1909 environment classification",
+      "path": "src/scan/supabase-drift-scope.test.ts",
+      "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
+      "sha256": "c4fdbfe6b2d0560786d49aa5ac099b985bd8e5aa93c85c758f3f9fa7eae3e7f3"
+    },
+    {
+      "bytes": 15682,
+      "disposition": "conservative-candidate",
+      "format": "source",
+      "gitMode": "100644",
+      "gitOid": "00f30f5e2ad7bb3263c59c5da0495e6a3500aee4",
       "id": "src/scan/supabase-drift.test.ts",
       "kind": "source",
-      "literalCount": 204,
-      "literalSha256": "d9e233dcd474654924f5a32eb9525af953083a0afd06edc7cfbe0e75ee91ab44",
+      "literalCount": 210,
+      "literalSha256": "bb8bc3d43971655c4dea72d4b36eef72e8a58b24ca5727d50f906cc7ded9c2e9",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "766be0904b21863f7092dc8523bfb62cbb33ffd0dac4824314112dfa8c4ad26b"
+      "sha256": "332a223f5d06218c86e4762eb2b5df8ce91b09e73d280308b88179d016dd3b46"
     },
     {
-      "bytes": 22559,
+      "bytes": 24717,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "f03351161b6fb7be9b947773662ad455b7e4b294",
+      "gitOid": "91fb4a15b2272c857d6aec93e5aa98a2ca34a360",
       "id": "src/scan/supabase-drift.ts",
       "kind": "source",
-      "literalCount": 101,
-      "literalSha256": "6cbd7c0ee53a08e58b73a1e06c74a9e9c3e39a718d4e8cfdf065f74f135c0df3",
+      "literalCount": 115,
+      "literalSha256": "99b8e71fd9a9d8c6d0118f91d48c7dbc997d2e38ce86169597dc918db10a87e6",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase-drift.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "3fdd3531ed3f10f255e4ae18c451cf2d6ac0b8bfda5aa4b35202860c4ea7e235"
+      "sha256": "e9af4f362d88def0f2f4bd78893f8ccbeba3f35c44db33a297018e885c0afd8b"
     },
     {
       "bytes": 14315,
@@ -390895,19 +391021,19 @@
       "sha256": "ead5cf1d47f4d8f34588ecf63266460ac339ec0da52cd26377ce656ccb47994c"
     },
     {
-      "bytes": 36318,
+      "bytes": 39011,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "e6c64cc9921a1266609fd7a5feae009acde594f0",
+      "gitOid": "ebfb6c2b725622e581a6bae13bbe60cca7942bb8",
       "id": "src/scan/supabase.ts",
       "kind": "source",
-      "literalCount": 147,
-      "literalSha256": "4efcca36bcacc82c3d30386b6f62779ab59d2a75e063f7dbe9ab76c4fdfa9804",
+      "literalCount": 165,
+      "literalSha256": "9e2a7da095482a42830c86a3db7553d5ea61618c79686b1c86f32f42743b45e9",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/scan/supabase.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "46a4268d5db5bc98b102ea5ab2f291c3cae30e4af5a3f85e4bc86c4bf208940c"
+      "sha256": "a18cbec4c9fe256fea0c65848b175d6cc686f1d284e3aac34362500087f8cae4"
     },
     {
       "bytes": 33344,
