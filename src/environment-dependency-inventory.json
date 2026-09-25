@@ -105,15 +105,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 39,
-        "candidateRows": 76,
+        "candidateRows": 78,
         "dependencyClass": "runner-image",
         "dynamic": 37,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 39,
-        "rows": 115,
-        "unresolved": 76,
-        "whollyUnbound": 76
+        "rows": 117,
+        "unresolved": 78,
+        "whollyUnbound": 78
       },
       {
         "accepted": 0,
@@ -209,13 +209,13 @@
     ],
     "environmentAssertions": 1120,
     "integrityAssertions": 21,
-    "noAssertions": 7358,
+    "noAssertions": 7360,
     "opaqueVenues": 3,
     "residualRows": 2680,
-    "rows": 8509,
+    "rows": 8511,
     "schemaAssertions": 10,
     "venues": 2680,
-    "vocabularyCandidates": 3586
+    "vocabularyCandidates": 3588
   },
   "reconciliations": [
     {
@@ -73435,7 +73435,7 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "a660a1c857e73b24aeb21ed1bac9036c322de624e56dd8a941a943a7a4f4db74",
+      "observedIdentity": "85ce71d21afb0a493b0a91bd7d46a1bfec16bc9b3986e0a74a0d607f46f9d677",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
       "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
@@ -73460,7 +73460,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 27224,
+        "line": 32865,
         "path": "dry-run/findings-report.json"
       },
       "freshness": {
@@ -73641,6 +73641,43 @@
       "declarationSource": null,
       "declaredIdentity": null,
       "dependency": "unresolved-reference",
+      "dependencyClass": "runner-image",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 25598,
+        "path": "dry-run/findings-report.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "dry-run/findings-report.json#content-hint:runner-image:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "dry-run/findings-report.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
       "dependencyClass": "runtime",
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
@@ -73682,7 +73719,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 29179,
+        "line": 34820,
         "path": "dry-run/findings-report.json"
       },
       "freshness": {
@@ -73825,7 +73862,7 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "cb5d1979c151cc77dbe4e37619b020e437d6d477678a3f42ea5bb357c4cbbf73",
+      "observedIdentity": "d72cc1bfe01eb9863eb5e7fad836c49914e20371d6a78b6abe59601fbe7c38cb",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
       "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
@@ -73850,7 +73887,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 27208,
+        "line": 32849,
         "path": "dry-run/findings.json"
       },
       "freshness": {
@@ -74008,6 +74045,43 @@
         "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
       },
       "id": "dry-run/findings.json#content-hint:package-manager:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "dry-run/findings.json"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "runner-image",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 25582,
+        "path": "dry-run/findings.json"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "dry-run/findings.json#content-hint:runner-image:unresolved-reference",
       "identitySource": null,
       "links": [],
       "observedIdentity": null,
@@ -74309,7 +74383,7 @@
         "src/cli/dry-run.ts",
         "#1909"
       ],
-      "observedIdentity": "d172b6def201c7e1a96f0f4f3b218e031fb16f5dbf4a95aab2d045b4434cefe4",
+      "observedIdentity": "fccfe218d0dc555658bc62742ee5b21f0f4ec5d19ca8e9a55b7dbc5807386505",
       "owner": "src/dry-run-artifacts.ts generated family",
       "pinSource": null,
       "reason": "Family target tree: b923c5c5b030664205a9150950da808bc8f9517c. The family does not retain one complete toolchain/environment identity for its historical production run.",
@@ -364173,8 +364247,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "903a575b003fc0673b070f4f03c19f5f3d81780a",
-    "commitPayload": "dHJlZSBjNjc0MzliNzlhOTUxZWJjM2QyZTQ3ZTYwMzBjNzhiN2ZkMDViZjMwCnBhcmVudCBkNjYwMzVhNDc2NDc5YjdiZGQyMzRmODhkOTdhMWZjZTU4ZGI0YWE2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5NDU1IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5NDU1IC0wNTAwCgpDb21wbGV0ZSBkZXBlbmRlbmN5IG1ldGFkYXRhIGFzc2Vzc21lbnQgKCMyMTQxKQo=",
+    "commit": "ed67951da7f18ae410c5577cc60f606216ca013c",
+    "commitPayload": "dHJlZSBjZmZhOTA3NTllMjc3ZDVlNzI1ZTQyZWEwOGQyNGM2ZDkzY2E4M2NhCnBhcmVudCAzNjY3ZGUxZmQ1N2NmMjQ1MWYwMDdmNGUxZjk2NDVkMjg0MzM0NGVmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5Njc3IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzA5Njc3IC0wNTAwCgpSZWdlbmVyYXRlIGRlcGVuZGVuY3kgbWV0YWRhdGEgY2FsaWJyYXRpb24gKCMyMTQxKQo=",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -364183,13 +364257,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "c61587a0b7c3ed6acceda0910e8ecb42887bbaa3",
+        "gitOid": "9e11cb2ccdd8cabb830dfcfaaa246e54d1dfe661",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "6bd71b8bc1b0d788dfc1c9b2fc532e028332bf05611eae636508e84adbdb6f96",
-    "tree": "c67439b79a951ebc3d2e47e6030c78b7fd05bf30"
+    "populationSha256": "1c4babc24c71791f957966dbb2b16d8f53c2c9babbb427d55918bdc9074a4e3c",
+    "tree": "cffa90759e277d5e725e42ea08d24c6d93ca83ca"
   },
   "venues": [
     {
@@ -367662,7 +367736,7 @@
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "728aafc887aaa24dedb2ecf91121baaddc1e7433",
+      "gitOid": "09d47301bedab34674d83774eeea9c15cd4f0160",
       "id": "dry-run/artifact-family.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367670,7 +367744,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/artifact-family.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "a49755265f2de136111a00e84c6bef444aa04eb556026cd4fb8fe6ec2e83e3fd"
+      "sha256": "9003b6d5f5c5efc2fcc99b0beabc19ea36eac1bf090eb002963bf547c6e65874"
     },
     {
       "bytes": 930,
@@ -367703,11 +367777,11 @@
       "sha256": "a32656e84a19b36c6175c7d12003fdd18d42e72507e39e06daa49bed3e0eec9f"
     },
     {
-      "bytes": 1850652,
+      "bytes": 2047884,
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "fa17a5067e5cd63c9ce41789aa857909fd34702c",
+      "gitOid": "8c75bc09e59ccca14b548333d78a950d2a6b62fb",
       "id": "dry-run/findings-report.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367715,14 +367789,14 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/findings-report.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "d474cc007fc6b63afc7b244e457a85561b408ff6b991b91bbd441b9ecd9ff14c"
+      "sha256": "768bc5135e01620f8ecc85c6cd6d2d35fac3e83f76ca5840a818662240472b45"
     },
     {
-      "bytes": 1790466,
+      "bytes": 1976416,
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "f4298ccf9c6ced46a715c7cb814b04c764738798",
+      "gitOid": "42960c6c632a19a1c054390b911aa0789cbdac2d",
       "id": "dry-run/findings.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367730,7 +367804,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/findings.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "25e6ab8d79bbe6725e4705a2b92aa2b4b9eb92b00e0b83a2723c08e559654b22"
+      "sha256": "8612e7b0a1953d581ae0896b8c6240ee1412b0122fafabc579766882a137aadd"
     },
     {
       "bytes": 12948,
@@ -367767,7 +367841,7 @@
       "disposition": "authoritative-adapter",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "0e8a1d4dc140cf7f5b4b42cc243d71a14ba9d2e9",
+      "gitOid": "eb0ac7801a52cde72967bb1b340d9ec274af4112",
       "id": "dry-run/scorecard.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -367775,7 +367849,7 @@
       "owner": "src/dry-run-artifacts.ts generated family",
       "path": "dry-run/scorecard.json",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "5ad0b347228a71e3573b7825325016784e216d56ecdf3b08b9ba87815db9513f"
+      "sha256": "9c6e792a95d604f8c26b1bf0af797d6231843aca33b436362947958569bc0d19"
     },
     {
       "bytes": 68,
