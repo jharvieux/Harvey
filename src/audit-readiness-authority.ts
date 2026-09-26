@@ -106,6 +106,14 @@ function protectedEnvironmentName(name: string): boolean {
     && (ENVIRONMENT_POLICY.protectedNames.includes(name) || ENVIRONMENT_POLICY.protectedPrefixes.some((prefix) => name.startsWith(prefix)));
 }
 
+/** Validate names before reading any associated value; this check grants no execution authority. */
+export function validateReadinessEnvironmentNames(names: readonly unknown[]): string[] {
+  if (!Array.isArray(names) || names.some((name) => typeof name !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(name) || protectedEnvironmentName(name))) {
+    throw new Error(`The approved environment contains an invalid name or a protected runtime/toolchain control. ${PROTECTED_ENVIRONMENT_REASON}`);
+  }
+  return [...new Set(names as readonly string[])].sort();
+}
+
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const nested of Object.values(value)) immutable(nested);
@@ -156,10 +164,7 @@ export function createReadinessAdmission(planInput: unknown, bindingInput: Readi
     }
     authorizations.set(authorization.stageId, immutable(structuredClone(authorization)));
   }
-  const approvedEnvNames = [...new Set(options.approvedEnvNames)].sort();
-  if (approvedEnvNames.some((name) => !/^[A-Z][A-Z0-9_]*$/.test(name) || protectedEnvironmentName(name))) {
-    throw new Error(`The approved environment contains an invalid name or a protected runtime/toolchain control. ${PROTECTED_ENVIRONMENT_REASON}`);
-  }
+  const approvedEnvNames = validateReadinessEnvironmentNames(options.approvedEnvNames);
   const values: Record<string, string> = Object.create(null) as Record<string, string>;
   const secrets = new SecretRegistry();
   for (const name of approvedEnvNames) {

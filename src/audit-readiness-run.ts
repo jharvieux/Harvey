@@ -1,6 +1,7 @@
 import { type ReadinessPlanV1 } from "./audit-readiness.js";
 import {
   createReadinessAdmission,
+  validateReadinessEnvironmentNames,
   type ReadinessPlanBindingV1,
   type ReadinessStageAuthorization,
 } from "./audit-readiness-authority.js";
@@ -91,15 +92,26 @@ export function parseReadinessAuthorizations(value: unknown, planSha256: string)
   }
   return {
     stageAuthorizations: row.stageAuthorizations as ReadinessStageAuthorization[],
-    approvedEnvNames: row.approvedEnvNames as string[],
+    approvedEnvNames: validateReadinessEnvironmentNames(row.approvedEnvNames),
     ...(row.toolchainPath === undefined ? {} : { toolchainPath: row.toolchainPath as string }),
     ...(row.timeoutMs === undefined ? {} : { limits: { timeoutMs: row.timeoutMs as number } }),
   };
 }
 
 /** Invalid pre-execution configuration has zero process work and retains the complete plan ID set. */
-export function discloseReadinessSetupFailure(plan: ReadinessPlanV1, binding: ReadinessPlanBindingV1): BoundReadinessResult {
+export function discloseReadinessSetupFailure(plan: ReadinessPlanV1, binding: ReadinessPlanBindingV1, redaction?: {
+  names: readonly string[];
+  environment: Readonly<Record<string, string | undefined>>;
+}): BoundReadinessResult {
   const evidence = createReadinessReceiptContext(plan, { approvedEnvNames: [], environment: {} });
+  // A rejected grant can still identify operator-supplied values to redact. These names never
+  // enter the admission or public approved/present observations, and all stages remain not-run.
+  if (redaction) for (const name of validateReadinessEnvironmentNames(redaction.names)) {
+    const value = Object.hasOwn(redaction.environment, name) ? redaction.environment[name] : undefined;
+    if (value === undefined || value === "") continue;
+    if (typeof value !== "string" || value.includes("\0")) throw new Error("Readiness redaction input is invalid.");
+    evidence.registerSecret(value);
+  }
   const receipts = plan.stages.map((stage) => createReadinessNotAssessedReceipt(evidence, stage.id, {
     reasonCode: "execution-configuration-invalid",
     reason: "Readiness execution was withheld because its plan-bound operator authorization could not be validated.",
@@ -115,6 +127,8 @@ export function discloseReadinessSetupFailure(plan: ReadinessPlanV1, binding: Re
 /** Owns the disposable copy, every child receipt, and cleanup after all children settle. */
 export async function executeBoundReadinessPlan(options: BoundReadinessOptions): Promise<BoundReadinessResult> {
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
+  try { validateReadinessEnvironmentNames(options.approvedEnvNames); }
+  catch { return discloseReadinessSetupFailure(options.plan, options.binding); }
   const evidence = createReadinessReceiptContext(options.plan, {
     approvedEnvNames: options.approvedEnvNames,
     environment: options.environment,

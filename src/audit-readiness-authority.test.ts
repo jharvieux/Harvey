@@ -373,7 +373,7 @@ process.emitWarning('runtime-output-canary');
     expect(await readFile(join(cache, "keep"), "utf8")).toBe("original cache canary");
     await expect(lstat(commandStarted)).rejects.toMatchObject({ code: "ENOENT" });
     expect(result.execution.stages.every((row) => row.execution.kind !== "process")).toBe(true);
-    expect(result.execution.cleanup).toMatchObject({ status: "passed", source: { status: "passed" }, removal: { status: "removed" } });
+    expect(result.execution.cleanup).toMatchObject({ status: "not-required", root: null });
     expect(result.json).not.toContain(value);
     expect(result.json).not.toContain("runtime-output-canary");
   });

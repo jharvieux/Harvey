@@ -56,6 +56,26 @@ function row(stages: readonly { kind: ReadinessStageV1["kind"] }[], kind: Readin
 }
 
 describe("bound readiness production composition (#1897)", () => {
+  it("redacts a rejected grant's independently valid names without recording approval or spawning", async () => {
+    const state = await fixture();
+    const manifestPath = join(state.source, "package.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { scripts: Record<string, string> };
+    manifest.scripts.build += " # fixture-secret";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const plan = discoverReadinessPlan(state.source);
+    const binding = bindReadinessPlanV1(plan, await captureSourceSentinel(state.source));
+    const result = discloseReadinessSetupFailure(plan, binding, { names: ["READINESS_TOKEN"], environment: { READINESS_TOKEN: "fixture-secret" } });
+    expect(result.json).not.toContain("fixture-secret");
+    expect(result.descriptorJson).not.toContain("fixture-secret");
+    expect(result.planExport.status).toBe("withheld");
+    expect(JSON.parse(result.descriptorJson).environment).toEqual({ approvedNames: [], presentNames: [] });
+    expect(result.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+    let valueReads = 0;
+    const protectedEnvironment = Object.defineProperty({}, "NODE_OPTIONS", { get() { valueReads++; return "unsafe"; } });
+    expect(() => discloseReadinessSetupFailure(plan, binding, { names: ["NODE_OPTIONS"], environment: protectedEnvironment })).toThrow(/protected/);
+    expect(valueReads).toBe(0);
+  });
+
   it("binds operator authorization to the exact plan and refuses values or malformed effect rows", async () => {
     const state = await fixture();
     const binding = bindReadinessPlanV1(state.plan, state.sentinel);
