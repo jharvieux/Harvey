@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateRestoredSemgrepPackArtifact } from "../corpus-mechanical-readiness.js";
 import { REGISTRY_PACK_FETCH_POLICY, REGISTRY_PACKS } from "../scan/semgrep.js";
@@ -192,6 +192,25 @@ function validate(dir: string, fixtureRoot: { bin: string; state: string }) {
 }
 
 describe("current Semgrep registry materialization transport (#2171)", () => {
+  it("rejects zero-exit overflow through the actual responsive registry CLI consumer", async () => {
+    const root = temporary("harvey-registry-responsive-overflow-");
+    const preload = join(root, "overflow.mjs");
+    // The async preload supplies real CLI-child output before the command starts its registry work.
+    writeFileSync(preload, `process.on("SIGTERM", () => process.exit(0));
+setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30);
+setTimeout(() => process.exit(2), 2000);
+await new Promise(() => {});
+`);
+    const originalNodeOptions = process.env.NODE_OPTIONS;
+    try {
+      process.env.NODE_OPTIONS = `${originalNodeOptions ?? ""} --import=${pathToFileURL(preload).href}`.trim();
+      await expect(runResponsive(join(root, "output"), fixture(), "transient-403")).rejects.toMatchObject({ code: "ENOBUFS" });
+    } finally {
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = originalNodeOptions;
+    }
+  });
+
   it("retains the actual zero-exit close state and overflow error after a termination handler", async () => {
     const script = 'process.on("SIGTERM", () => process.exit(0)); setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30); setTimeout(() => process.exit(2), 2000);';
     const result = await runCommand(process.execPath, ["--eval", script], ROOT, process.env);

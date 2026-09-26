@@ -474,7 +474,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
 
     const deadline = await shell({ name: "deadline control", run: runNode('process.on("SIGTERM", () => process.exit(0)); setTimeout(() => process.exit(0), 11000);') }, context("pull_request")).catch((error: NodeJS.ErrnoException & ShellRun) => error);
     expect(deadline).toMatchObject({ code: "ETIMEDOUT", status: 0, signal: null });
-  }, 15_000);
+  });
 
   it.each(events)("binds %s scorers, every transport owner, artifacts, merge and replay to the shipping expressions", async (event) => {
     await assertTopology(document, event, true, true);

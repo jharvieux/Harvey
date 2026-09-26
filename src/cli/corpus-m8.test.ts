@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
@@ -109,6 +110,20 @@ describe("M8 target failure evidence (#2057)", () => {
 
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it("rejects zero-exit overflow through the actual responsive M8 CLI consumer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-responsive-overflow-"));
+    dirs.push(root);
+    const preload = join(root, "overflow.mjs");
+    // The async preload supplies real CLI-child output before any corpus target can run.
+    writeFileSync(preload, `process.on("SIGTERM", () => process.exit(0));
+setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30);
+setTimeout(() => process.exit(2), 2000);
+await new Promise(() => {});
+`);
+    const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`.trim() };
+    await expect(runCliResponsive(["plan", "--github-output", join(root, "output.txt")], root, env)).rejects.toMatchObject({ code: "ENOBUFS" });
+  });
 
   it.each(["separate streams", "multiline preparation detail"])("retains bounded, redacted %s through target and aggregate artifacts", async (shape) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-wrapper-"));
