@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReadinessSpawnRequest } from "./audit-readiness-authority.js";
 import { createReadinessContainedProcessRunner, type ReadinessContainmentConfig } from "./readiness-process-containment.js";
 import { cleanupDisposableTarget, createDisposableTarget, type DisposableTarget } from "./disposable-target.js";
@@ -122,6 +122,16 @@ describe("readiness containment prerequisites", () => {
 });
 
 describe.skipIf(!config)("physical local PID namespace adapter", () => {
+  it("withholds a root target group before creating any runtime lease", async () => {
+    const p = await fixture("require('node:fs').writeFileSync('ran','yes');");
+    const gid = vi.spyOn(process as NodeJS.Process & { getgid: () => number }, "getgid").mockReturnValue(0);
+    try {
+      const result = await p.runner.run(p.request, bounds);
+      expect(result).toMatchObject({ succeeded: false, pid: null, spawnedAt: null, containment: { kind: "unavailable", reasonCode: "containment-target-identity-unavailable" } });
+      await expect(lstat(join(p.target.targetRoot, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { gid.mockRestore(); }
+  }, 20_000);
+
   it("preserves actual target lifecycle, exact environment and separate last stderr", async () => {
     const p = await fixture("process.stdout.write(JSON.stringify({cwd:process.cwd(),env:process.env,args:process.argv.slice(2)}));setTimeout(()=>process.stderr.write('LAST-STDERR'),40);", { APPROVED: "env-only-canary" }, ["space kept", "$(false)"]);
     expect(await p.runner.probe()).toMatchObject({ status: "ready", imageId: config!.imageId });

@@ -169,7 +169,7 @@ process.stdin.on('end',()=>{
   const raw=Buffer.concat(input);input=[];q=JSON.parse(raw.toString('utf8'));m.requestSha256=crypto.createHash('sha256').update(raw).digest('hex');
   if(process.pid!==1||process.getuid()!==0||!/^[a-f0-9]{32}$/.test(q.nonce))throw Error();
   dir='/.harvey-readiness-'+q.nonce;fs.mkdirSync(dir,{mode:0o700});process.setgroups([]);
-  if(!Number.isSafeInteger(q.uid)||q.uid<=0||!Number.isSafeInteger(q.gid)||q.gid<0||!q.request||!Array.isArray(q.approvedEnvNames))throw Error();
+  if(!Number.isSafeInteger(q.uid)||q.uid<=0||!Number.isSafeInteger(q.gid)||q.gid<=0||!q.request||!Array.isArray(q.approvedEnvNames))throw Error();
   const r=q.request, argv=[r.bin,...r.args];
   if(r.shell!==false||argv.some(x=>typeof x!=='string'||x.includes('\0'))||q.approvedEnvNames.some(n=>typeof n!=='string'||(r.env[n]&&argv.some(a=>a.includes(r.env[n])))))throw Error();
   if(fs.readFileSync(q.root+'/.harvey-mount-'+q.nonce,'utf8')!==q.nonce)throw Error();fs.unlinkSync(q.root+'/.harvey-mount-'+q.nonce);
@@ -360,7 +360,7 @@ async function executeContained(config: Required<ReadinessContainmentConfig>, re
   if (root.status !== "verified" || root.cwd !== request.cwd || request.env.PATH !== config.toolchainPath || !confined(target.root, request.cwd)
     || [config.nodePath, config.envPath, ...config.toolchainPath.split(":")].some((path) => confined(target.root, path) || confined(target.sourceRoot, path))) { result.containment = { kind: "unavailable", reasonCode: "containment-request-boundary-invalid" }; return; }
   const uid = process.getuid?.(), gid = process.getgid?.();
-  if (uid === undefined || uid === 0 || gid === undefined) { result.containment = { kind: "unavailable", reasonCode: "containment-target-identity-unavailable" }; return; }
+  if (uid === undefined || uid <= 0 || gid === undefined || gid <= 0) { result.containment = { kind: "unavailable", reasonCode: "containment-target-identity-unavailable" }; return; }
   const nonce = randomBytes(16).toString("hex");
   const name = `harvey-readiness-${nonce}`;
   const client = new DockerLocal(await realpath(config.socketPath));
