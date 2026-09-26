@@ -78,6 +78,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Authz decision from client-controlled input": ["639", "A01"],
   "Object-level authorization gap: client-supplied id reaches a read-by-id repo function (pg-idor-repo-fn)": ["639", "A01"],
   "Object-level authorization gap: client-supplied owner id scopes the query": ["639", "A01"],
+  "M1 — Client-supplied owner id trusted by authenticated action": ["639", "A01"],
+  "M1 — Client-supplied owner id trusted by unauthenticated service-role action": ["639", "A01"],
+  // #2227: the client/request boundary is bound to a literal tenant rather than the authenticated
+  // principal. Like the other object-level rows, that tenant-controlled selector is CWE-639/A01.
+  "M1 — Hardcoded tenant identifier at client/request boundary": ["639", "A01"],
   // #1267: the cross-file complement of the row above — same weakness (a user-controlled key
   // selects the object), the query one module out. Same 639/A01 for that reason.
   "Object-level authorization gap across a module boundary": ["639", "A01"],
@@ -159,6 +164,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Sensitive value logged to console": ["532", "A09"],
   // Hard-coded / mishandled credentials.
   "Committed credential": ["798", "A07"],
+  // A candidate that has not crossed the verified-secret threshold remains review-tier, but the
+  // emitted taxonomy still describes a credential literal and uses the same CWE routing as one
+  // confirmed by the provider/format checks.
+  "Possible committed credential": ["798", "A07"],
   // #934: still a hard-coded credential FACT (same CWE) — the doc/example-context taxonomy only
   // changes the exploitability prior and the grading route, not the weakness class.
   "Committed credential — docs/example context": ["798", "A07"],
@@ -244,6 +253,7 @@ const SECURITY: Record<string, [string, string | null]> = {
   // correct read. Same basis as the sibling row above. No OWASP Top-10-2021 category.
   "SELECT-then-INSERT dedup with no unique constraint": ["362", null],
   "External send without a deterministic idempotency key": ["837", null],
+  "Idempotency key does not identify a stable scoped operation": ["837", null],
   "Idempotency row written before the dispatched handler": ["754", null],
   // #1352 / D-091 item 27. NOT a race (362): both deliveries are genuinely different events and
   // neither read is stale — what is missing is the enforcement that they be APPLIED in the order
@@ -265,7 +275,7 @@ const SECURITY: Record<string, [string, string | null]> = {
 // property to the response client; CWE-200 captures that information exposure, and OWASP maps it
 // to A01. The classifier is deliberately suffix-bounded: a new producer kind is unclassified until
 // its CWE decision is made, while labels/field names remain free to describe the observed evidence.
-const PG_RESPONSE_EXPOSURE_TAXONOMY = /^Excessive data exposure: res\.json\(\.\.\.\) .+ \(pg-resjson-exposure-(?:direct|spread|select-star)\)$/;
+const PG_RESPONSE_EXPOSURE_TAXONOMY = /^Excessive data exposure: res\.json\(\.\.\.\) [\s\S]+ \(pg-resjson-exposure-(?:direct|spread|select-star)\)$/;
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.
 // First matching rule wins; a taxonomy that matches none is unclassified and fails the enumeration
