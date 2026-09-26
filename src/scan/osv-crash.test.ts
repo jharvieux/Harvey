@@ -277,6 +277,26 @@ describe("OSV input inventory and effective examination (#2033)", () => {
     expect(() => validateOsvAssessment(hidden, run.result, inventoryOsvInputs(target))).toThrow("does not reconcile");
   });
 
+  it("examines a pnpm alias selected with its actual registry name and peer suffix", () => {
+    const target = root();
+    const original = "lockfileVersion: '9.0'\nimporters:\n  apps/web:\n    devDependencies:\n      emulate:\n        specifier: npm:@inbox-zero/emulate@0.5.0\n        version: '@inbox-zero/emulate@0.5.0(hono@4.12.18)'\npackages:\n  '@inbox-zero/emulate@0.5.0':\n    resolution: {integrity: sha512-alias}\n";
+    write(target, "pnpm-lock.yaml", original);
+    let invoked = 0;
+    osvBehavior = (args) => {
+      invoked++;
+      expect(args).toContain("--all-packages");
+      expect(readFileSync(args.at(-1)!, "utf8")).toBe(original);
+      return JSON.stringify({ results: [{ source: { path: args.at(-1) }, packages: [{ package: { name: "@inbox-zero/emulate", version: "0.5.0", ecosystem: "npm" } }] }] });
+    };
+    const run = runOsvScanner(target);
+    expect(invoked).toBe(1);
+    expect(run.failure).toBeUndefined();
+    expect(run.assessment).toMatchObject({ status: "assessed", invocations: [{ examinedPackages: ["npm:@inbox-zero/emulate@0.5.0"], unassessedPackages: [] }] });
+    expect(run.execution.inputs).toMatchObject([{ status: "completed" }]);
+    expect(() => assertOsvExecution(run.assessment, run.execution)).not.toThrow();
+    expect(readFileSync(join(target, "pnpm-lock.yaml"), "utf8")).toBe(original);
+  });
+
   it("normalizes pnpm v6 scoped-peer keys for the pinned provider without changing identities, dev/optional flags, or the client lock", () => {
     const target = root();
     const original = [
