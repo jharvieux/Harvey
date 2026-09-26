@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -21,7 +21,7 @@ const workflow = parse(readFileSync(join(root, ".github/workflows/corpus-drift.y
 const command = workflow.jobs.drift.steps.find(({ name }) => name === "Merge and validate the complete live advisory population")!.run!;
 afterEach(() => directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-function run(mutation: string) {
+async function run(mutation: string) {
   const dir = mkdtempSync(join(tmpdir(), "corpus-observation-cli-"));
   directories.push(dir);
   const source = join(dir, "source");
@@ -88,29 +88,38 @@ if (files.length !== 6 || files.some((file) => fs.readFileSync(file, "utf8") !==
     Object.values(parts[0]!.targets)[0]!.status = "started";
   }
   parts.forEach((part, index) => writeFileSync(join(partsDir, `corpus-advisory-observation-shard${index + 1}.json`), JSON.stringify(part)));
-  const result = spawnSync("bash", ["-c", 'pnpm() { [ "$1" = exec ] && [ "$2" = tsx ] || return 99; shift 2; "$TEST_NODE" --import "$TEST_TSX" "$TEST_SOURCE/$1" "${@:2}"; }\n' + command], {
-    cwd: source, encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, TEST_NODE: process.execPath, TEST_TSX: tsxLoader, TEST_SOURCE: root, GITHUB_SHA: provenance.headSha, GITHUB_RUN_ID: provenance.runId, GITHUB_RUN_ATTEMPT: provenance.runAttempt },
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+    const child = spawn("bash", ["-c", 'pnpm() { [ "$1" = exec ] && [ "$2" = tsx ] || return 99; shift 2; "$TEST_NODE" --import "$TEST_TSX" "$TEST_SOURCE/$1" "${@:2}"; }\n' + command], {
+      cwd: source, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, TEST_NODE: process.execPath, TEST_TSX: tsxLoader, TEST_SOURCE: root, GITHUB_SHA: provenance.headSha, GITHUB_RUN_ID: provenance.runId, GITHUB_RUN_ATTEMPT: provenance.runAttempt }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", rejectRun); child.on("close", (status) => resolveRun({ status, stdout, stderr }));
   });
+  expect(serviced, "workflow aggregation child work must service the Vitest worker event loop").toBe(true);
+  await heartbeat;
   const path = join(dir, "corpus-advisory-observation.json");
   return { result, parts, artifact: existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as CorpusAdvisoryObservationArtifact : undefined };
 }
 
 describe("shipping live observation aggregation command (#2153)", () => {
-  it("assembles the complete pinned population through the actual workflow command", () => {
-    const { result, parts, artifact } = run("complete");
+  it("assembles the complete pinned population through the actual workflow command", async () => {
+    const { result, parts, artifact } = await run("complete");
     expect(result.status, result.stderr).toBe(0);
     expect(artifact?.populationComplete).toBe(true);
     expect(artifact?.targets).toEqual(Object.assign({}, ...parts.map(({ targets }) => targets)));
     expect(artifact?.expectedTargets).toHaveLength(EXTERNAL_CORPUS.length);
   });
-  it.each(["missing", "duplicate", "wrong-run"])("refuses %s inputs before publishing a canonical observation", (mutation) => {
-    const { result, artifact } = run(mutation);
+  it.each(["missing", "duplicate", "wrong-run"])("refuses %s inputs before publishing a canonical observation", async (mutation) => {
+    const { result, artifact } = await run(mutation);
     expect(result.status, result.stderr).toBe(1);
     expect(artifact).toBeUndefined();
   });
-  it("delivers interrupted observations with a nonzero outcome and incomplete population", () => {
-    const { result, artifact } = run("interrupted");
+  it("delivers interrupted observations with a nonzero outcome and incomplete population", async () => {
+    const { result, artifact } = await run("interrupted");
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("incomplete live advisory population");
     expect(artifact?.populationComplete).toBe(false);

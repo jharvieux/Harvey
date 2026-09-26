@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CORPUS_DRIFT_RUNTIME_ROOTS,
@@ -14,9 +15,10 @@ import {
 const CLI = fileURLToPath(new URL("./corpus-drift-relevance.ts", import.meta.url));
 const TSX = createRequire(import.meta.url).resolve("tsx");
 const disposable: string[] = [];
+const execFileAsync = promisify(execFile);
 
-function git(root: string, args: string[]): string {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+async function git(root: string, args: string[]): Promise<string> {
+  return (await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" })).stdout.trim();
 }
 
 function put(root: string, path: string, body: string): void {
@@ -25,18 +27,18 @@ function put(root: string, path: string, body: string): void {
   writeFileSync(absolute, body);
 }
 
-function commit(root: string, message: string): string {
-  git(root, ["add", "-A"]);
-  git(root, ["commit", "-qm", message]);
+async function commit(root: string, message: string): Promise<string> {
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "-qm", message]);
   return git(root, ["rev-parse", "HEAD"]);
 }
 
-function fixture(): { root: string; base: string } {
+async function fixture(): Promise<{ root: string; base: string }> {
   const root = mkdtempSync(join(tmpdir(), "harvey-corpus-relevance-cli-"));
   disposable.push(root);
-  git(root, ["init", "-q", "-b", "main"]);
-  git(root, ["config", "user.name", "Fixture"]);
-  git(root, ["config", "user.email", "fixture@example.test"]);
+  await git(root, ["init", "-q", "-b", "main"]);
+  await git(root, ["config", "user.name", "Fixture"]);
+  await git(root, ["config", "user.email", "fixture@example.test"]);
   for (const runtimeRoot of CORPUS_DRIFT_RUNTIME_ROOTS) put(root, runtimeRoot, "export const runtime = true;\n");
   put(root, "src/cli/corpus-cache-transport.ts", "export const transport = true;\n");
   put(root, "src/cli/corpus-drift-relevance.ts", "export const relevance = true;\n");
@@ -73,18 +75,27 @@ function fixture(): { root: string; base: string } {
     "",
   ].join("\n"));
   put(root, "report-template/render.mjs", "export const render = true;\n");
-  return { root, base: commit(root, "base") };
+  return { root, base: await commit(root, "base") };
 }
 
-function run(root: string, base: string): { status: number | null; stdout: string; stderr: string; receipt: CorpusDriftRelevanceReceipt } {
+async function run(root: string, base: string): Promise<{ status: number | null; stdout: string; stderr: string; receipt: CorpusDriftRelevanceReceipt }> {
   const inputs = mkdtempSync(join(tmpdir(), "harvey-corpus-relevance-inputs-"));
   disposable.push(inputs);
   const ownershipPath = join(inputs, "ownership.json");
   writeFileSync(ownershipPath, `${JSON.stringify(defaultCorpusInputOwnership(["fixture"]), null, 2)}\n`);
-  const result = spawnSync(process.execPath, ["--import", TSX, CLI, "classify", "--root", root, "--base", base, "--ownership", ownershipPath], {
-    encoding: "utf8",
-    cwd: fileURLToPath(new URL("../..", import.meta.url)),
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, ["--import", TSX, CLI, "classify", "--root", root, "--base", base, "--ownership", ownershipPath], {
+      cwd: fileURLToPath(new URL("../..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", rejectRun); child.on("close", (status) => resolveRun({ status, stdout, stderr }));
   });
+  expect(serviced, "corpus relevance child work must service the Vitest worker event loop").toBe(true);
+  await heartbeat;
   return {
     status: result.status,
     stdout: result.stdout,
@@ -102,8 +113,8 @@ describe("corpus-drift-relevance CLI", () => {
     expect(readFileSync(CLI, "utf8").split("\n")[0]).toBe('import "./sync-stdio.js";');
   });
 
-  it("generates canonical ownership from the exact C3 schema without a workflow-side map", () => {
-    const repository = fixture();
+  it("generates canonical ownership from the exact C3 schema without a workflow-side map", async () => {
+    const repository = await fixture();
     const inputs = mkdtempSync(join(tmpdir(), "harvey-corpus-ownership-cli-"));
     disposable.push(inputs);
     const mechanical = join(inputs, "mechanical.json");
@@ -124,11 +135,12 @@ describe("corpus-drift-relevance CLI", () => {
         registryFile: "src/scan/mechanical-dependency-registry.ts",
       }],
     }, null, 2)}\n`);
-    const result = spawnSync(process.execPath, [
-      "--import", TSX, CLI, "ownership", "--mechanical-ownership", mechanical, "--out", out,
-    ], {
-      encoding: "utf8",
-      cwd: repository.root,
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+      const child = spawn(process.execPath, ["--import", TSX, CLI, "ownership", "--mechanical-ownership", mechanical, "--out", out], { cwd: repository.root, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.on("error", rejectRun); child.on("close", (status) => resolveRun({ status, stdout, stderr }));
     });
     expect(result.status).toBe(0);
     const generated = JSON.parse(readFileSync(out, "utf8")) as ReturnType<typeof defaultCorpusInputOwnership>;
@@ -143,17 +155,20 @@ describe("corpus-drift-relevance CLI", () => {
     expect(result.stderr).toMatch(/wrote schema 1 with 9 runtime roots, 2 live mechanical producer row/);
   });
 
-  it("ships unflagged ownership with discovered inputs and fails loudly when a live registration disappears", () => {
-    const repository = fixture();
+  it("ships unflagged ownership with discovered inputs and fails loudly when a live registration disappears", async () => {
+    const repository = await fixture();
     const outputs = mkdtempSync(join(tmpdir(), "harvey-corpus-shipping-ownership-"));
     disposable.push(outputs);
     const out = join(outputs, "ownership.json");
-    const invoke = () => spawnSync(process.execPath, ["--import", TSX, CLI, "ownership", "--out", out], {
-      encoding: "utf8",
-      cwd: repository.root,
+    const invoke = () => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+      const child = spawn(process.execPath, ["--import", TSX, CLI, "ownership", "--out", out], { cwd: repository.root, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.on("error", rejectRun); child.on("close", (status) => resolveRun({ status, stdout, stderr }));
     });
 
-    const generatedResult = invoke();
+    const generatedResult = await invoke();
     expect(generatedResult.status).toBe(0);
     const generated = JSON.parse(readFileSync(out, "utf8")) as ReturnType<typeof defaultCorpusInputOwnership>;
     expect(generated.nonImportInputs.length).toBeGreaterThan(0);
@@ -173,37 +188,40 @@ describe("corpus-drift-relevance CLI", () => {
       && input.targetSelection.falsifier.length > 0)).toBe(true);
 
     put(repository.root, "src/scan/secrets.ts", "export const registrationWasRemoved = true;\n");
-    commit(repository.root, "remove gitleaks registration");
+    await commit(repository.root, "remove gitleaks registration");
     rmSync(out, { force: true });
-    const missingRegistration = invoke();
+    const missingRegistration = await invoke();
     expect(missingRegistration.status).toBe(2);
     expect(missingRegistration.stderr).toMatch(/discovery disagreement.*no longer registers.*gitleaks-supabase\.toml/);
   });
 
-  it("prints a machine receipt that distinguishes nothing-assessed no-op from full scan", () => {
-    const { root, base } = fixture();
+  it("prints a machine receipt that distinguishes nothing-assessed no-op from full scan", async () => {
+    const { root, base } = await fixture();
     put(root, "report-template/render.mjs", "export const render = false;\n");
-    commit(root, "change report renderer");
+    await commit(root, "change report renderer");
 
-    const noOp = run(root, base);
+    const noOp = await run(root, base);
     expect(noOp.status).toBe(0);
     expect(noOp.receipt.decision).toBe("declared-no-op");
     expect(noOp.receipt.assessment).toMatchObject({ status: "nothing-assessed", unitsAssessed: 0 });
     expect(noOp.stderr).toMatch(/declared-no-op — nothing assessed/);
 
     put(root, "src/cli/corpus-drift.ts", "export const runtime = false;\n");
-    commit(root, "change producer");
-    const full = run(root, base);
+    await commit(root, "change producer");
+    const full = await run(root, base);
     expect(full.status).toBe(0);
     expect(full.receipt.decision).toBe("full-scan");
     expect(full.receipt.reasons).toEqual(expect.arrayContaining([expect.objectContaining({ code: "owned-input-change" })]));
     expect(full.stderr).toMatch(/full-scan.*hosted full-pinned-corpus gate remains the backstop/);
   });
 
-  it("rejects malformed invocation instead of guessing a Git range", () => {
-    const result = spawnSync(process.execPath, ["--import", TSX, CLI, "classify", "--head", "HEAD"], {
-      encoding: "utf8",
-      cwd: fileURLToPath(new URL("../..", import.meta.url)),
+  it("rejects malformed invocation instead of guessing a Git range", async () => {
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+      const child = spawn(process.execPath, ["--import", TSX, CLI, "classify", "--head", "HEAD"], { cwd: fileURLToPath(new URL("../..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.on("error", rejectRun); child.on("close", (status) => resolveRun({ status, stdout, stderr }));
     });
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/requires --base.*--ownership/);
