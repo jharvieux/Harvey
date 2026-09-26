@@ -119,11 +119,11 @@ else {
 `;
   interface ShellReceipt { argv: string[]; program?: string; pid: number; status?: number; stdout?: string; stderr?: string }
   interface NativeTimeoutReceipt { requestedTimeout: number; pid: number; status: number | null; signal: string | null; error?: string }
-  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<ChildResult & { receipt?: ShellReceipt; nativeTimeout?: NativeTimeoutReceipt }> {
+  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}, command = 'eval "$HARVEY_FALSIFIER_FIXTURE_PROGRAM"'): Promise<ChildResult & { receipt?: ShellReceipt; nativeTimeout?: NativeTimeoutReceipt }> {
     const dir = plant({ "reason.md": [
       "REASON: a controlled fixture still describes a blocker",
       "KIND: empirical", "PROVENANCE: MEASURED 2026-08-26",
-      "FALSIFIER: :; <fixture-program>", "FALSIFIER-TIER: lighthouse",
+      `FALSIFIER: ${command}`, "FALSIFIER-TIER: lighthouse",
     ].join("\n") });
     const bin = plant({ sh: SHELL_FIXTURE });
     chmodSync(join(bin, "sh"), 0o755);
@@ -142,7 +142,7 @@ cp.spawnSync=function(bin,args,options){
   return result;
 }; require("node:module").syncBuiltinESMExports();`);
     try {
-      const result = await gate(dir, ["--revalidate", "--tier", "lighthouse"], {
+      const result = await gate(dir, ["--revalidate", "--tier", "lighthouse", "--list"], {
         ...extraEnv, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_SH_RECEIPT: receiptPath,
         HARVEY_FALSIFIER_FIXTURE_PROGRAM: program,
         ...(extraEnv.HARVEY_SH_MODE === "timeout" ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}` } : {}),
@@ -161,7 +161,7 @@ cp.spawnSync=function(bin,args,options){
     const result = await falsifier(program);
     expect(result.code).toBe(1);
     expect(result.out).toContain("STALE");
-    expect(result.receipt?.program).toBe(`:; ${program}`);
+    expect(result.receipt?.program).toBe('eval "$HARVEY_FALSIFIER_FIXTURE_PROGRAM"');
     expect(result.receipt?.stdout).toContain(canary);
     expect(JSON.stringify(result.receipt?.argv)).not.toContain(canary);
   });
@@ -171,7 +171,7 @@ cp.spawnSync=function(bin,args,options){
     const result = await falsifier(program);
     expect(result.code).toBe(1);
     expect(result.out).toContain("STALE");
-    expect(result.receipt?.program).toBe(`:; ${program}`);
+    expect(result.receipt?.program).toBe('eval "$HARVEY_FALSIFIER_FIXTURE_PROGRAM"');
     expect(result.receipt?.stdout).toBe("literal 'quotes' \"$dollar\" `not-run` \\backslash\nline two\npositional:0\n");
     expect(result.receipt?.stderr).toBe("");
   });
@@ -204,6 +204,37 @@ cp.spawnSync=function(bin,args,options){
     expect(result.out).toContain("refusing to spawn");
     expect(result.receipt).toBeUndefined();
     expect(result.out).not.toContain("no reason has outlived its truth");
+  });
+
+  it("runs a bound path as exact literal data and preserves the 0/1/127 contract through the actual CLI (#2090)", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-reason path "));
+    const exact = join(fixture, "existing ;$(printf${IFS}injected)*'file");
+    const missing = join(fixture, "missing path");
+    writeFileSync(exact, "fixture");
+    try {
+      const stale = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: exact }, "test -f <fixture-path>");
+      expect(stale.receipt?.status).toBe(0);
+      expect(stale.code).toBe(1);
+      expect(stale.out).toContain("STALE");
+      expect(stale.out).toContain("a controlled fixture still describes a blocker");
+      expect(stale.receipt?.program).toContain(`'${exact.replaceAll("'", "'\"'\"'")}'`);
+
+      const holds = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: missing }, "test -f <fixture-path>");
+      expect(holds.receipt?.status).toBe(1);
+      expect(holds.code).toBe(0);
+      expect(holds.out).toContain("HOLDS");
+      expect(holds.out).toContain("a controlled fixture still describes a blocker");
+      expect(holds.out).toContain(`'${missing}'\` exits 1`);
+
+      const unavailable = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: exact }, "harvey-command-that-does-not-exist <fixture-path>");
+      expect(unavailable.receipt?.status).toBe(127);
+      expect(unavailable.code).toBe(1);
+      expect(unavailable.out).toContain("UNVERIFIABLE");
+      expect(unavailable.out).toContain("a controlled fixture still describes a blocker");
+      expect(unavailable.out).toContain("exit 127");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 });
 
@@ -255,7 +286,7 @@ describe("validate-reasons CLI", () => {
     const bound = await gate(dir, ["--revalidate", "--tier", "lighthouse"], { HARVEY_FALSIFIER_SERVED_TARGET: "/dev/null" });
     expect(bound.code).toBe(1);
     expect(bound.out).toContain("STALE");
-    expect(bound.out).toContain("true /dev/null");
+    expect(bound.out).toContain("true '/dev/null'");
   });
 
   it("fails structurally — with no command run — on an empirical reason carrying no falsifier", async () => {

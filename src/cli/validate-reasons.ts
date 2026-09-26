@@ -510,11 +510,15 @@ if (process.argv.includes("--revalidate")) {
 
   const rows = revalidateReasons(empirical.filter((r) => !recordedInIssue(r)), runFalsifier, availableTiers, (placeholder) => process.env[placeholderEnvVar(placeholder)]);
   const skippedLive = rows.filter((row) => row.status === "SKIPPED-LIVE");
+  const held = rows.filter((row) => row.status === "holds");
   const broken = rows.filter((row) => row.status === "STALE" || row.status === "UNVERIFIABLE");
   const ran = rows.length - skippedLive.length;
   console.log(`\nRe-validated ${ran} empirical falsifier(s); ${skippedLive.length} live-only skipped; ${decisional.length} decisional reason(s) excluded by kind.`);
   for (const row of skippedLive) {
     console.log(`\nℹ SKIPPED-LIVE  ${row.file}:${row.line}\n    ${row.claim.slice(0, 120)}\n    ${row.detail}`);
+  }
+  if (process.argv.includes("--list")) {
+    for (const row of held) console.log(`\n✓ HOLDS  ${row.file}:${row.line}\n    ${row.claim.slice(0, 120)}\n    ${row.detail}`);
   }
   for (const row of broken) {
     failed = true;

@@ -136,8 +136,23 @@ describe("validateRecordedReason — the empirical/decisional split is structura
     expect(errors).toContain("input redirect");
   });
 
-  it("allows a <placeholder> once the reason declares the tier that supplies it", () => {
-    expect(validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir <some-clone>", FALSIFIER_TIER]))).toEqual([]);
+  it("allows an unquoted whole-word or assignment-value <placeholder> once its tier supplies it", () => {
+    expect(validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: TOKEN=<token> pnpm quick-scan --dir <some-clone>", FALSIFIER_TIER]))).toEqual([]);
+  });
+
+  it.each([
+    "pnpm quick-scan --dir '<some-clone>'",
+    'pnpm quick-scan --dir "<some-clone>"',
+    "printf '%s' 'prefix <some-clone> suffix'",
+    'printf "%s" "prefix <some-clone> suffix"',
+    "pnpm quick-scan --dir prefix<some-clone>",
+    "pnpm quick-scan --dir <some-clone>/suffix",
+    "printf '%s' $(printf '%s' <some-clone>)",
+    "printf '%s' `printf '%s' <some-clone>`",
+    "cat <<< <some-clone>",
+  ])("rejects a quoted or concatenated placeholder because literal encoding only owns a complete value: %s", (command) => {
+    const errors = validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, `FALSIFIER: ${command}`, FALSIFIER_TIER])).join();
+    expect(errors).toContain("unquoted complete shell word or assignment value");
   });
 
   it("does not mistake shell syntax for a placeholder", () => {
@@ -433,14 +448,33 @@ describe("revalidateReasons — seeded proof that the gate fires on a reason who
       expect(rows[0]?.detail).toContain("HARVEY_FALSIFIER_SOME_CLONE");
     });
 
-    it("substitutes the binding and runs the resolved command", () => {
+    it("refuses to run a quoted placeholder even when it is bound", () => {
+      const quoted = [CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir '<some-clone>'", FALSIFIER_TIER];
+      const rows = revalidateReasons([one(quoted)], () => {
+        throw new Error("an unsafe placeholder slot must not reach the shell");
+      }, available, () => "/clones/superredhat");
+      expect(statuses(rows)).toEqual(["UNVERIFIABLE"]);
+      expect(rows[0]?.detail).toContain("unquoted complete shell word or assignment value");
+    });
+
+    it("encodes the binding as one literal shell word before running the resolved command", () => {
       let ran = "";
       const rows = revalidateReasons([one(PLACEHOLDER_FALSIFIER)], (c) => {
         ran = c;
         return { code: 1, output: "" };
       }, available, () => "/clones/superredhat");
-      expect(ran).toBe("pnpm quick-scan --dir /clones/superredhat | grep -q csrf");
+      expect(ran).toBe("pnpm quick-scan --dir '/clones/superredhat' | grep -q csrf");
       expect(statuses(rows)).toEqual(["holds"]);
+    });
+
+    it("keeps whitespace, quotes and shell metacharacters in a binding literal", () => {
+      let ran = "";
+      const binding = "/clones/Super Red;$(printf injected)*'Hat";
+      revalidateReasons([one(PLACEHOLDER_FALSIFIER)], (command) => {
+        ran = command;
+        return { code: 1, output: "" };
+      }, available, () => binding);
+      expect(ran).toBe("pnpm quick-scan --dir '/clones/Super Red;$(printf injected)*'\"'\"'Hat' | grep -q csrf");
     });
 
     it("names the bindings the live run will need when the tier is unavailable", () => {

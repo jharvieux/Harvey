@@ -51,14 +51,62 @@ export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbenc
 // falsifiers used `<crapi-gateway>`-style angle-bracket prose, and `sh -c` reads `<` as an INPUT
 // REDIRECT — so `--tier secbench` did not re-test anything, it died on "No such file or directory"
 // and exited 1, which this file's contract reads as "the blocker still holds". Because that syntax
-// makes every unbound live target unfalsifiable by construction, a
-// placeholder is now a declared BINDING: substituted from HARVEY_FALSIFIER_<NAME> on the run that
-// has the tier, and UNVERIFIABLE — never executed — when unbound. Lowercase-and-hyphens only, so a
-// real redirect (`< /dev/null`, `2>&1`, `<<EOF`) is not mistaken for one.
+// makes every unbound live target unfalsifiable by construction, a placeholder is now a declared
+// BINDING: read from HARVEY_FALSIFIER_<NAME> on the run that has the tier, encoded by Harvey as one
+// literal shell word, and UNVERIFIABLE — never executed — when unbound. The author must leave the
+// placeholder unquoted as a complete word or assignment value, keeping the quoting boundary under
+// Harvey's control. Lowercase-and-hyphens only, so a real redirect (`< /dev/null`, `2>&1`, `<<EOF`)
+// is not mistaken for one.
 const PLACEHOLDER_TOKEN = /<([a-z][a-z0-9-]*)>/g;
 
 function falsifierPlaceholders(command: string): string[] {
   return [...new Set([...command.matchAll(PLACEHOLDER_TOKEN)].map((m) => m[1] as string))];
+}
+
+function placeholderShellContext(command: string, end: number): "quote" | "command substitution" | undefined {
+  let quote: "'" | '"' | "`" | undefined;
+  let commandSubstitutionDepth = 0;
+  for (let i = 0; i < end; i += 1) {
+    const char = command[i];
+    if (char === "\\" && quote !== "'") {
+      i += 1;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "$" && command[i + 1] === "(") {
+      commandSubstitutionDepth += 1;
+      i += 1;
+      continue;
+    }
+    if (char === ")" && commandSubstitutionDepth > 0) commandSubstitutionDepth -= 1;
+  }
+  if (quote !== undefined) return "quote";
+  if (commandSubstitutionDepth > 0) return "command substitution";
+  return undefined;
+}
+
+function unsafePlaceholderSlots(command: string): string[] {
+  const shellBoundary = (char: string | undefined): boolean => char === undefined || /[\s;|&()]/.test(char);
+  const hasHereDocumentOrString = command.includes("<<");
+  return [...new Set([...command.matchAll(PLACEHOLDER_TOKEN)].flatMap((match) => {
+    const index = match.index ?? 0;
+    const before = index === 0 ? undefined : command[index - 1];
+    const afterIndex = index + match[0].length;
+    const after = afterIndex === command.length ? undefined : command[afterIndex];
+    const literalSlot = (shellBoundary(before) || before === "=") && shellBoundary(after);
+    return literalSlot && placeholderShellContext(command, index) === undefined && !hasHereDocumentOrString ? [] : [match[1] as string];
+  }))];
+}
+
+function shellLiteral(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export function placeholderEnvVar(name: string): string {
@@ -617,6 +665,10 @@ export function validateRecordedReason(r: ParsedReason, exists: (path: string) =
     if (unbindable.length > 0 && tier === undefined) {
       errors.push(`FALSIFIER: names placeholder(s) ${bindingHint(unbindable)} but declares no FALSIFIER-TIER. Offline the command is run as written, where the shell reads \`<${unbindable[0]}>\` as an input redirect — it exits non-zero without testing anything, which reads as "the blocker holds" forever. Either write real paths, or tag the tier so the placeholders become run-time bindings (#1072).`);
     }
+    const unsafeSlots = f.FALSIFIER ? unsafePlaceholderSlots(f.FALSIFIER) : [];
+    if (unsafeSlots.length > 0) {
+      errors.push(`FALSIFIER: placeholder(s) ${bindingHint(unsafeSlots)} must be an unquoted complete shell word or assignment value (#2090). Harvey encodes the environment value as one literal shell word; quotes, concatenation, command substitutions, backticks, and heredoc/here-string programs put part of that boundary back under command-author control and are refused.`);
+    }
   }
   if (kind === "decisional") {
     if (f.FALSIFIER) errors.push("FALSIFIER: refused on a decisional reason — a human ruling is not re-testable by command, and sweeping it into the re-validation gate produces noise that discredits the gate (#1033)");
@@ -693,7 +745,9 @@ export interface FalsifierResult {
 //
 // `binding` resolves a `<placeholder>` in the command to the operator-supplied path/URL for this
 // run. An unbound placeholder is UNVERIFIABLE rather than executed, because running it as written
-// produces a non-zero exit indistinguishable from "the blocker holds".
+// produces a non-zero exit indistinguishable from "the blocker holds". A bound value is encoded as
+// one POSIX-shell literal word here, at the same boundary where substitution happens. Command
+// authors own the surrounding program; they do not own quoting of the supplied value (#2090).
 export function revalidateReasons(
   reasons: ParsedReason[],
   run: (command: string) => FalsifierResult,
@@ -707,18 +761,23 @@ export function revalidateReasons(
     const base = { file: r.file, line: r.line, claim: r.fields.REASON ?? "" };
     const tier = r.fields["FALSIFIER-TIER"];
     const placeholders = falsifierPlaceholders(command);
+    const unsafeSlots = unsafePlaceholderSlots(command);
     if (tier !== undefined && !availableTiers.has(tier)) {
       const bindings = placeholders.length > 0 ? ` That run must also bind ${bindingHint(placeholders)}.` : "";
       return [{ ...base, status: "SKIPPED-LIVE" as const, detail: `live-only falsifier not run — its tier "${tier}" is not available on this run. Re-run where that tier exists: \`--tier ${tier}\` (or \`--live\`).${bindings} \`${command}\`` }];
     }
-    const unbound = placeholders.filter((p) => binding(p) === undefined);
+    if (unsafeSlots.length > 0) {
+      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier has placeholder(s) outside an unquoted complete shell word or assignment value — rewrite ${bindingHint(unsafeSlots)} before re-running. It was NOT executed because quotes, concatenation, command substitutions, backticks, and heredoc/here-string programs do not preserve Harvey's literal binding boundary. \`${command}\`` }];
+    }
+    const bindings = new Map(placeholders.map((placeholder) => [placeholder, binding(placeholder)]));
+    const unbound = placeholders.filter((placeholder) => bindings.get(placeholder) === undefined);
     if (unbound.length > 0) {
       return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier has unbound placeholder(s) — set ${bindingHint(unbound)} and re-run. It was NOT executed: as written the shell reads \`<${unbound[0]}>\` as an input redirect and exits non-zero, which is indistinguishable from the blocker still holding. \`${command}\`` }];
     }
-    const resolved = placeholders.reduce((c, p) => c.replaceAll(`<${p}>`, binding(p) as string), command);
+    const resolved = placeholders.reduce((c, placeholder) => c.replaceAll(`<${placeholder}>`, shellLiteral(bindings.get(placeholder) as string)), command);
     const { code, output } = run(resolved);
     if (code === null || code === 127) {
-      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "command not found"}): \`${resolved}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
+      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "exit 127: command not found"}): \`${resolved}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
     }
     if (code === 0) {
       return [{ ...base, status: "STALE" as const, detail: `FALSIFIED: \`${resolved}\` now exits 0, which by this reason's own contract means the blocker is GONE — the text says otherwise. Re-verify, then delete the reason and do the work it was deferring, or correct the claim. ${output.trim().slice(0, 200)}` }];
