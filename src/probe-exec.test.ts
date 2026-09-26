@@ -45,8 +45,8 @@ describe("probeExec command execution receipts", () => {
       expect(result.ok).toBe(true);
       expect(started).toBeDefined();
       expect(finished).toBeDefined();
-      // Child timestamps bound the actual process window; ticks before launch or after exit
-      // cannot make a synchronous implementation appear to yield.
+      // Count only ticks between the child timestamps so host work outside the child window
+      // stays excluded from the liveness assertion.
       expect(beats.some((beat) => beat > started! && beat < finished!)).toBe(true);
     } finally {
       clearImmediate(heartbeat);
