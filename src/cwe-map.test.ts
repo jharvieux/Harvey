@@ -1,9 +1,10 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { classifyTaxonomyCwe, enrichFindingsCwe } from "./cwe-map.js";
 import type { Finding } from "./findings.js";
+import { readEntriesSafe } from "./fs-walk.js";
 import { MECHANICAL_DETECTORS } from "./scan/mechanical-detector-registry.js";
 import { runRegisteredNormalizationEngines } from "./scan/mechanical-normalization-registry.js";
 import { detectPgResponseExposureFindings } from "./scan/pg-response-exposure.js";
@@ -21,12 +22,18 @@ function finding(over: Partial<Finding> = {}): Finding {
   };
 }
 
+function sourceEntries(path: string) {
+  const { entries, dangling } = readEntriesSafe(path);
+  expect(dangling, `Unresolved source entries in ${path}`).toEqual([]);
+  return entries;
+}
+
 // Discovery scans both producer trees, regardless of which runner owns a file. Unread expressions
 // remain failures unless their exact source site has a checked finite-family or forwarding contract.
 function sourceFiles(path: string): string[] {
-  return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
+  return sourceEntries(path).flatMap((entry) => {
     const child = join(path, entry.name);
-    if (entry.isDirectory()) return sourceFiles(child);
+    if (entry.isDirectory) return sourceFiles(child);
     return /\.(?:ts|tsx|mts|cts)$/.test(entry.name) && !/\.(?:test|spec)\./.test(entry.name) ? [child] : [];
   });
 }
@@ -282,9 +289,9 @@ const boundaryCases: { fixture: string; framework?: TargetFramework }[] = [
 
 function boundaryFindings(fixture: string, framework: TargetFramework | undefined, direction: "positive" | "negative"): Finding[] {
   const root = join("src/detectors/__fixtures__", fixture, direction);
-  const load = (path: string): { path: string; text: string }[] => readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
+  const load = (path: string): { path: string; text: string }[] => sourceEntries(path).flatMap((entry) => {
     const child = join(path, entry.name);
-    if (entry.isDirectory()) return load(child);
+    if (entry.isDirectory) return load(child);
     return entry.name.endsWith(".txt") ? [{ path: relative(root, child).replace(/\.txt$/, ""), text: readFileSync(child, "utf8") }] : [];
   });
   return detectAppRouterFindings(load(root), framework).filter((finding) => finding.taxonomy.endsWith(" missing authorization check"));
