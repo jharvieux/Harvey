@@ -15,13 +15,16 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AUDIT_MODULES } from "../audit-coverage.js";
-import type { ReadinessPlanV1 } from "../audit-readiness.js";
+import { discoverReadinessPlan, type ReadinessPlanV1 } from "../audit-readiness.js";
+import { bindReadinessPlanV1 } from "../audit-readiness-authority.js";
+import { captureSourceSentinel } from "../disposable-target.js";
+import { createReadinessReceiptContext, validateReadinessExecutionV1, type ReadinessExecutionV1 } from "../audit-readiness-receipts.js";
 import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
 
@@ -75,10 +78,10 @@ function killChildGroup(pid: number | undefined): void {
   }
 }
 
-function startChild(command: string, args: string[]) {
+function startChild(command: string, args: string[], env: Record<string, string> = {}) {
   // tsx -> run-audit -> pnpm -> scanner all belong to this group. Killing only tsx leaves
   // scanners writing into a fixture after its suite has failed and begun removing it.
-  const child = spawn(command, args, { cwd: REPO_ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd: REPO_ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   const completion = new Promise<ChildResult>((res, rej) => {
     let out = "";
     let timedOut = false;
@@ -110,9 +113,9 @@ function startChild(command: string, args: string[]) {
   return { child, completion };
 }
 
-async function runCapturing(args: string[]): Promise<ChildResult> {
+async function runCapturing(args: string[], env: Record<string, string> = {}): Promise<ChildResult> {
   const started = performance.now();
-  const result = await startChild("node_modules/.bin/tsx", [CLI, ...args]).completion;
+  const result = await startChild("node_modules/.bin/tsx", [CLI, ...args], env).completion;
   console.info(`run-audit ${args.filter((arg) => arg.startsWith("--")).join(" ")}: exit ${result.code} in ${Math.round(performance.now() - started)}ms`);
   return result;
 }
@@ -343,6 +346,110 @@ describe("run-audit CLI export capture", () => {
     expect(auditedApps).toEqual(readinessPlan.workspaceInventory.applicationWorkspaceIds);
     expect(readinessEngagement.coverage).toEqual(engagement.coverage);
     expect(readinessEngagement.findings).toEqual(engagement.findings);
+  }, CASE_TIMEOUT_MS);
+});
+
+describe("run-audit readiness continuity through real CLI children (#1897)", () => {
+  let root: string, target: string, authority: string;
+  let plan: ReadinessPlanV1;
+  let baseline: FindingsDocument;
+  let source: Awaited<ReturnType<typeof captureSourceSentinel>>;
+  const approvedEnvNames = ["READINESS_MODE", "READINESS_TOKEN"];
+  const environment = (mode: string) => ({ READINESS_MODE: mode, READINESS_TOKEN: "cli-readiness-secret-canary" });
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-readiness-cli-"));
+    target = join(root, "source");
+    const tools = join(root, "tools");
+    mkdirSync(target); mkdirSync(tools);
+    const scripts = { codegen: "node generator.cjs", build: "node builder.cjs", typecheck: "node checker.cjs", lint: "node linter.cjs", test: "node tester.cjs" };
+    const pkg = { name: "readiness-cli", version: "1.0.0", private: true, packageManager: "npm@10.9.2", scripts };
+    writeFileSync(join(target, "package.json"), JSON.stringify(pkg));
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({ name: pkg.name, version: pkg.version, lockfileVersion: 3, packages: { "": pkg } }));
+    writeFileSync(join(target, "application.ts"), "export const sourceCanary = 'unchanged';\n");
+    for (const [kind, command] of Object.entries(scripts)) {
+      writeFileSync(join(target, command.split(" ")[1]!), `const fs = require('node:fs');
+fs.writeFileSync('${kind}.marker', process.cwd());
+process.stdout.write('${kind} ' + process.env.READINESS_TOKEN + '\\n');
+if (!process.env.READINESS_TOKEN) process.exitCode = 8;
+if ('${kind}' === 'codegen' && process.env.READINESS_MODE === 'failed') process.exitCode = 7;
+`);
+    }
+    const npm = join(tools, "npm");
+    writeFileSync(npm, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'ci' || args[0] === 'install') { fs.writeFileSync('install.marker', process.cwd()); process.stdout.write('install complete\\n'); }
+else {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const file = pkg.scripts[args[1]].split(' ')[1];
+  const result = require('node:child_process').spawnSync(process.execPath, [file], { stdio: 'inherit', env: process.env });
+  process.exitCode = result.status === null ? 9 : result.status;
+}
+`);
+    chmodSync(npm, 0o755);
+    source = await captureSourceSentinel(target);
+    plan = discoverReadinessPlan(target);
+    const binding = bindReadinessPlanV1(plan, source);
+    authority = join(root, "authority.json");
+    writeFileSync(authority, JSON.stringify({
+      schemaVersion: 1, planSha256: binding.planSha256, approvedEnvNames, toolchainPath: tools, timeoutMs: 5_000,
+      stageAuthorizations: plan.stages.filter((stage) => stage.assessment === "planned").map((stage) => ({
+        stageId: stage.id, effect: stage.kind === "install" ? "target-install" : "disposable-local",
+        source: "reviewed CLI fixture", reason: "These commands write only disposable markers.",
+        falsifier: "A command writes in the original source or reaches a service.",
+      })),
+    }));
+  });
+  afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+
+  it("retains the disabled audit's exact module population, findings and conservation", async () => {
+    const out = join(root, "disabled.json");
+    const result = await runCapturing([target, "--allow-target-install", "--findings-out", out], environment("success"));
+    expect(result.code, result.out).toBe(0);
+    baseline = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument;
+    expect(new Set(baseline.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(baseline.findings.length).toBeGreaterThan(0);
+    expect(baseline.conservation?.ok).toBe(true);
+    expect(await captureSourceSentinel(target)).toEqual(source);
+  }, CASE_TIMEOUT_MS);
+
+  it.each(["success", "failed"])("preserves every module after %s readiness and delivers bounded independent receipts", async (mode) => {
+    const out = join(root, `${mode}-findings.json`);
+    // Emitting into the source tests the production ordering as well as disposable isolation.
+    const receiptPath = join(target, "readiness-execution.json");
+    const planPath = join(target, "readiness-plan.json");
+    const result = await runCapturing([target, "--allow-target-install", "--findings-out", out,
+      "--readiness-plan-out", planPath, "--readiness-execute-out", receiptPath,
+      "--readiness-authorizations", authority], environment(mode));
+    const bytes = readFileSync(receiptPath, "utf8");
+    const execution: ReadinessExecutionV1 = validateReadinessExecutionV1(
+      createReadinessReceiptContext(plan, { approvedEnvNames, environment: environment(mode) }), JSON.parse(bytes),
+    );
+    expect(JSON.parse(readFileSync(planPath, "utf8"))).toEqual(plan);
+    rmSync(receiptPath); rmSync(planPath);
+    expect(result.code, result.out).toBe(mode === "success" ? 0 : 1);
+    const engagement = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument;
+    expect(engagement.coverage).toEqual(baseline.coverage);
+    expect(engagement.findings).toEqual(baseline.findings);
+    expect(engagement.conservation).toEqual(baseline.conservation);
+    expect(engagement.auditContext?.provenance?.moduleObservations).toEqual(baseline.auditContext?.provenance?.moduleObservations);
+    expect(execution.stages.map((stage) => stage.stageId).sort()).toEqual(plan.stages.map((stage) => stage.id).sort());
+    expect(execution.cleanup).toMatchObject({ status: "passed", removal: { status: "removed" }, source: { status: "passed" } });
+    expect(bytes).not.toContain(environment(mode).READINESS_TOKEN);
+    expect(await captureSourceSentinel(target)).toEqual(source);
+    const row = (kind: string) => execution.stages.find((stage) => stage.kind === kind)!;
+    expect(row("install"), JSON.stringify(row("install"))).toMatchObject({ status: "passed", execution: { kind: "process" } });
+    expect(row("lint")).toMatchObject({ status: "passed", execution: { kind: "process" } });
+    if (mode === "success") {
+      expect(execution.status).toBe("passed");
+      expect(execution.stages.every((stage) => stage.status === "passed")).toBe(true);
+    } else {
+      expect(execution.status).toBe("failed");
+      expect(row("codegen")).toMatchObject({ status: "failed", execution: { kind: "process", process: { exit: { code: 7 }, close: { code: 7 } } } });
+      for (const kind of ["build", "typecheck", "test"]) expect(row(kind)).toMatchObject({ status: "not-assessed", diagnostic: { reasonCode: "prerequisite-not-passed" } });
+      expect(result.out).toContain("READINESS FAIL");
+    }
   }, CASE_TIMEOUT_MS);
 });
 

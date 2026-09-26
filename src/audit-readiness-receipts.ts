@@ -617,7 +617,7 @@ export function validateReadinessExecutionV1(context: ReadinessReceiptContext, i
   return input as ReadinessExecutionV1;
 }
 
-/** Revalidate at the final artifact boundary; callers cannot serialize extra environment/error fields. */
+/** Revalidate at the final artifact boundary against the supported environment/error field set. */
 export function serializeReadinessExecutionV1(context: ReadinessReceiptContext, input: unknown): string {
   const value = validateReadinessExecutionV1(context, input);
   const safe = validateReadinessExecutionV1(context, safeExecution(stateOf(context), value));

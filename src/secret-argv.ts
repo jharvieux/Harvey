@@ -140,8 +140,8 @@ export class SecretRegistry {
   }
 
   /**
-   * Redact the union of overlapping matches in the original text, so replacing one value cannot
-   * expose part of another. A bounded head/tail can bisect a value; remove the matching partial
+   * Redact overlapping matches together at their original positions, before replacement changes
+   * their boundaries. A bounded head/tail can bisect a value; remove the matching partial
    * boundary too. UTF-8 decoding may place replacement characters beside that boundary.
    */
   redact(text: string, context: SecretExcerptBoundary | SecretExcerptContext = "whole"): string {
@@ -187,7 +187,7 @@ export class SecretRegistry {
     const ordinary = render("[REDACTED]");
     if (![...this.#patterns].some((secret) => ordinary.includes(secret))) return ordinary;
     // A short approved value can itself spell part of a marker, or bridge its edge. Choose a
-    // separator absent from every value so replacing text cannot construct another secret.
+    // separator absent from every value, separating replacements from surrounding text.
     for (let codepoint = 0x2588; codepoint <= 0x10ffff; codepoint++) {
       if (codepoint >= 0xd800 && codepoint <= 0xdfff) continue;
       const marker = String.fromCodePoint(codepoint);

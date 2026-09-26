@@ -5,6 +5,7 @@
 //       [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif]
 //       [--sbom-out sbom.json] [--meta meta.json]
 //       [--readiness-plan-out readiness-plan.json]
+//       [--readiness-execute-out readiness-execution.json --readiness-authorizations authority.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
 //       [--schema <path>]... | [--schema <app-name>=<path>]...
 //
@@ -91,7 +92,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
 import { beginFreshAuditContext, auditContextDigest } from "../audit-context.js";
-import { discoverReadinessPlan, serializeReadinessPlanV1 } from "../audit-readiness.js";
+import { discoverReadinessPlan, serializeReadinessPlanV1, type ReadinessPlanV1 } from "../audit-readiness.js";
+import { bindReadinessPlanV1, type ReadinessPlanBindingV1 } from "../audit-readiness-authority.js";
+import { discloseReadinessSetupFailure, executeBoundReadinessPlan, parseReadinessAuthorizations } from "../audit-readiness-run.js";
+import { captureSourceSentinel, type SourceSentinelV1 } from "../disposable-target.js";
 import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
@@ -147,6 +151,8 @@ const pdfOut = flagValue("--pdf-out");
 const assembleDir = flagValue("--assemble");
 const retainDir = flagValue("--retain-artifacts");
 const readinessPlanOut = flagValue("--readiness-plan-out");
+const readinessExecuteOut = flagValue("--readiness-execute-out");
+const readinessAuthorizations = flagValue("--readiness-authorizations");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
 // tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
@@ -182,7 +188,7 @@ supabaseRefsArg.forEach((ref, i) => {
 });
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--sbom-out sbom.json] [--readiness-plan-out readiness-plan.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--sbom-out sbom.json] [--readiness-plan-out readiness-plan.json] [--readiness-execute-out readiness-execution.json --readiness-authorizations authority.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -198,7 +204,7 @@ const targetDir = resolve(targetArg);
 // The assembly branch is before discovery, probing and execution. Tier flags authorize fresh
 // execution; importing existing evidence never needs them and refuses them to avoid ambiguity.
 if (assembleDir) {
-  const incompatible = ["--connected", "--dynamic", "--llm", "--allow-target-install", "--record", "--artifacts-dir", "--retain-artifacts", "--schema", "--supabase", "--readiness-plan-out"].filter((flag) => args.includes(flag));
+  const incompatible = ["--connected", "--dynamic", "--llm", "--allow-target-install", "--record", "--artifacts-dir", "--retain-artifacts", "--schema", "--supabase", "--readiness-plan-out", "--readiness-execute-out", "--readiness-authorizations"].filter((flag) => args.includes(flag));
   if (incompatible.length) { console.error(`--assemble cannot be combined with execution/discovery flags: ${incompatible.join(", ")}`); process.exit(2); }
   try {
     await deliverAuditReplay({ target: targetDir, bundle: resolve(assembleDir), findingsOut, coverageOut: outPath, sarifOut, sbomOut, htmlOut, pdfOut, metaPath, baselinePath, conservationOut: flagValue("--conservation-out"), configPath: flagValue("--replay-config") });
@@ -214,11 +220,24 @@ if (retainDir && artifactsDir) {
 // #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
 // tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
 // enumerates one app and the tiers behave exactly as before (no per-instance rows).
+let readinessSource: SourceSentinelV1 | undefined;
+let readinessSetupFailed = Boolean(readinessAuthorizations && !readinessExecuteOut);
+if (readinessExecuteOut) {
+  try { readinessSource = await captureSourceSentinel(targetDir); }
+  catch { readinessSetupFailed = true; }
+}
 const workspaceInventory = discoverWorkspaceInventory(targetDir);
 const appList = discoverTargets(targetDir, [], workspaceInventory).apps.map((a) => ({ name: a.name, path: a.path }));
-const readinessPlanJson = readinessPlanOut
-  ? `${serializeReadinessPlanV1(discoverReadinessPlan(targetDir, workspaceInventory))}\n`
-  : undefined;
+let readinessPlan: ReadinessPlanV1 | undefined;
+let readinessBinding: ReadinessPlanBindingV1 | undefined;
+let readinessPlanJson: string | undefined;
+if (readinessPlanOut || readinessExecuteOut) {
+  try {
+    readinessPlan = discoverReadinessPlan(targetDir, workspaceInventory);
+    readinessPlanJson = `${serializeReadinessPlanV1(readinessPlan)}\n`;
+    if (readinessSource) readinessBinding = bindReadinessPlanV1(readinessPlan, readinessSource);
+  } catch { readinessSetupFailed = true; }
+}
 
 const env: EngagementEnv = {
   connected: args.includes("--connected"),
@@ -402,6 +421,34 @@ console.log("");
 
 const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions, producerExecutionReceipts } = runAudit(AUDIT_RUNNERS, ctx);
 const auditContext = freshCapture?.finish(producerExecutionReceipts);
+let readinessExecutionJson: string | undefined;
+let readinessExecutionFailed = false;
+if (readinessExecuteOut && readinessPlan && readinessBinding) {
+  let authorization: ReturnType<typeof parseReadinessAuthorizations> | undefined;
+  try {
+    authorization = readinessAuthorizations
+      ? parseReadinessAuthorizations(JSON.parse(readFileSync(readinessAuthorizations, "utf8")), readinessBinding.planSha256)
+      : { stageAuthorizations: [], approvedEnvNames: [] };
+  } catch {
+    readinessSetupFailed = true;
+    readinessExecutionJson = discloseReadinessSetupFailure(readinessPlan, readinessBinding).json;
+  }
+  if (authorization) {
+    try {
+      const result = await executeBoundReadinessPlan({
+        sourceRoot: targetDir, plan: readinessPlan, binding: readinessBinding,
+        allowTargetInstall: args.includes("--allow-target-install"), environment: process.env,
+        ...authorization,
+      });
+      readinessExecutionJson = result.json;
+      readinessExecutionFailed = result.execution.status === "failed";
+    } catch {
+      // Execution may have begun. The delivery gate exposes the missing receipt rather than
+      // substituting a zero-work cleanup or a fabricated process outcome.
+      readinessExecutionFailed = true;
+    }
+  }
+}
 if (retainDir && auditContext) {
   for (const module of AUDIT_MODULES) {
     const path = join(captureDir!, `${module}-owning-run.json`);
@@ -562,6 +609,12 @@ if (readinessPlanOut && readinessPlanJson) {
   writeFileSync(readinessPlanOut, readinessPlanJson);
   console.log(`\nAudit readiness plan → ${readinessPlanOut}`);
 }
+if (readinessExecuteOut && readinessExecutionJson) {
+  writeFileSync(readinessExecuteOut, readinessExecutionJson);
+  console.log(`\nAudit readiness execution → ${readinessExecuteOut}`);
+}
+if (readinessSetupFailed) console.error("\nREADINESS NOT ASSESSED — its execution configuration or source binding was invalid; audit module collection completed independently.");
+if (readinessExecutionFailed) console.error("\nREADINESS FAIL — execution, disposable cleanup, or evidence validation failed. Audit module collection completed independently.");
 
 // #1470: the delivery gate. Everything above proves what was PRODUCED and ASSEMBLED; this is the
 // only check that reads the client's side of the seam. Every export the operator asked for must
@@ -575,6 +628,7 @@ const requestedExports = [
   ...(sbomOut ? [{ flag: "--sbom-out", path: sbomOut }] : []),
   ...(outPath ? [{ flag: "--out", path: outPath }] : []),
   ...(readinessPlanOut ? [{ flag: "--readiness-plan-out", path: readinessPlanOut }] : []),
+  ...(readinessExecuteOut ? [{ flag: "--readiness-execute-out", path: readinessExecuteOut }] : []),
 ];
 const undelivered = requestedExports.filter((e) => (statSafe(e.path)?.size ?? 0) === 0);
 if (undelivered.length) {
@@ -601,6 +655,7 @@ if (failures.length) {
   console.error(`\n${formatFailures(failures)}`);
   process.exit(1);
 }
+if (readinessSetupFailed || readinessExecutionFailed) process.exit(1);
 
 try {
   assertAuditComplete(recorded, env);

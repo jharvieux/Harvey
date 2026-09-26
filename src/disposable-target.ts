@@ -251,7 +251,7 @@ export async function createDisposableTarget(source: string, options: { tempPare
         if (!within(before.sourceRoot, resolved) || excluded(linkRelative)) {
           throw new BoundaryError("source-link-escape", "A retained source link escapes the source or points to an excluded dependency/build artifact.");
         }
-        // Rewrite even an absolute internal link so it cannot retain a path back to the source.
+        // Rebase absolute internal links into the copy, removing their original source path.
         await symlink(relative(dirname(to), join(target!.targetRoot, linkRelative)) || ".", to);
       } else if (info.isDirectory()) {
         await assertDirectory(from, before.sourceRoot, info);

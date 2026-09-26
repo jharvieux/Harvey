@@ -352,7 +352,7 @@ async function execute(request: ReadinessSpawnRequest, options: Configuration, q
   };
 }
 
-/** Admission must happen when the scheduler owns a slot; queued requests cannot revalidate a disposable handle. */
+/** Admit after reserving a scheduler slot, keeping the disposable handle check adjacent to execution. */
 export function createBoundedProcessRunner(options: { concurrency?: number } = {}): { run(request: ReadinessSpawnRequest, options: BoundedProcessOptions): Promise<BoundedProcessResult> } {
   const concurrency = options.concurrency ?? 1;
   if (!integer(concurrency, 16)) throw new Error("Bounded process concurrency must be an integer between one and sixteen.");
