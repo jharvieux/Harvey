@@ -72,8 +72,10 @@ function unsafePlaceholderSlots(command: string): string[] {
   // `$(` and `)` is unsound: a nested subshell, case pattern or quote changes which `)` closes it.
   // No escape processing or nested evaluation is admitted, even inside an ordinary quoted word.
   // Programs without bindings keep their existing shell semantics.
-  if (/[\\`\r\n\0]/.test(command) || ["$(", "${", "$'", '$"', "$["].some((syntax) => command.includes(syntax))) return placeholders;
-  const tokens = /[ \t]+|&&|\|\||[;|]|(?:<[a-z][a-z0-9-]*>|'[^']*'|"[^"]*"|[^ \t;&|<>'"(){}#])+/y;
+  if (/[\\`\r\n\0]/.test(command) || ["$(", "${", "$["].some((syntax) => command.includes(syntax))) return placeholders;
+  // Dollar-prefixed quotes are refused only outside ordinary quoted words: the closing quote
+  // in "$$" or '$$' does not open an ANSI-C/locale quote.
+  const tokens = /[ \t]+|&&|\|\||[;|]|(?:<[a-z][a-z0-9-]*>|'[^']*'|"[^"]*"|(?!\$['"])[^ \t;&|<>'"(){}#])+/y;
   const reserved = new Set(["if", "then", "elif", "else", "fi", "do", "done", "for", "while", "until", "case", "esac", "in", "function", "select", "time", "coproc", "[[", "]]"]);
   let index = 0;
   let hasWord = false;

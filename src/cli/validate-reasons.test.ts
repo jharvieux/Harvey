@@ -302,6 +302,7 @@ cp.spawnSync=function(bin,args,options){
     'P=<fixture-path>; test -f "$P"',
     'P=<fixture-path> sh -c \'test -f "$P"\'',
     'test -f <fixture-path> && ! false || exit 127',
+    'P=<fixture-path>; test -f "$P" && test -n "$$" && test "$$" != \'$$\'',
   ])("preserves quotes, newlines and Unicode in standalone and leading-assignment bindings: %s (#2090)", async (command) => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-reason-value-"));
     const path = join(fixture, "existing 'single' \"double\"\nnewline\ttab β\u00a0$*file");
@@ -330,6 +331,8 @@ cp.spawnSync=function(bin,args,options){
     "test -f '<fixture-path>'",
     'test -f "<fixture-path>"',
     "test -f $'<fixture-path>'",
+    "test -f <fixture-path> && printf $'literal'",
+    'test -f <fixture-path> && printf $"literal"',
     "test -f `printf '%s' <fixture-path>`",
     "test -f ${OTHER:-<fixture-path>}",
     "cat <<< <fixture-path>",
