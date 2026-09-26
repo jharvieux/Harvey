@@ -98,7 +98,7 @@ interface StubCheckRun {
 
 export type StubTestRunner = (stub: { file: string; exportName: string; stubbedText: string }, coveringTests: string[]) => CommandExecutionReceipt;
 
-export type StubCheckClassification =
+type StubCheckClassification =
   | { status: "completed"; suitePassed: boolean }
   | { status: "interrupted"; reason: string };
 
