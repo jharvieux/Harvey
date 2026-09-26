@@ -164,6 +164,17 @@ jobs:
           path: .harvey-corpus-relevance
           include-hidden-files: true
           if-no-files-found: error
+      - name: Check every pinned advisory snapshot before allocating hosted work
+        if: steps.route.outputs.relevant == 'true'
+        run: |
+          pnpm exec tsx src/cli/corpus-advisory-freshness.ts --out "$RUNNER_TEMP/corpus-advisory-freshness.json" ${{ github.event_name == 'schedule' && '--fail-warning' || '' }}
+      - name: Retain advisory freshness receipt
+        if: always() && steps.route.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-advisory-freshness
+          path: ${{ runner.temp }}/corpus-advisory-freshness.json
+          if-no-files-found: error
       - name: Authenticate private corpus mirrors for the whole-pin seed
         if: steps.route.outputs.relevant == 'true' && !inputs.alert_drill && !inputs.liveness_drill
         uses: ./.github/actions/corpus-mirror-auth
