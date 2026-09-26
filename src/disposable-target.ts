@@ -138,8 +138,9 @@ async function gitSentinel(sourceRoot: string): Promise<SourceSentinelV1["git"]>
   }
   if (!hasGit) return { status: "absent" };
   const args = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=/dev/null", "-C", sourceRoot];
+  const environment: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin:/usr/local/bin", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
   const options = {
-    env: { PATH: "/usr/bin:/bin:/usr/local/bin", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+    env: environment,
     timeout: 10_000,
     maxBuffer: 4 * 1024 ** 2,
     encoding: "utf8" as const,
@@ -151,10 +152,14 @@ async function gitSentinel(sourceRoot: string): Promise<SourceSentinelV1["git"]>
     .catch((error: unknown) => { if ((error as { code?: unknown }).code === 1) return []; throw error; });
   // Status can invoke a clean/process filter from untrusted .git/config. Disable every discovered
   // driver, including included configuration, before asking Git to inspect working-tree contents.
-  for (const key of filterKeys) {
+  for (const [index, key] of filterKeys.entries()) {
     if (!/^filter\..*\.(?:clean|smudge|process|required)$/i.test(key)) throw new BoundaryError("git-filter-config", "Git filter configuration could not be safely neutralized.");
-    args.push("-c", `${key}=${key.toLowerCase().endsWith(".required") ? "false" : ""}`);
+    // Driver names come from target configuration. Keep those opaque keys in
+    // the private environment rather than exposing them in process argv.
+    environment[`GIT_CONFIG_KEY_${index}`] = key;
+    environment[`GIT_CONFIG_VALUE_${index}`] = key.toLowerCase().endsWith(".required") ? "false" : "";
   }
+  environment.GIT_CONFIG_COUNT = String(filterKeys.length);
   const status = await execFileAsync("git", [...args, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all", "--", "."], options);
   const head = await execFileAsync("git", [...args, "rev-parse", "--verify", "--quiet", "HEAD"], options)
     .then((result) => result.stdout.trim())

@@ -3,6 +3,7 @@ import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpa
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget, retainDisposableTarget, type DisposableTarget, verifyRunRoot } from "./disposable-target.js";
 
@@ -208,17 +209,50 @@ describe("source and cleanup receipts", () => {
     expect((await captureSourceSentinel(source)).git).toMatchObject({ status: "present", head: null });
   });
 
-  it("does not invoke target-owned Git clean filters while recording sentinels", async () => {
-    const { source } = await fixture();
+  it("neutralizes target-owned Git filters without copying their opaque names into process argv", async () => {
+    const { root, source } = await fixture();
+    const driverName = "HARVEY_SYNTHETIC_FILTER_IDENTITY_7d243e";
     await git(source, ["init", "-q"]);
-    await writeFile(join(source, ".gitattributes"), "source.txt filter=canary\n");
+    await writeFile(join(source, ".gitattributes"), `source.txt filter=${driverName}\n`);
     await writeFile(join(source, "filter.cjs"), "const f=require('node:fs');f.writeFileSync('filter-ran','unsafe');process.stdout.write(f.readFileSync(0));");
-    await git(source, ["config", "filter.canary.clean", `${process.execPath} filter.cjs`]);
+    await git(source, ["config", `filter.${driverName}.clean`, `${process.execPath} filter.cjs`]);
+    await git(source, ["config", `filter.${driverName}.required`, "true"]);
     await git(source, ["add", "."]);
     expect(await readFile(join(source, "filter-ran"), "utf8")).toBe("unsafe");
     await rm(join(source, "filter-ran"));
     await writeFile(join(source, "source.txt"), "original contents\n");
-    await captureSourceSentinel(source);
+    const log = join(root, "git-argv.jsonl");
+    const preload = join(root, "observe-exec.cjs");
+    await writeFile(preload, `
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const original = childProcess.execFile;
+childProcess.execFile = function(file, args, options) {
+  if (file === 'git') fs.appendFileSync(process.env.HARVEY_ARGV_LOG, JSON.stringify({
+    args, filterOverrides: Object.entries(options.env).filter(([key]) => key.startsWith('GIT_CONFIG_'))
+  }) + '\\n');
+  return original.apply(this, arguments);
+};
+childProcess.execFile[require('node:util').promisify.custom] = (...args) => new Promise((resolve, reject) => {
+  childProcess.execFile(...args, (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }));
+});
+require('node:module').syncBuiltinESMExports();
+`);
+    const probe = join(root, "sentinel-probe.mjs");
+    await writeFile(probe, `import { captureSourceSentinel } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "src/disposable-target.ts")).href)};\nconsole.log(JSON.stringify((await captureSourceSentinel(process.argv[2])).git));\n`);
+    const result = await exec(process.execPath, ["--require", preload, "--import", "tsx", probe, source], {
+      timeout: 10_000, env: { PATH: process.env.PATH, HOME: root, HARVEY_ARGV_LOG: log },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "present", head: null });
+    const observations = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; filterOverrides: [string, string][] });
+    expect(observations).toHaveLength(4);
+    expect(observations.flatMap((observation) => observation.args).join("\n")).not.toContain(driverName);
+    const status = observations.find((observation) => observation.args.includes("status"));
+    expect(status?.filterOverrides).toEqual(expect.arrayContaining([
+      ["GIT_CONFIG_KEY_0", `filter.${driverName}.clean`], ["GIT_CONFIG_VALUE_0", ""],
+      ["GIT_CONFIG_KEY_1", `filter.${driverName}.required`], ["GIT_CONFIG_VALUE_1", "false"],
+      ["GIT_CONFIG_COUNT", "2"],
+    ]));
     await expect(lstat(join(source, "filter-ran"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
