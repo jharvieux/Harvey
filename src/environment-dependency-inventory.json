@@ -144,15 +144,15 @@
       {
         "accepted": 0,
         "authoritativeRecords": 20,
-        "candidateRows": 209,
+        "candidateRows": 210,
         "dependencyClass": "clock",
         "dynamic": 18,
         "emptyReason": null,
         "pinned": 0,
         "recorded": 1,
-        "rows": 229,
-        "unresolved": 210,
-        "whollyUnbound": 228
+        "rows": 230,
+        "unresolved": 211,
+        "whollyUnbound": 229
       },
       {
         "accepted": 0,
@@ -209,13 +209,13 @@
     ],
     "environmentAssertions": 1131,
     "integrityAssertions": 21,
-    "noAssertions": 7611,
+    "noAssertions": 7612,
     "opaqueVenues": 3,
     "residualRows": 2773,
-    "rows": 8773,
+    "rows": 8774,
     "schemaAssertions": 10,
     "venues": 2773,
-    "vocabularyCandidates": 3735
+    "vocabularyCandidates": 3736
   },
   "reconciliations": [
     {
@@ -124781,6 +124781,43 @@
       "schemaOwner": null,
       "state": "wholly-unbound",
       "venue": "src/corpus-package-manager.ts"
+    },
+    {
+      "assertionVenue": null,
+      "classification": "vocabulary-candidate",
+      "consumer": {
+        "location": null,
+        "reason": "No authoritative consumer was resolved for this candidate. Presence or a textual reference is not proof of executable consumption.",
+        "resolution": "unresolved"
+      },
+      "decision": null,
+      "declarationSource": null,
+      "declaredIdentity": null,
+      "dependency": "unresolved-reference",
+      "dependencyClass": "clock",
+      "environmentOwner": "#1909 stability evidence",
+      "evidence": {
+        "anchor": "content-hint",
+        "line": 498,
+        "path": "src/corpus-phase-cache-workflow.test.ts"
+      },
+      "freshness": {
+        "enforcedBy": null,
+        "expiresAt": null,
+        "observedAt": null,
+        "requirement": "No enforceable freshness requirement resolved from this evidence. Revalidation remains with the named owner."
+      },
+      "id": "src/corpus-phase-cache-workflow.test.ts#content-hint:clock:unresolved-reference",
+      "identitySource": null,
+      "links": [],
+      "observedIdentity": null,
+      "owner": "#1906 discovery",
+      "pinSource": null,
+      "reason": "Content mentions this dependency class; comments, fixtures and executable operations may all match. No version or authoritative consumer is inferred from vocabulary alone.",
+      "resolution": "unresolved",
+      "schemaOwner": null,
+      "state": "wholly-unbound",
+      "venue": "src/corpus-phase-cache-workflow.test.ts"
     },
     {
       "assertionVenue": null,
@@ -374377,8 +374414,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "2ad7997b57b32d2fddf0ef8b25332bfa7241fc01",
-    "commitPayload": "dHJlZSBhMWZmNTIzY2E5YWFkZTkwZDQ5N2M2ZTE5ODE3Mjk2NmM5ZGYwOGI2CnBhcmVudCBiZmFjNDI5MzU5NTE2ZTI0N2I2NmQ4ZDRhNzYxNzE5ZjRkZmNhMDU0CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg4NDY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg4NDY0IC0wNTAwCgpLZWVwIGFkdmlzb3J5IGZyZXNobmVzcyByZWNlaXB0IHR5cGVzIHByaXZhdGUgKCMyMTQ4KQo=",
+    "commit": "f39290069cd06c8b79b711b4cd1a5394756f331a",
+    "commitPayload": "dHJlZSBlYWE0ZjAxMmZmYmU4NDIzODQ5YjdkYTRkMDQwM2YzNTk2MzViZDUzCnBhcmVudCBhNmFmZTdiOTdiNjExNjBkZmUxYjAxOWQ1OWNmNDU4MzY1ZDBiZDVmCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzkwMTA0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzkwMTA0IC0wNTAwCgpJc29sYXRlIGFkdmlzb3J5IGZyZXNobmVzcyBmcm9tIHdvcmtmbG93IGRyaWxscyAoIzIxNDgpCg==",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -374387,13 +374424,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "1b59536fa177a29753bb8222db161c111f38c721",
+        "gitOid": "03b1e0e7fcd427fbf9f48d0ae7cc08ce087b3cd6",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "dca4d53270aafb87c701be711816e45d5b026ef676e30a648d3ec60253a60227",
-    "tree": "a1ff523ca9aade90d497c6e198172966c9df08b6"
+    "populationSha256": "87c37e0cfd35f47a0d251418c3ffaf1439a0302d70e58b90aa3992a9e74e4f08",
+    "tree": "eaa4f012ffbe8423849b7da4d0403f359635bd53"
   },
   "venues": [
     {
@@ -374817,11 +374854,11 @@
       "sha256": "1b5acd2deff83ddcfe1fce549940f91a07dd8dd25c8812fad7446d6ca09a05fb"
     },
     {
-      "bytes": 59296,
+      "bytes": 59394,
       "disposition": "authoritative-adapter",
       "format": "yaml",
       "gitMode": "100644",
-      "gitOid": "e9727156e2c6e0ae3751f9bc5999427a7d93edf0",
+      "gitOid": "f346608105e1448854e845c4df77052ec497f241",
       "id": ".github/workflows/corpus-drift.yml",
       "kind": "workflow",
       "literalCount": 0,
@@ -374829,7 +374866,7 @@
       "owner": "workflow/action declaration; #1909 runtime receipts",
       "path": ".github/workflows/corpus-drift.yml",
       "reason": "An adapter resolves identified records to their authoritative consumer. The independent unresolved-content row still covers identities and literals outside that adapter's proven scope.",
-      "sha256": "15ed67efc267fc48d11c6fcc1ee0c47b508e58f7ec8f68a126d72abc8040fe7c"
+      "sha256": "e080935bba943cb236a0cdece4142461f76b6861648e91a11b59fe7843aadeb9"
     },
     {
       "bytes": 10463,
@@ -383847,19 +383884,19 @@
       "sha256": "6f02533cfaaf30232db8a1161f46f32cab8a6945979c860f3b64d0fef1aff104"
     },
     {
-      "bytes": 64401,
+      "bytes": 67206,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9b95a1fabad44a6df8f3c0f49780f0258f9d1aab",
+      "gitOid": "550493768a2ebae53ba08bf4f3ba5a95c0b62b9a",
       "id": "src/corpus-phase-cache-workflow.test.ts",
       "kind": "source",
-      "literalCount": 964,
-      "literalSha256": "b2ec3485d843489c648114461deb6593b49d1ea0e0517ddc247f81b62e5b64b4",
+      "literalCount": 1000,
+      "literalSha256": "0c0796756f99ef10c7cdf64c13eb3699308a428a20ff3479d3b781e3a62521d2",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-phase-cache-workflow.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "4e077aefe5f0499de6fc2f115152ce5d863186cba384f461c9ab0033a0213c3e"
+      "sha256": "ac72f4fd5ff302dc17e8a897d74c1de95ed98d4e2ac315ac464179b7fad90895"
     },
     {
       "bytes": 22342,
