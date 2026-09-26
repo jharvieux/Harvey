@@ -127,6 +127,7 @@ import { redactSecrets } from "../secret-redact.js";
 import { createCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
 import {
   coveredScopeLine,
+  validMutantCount,
   compareMutationRuns,
   applyReportedMutation,
   detectDryRunFailure,
@@ -1726,7 +1727,7 @@ const hotspotFiles = hotspotsPath
 
 const summary = summarizeMutationReport(report, hotspotFiles);
 
-console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors - summary.overall.runtimeErrors} valid mutants killed)`);
+console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${validMutantCount(summary.overall)} valid mutants detected)`);
 // #1076: Stryker's OTHER published score — detected/(detected+survived), i.e. over only the code
 // the suite actually reached. Printed alongside so "your tests are bad" and "your tests are decent
 // but reach half the code" don't collapse into one number.

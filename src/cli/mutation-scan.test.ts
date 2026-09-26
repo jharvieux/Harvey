@@ -20,7 +20,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
 import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import { readNamesSafe, statSafe } from "../fs-walk.js";
-import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
+import { mutationRunFromArtifact, TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
+import { scoreMutationBaseline } from "../scan/external-corpus.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "mutation-scan.ts");
@@ -55,19 +56,21 @@ function fixtureRepo(testFiles: Record<string, string>): string {
 // constraint is "no single blocking window may approach 60s" for every heavy CLI test, not only the
 // one already found over it. This also folds in the three near-identical `runCliOn` copies that used
 // to live in the describe blocks below (#623/#932/#655) — same body, different local name.
-function runCli(target: string, extraArgs: string[], extraEnv: Record<string, string> = {}): Promise<{ status: number; out: string }> {
+function runCli(target: string, extraArgs: string[], extraEnv: Record<string, string> = {}): Promise<{ status: number; out: string; stderr: string }> {
   const outPath = join(target, "m8-out.json");
   return new Promise((resolve) => {
     const child = spawn("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
       cwd: REPO_ROOT,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       // A PATH with node but no stryker anywhere — the exact CI condition of issue #470.
       env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, ...extraEnv },
     });
-    child.on("error", () => resolve({ status: 1, out: "" }));
+    let stderr = "";
+    child.stderr!.on("data", chunk => { stderr += String(chunk); });
+    child.on("error", () => resolve({ status: 1, out: "", stderr }));
     child.on("close", (code) => {
       const status = code ?? 1;
-      resolve({ status, out: status === 0 && existsSync(outPath) ? readFileSync(outPath, "utf8") : "" });
+      resolve({ status, out: status === 0 && existsSync(outPath) ? readFileSync(outPath, "utf8") : "", stderr });
     });
   });
 }
@@ -200,6 +203,20 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(reportFiles.map((f) => [f, { mutants: [killed] }])) }));
     return { repo, reportPath };
   }
+
+  it("replays unjudged mutants with a consistent CLI and corpus denominator (#2219)", async () => {
+    const { repo, reportPath } = scopedFixture(["src/add.ts"]);
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: ["Killed", "RuntimeError", "Pending", "Timeout"].map((status, id) => ({ ...killed, id: String(id), status })) } } }));
+    const result = await runCli(repo, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("100% (2/2 valid mutants detected)");
+    const actual = mutationRunFromArtifact("fixture", JSON.parse(result.out));
+    expect(actual).toEqual({ mutationScore: 100, killed: 1, valid: 2 });
+    const row = scoreMutationBaseline("fixture", { ...actual, coveredScope: ["src/add.ts"], note: "one killed and one timed out" }, actual);
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("1/2 killed");
+    expect(row.detail).not.toContain("1/3");
+  });
 
   it("a report covering a subset of the configured mutate scope emits the partial moduleRecord alongside its summary", async () => {
     const { repo, reportPath } = scopedFixture(["src/add.ts"]);

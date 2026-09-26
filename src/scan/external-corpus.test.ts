@@ -13,6 +13,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { summarizeMutationReport, mutationRunFromArtifact, type StrykerMutant } from "../mutation-scan.js";
 import { parseRecordedReasons, validateRecordedReason } from "../recorded-reasons.js";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
@@ -690,10 +691,9 @@ describe("scoreMutationBaseline (#300)", () => {
     expect(row.detail).toContain("DRIFT");
   });
 
-  it("FAILS on a kill-for-survivor swap that leaves the percentage identical", () => {
-    // Why the scorer compares killed/valid and not just the rounded score: 7/35 and 7/35 at a
-    // different mutant population is still 20%, but the suite is measuring different code. A
-    // percentage-only check would call this green.
+  it("FAILS when killed and valid counts change at the same percentage", () => {
+    // 7/35 and 4/20 both round to 20%, but their aggregate counts differ.
+    // This says nothing about identities when both counts stay unchanged.
     expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 4, valid: 20 }))
       .toMatchObject({ pass: false });
   });
@@ -703,6 +703,20 @@ describe("scoreMutationBaseline (#300)", () => {
     // real drift in what fraction of the code is actually tested.
     expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 15.6, killed: 7, valid: 45 }))
       .toMatchObject({ pass: false });
+  });
+
+  it("discloses that equal aggregates do not measure survivor-identity swaps (#2101)", () => {
+    const run = (statuses: StrykerMutant["status"][]) => mutationRunFromArtifact("fixture", { summary: summarizeMutationReport({ files: { "a.ts": { mutants: statuses.map((status, id) => ({ id: String(id), status, mutatorName: "BooleanLiteral", location: { start: { line: id + 1, column: 1 }, end: { line: id + 1, column: 5 } } })) } } }) });
+    const original = run(["Killed", "Survived"]);
+    const exchanged = run(["Survived", "Killed"]);
+    expect(exchanged).toEqual(original);
+    const recorded = { ...original, coveredScope: ["a.ts"], note: "aggregate-only contract" };
+    for (const actual of [original, exchanged, run(["Killed", "Killed"])]) {
+      const row = scoreMutationBaseline("fixture", recorded, actual);
+      expect(row.pass).toBe(actual.killed === original.killed);
+      expect(row.detail).toContain("aggregate-count drift only");
+      expect(row.detail).toContain("survivor-identity changes are unmeasured");
+    }
   });
 
   // #432: boxyhq's own spec calls Math.random() (unseeded) to pick generateToken's length, and

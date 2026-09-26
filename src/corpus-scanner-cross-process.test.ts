@@ -1297,7 +1297,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     vi.unstubAllEnvs();
   });
   const identity = { targetRevision: "m8-local-pin", targetTree: "m8-local-tree" };
-  const score = { summary: { overall: { mutationScore: 100, killed: 1, totalMutants: 1, ignored: 0, compileErrors: 0 } } };
+  const score = { summary: { overall: { mutationScore: 100, killed: 1, timeout: 0, survived: 0, noCoverage: 0, totalMutants: 1, ignored: 0, compileErrors: 0 } } };
   function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
     const result = prepareCorpusDependencies(options);
     preparations.push(result);
