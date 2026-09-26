@@ -194,7 +194,14 @@ So a placeholder is a **declared binding**, and this is the contract:
 
 - A `<lowercase-with-hyphens>` token in a `FALSIFIER:` is a run-time binding, resolved from the
   environment variable `HARVEY_FALSIFIER_<UPPER_SNAKE>` — `<superredhat-clone>` reads
-  `HARVEY_FALSIFIER_SUPERREDHAT_CLONE`.
+  `HARVEY_FALSIFIER_SUPERREDHAT_CLONE`. Write each placeholder unquoted as a complete shell word,
+  or as the complete value in an assignment such as `TOKEN=<token>`. The structural and runtime
+  gates reject quoted or concatenated forms, including placeholders inside single or double
+  quotes, `$(...)`, backticks, and heredoc/here-string programs. At execution Harvey replaces it
+  with one POSIX-shell single-quoted word, escaping embedded quotes, so whitespace, glob
+  characters, redirections, substitutions and command separators in the environment value remain
+  literal data. The command author owns the surrounding shell program; Harvey owns literal
+  encoding of the bound value.
 - It is **legal only on a reason that carries `FALSIFIER-TIER:`**. A placeholder in an offline
   falsifier is a structural error, because offline the command really is run as written and really
   does hit the redirect. Write a real path instead, or declare the tier.
@@ -207,7 +214,7 @@ So a placeholder is a **declared binding**, and this is the contract:
   not have to read the command to find out what to export.
 
 ```bash
-HARVEY_FALSIFIER_SUPERREDHAT_CLONE=/clones/superredhat \
+HARVEY_FALSIFIER_SUPERREDHAT_CLONE='/clones/Super Red Hat; literal' \
   pnpm validate-reasons --revalidate --tier secbench
 ```
 
