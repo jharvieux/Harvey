@@ -59,7 +59,7 @@ const NOW = Date.parse("2026-07-30T12:00:00Z");
 const LEDGER_CTX: RunContext = {
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: (_command, argv) => ({
+  exec: async (_command, argv) => ({
     ok: true,
     output: argv.join(" ").includes("quick-scan") ? "  4,778 lines of application code across 400 file(s)\n  Band: Small" : "",
     stderr: "",
@@ -76,7 +76,7 @@ const LEDGER_CTX: RunContext = {
       ? { module: "M1", target: "/target", pass: "semantic", generatedAt: new Date(NOW - 3_600_000).toISOString() }
       : undefined,
 };
-const RECORDED: ModuleCoverage[] = runAudit(AUDIT_RUNNERS, LEDGER_CTX).recorded;
+const RECORDED: ModuleCoverage[] = (await runAudit(AUDIT_RUNNERS, LEDGER_CTX)).recorded;
 
 const finding = (over: Partial<Finding> & Pick<Finding, "id">): Finding => ({
   title: "Tenant-scope check missing", severity: "High", confidence: "Confirmed", category: "Security",
@@ -584,9 +584,9 @@ describe("#1435 a finding's own words survive the render seam", () => {
   // field #1555 had just proven the report was dropping — so the produce→deliver leg is asserted
   // here rather than inferred from the ledger, on the same real orchestrator → assembler → renderer
   // path as everything else in this file.
-  it("a Prisma target's N/A-by-architecture tier reaches the rendered report (#1556)", () => {
+  it("a Prisma target's N/A-by-architecture tier reaches the rendered report (#1556)", async () => {
     const prismaDoc = assembleEngagementDocument(
-      runAudit(AUDIT_RUNNERS, { ...LEDGER_CTX, detectOrm: () => "prisma" }).recorded,
+      (await runAudit(AUDIT_RUNNERS, { ...LEDGER_CTX, detectOrm: () => "prisma" })).recorded,
       ENV,
       [finding({ id: "M1-03" })],
       META,

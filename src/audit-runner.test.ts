@@ -10,6 +10,7 @@ import { type Finding, type ReportMeta, validateFindings } from "./findings.js";
 import { conservationLedger } from "./conservation-ledger.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 import { runAudit } from "./audit-runner.js";
+import { probeExec } from "./probe-exec.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
@@ -31,8 +32,8 @@ describe("specialist rejection disclosure through the client artifact", () => {
     const module = branch.startsWith("M3") ? "M3" : "M7";
     const now = Date.parse("2026-09-24T12:00:00Z");
     const slot = { module, target: "/target", pass: "current-specialist", generatedAt: new Date(now).toISOString(), priorPasses: [{ pass: "future-specialist", generatedAt: new Date(now + MAX_PASS_FUTURE_SKEW_MS + 1).toISOString(), findings: [{ id: "FUTURE-MUST-NOT-DELIVER" }] }] };
-    const context = ctx({ now, artifactsDir: "/passes", captureDir: "/capture", readFindings: () => [], readArtifact: (path) => path.endsWith(`${module}.pass.json`) ? slot : undefined, exec: (_command, argv) => ({ ...cleanRun(argv), ...(argv.includes("src/cli/hotspot-scan.ts") ? { output: `${cleanOutput(argv)}\n${branch}` } : {}) }) });
-    const result = runAudit(AUDIT_RUNNERS, context);
+    const context = ctx({ now, artifactsDir: "/passes", captureDir: "/capture", readFindings: () => [], readArtifact: (path) => path.endsWith(`${module}.pass.json`) ? slot : undefined, exec: async (_command, argv) => ({ ...cleanRun(argv), ...(argv.includes("src/cli/hotspot-scan.ts") ? { output: `${cleanOutput(argv)}\n${branch}` } : {}) }) });
+    const result = await runAudit(AUDIT_RUNNERS, context);
     const row = result.recorded.find((recorded) => recorded.module === module)!;
     const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
     const dir = mkdtempSync(join(tmpdir(), "rejected-pass-delivery-"));
@@ -48,10 +49,10 @@ describe("specialist rejection disclosure through the client artifact", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("discloses a rejected primary M3 pass beside a successful native ranking", () => {
+  it("discloses a rejected primary M3 pass beside a successful native ranking", async () => {
     const now = Date.parse("2026-09-24T12:00:00Z");
     const context = ctx({ now, artifactsDir: "/passes", readArtifact: () => ({ module: "M3", target: "/target", pass: "future-primary", generatedAt: new Date(now + MAX_PASS_FUTURE_SKEW_MS + 1).toISOString() }) });
-    const result = runAudit(AUDIT_RUNNERS, context);
+    const result = await runAudit(AUDIT_RUNNERS, context);
     expect(JSON.stringify(result.recorded.find((row) => row.module === "M3"))).toContain("future-dated");
   });
 });
@@ -102,7 +103,7 @@ const cleanRun = (argv: string[]): { ok: true; output: string; stderr: string } 
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: (_command, argv) => cleanRun(argv),
+  exec: async (_command, argv) => cleanRun(argv),
   exists: () => true,
   isGitRepoRoot: () => true,
   // #1556: the filesystem probes are doubled here for the same reason `exists` is — "/target" does
@@ -121,10 +122,10 @@ describe("assertRegistryComplete (#229 — a module with no runner is the skip i
     expect(() => assertRegistryComplete(missingFive)).toThrow(/M5 \(Slop \/ dead code\)/);
   });
 
-  it("throws before any module runs, so a short registry can't produce a partial ledger", () => {
+  it("throws before any module runs, so a short registry can't produce a partial ledger", async () => {
     // The failure #229 exists to prevent: a registry that simply omits a module. If this were
     // permissive, runAudit would return nine honest rows and the tenth would never be mentioned.
-    expect(() => runAudit(allRan().filter((r) => r.module !== "M8"), ctx())).toThrow(/registry is incomplete/);
+    await expect(runAudit(allRan().filter((r) => r.module !== "M8"), ctx())).rejects.toThrow(/registry is incomplete/);
   });
 
   it("rejects a module registered twice — two probes, two answers to 'did it run'", () => {
@@ -137,41 +138,41 @@ describe("assertRegistryComplete (#229 — a module with no runner is the skip i
 });
 
 describe("runAudit derives the ledger from execution (#229/#284)", () => {
-  it("records a row per module, in the enumeration's order, never the registry's", () => {
+  it("records a row per module, in the enumeration's order, never the registry's", async () => {
     const shuffled = [...allRan()].reverse();
-    expect(runAudit(shuffled, ctx()).recorded.map((r) => r.module)).toEqual([...AUDIT_MODULES]);
+    expect((await runAudit(shuffled, ctx())).recorded.map((r) => r.module)).toEqual([...AUDIT_MODULES]);
   });
 
   // The core property: a probe's report is the ONLY source of a row. A module that did not execute
   // cannot be recorded "ran" by anyone — there is no parameter through which to claim it.
-  it("records what the probe reported, not what a caller wishes had run", () => {
+  it("records what the probe reported, not what a caller wishes had run", async () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M5"),
       probe("M5", { status: "requires-live-run", reason: "target has no node_modules" }),
     ];
-    const m5 = runAudit(runners, ctx()).recorded.find((r) => r.module === "M5");
+    const m5 = (await runAudit(runners, ctx())).recorded.find((r) => r.module === "M5");
     expect(m5?.status).toBe("requires-live-run");
     expect(m5?.reason).toBe("target has no node_modules");
   });
 
-  it("carries a partial's reason through, so a half-run module never reads as complete", () => {
+  it("carries a partial's reason through, so a half-run module never reads as complete", async () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M7"),
       probe("M7", { status: "partial", detail: "code tier", reason: "no DB creds for the advisors" }),
     ];
-    const report = buildAuditCoverage(runAudit(runners, ctx()).recorded);
+    const report = buildAuditCoverage((await runAudit(runners, ctx())).recorded);
     expect(report.rows.find((r) => r.module === "M7")?.reason).toMatch(/no DB creds/);
     expect(report.ranCount).toBe(9);
   });
 
   // A crashed scanner is a bug, not a tier. If a throw were laundered into a reasoned
   // requires-live-run, a broken M4 would sail through the gate as a legitimate environment gap.
-  it("routes a crashed runner to failures instead of excusing it as an environment gap", () => {
+  it("routes a crashed runner to failures instead of excusing it as an environment gap", async () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M4"),
       { module: "M4" as const, producers: [], run: () => { throw new Error("jscpd binary missing"); } },
     ];
-    const { recorded, failures } = runAudit(runners, ctx());
+    const { recorded, failures } = await runAudit(runners, ctx());
     expect(failures).toEqual([{ module: "M4", error: "jscpd binary missing" }]);
     // The ledger stays honest about the absence of output...
     expect(recorded.find((r) => r.module === "M4")?.reason).toMatch(/runner failed: jscpd binary missing/);
@@ -181,22 +182,197 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("keeps running the remaining modules after one crashes, so one bug can't truncate the audit", () => {
+  it("keeps running the remaining modules after one crashes, so one bug can't truncate the audit", async () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M1"),
       { module: "M1" as const, producers: [], run: () => { throw new Error("boom"); } },
     ];
-    const { recorded } = runAudit(runners, ctx());
+    const { recorded } = await runAudit(runners, ctx());
     expect(recorded).toHaveLength(10);
     expect(recorded.filter((r) => r.status === "ran")).toHaveLength(9);
   });
 
-  it("produces a ledger the coverage gate accepts when every probe truly ran", () => {
-    const { recorded, failures } = runAudit(allRan(), ctx());
+  it("produces a ledger the coverage gate accepts when every probe truly ran", async () => {
+    const { recorded, failures } = await runAudit(allRan(), ctx());
     expect(failures).toEqual([]);
     // Every module reports `ran`, so the coverage gate is satisfied and the never-run ledger (now
     // empty since #283 cleared M6) has nothing to block on — see #284 below.
     expect(buildAuditCoverage(recorded).complete).toBe(true);
+  });
+});
+
+describe("awaited audit execution (#2223)", () => {
+  const retainedFinding = (module: AuditModule, location: string): Finding => ({
+    id: `${module}-ASYNC`, title: "Retained asynchronous finding", severity: "Low", confidence: "Confirmed",
+    category: "quality", taxonomy: `${module} — retained asynchronous finding`, location,
+    status: "observed", evidence: location, impact: "Fixture impact", fix: "Fixture repair",
+    value: 1, ease: 1, safety: 1,
+  });
+
+  it("awaits each module and its receipt observation before retaining and starting the next", async () => {
+    const events: string[] = [];
+    const runners: ModuleRunner[] = [...AUDIT_MODULES].reverse().map((module) => ({
+      module, producers: [], typed: true,
+      run: async (context) => {
+        events.push(`start:${module}`);
+        await context.exec("fixture", [module]);
+        return { kind: "examined", unitsExamined: 1, scope: "fixture units", detail: module, findings: [retainedFinding(module, `${module}.ts`)] };
+      },
+    }));
+    const result = await runAudit(runners, ctx({
+      exec: async (_command, argv) => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        events.push(`observed:${argv[0]}`);
+        return { ok: true, output: "complete" };
+      },
+      retainModuleResult: (module, reports) => {
+        expect(reports).toEqual([expect.objectContaining({ kind: "examined", findings: [retainedFinding(module, `${module}.ts`)] })]);
+        events.push(`retained:${module}`);
+      },
+    }));
+    expect(events).toEqual(AUDIT_MODULES.flatMap((module) => [`start:${module}`, `observed:${module}`, `retained:${module}`]));
+    expect(result.failures).toEqual([]);
+    expect(result.recorded.map((row) => row.module)).toEqual(AUDIT_MODULES);
+    expect(result.findings.map((finding) => finding.id)).toEqual(AUDIT_MODULES.map((module) => `${module}-ASYNC`));
+    expect(Object.keys(result.findingsByModule)).toEqual(AUDIT_MODULES);
+    const document = assembleEngagementDocument(result.recorded, ctx().env, result.findings, m5137Meta);
+    expect(conservationLedger(result.findings, document.findings, result.findingsByModule)).toMatchObject({ produced: 10, unaccounted: 0, ok: true });
+  });
+
+  it("records an asynchronous rejection and an empty fan-out without dropping later modules", async () => {
+    const retained: AuditModule[] = [];
+    const runners: ModuleRunner[] = allRan().map((runner) => runner.module === "M3"
+      ? { ...runner, run: async () => { await new Promise<void>((resolve) => setImmediate(resolve)); throw new Error("late process failure"); } }
+      : runner.module === "M5" ? { ...runner, run: async () => [] } : runner);
+    const result = await runAudit(runners, ctx({ retainModuleResult: (module) => { retained.push(module); } }));
+    expect(result.recorded.map((row) => row.module)).toEqual(AUDIT_MODULES);
+    expect(result.failures).toEqual([
+      { module: "M3", error: "late process failure" },
+      { module: "M5", error: "runner returned no outcomes — a per-instance fan-out that enumerated nothing is a silent skip" },
+    ]);
+    expect(result.recorded.find((row) => row.module === "M3")).toMatchObject({ status: "requires-live-run", reason: "runner failed: late process failure" });
+    expect(result.recorded.find((row) => row.module === "M5")).toMatchObject({ status: "requires-live-run", reason: "runner produced no outcome for any instance" });
+    expect(result.recorded.find((row) => row.module === "M10")?.status).toBe("ran");
+    expect(retained).toEqual(AUDIT_MODULES);
+  });
+
+  it.each(["missing", "malformed"])("a real child's %s artifact cannot become a clean module result", async (mode) => {
+    const captureDir = mkdtempSync(join(tmpdir(), "harvey-async-artifact-"));
+    const report = join(captureDir, "M3.json");
+    let execution: Awaited<ReturnType<typeof probeExec>> | undefined;
+    const retained: AuditModule[] = [];
+    try {
+      const context = ctx({
+        captureDir,
+        readArtifact: (path) => JSON.parse(readFileSync(path, "utf8")),
+        exec: async () => {
+          execution = await probeExec(process.execPath, ["-e", `
+            setTimeout(() => {
+              ${mode === "malformed" ? `require('node:fs').writeFileSync(${JSON.stringify(report)}, 'not-json');` : ""}
+              process.stdout.write('M3 hotspot table — fixture (5 rows, worst first)');
+            }, 30);
+          `], { receipt: { artifacts: [{ role: "report", path: report }] } });
+          return execution;
+        },
+        retainModuleResult: (module) => { if (module === "M3") expect(execution?.receipt).toBeDefined(); retained.push(module); },
+      });
+      const runners = allRan().map((runner) => runner.module === "M3" ? AUDIT_RUNNERS.find((candidate) => candidate.module === "M3")! : runner);
+      const result = await runAudit(runners, context);
+      expect(execution?.receipt?.outcome).toEqual({ state: "exited", exitCode: 0, signal: null });
+      expect(result.recorded.map((row) => row.module)).toEqual(AUDIT_MODULES);
+      expect(retained).toEqual(AUDIT_MODULES);
+      const row = result.recorded.find((candidate) => candidate.module === "M3")!;
+      expect(row.status).toBe("requires-live-run");
+      if (mode === "missing") {
+        expect(execution?.ok).toBe(false);
+        expect(row.reason).toContain("declared report artifact missing");
+        expect(result.failures).toEqual([]);
+      } else {
+        expect(execution?.ok).toBe(true); // Command receipt binds bytes; M3 owns JSON interpretation.
+        expect(row.reason).toMatch(/runner failed:.*JSON/);
+        expect(result.failures).toEqual([{ module: "M3", error: expect.stringMatching(/JSON/) }]);
+      }
+      const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
+      const htmlPath = join(captureDir, "report.html");
+      await renderReport(document, { htmlPath });
+      expect(readFileSync(htmlPath, "utf8")).toContain(mode === "missing" ? "declared report artifact missing" : "runner failed:");
+    } finally {
+      rmSync(captureDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["spawn", "metadata"])("guards an actual pre-start %s rejection and continues the audit", async (failure) => {
+    const runners = allRan().map((runner) => runner.module === "M4" ? {
+      ...runner,
+      run: async (context: RunContext): Promise<ProbeOutcome> => {
+        await context.exec(failure === "spawn" ? "invalid\0command" : process.execPath, [], failure === "metadata"
+          ? { receipt: { target: { identity: "invalid-target", value: () => "not receipt data" } } } : undefined);
+        return { status: "ran", detail: "unreachable failed execution" };
+      },
+    } : runner);
+    const result = await runAudit(runners, ctx({ exec: probeExec }));
+    expect(result.recorded.map((row) => row.module)).toEqual(AUDIT_MODULES);
+    expect(result.recorded.find((row) => row.module === "M4")).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining("runner failed:") });
+    expect(result.recorded.find((row) => row.module === "M10")?.status).toBe("ran");
+    expect(result.failures).toEqual([{ module: "M4", error: expect.stringMatching(failure === "spawn" ? /null bytes/ : /clone/) }]);
+  });
+
+  it("leaves the shipping M2 runner synchronous and artifact-only", () => {
+    let commands = 0;
+    const result = AUDIT_RUNNERS.find((runner) => runner.module === "M2")!.run(ctx({
+      exec: async () => { commands++; throw new Error("M2 must not manufacture a command"); },
+    }));
+    expect(result).not.toBeInstanceOf(Promise);
+    expect(result).toMatchObject({ kind: "not-assessed" });
+    expect(commands).toBe(0);
+  });
+
+  it.each([false, true])("settles shipping fan-outs before reading or reusing captures (connected=%s)", async (connected) => {
+    const apps = [{ name: "main", path: "/target/main" }, { name: "rag", path: "/target/rag" }];
+    const events: string[] = [];
+    const ready = new Map<string, Finding[]>();
+    const liveUrls: string[] = [];
+    let active = 0;
+    let peak = 0;
+    const context = ctx({
+      apps, captureDir: "/cap", env: { connected, dynamic: false, llm: false },
+      supabaseRefs: ["main-db", "rag-db"], supabaseDbUrls: { "main-db": "postgres://main", "rag-db": "postgres://rag" },
+      exec: async (_command, argv, options) => {
+        active++;
+        peak = Math.max(peak, active);
+        const identity = argv.join(" ");
+        events.push(`start:${identity}`);
+        const out = argv[argv.indexOf("--out") + 1];
+        const findingsOut = argv[argv.indexOf("--findings-out") + 1];
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const path = argv.includes("--out") ? out : argv.includes("--findings-out") ? findingsOut : undefined;
+        if (path) {
+          const module = path.endsWith("M4.json") ? "M4" : path.endsWith("M9.json") ? "M9" : undefined;
+          ready.set(path, module ? [retainedFinding(module, argv[1]!)] : []);
+        }
+        if (options?.env?.SUPABASE_DB_URL) liveUrls.push(options.env.SUPABASE_DB_URL);
+        events.push(`end:${identity}`);
+        active--;
+        return cleanRun(argv);
+      },
+      readFindings: (path) => {
+        expect(active).toBe(0);
+        expect(ready.has(path), `capture ${path} must settle before ingestion`).toBe(true);
+        return ready.get(path)!;
+      },
+    });
+    const result = await runAudit(AUDIT_RUNNERS, context);
+    expect(result.failures).toEqual([]);
+    expect(active).toBe(0);
+    expect(peak).toBe(1);
+    expect(events).toEqual(events.filter((event) => event.startsWith("start:")).flatMap((start) => [start, start.replace(/^start:/, "end:")]));
+    expect([...new Set(result.recorded.map((row) => row.module))]).toEqual(AUDIT_MODULES);
+    for (const module of ["M4", "M5", "M9"] as const) expect(result.recorded.filter((row) => row.module === module).map((row) => row.instance)).toEqual(["main", "rag"]);
+    expect(result.recorded.filter((row) => row.module === "M10").map((row) => row.instance)).toEqual(connected ? ["main-db", "rag-db"] : ["main", "rag"]);
+    expect(result.findingsByModule.M4?.map((finding) => [finding.id, finding.location])).toEqual([["M4-ASYNC@main", "/target/main"], ["M4-ASYNC@rag", "/target/rag"]]);
+    expect(result.findingsByModule.M9?.map((finding) => [finding.id, finding.location])).toEqual([["M9-ASYNC@main", "/target/main"], ["M9-ASYNC@rag", "/target/rag"]]);
+    expect(liveUrls).toEqual(connected ? ["postgres://main", "postgres://rag"] : []);
+    if (connected) expect(result.recorded.filter((row) => row.module === "M7").map((row) => row.instance)).toEqual(["main-db", "rag-db"]);
   });
 });
 
@@ -210,16 +386,16 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   // #1035: a deps-free target is a REDUCED tier, not an unrunnable one — #810 built the fallback
   // and this probe used to refuse to reach it. The distinction it was protecting survives as a
   // status: quality-scan is invoked, M5 records partial, and file-level dead code stays review-tier.
-  it("M5 without the target's installed deps still invokes quality-scan and records partial, not requires-live-run", () => {
+  it("M5 without the target's installed deps still invokes quality-scan and records partial, not requires-live-run", async () => {
     const invoked: string[] = [];
     const noDeps = ctx({
       exists: (p) => !p.endsWith("node_modules"),
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("quality-scan")) invoked.push(argv.join(" "));
         return cleanRun(argv);
       },
     });
-    const m5 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M5");
+    const m5 = (await runAudit(AUDIT_RUNNERS, noDeps)).recorded.find((r) => r.module === "M5");
     expect(invoked.length).toBeGreaterThan(0);
     expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/review-tier, not confirmed/);
@@ -227,18 +403,18 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // The #810 reduced tier discloses itself with an M5-98 row; the orchestrator must surface THAT
   // reason rather than a generic partial, so a reader knows plugins were disabled.
-  it("M5 reports the #810 reduced tier when quality-scan emitted M5-98", () => {
+  it("M5 reports the #810 reduced tier when quality-scan emitted M5-98", async () => {
     const reduced = ctx({
       exists: (p) => !p.endsWith("node_modules"),
-      exec: (_c, argv) => (argv.includes("quality-scan") ? { ...cleanRun(argv), output: JSON.stringify([{ id: "M5-98" }]) } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("quality-scan") ? { ...cleanRun(argv), output: JSON.stringify([{ id: "M5-98" }]) } : cleanRun(argv)),
     });
-    const m5 = runAudit(AUDIT_RUNNERS, reduced).recorded.find((r) => r.module === "M5");
+    const m5 = (await runAudit(AUDIT_RUNNERS, reduced)).recorded.find((r) => r.module === "M5");
     expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/reduced \(no-dependencies\) tier/);
   });
 
-  it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
-    expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
+  it("M5 runs once the target's deps are present — the prereq gates it, not a flag", async () => {
+    expect((await runAudit(AUDIT_RUNNERS, ctx())).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
   });
 
   it("M5 delivers the exact zero-selector NotAssessed reason and finding instead of reading a nonempty broad inventory as clean", async () => {
@@ -280,11 +456,11 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
         readFindings: (path) => path === staticOutPath
           ? JSON.parse(readFileSync(path, "utf8")) as Finding[]
           : [],
-        exec: (_command, argv) => argv.includes("detect-static") && argv.includes(staticOutPath)
+        exec: async (_command, argv) => argv.includes("detect-static") && argv.includes(staticOutPath)
           ? staticRun
           : cleanRun(argv),
       });
-      const result = runAudit(AUDIT_RUNNERS, run);
+      const result = await runAudit(AUDIT_RUNNERS, run);
       const m5 = result.recorded.find((row) => row.module === "M5");
       expect(m5?.status).toBe("partial");
       expect(m5?.reason).toContain("Hardcoded-deployment source coverage");
@@ -309,14 +485,14 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   // ran on NO scope (no "M5 dead code across N scope(s)" line), the pass is NotAssessed — but the
   // disclosure must still reach the reader, so the reason (with provenance + falsifier) is carried
   // into the assembled deliverable's coverage ledger, not dropped with the Finding.
-  it("M5 records requires-live-run when knip ran on no scope, and the disclosure reaches the deliverable (#1137)", () => {
+  it("M5 records requires-live-run when knip ran on no scope, and the disclosure reaches the deliverable (#1137)", async () => {
     const noScope = ctx({
-      exec: (_c, argv) =>
+      exec: async (_c, argv) =>
         argv.includes("quality-scan")
           ? { ok: true, output: JSON.stringify([{ id: "M5-00" }]), stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code: skipped (knip failed on every scope — see warnings above)" }
           : cleanRun(argv),
     });
-    const { recorded } = runAudit(AUDIT_RUNNERS, noScope);
+    const { recorded } = await runAudit(AUDIT_RUNNERS, noScope);
     const m5 = recorded.find((r) => r.module === "M5");
     expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/knip did not run on any scope/);
@@ -330,17 +506,17 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   // rest, the probe used to return requires-live-run and drop the completed scopes' real dead-code
   // findings (produced by quality-scan, delivered nowhere — the #1050 family). It is a partial
   // Examined: the completed findings AND the M5-00 disclosure row both reach the assembled deliverable.
-  it("M5 partial — completed scopes' findings and the M5-00 disclosure both reach the deliverable, not requires-live-run (#1137)", () => {
+  it("M5 partial — completed scopes' findings and the M5-00 disclosure both reach the deliverable, not requires-live-run (#1137)", async () => {
     const captured: Finding[] = [{ id: "M5-01" } as Finding, { id: "M5-00" } as Finding];
     const partial = ctx({
       captureDir: "/capture",
       readFindings: (p) => (p.endsWith("M5.json") ? captured : []),
-      exec: (_c, argv) =>
+      exec: async (_c, argv) =>
         argv.includes("quality-scan")
           ? { ok: true, output: "", stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code across 1 scope(s): 1 unused file(s), 0 file(s) with unused exports, 0 unused dependenc(ies) (#1050), 1/2 scope(s) incomplete (#505, see M5-00)" }
           : cleanRun(argv),
     });
-    const { recorded, findings, findingsByModule } = runAudit(AUDIT_RUNNERS, partial);
+    const { recorded, findings, findingsByModule } = await runAudit(AUDIT_RUNNERS, partial);
     const m5 = recorded.find((r) => r.module === "M5");
     expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/did not complete on every scope/);
@@ -354,15 +530,15 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   // installed deps needed — so it must be invoked (and its verdict trusted) whether or not
   // node_modules exists. A target that genuinely HAS a suite but no node_modules degrades through
   // mutation-scan's own ladder (partial, naming --install) rather than a blanket M8-probe fallback.
-  it("M8 without node_modules still invokes mutation-scan, reading its suite-exists-no-install verdict as partial", () => {
+  it("M8 without node_modules still invokes mutation-scan, reading its suite-exists-no-install verdict as partial", async () => {
     const noDeps = ctx({
       exists: (p) => !p.endsWith("node_modules"),
-      exec: (_c, argv) =>
+      exec: async (_c, argv) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ moduleRecord: { status: "partial", note: "Mutation scoring did not run: the target has a vitest suite but no Stryker install (@stryker-mutator/core, @stryker-mutator/vitest-runner missing) — re-run with --install to provision them." } }) }
           : cleanRun(argv),
     });
-    const m8 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M8");
+    const m8 = (await runAudit(AUDIT_RUNNERS, noDeps)).recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/--install/);
   });
@@ -373,51 +549,51 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   // mutation-scan's suite-absence detection needs no installed deps, so it must run regardless and
   // its `noSuite` verdict must read `ran` with the M8-00 finding captured into the deliverable —
   // exactly the #754 no-suite mapping, now reachable from a target with no node_modules too.
-  it("M8 — a no-package.json / no-tests target (no node_modules) still reads ran with the M8-00 finding (#771)", () => {
+  it("M8 — a no-package.json / no-tests target (no node_modules) still reads ran with the M8-00 finding (#771)", async () => {
     const noSuiteRecord = { status: "partial" as const, noSuite: true, note: "No automated test suite found (no package.json found; no known test-runner dependency; no stryker.conf.*) — mutation scan could not run." };
     const artifact = { finding: { id: "M8-00" }, moduleRecord: noSuiteRecord };
     const noPackageJson = ctx({
       exists: (p) => !p.endsWith("node_modules"),
       captureDir: "/capture",
       readArtifact: () => artifact,
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, noPackageJson);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, noPackageJson);
     const m8 = recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("ran");
     expect(findings.map((f) => f.id)).toContain("M8-00");
   });
 
-  it("M2 is requires-live-run without a dynamic stack, and never silently absent", () => {
-    const m2 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M2");
+  it("M2 is requires-live-run without a dynamic stack, and never silently absent", async () => {
+    const m2 = (await runAudit(AUDIT_RUNNERS, ctx())).recorded.find((r) => r.module === "M2");
     expect(m2?.status).toBe("requires-live-run");
     expect(m2?.reason).toMatch(/no local supabase stack/);
   });
 
-  it("M7 without connected execution intent is partial and still reports source coverage", () => {
-    const m7 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M7");
+  it("M7 without connected execution intent is partial and still reports source coverage", async () => {
+    const m7 = (await runAudit(AUDIT_RUNNERS, ctx())).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
     expect(m7?.reason).toMatch(/advisors/);
   });
 
   // #434: --connected is intent, not a reachable project — perf-scan needs a ref as its positional
   // arg. Without one threaded through ctx.supabaseRef, the advisor call has nothing to reach.
-  it("M7 with --connected but no project ref stays partial, naming the missing ref", () => {
+  it("M7 with --connected but no project ref stays partial, naming the missing ref", async () => {
     const connectedNoRef = ctx({ env: { connected: true, dynamic: false, llm: false } });
-    const m7 = runAudit(AUDIT_RUNNERS, connectedNoRef).recorded.find((r) => r.module === "M7");
+    const m7 = (await runAudit(AUDIT_RUNNERS, connectedNoRef)).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
     expect(m7?.reason).toMatch(/project ref/);
   });
 
   // #527: code + advisors both run, but the orchestrator never fires the Lighthouse/CWV tier, so a
   // successful advisor run is `partial` naming the unmeasured tier — never a bare `ran`.
-  it("M7 threads ctx.supabaseRef to perf-scan and, on advisor success, is partial (Lighthouse tier not run)", () => {
+  it("M7 threads ctx.supabaseRef to perf-scan and, on advisor success, is partial (Lighthouse tier not run)", async () => {
     const connectedWithRef = ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRef: "my-project-ref",
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : cleanRun(argv)),
     });
-    const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
+    const m7 = (await runAudit(AUDIT_RUNNERS, connectedWithRef)).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
     expect(m7?.status).not.toBe("ran");
     expect(m7?.reason).toMatch(/Lighthouse\/CWV tier not run/);
@@ -426,25 +602,25 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // A non-zero exit is the tool saying it produced nothing. Recording that as "ran" is precisely
   // the false-positive coverage claim the gate exists to prevent.
-  it("records a module whose CLI exits non-zero as requires-live-run, not ran", () => {
-    const failing = ctx({ exec: () => ({ ok: false, output: "jscpd: command not found" }) });
-    const m4 = runAudit(AUDIT_RUNNERS, failing).recorded.find((r) => r.module === "M4");
+  it("records a module whose CLI exits non-zero as requires-live-run, not ran", async () => {
+    const failing = ctx({ exec: async () => ({ ok: false, output: "jscpd: command not found" }) });
+    const m4 = (await runAudit(AUDIT_RUNNERS, failing)).recorded.find((r) => r.module === "M4");
     expect(m4?.status).toBe("requires-live-run");
     expect(m4?.reason).toMatch(/command not found/);
   });
 
-  it("M10 falls back to schema-tier when there is no live DB, and says what it missed", () => {
-    const m10 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M10");
+  it("M10 falls back to schema-tier when there is no live DB, and says what it missed", async () => {
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx())).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/schema tier only/);
   });
 
-  it("M10 has nothing to classify with neither a DB nor any conventional schema layout", () => {
+  it("M10 has nothing to classify with neither a DB nor any conventional schema layout", async () => {
     // #529/#758: the probe now tries supabase/migrations, prisma/migrations, drizzle/, db/,
     // schema.sql, schema.prisma — so "nothing to classify" means none of them exist, and the
     // reason lists what was probed.
     const bare = ctx({ exists: (p) => !/(migrations|drizzle|\/db$|schema\.(sql|prisma))/.test(p) });
-    const m10 = runAudit(AUDIT_RUNNERS, bare).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, bare)).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/nothing to classify/);
     expect(m10?.reason).toMatch(/Probed:/);
@@ -453,19 +629,19 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // #529: a non-Supabase target (Prisma/Drizzle/pg_dump) whose schema is not at supabase/migrations
   // still gets real M10 schema classification, not a bare "nothing to classify".
-  it("M10 classifies a Prisma-layout target (prisma/migrations, no supabase/migrations)", () => {
+  it("M10 classifies a Prisma-layout target (prisma/migrations, no supabase/migrations)", async () => {
     const prismaOnly = ctx({ exists: (p) => !p.includes(join("supabase", "migrations")) });
-    const m10 = runAudit(AUDIT_RUNNERS, prismaOnly).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, prismaOnly)).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.detail).toMatch(/prisma[/\\]migrations/);
   });
 
   // #529: an explicit --schema hint (ctx.schemaHint) wins over the conventional-location probe.
-  it("M10 uses the --schema hint ahead of the conventional-location probe", () => {
+  it("M10 uses the --schema hint ahead of the conventional-location probe", async () => {
     const seen: string[] = [];
-    runAudit(AUDIT_RUNNERS, ctx({
+    await runAudit(AUDIT_RUNNERS, ctx({
       schemaHint: "/given/schema.sql",
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("pii-classify")) seen.push(argv[argv.indexOf("--schema") + 1]!);
         return cleanRun(argv);
       },
@@ -475,8 +651,8 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // The whole-audit shape of #229's original failure: a source-tier engagement. Every module is
   // still accounted for — nothing is silently missing — but the tier-gated ones say why.
-  it("accounts for all ten modules on a source-only engagement, with reasons", () => {
-    const { recorded, failures } = runAudit(AUDIT_RUNNERS, ctx());
+  it("accounts for all ten modules on a source-only engagement, with reasons", async () => {
+    const { recorded, failures } = await runAudit(AUDIT_RUNNERS, ctx());
     expect(failures).toEqual([]);
     expect(recorded.map((r) => r.module)).toEqual([...AUDIT_MODULES]);
     for (const row of recorded) {
@@ -498,34 +674,34 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  it("finds a root-level, unconventionally-named schema file (launch-mvp shape) and classifies it", () => {
+  it("finds a root-level, unconventionally-named schema file (launch-mvp shape) and classifies it", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-launch-mvp-"));
     dirs.push(app);
     writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
 
     const seenArgv: string[][] = [];
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({
       targetDir: app,
       exists: existsSync,
       discoverSchemaFiles,
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
         return cleanRun(argv);
       },
-    })).recorded.find((r) => r.module === "M10");
+    }))).recorded.find((r) => r.module === "M10");
 
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/schema tier only/);
     expect(seenArgv[0]).toContain(join(app, "initial_supabase_table_schema.sql"));
   });
 
-  it("finds a nested schema.sql under a non-conventional directory (nocode-rescue shape)", () => {
+  it("finds a nested schema.sql under a non-conventional directory (nocode-rescue shape)", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-nocode-rescue-"));
     dirs.push(app);
     mkdirSync(join(app, "before"));
     writeFileSync(join(app, "before", "schema.sql"), "create table applicants (id uuid primary key, customer_ssn text);");
 
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync, discoverSchemaFiles })).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync, discoverSchemaFiles }))).recorded.find((r) => r.module === "M10");
 
     expect(m10?.status).toBe("partial");
     expect(m10?.detail).toMatch(/before[/\\]schema\.sql/);
@@ -533,17 +709,17 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
 
   // The exact pre-#770 symptom: without discovery wired, the SAME fixture the fix above classifies
   // goes right back to "nothing to classify" — proving discovery (not the parser) closed the gap.
-  it("without discovery wired, the same launch-mvp-shaped fixture reverts to the pre-#770 'nothing to classify' gap", () => {
+  it("without discovery wired, the same launch-mvp-shaped fixture reverts to the pre-#770 'nothing to classify' gap", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-no-discovery-"));
     dirs.push(app);
     writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
 
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync }))).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/nothing to classify/);
   });
 
-  it("feeds every discovered file to pii-classify when schema DDL is scattered across more than one unconventional location", () => {
+  it("feeds every discovered file to pii-classify when schema DDL is scattered across more than one unconventional location", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-multi-"));
     dirs.push(app);
     writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
@@ -551,11 +727,11 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
     writeFileSync(join(app, "before", "schema.sql"), "create table applicants (id uuid primary key, customer_ssn text);");
 
     const seenArgv: string[][] = [];
-    runAudit(AUDIT_RUNNERS, ctx({
+    await runAudit(AUDIT_RUNNERS, ctx({
       targetDir: app,
       exists: existsSync,
       discoverSchemaFiles,
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
         return cleanRun(argv);
       },
@@ -576,45 +752,45 @@ describe("M10 classifies a Prisma app's schema.prisma when no migrations have be
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  it("finds prisma/schema.prisma and feeds it to pii-classify --schema", () => {
+  it("finds prisma/schema.prisma and feeds it to pii-classify --schema", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-schema-"));
     dirs.push(app);
     mkdirSync(join(app, "prisma"), { recursive: true });
     writeFileSync(join(app, "prisma", "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
 
     const seenArgv: string[][] = [];
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({
       targetDir: app,
       exists: existsSync,
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
         return cleanRun(argv);
       },
-    })).recorded.find((r) => r.module === "M10");
+    }))).recorded.find((r) => r.module === "M10");
 
     expect(m10?.status).toBe("partial");
     expect(m10?.detail).toMatch(/prisma[/\\]schema\.prisma/);
     expect(seenArgv[0]).toContain(join(app, "prisma", "schema.prisma"));
   });
 
-  it("finds a root-level schema.prisma too", () => {
+  it("finds a root-level schema.prisma too", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-root-"));
     dirs.push(app);
     writeFileSync(join(app, "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
 
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync }))).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.detail).toMatch(/schema\.prisma/);
   });
 
-  it("prefers a generated prisma/migrations SQL migration over the raw schema.prisma when both exist", () => {
+  it("prefers a generated prisma/migrations SQL migration over the raw schema.prisma when both exist", async () => {
     const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-both-"));
     dirs.push(app);
     mkdirSync(join(app, "prisma", "migrations", "0001_init"), { recursive: true });
     writeFileSync(join(app, "prisma", "migrations", "0001_init", "migration.sql"), 'create table "Customer" (id text primary key, email text);');
     writeFileSync(join(app, "prisma", "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
 
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync }))).recorded.find((r) => r.module === "M10");
     expect(m10?.detail).toMatch(/prisma[/\\]migrations/);
     expect(m10?.detail).not.toMatch(/schema\.prisma/);
   });
@@ -627,20 +803,20 @@ describe("monorepo fan-out namespaces finding ids by instance (#620)", () => {
   const withId = (id: string): Finding => ({ id } as unknown as Finding);
   const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
 
-  it("distinguishes the same finding id emitted by two apps so ids stay unique", () => {
+  it("distinguishes the same finding id emitted by two apps so ids stay unique", async () => {
     const runners = swap("M5", () => [
       { status: "ran", detail: "knip apps/main", instance: "apps/main", findings: [withId("SLOP-01")] },
       { status: "ran", detail: "knip apps/rag", instance: "apps/rag", findings: [withId("SLOP-01")] },
     ]);
-    const ids = runAudit(runners, ctx()).findings.map((f) => f.id);
+    const ids = (await runAudit(runners, ctx())).findings.map((f) => f.id);
     expect(ids).toContain("SLOP-01@apps/main");
     expect(ids).toContain("SLOP-01@apps/rag");
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("leaves ids unchanged on a single-target (no instance) run", () => {
+  it("leaves ids unchanged on a single-target (no instance) run", async () => {
     const runners = swap("M5", () => ({ status: "ran", detail: "knip", findings: [withId("SLOP-01")] }));
-    expect(runAudit(runners, ctx()).findings.map((f) => f.id)).toContain("SLOP-01");
+    expect((await runAudit(runners, ctx())).findings.map((f) => f.id)).toContain("SLOP-01");
   });
 });
 
@@ -666,15 +842,15 @@ describe("monorepo — M9 collects the complement of M6/M7/M8, ending the double
     readArtifact: () => undefined,
   });
 
-  it("a root-scope M7 finding and its per-app M9 twin resolve to exactly one delivered row", () => {
-    const ids = runAudit(AUDIT_RUNNERS, monorepo).findings.map((f) => f.id);
+  it("a root-scope M7 finding and its per-app M9 twin resolve to exactly one delivered row", async () => {
+    const ids = (await runAudit(AUDIT_RUNNERS, monorepo)).findings.map((f) => f.id);
     // Before the fix M9's unfiltered per-app capture added M7C-01@web and M7C-01@api alongside the
     // root-scope M7C-01 — three rows for one issue. Now only the root-scope row survives.
     expect(ids.filter((id) => id.startsWith("M7C-01"))).toEqual(["M7C-01"]);
   });
 
-  it("still delivers the unowned class only M9 collects, per app — the partition drops nothing", () => {
-    const ids = runAudit(AUDIT_RUNNERS, monorepo).findings.map((f) => f.id);
+  it("still delivers the unowned class only M9 collects, per app — the partition drops nothing", async () => {
+    const ids = (await runAudit(AUDIT_RUNNERS, monorepo)).findings.map((f) => f.id);
     expect(ids).toContain("M1-SFC-00@web");
     expect(ids).toContain("M1-SFC-00@api");
   });
@@ -682,11 +858,11 @@ describe("monorepo — M9 collects the complement of M6/M7/M8, ending the double
 
 // A RunContext whose exec succeeds (exit 0) but returns the no-op OUTPUT each tool prints when it
 // scanned nothing — the exact shape #350 proved slips past an exit-code check.
-const status = (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module: AuditModule) =>
-  runAudit(runners, ctx(over)).recorded.find((r) => r.module === module);
+const status = async (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module: AuditModule) =>
+  (await runAudit(runners, ctx(over))).recorded.find((r) => r.module === module);
 
 describe("probes derive status from evidence, not the exit code (#350)", () => {
-  it("M5 — knip did not run on any scope (M5-00 emitted, no scope summary, exit 0) is NOT recorded ran", () => {
+  it("M5 — knip did not run on any scope (M5-00 emitted, no scope summary, exit 0) is NOT recorded ran", async () => {
     // quality-scan exits 0 by design (#223) so M4 keeps its findings; the M5-00 finding is the tell.
     // #1109: knip having run on NO scope is a not-assessed, not a partial — the typed result draws
     // the line the old `partial` blurred, because a partial with no unit count reads as coverage.
@@ -694,13 +870,13 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     // skipped every scope. (M5-00 WITH a scope count is the partial case, tested below.) The stderr
     // is overridden here so it does not contradict the M5-00 the output emits.
     const knipFailed = {
-      exec: (_c: string, argv: string[]) => ({
+      exec: async (_c: string, argv: string[]) => ({
         ...cleanRun(argv),
         output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]),
         ...(argv.includes("quality-scan") ? { stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code: skipped (knip failed on every scope — see warnings above)" } : {}),
       }),
     };
-    const m5 = status(AUDIT_RUNNERS, knipFailed, "M5");
+    const m5 = await status(AUDIT_RUNNERS, knipFailed, "M5");
     expect(m5?.status).not.toBe("ran");
     expect(m5?.status).toBe("requires-live-run");
     expect(m5?.reason).toMatch(/knip did not run on any scope/);
@@ -709,22 +885,22 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // #505: a monorepo target where jscpd timed out on one workspace — quality-scan still exits 0
   // (the gap is disclosed as a finding, not a crash) so this is exactly the #350 shape: the exit
   // code says nothing, the M4-99 finding is the tell.
-  it("M4 — jscpd did not complete on every workspace (M4-99 disclosure emitted, exit 0) is NOT recorded ran", () => {
-    const jscpdTimedOut = { exec: (_c: string, argv: string[]) => ({ ...cleanRun(argv), output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
-    const m4 = status(AUDIT_RUNNERS, jscpdTimedOut, "M4");
+  it("M4 — jscpd did not complete on every workspace (M4-99 disclosure emitted, exit 0) is NOT recorded ran", async () => {
+    const jscpdTimedOut = { exec: async (_c: string, argv: string[]) => ({ ...cleanRun(argv), output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
+    const m4 = await status(AUDIT_RUNNERS, jscpdTimedOut, "M4");
     expect(m4?.status).not.toBe("ran");
     expect(m4?.status).toBe("partial");
     expect(m4?.reason).toMatch(/jscpd did not complete/);
   });
 
-  it("M4 — zero compared lines retain the excluded source-alias reason in the assessment", () => {
+  it("M4 — zero compared lines retain the excluded source-alias reason in the assessment", async () => {
     const sourceGap = "external-src points outside the selected target; its source population was excluded and not assessed";
     const qualityZero = {
-      exec: (_c: string, argv: string[]) => argv.includes("quality-scan")
+      exec: async (_c: string, argv: string[]) => argv.includes("quality-scan")
         ? { ok: true, output: JSON.stringify([{ id: "M4-99", evidence: sourceGap }]), stderr: "M4 duplication: 0% (0/0 lines) — 0 clone clusters" }
         : cleanRun(argv),
     };
-    const m4 = status(AUDIT_RUNNERS, qualityZero, "M4");
+    const m4 = await status(AUDIT_RUNNERS, qualityZero, "M4");
     expect(m4).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining(sourceGap) });
     expect(m4?.reason).toContain("MEASURED; falsifier:");
     expect(m4?.detail).toBeUndefined();
@@ -735,15 +911,15 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // suite that EXISTS but the measurement itself fell short (dry-run failure, degraded ladder,
   // scoped subset — covered below). A `ran` status with no findings captured would silently drop
   // the M8-00 finding from the deliverable, so this also asserts the finding survives capture.
-  it("M8 — no test suite at all reads ran, with the M8-00 finding captured (#754)", () => {
+  it("M8 — no test suite at all reads ran, with the M8-00 finding captured (#754)", async () => {
     const noSuiteRecord = { status: "partial" as const, noSuite: true, note: "No automated test suite found (no scripts.test) — mutation scan could not run." };
     const artifact = { finding: { id: "M8-00" }, moduleRecord: noSuiteRecord };
     const noSuite = ctx({
       captureDir: "/capture",
       readArtifact: () => artifact,
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, noSuite);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, noSuite);
     const m8 = recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("ran");
     expect(findings.map((f) => f.id)).toContain("M8-00");
@@ -752,14 +928,14 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // #504: the coverage-honesty guard — a scoped mutation run emits its summary AND a partial
   // moduleRecord, and the moduleRecord must win. A subset score that read `ran` is exactly how
   // the ATC run silently invalidated M8.
-  it("M8 — a deliberately-scoped mutation run (summary + moduleRecord) scores partial with its scope, never ran", () => {
+  it("M8 — a deliberately-scoped mutation run (summary + moduleRecord) scores partial with its scope, never ran", async () => {
     const scopedRun = {
-      exec: (_c: string, argv: string[]) =>
+      exec: async (_c: string, argv: string[]) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ summary: { overall: { mutationScore: 91.2 } }, reportRows: [], moduleRecord: { status: "partial", note: "Scoped mutation run — run covered 263 file(s) but the configured mutate globs match 812 — 549 file(s) were never mutated (e.g. src/other.ts). A subset measurement is not M8's result: recorded partial, never ran (#504)." } }) }
           : cleanRun(argv),
     };
-    const m8 = status(AUDIT_RUNNERS, scopedRun, "M8");
+    const m8 = await status(AUDIT_RUNNERS, scopedRun, "M8");
     expect(m8?.status).not.toBe("ran");
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/Scoped mutation run/);
@@ -775,8 +951,8 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     const workspace = planMutationWorkspaces(directory).workspaces.find(row => row.directory === "apps/rag")!;
     const finding = mutationWorkspaceFinding(workspace, "discovery-failed", "Zero related tests; the configured production source remains unassessed");
     const artifact = { summary: { overall: { totalMutants: 5, mutationScore: 80 } }, findings: [finding], moduleRecord: { status: "partial", note: "Main measured; RAG discovery-failed: zero related tests" } };
-    const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
-    const result = runAudit(AUDIT_RUNNERS, context);
+    const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, exec: async (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
+    const result = await runAudit(AUDIT_RUNNERS, context);
     expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial" });
     expect(result.findings).toContainEqual(finding);
     const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta);
@@ -796,8 +972,8 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "unavailable", devDependencies: { vitest: "3.2.6" } }));
     writeFileSync(join(directory, "source.ts"), "export const source = 1");
     const artifact = runMutationWorkspaces(planMutationWorkspaces(directory), { storage: "/unused", cliPath: "/unused", planOnly: true });
-    const context = ctx({ targetDir: directory, captureDir: "/capture", readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, readFindings: () => [], exec: (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: false, output: "Source test-intent producer unavailable" } });
-    const result = runAudit(AUDIT_RUNNERS, context);
+    const context = ctx({ targetDir: directory, captureDir: "/capture", readArtifact: path => path.endsWith("M8.json") ? artifact : undefined, readFindings: () => [], exec: async (_command, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: false, output: "Source test-intent producer unavailable" } });
+    const result = await runAudit(AUDIT_RUNNERS, context);
     expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining("Plan-only invocation") });
     expect(result.findingsByModule.M8).toEqual(artifact.findings);
     expect(result.testQuality).toBeUndefined();
@@ -816,9 +992,9 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // true`), so mutationVerdict fell through to `summary` present → `ran` — a full pass banked over
   // a scope nobody verified. src/cli/mutation-scan.ts now emits unverifiableScopeModuleRecord on
   // that branch too.
-  it("M8 — an unverifiable mutate scope (verified:false, scoped:false) scores partial, never ran (#1309)", () => {
+  it("M8 — an unverifiable mutate scope (verified:false, scoped:false) scores partial, never ran (#1309)", async () => {
     const unverifiableRun = {
-      exec: (_c: string, argv: string[]) =>
+      exec: async (_c: string, argv: string[]) =>
         argv.includes("mutation-scan")
           ? {
               ok: true,
@@ -831,7 +1007,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
             }
           : cleanRun(argv),
     };
-    const m8 = status(AUDIT_RUNNERS, unverifiableRun, "M8");
+    const m8 = await status(AUDIT_RUNNERS, unverifiableRun, "M8");
     expect(m8?.status).not.toBe("ran");
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/#1309/);
@@ -841,14 +1017,14 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // #503: a failed Stryker dry run (the target's own suite failing unmutated) emits the same
   // machine-readable moduleRecord shape — the probe must surface its distinct reason, not a
   // generic requires-live-run and never a silent zero.
-  it("M8 — a failed Stryker dry run (moduleRecord partial, exit 0) reads partial with the dry-run reason", () => {
+  it("M8 — a failed Stryker dry run (moduleRecord partial, exit 0) reads partial with the dry-run reason", async () => {
     const dryRunFailed = {
-      exec: (_c: string, argv: string[]) =>
+      exec: async (_c: string, argv: string[]) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ finding: { id: "M8-03" }, moduleRecord: { status: "partial", note: "Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (TZ=UTC (from ci.yml)): × format-date.test.ts. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first." } }) }
           : cleanRun(argv),
     };
-    const m8 = status(AUDIT_RUNNERS, dryRunFailed, "M8");
+    const m8 = await status(AUDIT_RUNNERS, dryRunFailed, "M8");
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/dry run FAILED/);
     expect(m8?.reason).toMatch(/format-date\.test\.ts/);
@@ -857,47 +1033,47 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // #523: --install (provisioning Stryker into the target, running its npm lifecycle scripts) is
   // gated on explicit operator consent threaded via ctx.allowTargetInstall. The flag decides whether
   // the M8 probe appends --install to mutation-scan — consent unlocks the attempt, nothing else.
-  it("M8 appends --install to mutation-scan only when ctx.allowTargetInstall is set (#523)", () => {
-    const mutationArgv = (over: Partial<RunContext>): string[] => {
+  it("M8 appends --install to mutation-scan only when ctx.allowTargetInstall is set (#523)", async () => {
+    const mutationArgv = async (over: Partial<RunContext>): Promise<string[]> => {
       let seen: string[] = [];
-      runAudit(AUDIT_RUNNERS, ctx({
+      await runAudit(AUDIT_RUNNERS, ctx({
         ...over,
-        exec: (_c, argv) => {
+        exec: async (_c, argv) => {
           if (argv.includes("mutation-scan")) seen = argv;
           return cleanRun(argv);
         },
       }));
       return seen;
     };
-    expect(mutationArgv({ allowTargetInstall: true })).toContain("--install");
-    expect(mutationArgv({})).not.toContain("--install");
-    expect(mutationArgv({ allowTargetInstall: false })).not.toContain("--install");
+    expect(await mutationArgv({ allowTargetInstall: true })).toContain("--install");
+    expect(await mutationArgv({})).not.toContain("--install");
+    expect(await mutationArgv({ allowTargetInstall: false })).not.toContain("--install");
   });
 
-  it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
-    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
-    const m9 = status(AUDIT_RUNNERS, emptyDir, "M9");
+  it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", async () => {
+    const emptyDir = { exec: async () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
+    const m9 = await status(AUDIT_RUNNERS, emptyDir, "M9");
     expect(m9?.status).not.toBe("ran");
     expect(m9?.reason).toMatch(/0 product source files/);
   });
 
-  it("M9 records ran only when the tool reports a non-zero file count", () => {
-    expect(status(AUDIT_RUNNERS, {}, "M9")?.status).toBe("ran");
+  it("M9 records ran only when the tool reports a non-zero file count", async () => {
+    expect((await status(AUDIT_RUNNERS, {}, "M9"))?.status).toBe("ran");
   });
 
   // #1065: the guard above was unreachable. loadSources reads package.json and next.config.js on
   // every target, so a run that opened nothing BUT those still printed a non-zero total and read
   // `ran`. That is exactly what a plain-JavaScript app produced. Only the PRODUCT SOURCE count is
   // evidence code was read — for M9 and for M6/M7, which share the same output.
-  it("M9/M6/M7 — config files alone are not a scan, however many the tool loaded", () => {
-    const configOnly = { exec: () => ({ ok: true, output: "loaded 2 source files (0 product source, 2 config, 0 test/story) from /target\n\n0 findings across 0 classes:" }) };
+  it("M9/M6/M7 — config files alone are not a scan, however many the tool loaded", async () => {
+    const configOnly = { exec: async () => ({ ok: true, output: "loaded 2 source files (0 product source, 2 config, 0 test/story) from /target\n\n0 findings across 0 classes:" }) };
     for (const module of ["M9", "M7"] as const) {
-      const row = status(AUDIT_RUNNERS, configOnly, module);
+      const row = await status(AUDIT_RUNNERS, configOnly, module);
       expect(row?.status).toBe("requires-live-run");
       expect(row?.reason).toMatch(/0 product source files/);
     }
     // M6's indicator tier degrades to its own not-run reason rather than crediting the layer.
-    expect(status(AUDIT_RUNNERS, configOnly, "M6")?.status).not.toBe("partial");
+    expect((await status(AUDIT_RUNNERS, configOnly, "M6"))?.status).not.toBe("partial");
   });
 });
 
@@ -907,51 +1083,51 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
 // the tier which did run had no subject matter.
 describe("a probe that examined nothing is not-assessed, not a clean row (#1096/#1109)", () => {
   const withTool = (match: string, output: string, stderr = ""): Partial<RunContext> => ({
-    exec: (_c, argv) => (argv.join(" ").includes(match) ? { ok: true, output, stderr } : cleanRun(argv)),
+    exec: async (_c, argv) => (argv.join(" ").includes(match) ? { ok: true, output, stderr } : cleanRun(argv)),
   });
 
-  it("M1 — quick-scan measuring 0 application files is not a mechanical-tier partial", () => {
+  it("M1 — quick-scan measuring 0 application files is not a mechanical-tier partial", async () => {
     const noCode = withTool("quick-scan", "  0 lines of application code across 0 file(s)");
-    const m1 = status(AUDIT_RUNNERS, noCode, "M1");
+    const m1 = await status(AUDIT_RUNNERS, noCode, "M1");
     expect(m1?.status).toBe("requires-live-run");
     expect(m1?.reason).toMatch(/0 application source files/);
   });
 
-  it("M1 — a real file count rides onto the row, so the client can check the zero", () => {
-    const m1 = status(AUDIT_RUNNERS, {}, "M1");
+  it("M1 — a real file count rides onto the row, so the client can check the zero", async () => {
+    const m1 = await status(AUDIT_RUNNERS, {}, "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.detail).toContain("examined 400 application source files");
   });
 
-  it("M3 — a hotspot table over 0 ranked files is not an M3 pass", () => {
-    const m3 = status(AUDIT_RUNNERS, withTool("hotspot-scan.ts", "M3 hotspot table — /target (0 rows, worst first)"), "M3");
+  it("M3 — a hotspot table over 0 ranked files is not an M3 pass", async () => {
+    const m3 = await status(AUDIT_RUNNERS, withTool("hotspot-scan.ts", "M3 hotspot table — /target (0 rows, worst first)"), "M3");
     expect(m3?.status).toBe("requires-live-run");
     expect(m3?.reason).toMatch(/ranked 0 files/);
   });
 
-  it("M4 — quality-scan exiting 0 with no jscpd line total is not a duplication measurement", () => {
-    const m4 = status(AUDIT_RUNNERS, withTool("quality-scan", "[]", "jscpd: nothing to report"), "M4");
+  it("M4 — quality-scan exiting 0 with no jscpd line total is not a duplication measurement", async () => {
+    const m4 = await status(AUDIT_RUNNERS, withTool("quality-scan", "[]", "jscpd: nothing to report"), "M4");
     expect(m4?.status).toBe("requires-live-run");
     expect(m4?.reason).toMatch(/no jscpd line total/);
   });
 
-  it("M4/M5 — the counts quality-scan prints on STDERR reach the ledger row (the #1109 blocker)", () => {
-    expect(status(AUDIT_RUNNERS, {}, "M4")?.detail).toContain("examined 5000 source lines compared by jscpd");
-    expect(status(AUDIT_RUNNERS, {}, "M5")?.detail).toContain("examined 2 workspace scopes analysed by knip");
+  it("M4/M5 — the counts quality-scan prints on STDERR reach the ledger row (the #1109 blocker)", async () => {
+    expect((await status(AUDIT_RUNNERS, {}, "M4"))?.detail).toContain("examined 5000 source lines compared by jscpd");
+    expect((await status(AUDIT_RUNNERS, {}, "M5"))?.detail).toContain("examined 2 workspace scopes analysed by knip");
   });
 
-  it("M10 — pii-classify classifying 0 columns is not a schema-tier partial", () => {
-    const m10 = status(AUDIT_RUNNERS, withTool("pii-classify", "Scanned 0 columns. PII-bearing columns: 0 across 0 tables."), "M10");
+  it("M10 — pii-classify classifying 0 columns is not a schema-tier partial", async () => {
+    const m10 = await status(AUDIT_RUNNERS, withTool("pii-classify", "Scanned 0 columns. PII-bearing columns: 0 across 0 tables."), "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/classified 0 columns/);
   });
 
-  it("M10 — the classified column count rides onto the schema-tier row", () => {
-    expect(status(AUDIT_RUNNERS, {}, "M10")?.detail).toContain("examined 120 database columns");
+  it("M10 — the classified column count rides onto the schema-tier row", async () => {
+    expect((await status(AUDIT_RUNNERS, {}, "M10"))?.detail).toContain("examined 120 database columns");
   });
 
-  it("M8 — the test-intent tier's file count is the unit on every rung of the verdict ladder", () => {
-    const m8 = status(AUDIT_RUNNERS, {}, "M8");
+  it("M8 — the test-intent tier's file count is the unit on every rung of the verdict ladder", async () => {
+    const m8 = await status(AUDIT_RUNNERS, {}, "M8");
     expect(m8?.detail).toContain("examined 40 source files (test-intent tier, tests included)");
   });
 });
@@ -971,11 +1147,11 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
       ...over,
     });
 
-  it("a non-zero mutation-scan exit reads partial+sub-step-blocked and keeps the test-intent findings", () => {
+  it("a non-zero mutation-scan exit reads partial+sub-step-blocked and keeps the test-intent findings", async () => {
     const blocked = withStatic({
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: false, output: "TypeError undefined (harness #623)" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("mutation-scan") ? { ok: false, output: "TypeError undefined (harness #623)" } : cleanRun(argv)),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, blocked);
     const m8 = recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("partial");
     expect(m8?.status).not.toBe("requires-live-run");
@@ -985,26 +1161,26 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
     expect(findings.map((f) => f.id)).toContain("M8-53");
   });
 
-  it("an unrecognized mutation verdict also degrades to partial+sub-step-blocked, findings kept", () => {
+  it("an unrecognized mutation verdict also degrades to partial+sub-step-blocked, findings kept", async () => {
     const unknown = withStatic({
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: "not json at all" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: "not json at all" } : cleanRun(argv)),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, unknown);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, unknown);
     const m8 = recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("partial");
     expect(m8?.subStatus).toBe("sub-step-blocked");
     expect(findings.map((f) => f.id)).toContain("M8-53");
   });
 
-  it("stays requires-live-run (no findings produced) when the test-intent tier could not scan either", () => {
+  it("stays requires-live-run (no findings produced) when the test-intent tier could not scan either", async () => {
     const bothDown = ctx({
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("mutation-scan")) return { ok: false, output: "crash" };
         if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
         return cleanRun(argv);
       },
     });
-    const m8 = status(AUDIT_RUNNERS, bothDown, "M8");
+    const m8 = await status(AUDIT_RUNNERS, bothDown, "M8");
     expect(m8?.status).toBe("requires-live-run");
     expect(m8?.subStatus).toBeUndefined();
     expect(m8?.reason).toMatch(/could not scan either/);
@@ -1016,37 +1192,37 @@ describe("a flag is intent, not evidence — no flag alone produces ran (#311/#3
   // observe. None of the modules whose `ran` was previously flag-derived may read ran.
   const allFlags = { env: { connected: true, dynamic: true, llm: true } };
 
-  it("M1 stays partial with --connected --llm — the mechanical tier is all the orchestrator ran (#311)", () => {
-    const m1 = status(AUDIT_RUNNERS, allFlags, "M1");
+  it("M1 stays partial with --connected --llm — the mechanical tier is all the orchestrator ran (#311)", async () => {
+    const m1 = await status(AUDIT_RUNNERS, allFlags, "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).toMatch(/mechanical tier only/);
   });
 
-  it("M2 stays requires-live-run with --dynamic — a flag is not a reachable stack (#356)", () => {
-    const m2 = status(AUDIT_RUNNERS, allFlags, "M2");
+  it("M2 stays requires-live-run with --dynamic — a flag is not a reachable stack (#356)", async () => {
+    const m2 = await status(AUDIT_RUNNERS, allFlags, "M2");
     expect(m2?.status).toBe("requires-live-run");
     expect(m2?.reason).toMatch(/flag is not a reachable stack/);
   });
 
-  it("no module reads ran off the flags when the flag-gated passes produced no evidence", () => {
-    const flagGated = runAudit(AUDIT_RUNNERS, ctx(allFlags)).recorded.filter((r) => ["M1", "M2", "M6"].includes(r.module));
+  it("no module reads ran off the flags when the flag-gated passes produced no evidence", async () => {
+    const flagGated = (await runAudit(AUDIT_RUNNERS, ctx(allFlags))).recorded.filter((r) => ["M1", "M2", "M6"].includes(r.module));
     expect(flagGated.every((r) => r.status !== "ran")).toBe(true);
   });
 });
 
 describe("M6's never-run alarm is not cleared by a review packet (#351)", () => {
-  it("M6 with --llm reports partial, never ran — a packet is not a verdict", () => {
-    const m6 = status(AUDIT_RUNNERS, { env: { connected: false, dynamic: false, llm: true } }, "M6");
+  it("M6 with --llm reports partial, never ran — a packet is not a verdict", async () => {
+    const m6 = await status(AUDIT_RUNNERS, { env: { connected: false, dynamic: false, llm: true } }, "M6");
     expect(m6?.status).toBe("partial");
     expect(m6?.status).not.toBe("ran");
     expect(m6?.reason).toMatch(/not a verdict/);
   });
 
-  it("a packet-only --llm run banks no `ran`, so it could never clear a never-run alarm", () => {
+  it("a packet-only --llm run banks no `ran`, so it could never clear a never-run alarm", async () => {
     // #283 recorded a REAL reviewed verdict, so the live ledger no longer flags M6. The invariant
     // #351 protects — that a bare packet run does NOT clear the alarm — is shown against a synthetic
     // ledger: the probe reports a non-`ran` status, so a never-run M6 stays flagged.
-    const { recorded } = runAudit(AUDIT_RUNNERS, ctx({ env: { connected: false, dynamic: false, llm: true } }));
+    const { recorded } = await runAudit(AUDIT_RUNNERS, ctx({ env: { connected: false, dynamic: false, llm: true } }));
     expect(recorded.find((r) => r.module === "M6")?.status).not.toBe("ran");
     expect(buildAuditCoverage(recorded, undefined, new Set<AuditModule>(["M6"])).neverRun).toContain("M6");
   });
@@ -1058,36 +1234,36 @@ describe("M6's never-run alarm is not cleared by a review packet (#351)", () => 
 // `partial` coverage, never a silent requires-live-run when it demonstrably ran, and never `ran`
 // (that stays gated on a reviewed verdict per #351).
 describe("M6 credits its free indicator layer without a --llm flag (#397)", () => {
-  it("reads partial, not requires-live-run, when detect-static confirms the indicator layer ran", () => {
+  it("reads partial, not requires-live-run, when detect-static confirms the indicator layer ran", async () => {
     // Default ctx()'s detect-static fake reports a positive file count (see cleanOutput above).
-    const m6 = status(AUDIT_RUNNERS, {}, "M6");
+    const m6 = await status(AUDIT_RUNNERS, {}, "M6");
     expect(m6?.status).toBe("partial");
     expect(m6?.reason).toMatch(/free indicator layer ran/i);
   });
 
-  it("never reads `ran` off the indicator layer alone — #351's never-run alarm still needs a verdict", () => {
-    const { recorded } = runAudit(AUDIT_RUNNERS, ctx());
+  it("never reads `ran` off the indicator layer alone — #351's never-run alarm still needs a verdict", async () => {
+    const { recorded } = await runAudit(AUDIT_RUNNERS, ctx());
     expect(recorded.find((r) => r.module === "M6")?.status).not.toBe("ran");
     // Against a synthetic never-run ledger (the live one is empty since #283), a non-`ran` indicator
     // row leaves M6 flagged — the alarm still turns on the verdict, not the indicator layer.
     expect(buildAuditCoverage(recorded, undefined, new Set<AuditModule>(["M6"])).neverRun).toContain("M6");
   });
 
-  it("stays requires-live-run when detect-static could not confirm a scan (0 files, no llm)", () => {
-    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
-    const m6 = status(AUDIT_RUNNERS, emptyDir, "M6");
+  it("stays requires-live-run when detect-static could not confirm a scan (0 files, no llm)", async () => {
+    const emptyDir = { exec: async () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
+    const m6 = await status(AUDIT_RUNNERS, emptyDir, "M6");
     expect(m6?.status).toBe("requires-live-run");
     expect(m6?.reason).toMatch(/could not confirm the free indicator layer ran/i);
   });
 
-  it("stays requires-live-run when detect-static's CLI itself fails, no llm", () => {
-    const failing = { exec: () => ({ ok: false, output: "detect-static crashed" }) };
-    const m6 = status(AUDIT_RUNNERS, failing, "M6");
+  it("stays requires-live-run when detect-static's CLI itself fails, no llm", async () => {
+    const failing = { exec: async () => ({ ok: false, output: "detect-static crashed" }) };
+    const m6 = await status(AUDIT_RUNNERS, failing, "M6");
     expect(m6?.status).toBe("requires-live-run");
     expect(m6?.reason).toMatch(/paid LLM tier not in scope/);
   });
 
-  it("collects the captured M6 — Indicator findings into the deliverable when the layer ran", () => {
+  it("collects the captured M6 — Indicator findings into the deliverable when the layer ran", async () => {
     const capturing = ctx({
       captureDir: "/cap",
       readFindings: (p) =>
@@ -1098,7 +1274,7 @@ describe("M6 credits its free indicator layer without a --llm flag (#397)", () =
             ]
           : [],
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturing);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, capturing);
     const m6 = recorded.find((r) => r.module === "M6");
     expect(m6?.status).toBe("partial");
     expect(findings.map((f) => f.id)).toContain("M6IND-01");
@@ -1137,11 +1313,11 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
       ...over,
     });
 
-  it("a non-zero simplify-scan reads partial+sub-step-blocked and keeps the indicator findings", () => {
+  it("a non-zero simplify-scan reads partial+sub-step-blocked and keeps the indicator findings", async () => {
     const blocked = withIndicator({
-      exec: (_c, argv) => (argv.includes("simplify-scan") ? { ok: false, output: "packet assembly crashed" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("simplify-scan") ? { ok: false, output: "packet assembly crashed" } : cleanRun(argv)),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, blocked);
     const m6 = recorded.find((r) => r.module === "M6");
     expect(m6?.status).toBe("partial");
     expect(m6?.status).not.toBe("requires-live-run");
@@ -1151,16 +1327,16 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
     expect(findings.map((f) => f.id)).toContain("M6IND-01");
   });
 
-  it("stays requires-live-run (no findings) when the indicator tier could not scan either", () => {
+  it("stays requires-live-run (no findings) when the indicator tier could not scan either", async () => {
     const bothDown = ctx({
       ...llmEnv,
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("simplify-scan")) return { ok: false, output: "crash" };
         if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
         return cleanRun(argv);
       },
     });
-    const m6 = status(AUDIT_RUNNERS, bothDown, "M6");
+    const m6 = await status(AUDIT_RUNNERS, bothDown, "M6");
     expect(m6?.status).toBe("requires-live-run");
     expect(m6?.subStatus).toBeUndefined();
     expect(m6?.reason).toMatch(/could not scan either/);
@@ -1168,23 +1344,23 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
 });
 
 describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", () => {
-  it("records ran when hotspot-scan emits the ranked table (vitals report parsed)", () => {
-    expect(status(AUDIT_RUNNERS, {}, "M3")?.status).toBe("ran");
+  it("records ran when hotspot-scan emits the ranked table (vitals report parsed)", async () => {
+    expect((await status(AUDIT_RUNNERS, {}, "M3"))?.status).toBe("ran");
   });
 
-  it("records requires-live-run when vitals_cli.py is not on PATH", () => {
-    const noVitals = { exec: () => ({ ok: false, output: "vitals_cli.py not found on PATH (#314)" }) };
-    const m3 = status(AUDIT_RUNNERS, noVitals, "M3");
+  it("records requires-live-run when vitals_cli.py is not on PATH", async () => {
+    const noVitals = { exec: async () => ({ ok: false, output: "vitals_cli.py not found on PATH (#314)" }) };
+    const m3 = await status(AUDIT_RUNNERS, noVitals, "M3");
     expect(m3?.status).toBe("requires-live-run");
     expect(m3?.reason).toMatch(/vitals/);
   });
 
-  it("does not let a retained prior pass supersede a current empty live capture", () => {
+  it("does not let a retained prior pass supersede a current empty live capture", async () => {
     const now = Date.parse("2026-09-25T12:00:00Z");
-    const m3 = status(AUDIT_RUNNERS, {
+    const m3 = await status(AUDIT_RUNNERS, {
       now,
       artifactsDir: "/artifacts",
-      exec: (_command, argv) => argv.join(" ").includes("hotspot-scan.ts")
+      exec: async (_command, argv) => argv.join(" ").includes("hotspot-scan.ts")
         ? { ok: true, output: "M3 hotspot table — /target (0 rows, worst first)\n⚠ M3 EMPTY CAPTURE\nCurrent signal availability: currentHealth=failed/0, historyTrend=not-assessed/0, knowledgeRisk=not-assessed/0, aiProvenance=not-assessed/0" }
         : cleanRun(argv),
       readArtifact: (path) => path.endsWith("M3.pass.json")
@@ -1198,53 +1374,53 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
 
   // #515: M3 surfaces its top-K ranking so runAudit can hand it to the assembler for cross-module
   // enrichment. The whole path: probe reads the M3 artifact's topK → runAudit result.hotspots.
-  it("surfaces the captured top-K hotspot ranking on the run result", () => {
+  it("surfaces the captured top-K hotspot ranking on the run result", async () => {
     const withM3Artifact = ctx({
       captureDir: "/cap",
       readArtifact: (p: string) => (p.endsWith("M3.json") ? { topK: ["core/checkout.ts", "core/pay.ts"], findings: [] } : undefined),
     });
-    const { hotspots } = runAudit(AUDIT_RUNNERS, withM3Artifact);
+    const { hotspots } = await runAudit(AUDIT_RUNNERS, withM3Artifact);
     expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
   });
 
   // #1075: vitals ran (installed, real report) but in "complexity-only" mode — the target has no git
   // history, so every hotspot's risk_score is 0.0 and the ranking is filesystem-walk order, not a
   // churn×complexity ranking. The CLI's "M3 UNRANKED" banner (src/cli/hotspot-scan.ts) is the tell.
-  it("records partial (not a clean ran) when the CLI reports 'M3 UNRANKED' — complexity-only mode", () => {
+  it("records partial (not a clean ran) when the CLI reports 'M3 UNRANKED' — complexity-only mode", async () => {
     const unranked = {
-      exec: () => ({
+      exec: async () => ({
         ok: true,
         output: 'M3 hotspot table — /target (3 rows, worst first)\n  ⚠ M3 UNRANKED: vitals ran in "complexity-only" mode — the target has no git history.',
       }),
     };
-    const m3 = status(AUDIT_RUNNERS, unranked, "M3");
+    const m3 = await status(AUDIT_RUNNERS, unranked, "M3");
     expect(m3?.status).toBe("partial");
     expect(m3?.reason).toMatch(/complexity-only/);
   });
 
   // The CLI withholds topK entirely when unranked (src/cli/hotspot-scan.ts sets `top = []`), so even
   // if a stale artifact carried one, this run must not hand a ranking to cross-module enrichment.
-  it("never surfaces a hotspot ranking for an unranked run — cross-module enrichment stays off", () => {
+  it("never surfaces a hotspot ranking for an unranked run — cross-module enrichment stays off", async () => {
     const unranked = ctx({
-      exec: () => ({
+      exec: async () => ({
         ok: true,
         output: "M3 hotspot table — /target (3 rows, worst first)\n  ⚠ M3 UNRANKED: every row scored risk_score 0.0.",
       }),
       captureDir: "/cap",
       readArtifact: (p: string) => (p.endsWith("M3.json") ? { topK: [], findings: [] } : undefined),
     });
-    const { hotspots } = runAudit(AUDIT_RUNNERS, unranked);
+    const { hotspots } = await runAudit(AUDIT_RUNNERS, unranked);
     expect(hotspots).toBeUndefined();
   });
 
-  it("delivers the same valid history trend exactly once when live and pass evidence overlap (#2135)", () => {
+  it("delivers the same valid history trend exactly once when live and pass evidence overlap (#2135)", async () => {
     const now = Date.parse("2026-09-25T12:00:00Z");
     const trend = {
       id: "M3-TREND-00", title: "Health trend", severity: "Watch", confidence: "Confirmed",
       category: "Maintainability", taxonomy: "M3 — Codebase health trend", location: "(repository-wide)",
       status: "Open", evidence: "one file degraded", impact: "risk", fix: "review", value: 3, ease: 3, safety: 5,
     } as Finding;
-    const run = runAudit(AUDIT_RUNNERS, ctx({
+    const run = await runAudit(AUDIT_RUNNERS, ctx({
       now,
       captureDir: "/cap",
       artifactsDir: "/artifacts",
@@ -1257,9 +1433,9 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
     expect(run.findingsByModule.M3?.filter((finding) => finding.id === "M3-TREND-00")).toHaveLength(1);
   });
 
-  it("classifies a Vitals subprocess failure without stopping independent modules (#2135)", () => {
-    const run = runAudit(AUDIT_RUNNERS, ctx({
-      exec: (_command, argv) => argv.join(" ").includes("hotspot-scan.ts")
+  it("classifies a Vitals subprocess failure without stopping independent modules (#2135)", async () => {
+    const run = await runAudit(AUDIT_RUNNERS, ctx({
+      exec: async (_command, argv) => argv.join(" ").includes("hotspot-scan.ts")
         ? { ok: false, output: "sqlite3.OperationalError: attempt to write a readonly database" }
         : cleanRun(argv),
     }));
@@ -1285,8 +1461,8 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
       ...over,
     });
 
-  it("M1 reads a fresh semantic-pass artifact as the evidence that tier ran", () => {
-    const m1 = status(AUDIT_RUNNERS, withPass("M1", { pass: "semantic" }), "M1");
+  it("M1 reads a fresh semantic-pass artifact as the evidence that tier ran", async () => {
+    const m1 = await status(AUDIT_RUNNERS, withPass("M1", { pass: "semantic" }), "M1");
     expect(m1?.detail).toMatch(/semantic pass/);
     // #1522: `ran` needs every M1 tier accounted for; with live and connected unrecorded the row is
     // partial and names them, rather than reading as a module that ran in full.
@@ -1300,23 +1476,23 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
   // --pass connected` overwrote M1.pass.json, and the probe returned `{ kind: "examined" }` with NO
   // reason — status `ran`, the semantic/live disclosure gone, the semantic pass's findings deleted
   // at the write side. The more diligently an engagement recorded a tier, the quieter its M1 row.
-  it("a connected-only pass still names the semantic and live tiers as un-run (#1522)", () => {
-    const m1 = status(AUDIT_RUNNERS, withPass("M1", { pass: "connected" }), "M1");
+  it("a connected-only pass still names the semantic and live tiers as un-run (#1522)", async () => {
+    const m1 = await status(AUDIT_RUNNERS, withPass("M1", { pass: "connected" }), "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).toMatch(/semantic \(LLM `\/vuln-scan` → `\/triage`\)/);
     expect(m1?.reason).toMatch(/live \(`pnpm detect-deeper`\)/);
     expect(m1?.reason).not.toMatch(/connected Supabase/); // the tier that DID run is not listed as missing
   });
 
-  it("M1 names the un-run tiers for every combination, and reads ran only when none is left", () => {
+  it("M1 names the un-run tiers for every combination, and reads ran only when none is left", async () => {
     const slot = (pass: string, ...prior: string[]) =>
       withPass("M1", { pass, priorPasses: prior.map((p) => ({ module: "M1", target: "/target", pass: p, generatedAt: iso(DAY) })) });
-    const semanticAndLive = status(AUDIT_RUNNERS, slot("live", "semantic"), "M1");
+    const semanticAndLive = await status(AUDIT_RUNNERS, slot("live", "semantic"), "M1");
     expect(semanticAndLive?.status).toBe("partial");
     expect(semanticAndLive?.reason).toMatch(/connected Supabase/);
     expect(semanticAndLive?.reason).not.toMatch(/detect-deeper/);
 
-    const allThree = status(AUDIT_RUNNERS, slot("connected", "semantic", "live"), "M1");
+    const allThree = await status(AUDIT_RUNNERS, slot("connected", "semantic", "live"), "M1");
     expect(allThree?.status).toBe("ran");
     expect(allThree?.detail).toMatch(/connected pass.*semantic pass.*live pass/);
   });
@@ -1341,15 +1517,15 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
         { detectOrm: () => orm },
       );
 
-    it("a Supabase target with no connected pass still reads partial and names that tier", () => {
-      const m1 = status(AUDIT_RUNNERS, withOrm("supabase", "live", "semantic"), "M1");
+    it("a Supabase target with no connected pass still reads partial and names that tier", async () => {
+      const m1 = await status(AUDIT_RUNNERS, withOrm("supabase", "live", "semantic"), "M1");
       expect(m1?.status).toBe("partial");
       expect(m1?.reason).toMatch(/connected Supabase/);
       expect(m1?.detail).not.toMatch(/Not applicable to this target's architecture/);
     });
 
-    it("a Prisma target with no connected pass does not name it as missing, and reads ran", () => {
-      const m1 = status(AUDIT_RUNNERS, withOrm("prisma", "live", "semantic"), "M1");
+    it("a Prisma target with no connected pass does not name it as missing, and reads ran", async () => {
+      const m1 = await status(AUDIT_RUNNERS, withOrm("prisma", "live", "semantic"), "M1");
       expect(m1?.status).toBe("ran");
       expect(m1?.reason).toBeUndefined();
       // Disclosed, not dropped: the row still says the tier exists and why it does not apply here.
@@ -1358,8 +1534,8 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
       expect(m1?.detail).toMatch(/M1-ARCH-PRISMA/);
     });
 
-    it("an un-run APPLICABLE tier is still named on a Prisma target — the N/A path silences nothing else", () => {
-      const m1 = status(AUDIT_RUNNERS, withOrm("drizzle", "semantic"), "M1");
+    it("an un-run APPLICABLE tier is still named on a Prisma target — the N/A path silences nothing else", async () => {
+      const m1 = await status(AUDIT_RUNNERS, withOrm("drizzle", "semantic"), "M1");
       expect(m1?.status).toBe("partial");
       expect(m1?.reason).toMatch(/live \(`pnpm detect-deeper`\)/);
       expect(m1?.reason).toMatch(/1 of M1's 2 applicable out-of-orchestrator tiers/);
@@ -1369,15 +1545,15 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
 
     // detectOrm returns "unknown" when NO data layer is recognised. The Supabase RLS detectors still
     // run on such a target, so the connected tier is genuinely un-run there, not N/A.
-    it("an unrecognised data layer keeps the connected tier applicable", () => {
-      const m1 = status(AUDIT_RUNNERS, withOrm("unknown", "live", "semantic"), "M1");
+    it("an unrecognised data layer keeps the connected tier applicable", async () => {
+      const m1 = await status(AUDIT_RUNNERS, withOrm("unknown", "live", "semantic"), "M1");
       expect(m1?.status).toBe("partial");
       expect(m1?.reason).toMatch(/connected Supabase/);
     });
 
     // The no-pass-at-all branch takes the same split, and it is the one a real Prisma engagement hits.
-    it("states the N/A tier on the mechanical-tier-only row too", () => {
-      const m1 = status(AUDIT_RUNNERS, ctx({ detectOrm: () => "prisma" }), "M1");
+    it("states the N/A tier on the mechanical-tier-only row too", async () => {
+      const m1 = await status(AUDIT_RUNNERS, ctx({ detectOrm: () => "prisma" }), "M1");
       expect(m1?.status).toBe("partial");
       expect(m1?.reason).toMatch(/applicable out-of-orchestrator tiers/);
       expect(m1?.reason).not.toMatch(/connected Supabase/);
@@ -1388,113 +1564,113 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     // that reads it — the #1407 shape, where a round-trip was library-proven and the flag that feeds
     // it was unguarded. This one plants a real schema.prisma and lets the probe call the real
     // detectOrm on a real directory, so the `ctx.detectOrm ?? detectOrm` fallback is exercised.
-    it("reads the architecture off the real target directory when nothing is injected", () => {
+    it("reads the architecture off the real target directory when nothing is injected", async () => {
       const dir = mkdtempSync(join(tmpdir(), "harvey-m1-orm-"));
       tmpDirs.push(dir);
       writeFileSync(join(dir, "schema.prisma"), "datasource db { provider = \"postgresql\" }\n");
       // detectOrm: undefined DROPS the helper's double, so the probe takes its real-function branch.
-      const m1 = status(AUDIT_RUNNERS, { targetDir: dir, detectOrm: undefined }, "M1");
+      const m1 = await status(AUDIT_RUNNERS, { targetDir: dir, detectOrm: undefined }, "M1");
       expect(m1?.detail).toMatch(/M1-ARCH-PRISMA/);
       expect(m1?.reason).not.toMatch(/connected Supabase/);
     });
   });
 
-  it("a connected pass recorded after a semantic one keeps BOTH tiers' findings (#1522)", () => {
+  it("a connected pass recorded after a semantic one keeps BOTH tiers' findings (#1522)", async () => {
     const both = withPass("M1", {
       pass: "connected",
       findings: [{ id: "SB-DRIFT-01" }],
       priorPasses: [{ module: "M1", target: "/target", pass: "semantic", generatedAt: iso(DAY), findings: [{ id: "TRIAGE-1" }] }],
     });
-    const { findings } = runAudit(AUDIT_RUNNERS, both);
+    const { findings } = await runAudit(AUDIT_RUNNERS, both);
     const ids = findings.map((f) => (f as { id?: string }).id);
     expect(ids).toContain("SB-DRIFT-01");
     expect(ids).toContain("TRIAGE-1");
   });
 
   // The #502 warning was read off the NEWEST pass, so recording any other tier afterwards lost it.
-  it("keeps the un-focused-semantic warning when a connected pass is recorded on top (#1522)", () => {
+  it("keeps the un-focused-semantic warning when a connected pass is recorded on top (#1522)", async () => {
     const superseded = withPass("M1", {
       pass: "connected",
       priorPasses: [{ module: "M1", target: "/target", pass: "semantic", generatedAt: iso(DAY) }],
     });
-    expect(status(AUDIT_RUNNERS, superseded, "M1")?.detail).toMatch(/no M3 hotspot focus/i);
+    expect((await status(AUDIT_RUNNERS, superseded, "M1"))?.detail).toMatch(/no M3 hotspot focus/i);
   });
 
-  it("M1 carries the pass's triage findings into the deliverable", () => {
+  it("M1 carries the pass's triage findings into the deliverable", async () => {
     const withFindings = withPass("M1", { findings: [{ id: "TRIAGE-1" }] });
-    const { findings } = runAudit(AUDIT_RUNNERS, withFindings);
+    const { findings } = await runAudit(AUDIT_RUNNERS, withFindings);
     expect(findings.some((f) => (f as { id?: string }).id === "TRIAGE-1")).toBe(true);
   });
 
   // #502: the M3→M1 hotspot focus is a designed dependency — an un-focused semantic pass silently
   // degrades review to un-prioritized, so the ledger detail must make its presence/absence visible.
-  it("M1 flags a semantic pass that ran WITHOUT an M3 hotspot focus", () => {
+  it("M1 flags a semantic pass that ran WITHOUT an M3 hotspot focus", async () => {
     const noFocus = withPass("M1", { pass: "semantic" }); // hotspotFocus absent
-    expect(status(AUDIT_RUNNERS, noFocus, "M1")?.detail).toMatch(/no M3 hotspot focus/i);
+    expect((await status(AUDIT_RUNNERS, noFocus, "M1"))?.detail).toMatch(/no M3 hotspot focus/i);
   });
 
-  it("M1 records a semantic pass that WAS hotspot-focused", () => {
+  it("M1 records a semantic pass that WAS hotspot-focused", async () => {
     const focused = withPass("M1", { pass: "semantic", hotspotFocus: true });
-    const m1 = status(AUDIT_RUNNERS, focused, "M1");
+    const m1 = await status(AUDIT_RUNNERS, focused, "M1");
     expect(m1?.detail).toMatch(/hotspot-focused/i);
     expect(m1?.detail).not.toMatch(/WARNING/);
   });
 
-  it("M2 retains a legacy dynamic pass as partial because application-route and tenant scopes are unbound", () => {
-    const row = status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic", summary: "PostgREST only; no application routes tested" }), "M2");
+  it("M2 retains a legacy dynamic pass as partial because application-route and tenant scopes are unbound", async () => {
+    const row = await status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic", summary: "PostgREST only; no application routes tested" }), "M2");
     expect(row?.status).toBe("partial");
     expect(row?.reason).toContain("do not establish application-route isolation");
     expect(row?.reason).toContain("falsifier:");
   });
 
-  it("M6 reads ran when a fresh verdict artifact exists — the one thing that clears its never-run alarm", () => {
+  it("M6 reads ran when a fresh verdict artifact exists — the one thing that clears its never-run alarm", async () => {
     // Note: no --llm flag. A recorded verdict is evidence; the flag is not.
-    expect(status(AUDIT_RUNNERS, withPass("M6", { pass: "verdict" }), "M6")?.status).toBe("ran");
+    expect((await status(AUDIT_RUNNERS, withPass("M6", { pass: "verdict" }), "M6"))?.status).toBe("ran");
   });
 
-  it("M3 reads ran from a captured-vitals artifact when vitals is not on PATH", () => {
-    const vitalsDown = withPass("M3", { pass: "vitals" }, { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) });
-    expect(status(AUDIT_RUNNERS, vitalsDown, "M3")?.status).toBe("ran");
+  it("M3 reads ran from a captured-vitals artifact when vitals is not on PATH", async () => {
+    const vitalsDown = withPass("M3", { pass: "vitals" }, { exec: async () => ({ ok: false, output: "vitals_cli.py not found" }) });
+    expect((await status(AUDIT_RUNNERS, vitalsDown, "M3"))?.status).toBe("ran");
   });
 
   // #530: the vitals-off-PATH flow — M3 ran via a pass artifact carrying its top-K ranking, so the
   // cross-module enrichment (#515) must fire here too, not only on the in-process capture path.
-  it("M3 surfaces the pass artifact's top-K ranking so run-audit hands it to the assembler", () => {
+  it("M3 surfaces the pass artifact's top-K ranking so run-audit hands it to the assembler", async () => {
     const withRanking = withPass(
       "M3",
       { pass: "vitals", hotspots: ["core/checkout.ts", "core/pay.ts"] },
-      { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) },
+      { exec: async () => ({ ok: false, output: "vitals_cli.py not found" }) },
     );
-    const { recorded, hotspots } = runAudit(AUDIT_RUNNERS, withRanking);
+    const { recorded, hotspots } = await runAudit(AUDIT_RUNNERS, withRanking);
     expect(recorded.find((r) => r.module === "M3")?.status).toBe("ran");
     expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
   });
 
-  it("M3 pass artifact without a ranking yields no hotspots — enrichment simply does not fire", () => {
-    const noRanking = withPass("M3", { pass: "vitals" }, { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) });
-    expect(runAudit(AUDIT_RUNNERS, noRanking).hotspots).toBeUndefined();
+  it("M3 pass artifact without a ranking yields no hotspots — enrichment simply does not fire", async () => {
+    const noRanking = withPass("M3", { pass: "vitals" }, { exec: async () => ({ ok: false, output: "vitals_cli.py not found" }) });
+    expect((await runAudit(AUDIT_RUNNERS, noRanking)).hotspots).toBeUndefined();
   });
 
   // The core guard: a stale or mismatched artifact must NOT yield ran — the probe falls back to its
   // honest not-run status and says the artifact was rejected.
-  it("a STALE artifact does not yield ran — M1 falls back to partial and reports the rejection", () => {
+  it("a STALE artifact does not yield ran — M1 falls back to partial and reports the rejection", async () => {
     const stale = withPass("M1", { generatedAt: iso(400 * DAY) });
-    const m1 = status(AUDIT_RUNNERS, stale, "M1");
+    const m1 = await status(AUDIT_RUNNERS, stale, "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).toMatch(/rejected: pass artifact for M1 is stale/);
   });
 
-  it("a WRONG-TARGET artifact does not yield ran — M2 stays requires-live-run and flags the mismatch", () => {
+  it("a WRONG-TARGET artifact does not yield ran — M2 stays requires-live-run and flags the mismatch", async () => {
     const wrong = withPass("M2", { target: "/some-other-app" });
-    const m2 = status(AUDIT_RUNNERS, wrong, "M2");
+    const m2 = await status(AUDIT_RUNNERS, wrong, "M2");
     expect(m2?.status).toBe("requires-live-run");
     expect(m2?.reason).toMatch(/rejected:.*not the audited target/);
   });
 
-  it("no artifacts dir ⇒ the #311/#356/#351 behaviour is exactly unchanged", () => {
+  it("no artifacts dir ⇒ the #311/#356/#351 behaviour is exactly unchanged", async () => {
     // Regression guard for the existing flag-is-not-evidence tests: without an artifacts dir the
     // four probes must report precisely what they did before #416.
-    const bare = runAudit(AUDIT_RUNNERS, ctx({ env: { connected: true, dynamic: true, llm: true } })).recorded;
+    const bare = (await runAudit(AUDIT_RUNNERS, ctx({ env: { connected: true, dynamic: true, llm: true } }))).recorded;
     expect(bare.find((r) => r.module === "M1")?.status).toBe("partial");
     expect(bare.find((r) => r.module === "M2")?.status).toBe("requires-live-run");
     expect(bare.find((r) => r.module === "M6")?.status).toBe("partial");
@@ -1506,9 +1682,9 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
   // The intent under test: a recorded pass for ANY module either reaches the deliverable or is
   // visibly rejected — never a silent drop.
   describe("every module record-pass accepts has a consumer (#1042)", () => {
-    it("M7 merges a recorded Lighthouse pass's findings and stops asserting the CWV tier did not run", () => {
+    it("M7 merges a recorded Lighthouse pass's findings and stops asserting the CWV tier did not run", async () => {
       const lighthouse = withPass("M7", { pass: "lighthouse", findings: [{ id: "M7L-01" }] });
-      const { recorded, findings } = runAudit(AUDIT_RUNNERS, lighthouse);
+      const { recorded, findings } = await runAudit(AUDIT_RUNNERS, lighthouse);
       const m7 = recorded.find((r) => r.module === "M7");
       expect(findings.some((f) => (f as { id?: string }).id === "M7L-01")).toBe(true);
       expect(m7?.reason).not.toMatch(/Core Web Vitals were not measured/);
@@ -1516,13 +1692,13 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     });
 
     // The status must NOT become `ran`: a Lighthouse pass is one of M7's three tiers.
-    it("M7 stays partial on a recorded pass — one tier is not the whole module", () => {
-      expect(status(AUDIT_RUNNERS, withPass("M7", { pass: "lighthouse" }), "M7")?.status).toBe("partial");
+    it("M7 stays partial on a recorded pass — one tier is not the whole module", async () => {
+      expect((await status(AUDIT_RUNNERS, withPass("M7", { pass: "lighthouse" }), "M7"))?.status).toBe("partial");
     });
 
-    it.each(["M4", "M5", "M8", "M9", "M10"] as const)("%s merges a recorded pass's findings and names it on the row", (module) => {
+    it.each(["M4", "M5", "M8", "M9", "M10"] as const)("%s merges a recorded pass's findings and names it on the row", async (module) => {
       const recordedPass = withPass(module, { pass: "captured", findings: [{ id: `${module}-PASS-1` }] });
-      const { recorded, findings } = runAudit(AUDIT_RUNNERS, recordedPass);
+      const { recorded, findings } = await runAudit(AUDIT_RUNNERS, recordedPass);
       const row = recorded.find((r) => r.module === module);
       expect(findings.some((f) => (f as { id?: string }).id === `${module}-PASS-1`)).toBe(true);
       expect(`${row?.detail ?? ""} ${row?.reason ?? ""}`).toMatch(/recorded captured pass/);
@@ -1530,19 +1706,19 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
 
     // The pass contributes findings; it never UPGRADES the status to `ran` the way M1/M2/M3/M6's
     // does. A probe that could not run its own tiers becomes partial — something ran — not `ran`.
-    it("a recorded pass lifts a not-run module to partial, never to ran", () => {
+    it("a recorded pass lifts a not-run module to partial, never to ran", async () => {
       const noSource = withPass("M9", { pass: "captured", findings: [{ id: "M9-PASS-1" }] }, {
-        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /target" } : cleanRun(argv)),
+        exec: async (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /target" } : cleanRun(argv)),
       });
-      const m9 = status(AUDIT_RUNNERS, noSource, "M9");
+      const m9 = await status(AUDIT_RUNNERS, noSource, "M9");
       expect(m9?.status).toBe("partial");
       expect(m9?.reason).toMatch(/scanned 0 product source files/);
       expect(m9?.reason).toMatch(/not by itself evidence the module ran in full/);
     });
 
-    it("a rejected artifact for a newly-wired module is named on the row, not ignored", () => {
+    it("a rejected artifact for a newly-wired module is named on the row, not ignored", async () => {
       const stale = withPass("M9", { generatedAt: iso(400 * DAY) });
-      const m9 = status(AUDIT_RUNNERS, stale, "M9");
+      const m9 = await status(AUDIT_RUNNERS, stale, "M9");
       expect(`${m9?.detail ?? ""} ${m9?.reason ?? ""}`).toMatch(/rejected: pass artifact for M9 is stale/);
     });
   });
@@ -1557,8 +1733,8 @@ describe("M10 captures its classification findings (#436)", () => {
     readFindings: (p: string) => (p.endsWith("M10.json") ? [{ id: "M10-01" } as never] : []),
   };
 
-  it("schema tier stays partial for the live-DB gap alone, with its findings captured", () => {
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, ctx(capture));
+  it("schema tier stays partial for the live-DB gap alone, with its findings captured", async () => {
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, ctx(capture));
     const m10 = recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/schema tier only/);
@@ -1566,14 +1742,14 @@ describe("M10 captures its classification findings (#436)", () => {
     expect(findings.some((f) => (f as { id?: string }).id === "M10-01")).toBe(true);
   });
 
-  it("live tier preserves protection limitations after findings are captured", () => {
-    const m10 = status(AUDIT_RUNNERS, { ...capture, env: { connected: true, dynamic: false, llm: false } }, "M10");
+  it("live tier preserves protection limitations after findings are captured", async () => {
+    const m10 = await status(AUDIT_RUNNERS, { ...capture, env: { connected: true, dynamic: false, llm: false } }, "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toContain("encryption behavior");
   });
 
-  it("a coverage-only run (no capture) still discloses that findings were not collected", () => {
-    const m10 = status(AUDIT_RUNNERS, {}, "M10");
+  it("a coverage-only run (no capture) still discloses that findings were not collected", async () => {
+    const m10 = await status(AUDIT_RUNNERS, {}, "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/not-collected, not clean/);
   });
@@ -1581,8 +1757,8 @@ describe("M10 captures its classification findings (#436)", () => {
   // #1043: the schema tier's reason used to name only the row-sampling gap, so a reader saw a longer
   // sensitive-column list and a "partial — rows not sampled" note, and reasonably concluded the
   // protection claim had been honoured. It has to name the protection gap too.
-  it("schema tier's reason names the PII-protection gap, not only the row-sampling one", () => {
-    const m10 = runAudit(AUDIT_RUNNERS, ctx(capture)).recorded.find((r) => r.module === "M10");
+  it("schema tier's reason names the PII-protection gap, not only the row-sampling one", async () => {
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx(capture))).recorded.find((r) => r.module === "M10");
     expect(m10?.reason).toMatch(/protection was not verified/i);
     expect(m10?.reason).toMatch(/M10-PROT-00/);
   });
@@ -1612,13 +1788,13 @@ describe("M4 and M5 each capture only their own rows (#1101)", () => {
     readFindings: (p: string) => (p.endsWith("M4.json") ? qualityScanOutput(false) : p.endsWith("M5.json") ? qualityScanOutput(true) : []),
   });
 
-  it("delivers no id twice, even when the two invocations disagree on order", () => {
-    const ids = runAudit(AUDIT_RUNNERS, ctx(racing())).findings.map((f) => (f as { id?: string }).id);
+  it("delivers no id twice, even when the two invocations disagree on order", async () => {
+    const ids = (await runAudit(AUDIT_RUNNERS, ctx(racing()))).findings.map((f) => (f as { id?: string }).id);
     expect(ids).toEqual([...new Set(ids)]);
   });
 
-  it("credits each module with its own findings only — M4's ledger must not carry M5's rows", () => {
-    const { findingsByModule } = runAudit(AUDIT_RUNNERS, ctx(racing()));
+  it("credits each module with its own findings only — M4's ledger must not carry M5's rows", async () => {
+    const { findingsByModule } = await runAudit(AUDIT_RUNNERS, ctx(racing()));
     // The conservation gate compares what each module PRODUCED against what was delivered, so a
     // produced-count inflated with the other module's rows is the wrong number for that comparison
     // (MEASURED 2026-07-26 on the unfixed code: all 41 quality-scan rows attributed to M5, and the
@@ -1639,15 +1815,15 @@ describe("M10 surfaces its data map for the severity join (#1049)", () => {
     readArtifact: (p: string) => (p.endsWith("M10-datamap.json") ? dataMap : undefined),
   });
 
-  it("passes --data-map-out to pii-classify and returns the parsed map", () => {
+  it("passes --data-map-out to pii-classify and returns the parsed map", async () => {
     const argvSeen: string[][] = [];
-    const result = runAudit(AUDIT_RUNNERS, ctx({ ...capturing(), exec: (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
+    const result = await runAudit(AUDIT_RUNNERS, ctx({ ...capturing(), exec: async (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
     expect(argvSeen.some((argv) => argv.includes("pii-classify") && argv.includes("--data-map-out"))).toBe(true);
     expect(result.dataMap).toEqual(dataMap);
   });
 
-  it("returns no map when the classifier wrote none, so the assembler records the gap instead of guessing", () => {
-    expect(runAudit(AUDIT_RUNNERS, ctx({ captureDir: "/cap", readFindings: () => [], readArtifact: () => undefined })).dataMap).toBeUndefined();
+  it("returns no map when the classifier wrote none, so the assembler records the gap instead of guessing", async () => {
+    expect((await runAudit(AUDIT_RUNNERS, ctx({ captureDir: "/cap", readFindings: () => [], readArtifact: () => undefined }))).dataMap).toBeUndefined();
   });
 });
 
@@ -1665,32 +1841,32 @@ describe("M1 collects the mechanical tier's findings into the deliverable (#1040
     ctx({
       captureDir: "/cap",
       readFindings: (p: string) => (p.endsWith("M1.json") ? [critical, indicator, sfc] : []),
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.join(" ").includes("quick-scan")) expect(argv).toContain("--findings-out");
         return cleanRun(argv);
       },
     });
 
-  it("a known mechanical Critical is present in the assembled findings", () => {
-    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+  it("a known mechanical Critical is present in the assembled findings", async () => {
+    const { findings } = await runAudit(AUDIT_RUNNERS, capturing());
     expect(findings.map((f) => f.id)).toContain("SEC-GL-source-2");
   });
 
-  it("does not re-collect the classes the shared detect-static pass already contributes", () => {
-    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+  it("does not re-collect the classes the shared detect-static pass already contributes", async () => {
+    const { findings } = await runAudit(AUDIT_RUNNERS, capturing());
     expect(findings.filter((f) => f.taxonomy.startsWith("M6 — Indicator: ")).map((f) => f.id)).not.toContain("3");
     expect(findings.filter((f) => f.id === "M1-SFC-00")).toHaveLength(0);
   });
 
-  it("no longer claims the mechanical tier's findings are uncollected", () => {
-    const m1 = runAudit(AUDIT_RUNNERS, capturing()).recorded.find((r) => r.module === "M1");
+  it("no longer claims the mechanical tier's findings are uncollected", async () => {
+    const m1 = (await runAudit(AUDIT_RUNNERS, capturing())).recorded.find((r) => r.module === "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).not.toMatch(/No M1 security findings are collected/);
     expect(m1?.reason).toMatch(/MECHANICAL tier's findings ARE collected/);
   });
 
-  it("a coverage-only run says so instead of implying the mechanical tier was collected", () => {
-    const m1 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M1");
+  it("a coverage-only run says so instead of implying the mechanical tier was collected", async () => {
+    const m1 = (await runAudit(AUDIT_RUNNERS, ctx())).recorded.find((r) => r.module === "M1");
     expect(m1?.reason).toMatch(/coverage-only, no --findings-out/);
   });
 });
@@ -1701,26 +1877,26 @@ describe("M1 collects the mechanical tier's findings into the deliverable (#1040
 // switched the M1 probe to check ctx.isGitRepoRoot directly, so a coverage-only run (no captureDir)
 // reflects the sub-gap too, and a git-repo-root target is unaffected either way.
 describe("M1 surfaces the git-history secrets coverage gap (#528/#537)", () => {
-  it("surfaces the git-history-not-assessed note on a coverage-only run against a non-git target", () => {
-    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => false })).recorded.find((r) => r.module === "M1");
+  it("surfaces the git-history-not-assessed note on a coverage-only run against a non-git target", async () => {
+    const m1 = (await runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => false }))).recorded.find((r) => r.module === "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).toMatch(/git-history secret scan/i);
     expect(m1?.reason).toMatch(/SEC-TH-GH-00/);
   });
 
-  it("still surfaces the note on a capturing run against a non-git target", () => {
+  it("still surfaces the note on a capturing run against a non-git target", async () => {
     const capturing = ctx({ captureDir: "/cap", readFindings: () => [], isGitRepoRoot: () => false });
-    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+    const m1 = (await runAudit(AUDIT_RUNNERS, capturing)).recorded.find((r) => r.module === "M1");
     expect(m1?.reason).toMatch(/SEC-TH-GH-00/);
   });
 
-  it("a git-repo-root target's M1 reason carries no git-history note", () => {
-    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => true })).recorded.find((r) => r.module === "M1");
+  it("a git-repo-root target's M1 reason carries no git-history note", async () => {
+    const m1 = (await runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => true }))).recorded.find((r) => r.module === "M1");
     expect(m1?.reason).not.toMatch(/git-history/i);
   });
 
-  it("stays silent on the sub-gap when the signal is not supplied at all", () => {
-    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: undefined })).recorded.find((r) => r.module === "M1");
+  it("stays silent on the sub-gap when the signal is not supplied at all", async () => {
+    const m1 = (await runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: undefined }))).recorded.find((r) => r.module === "M1");
     expect(m1?.reason).not.toMatch(/git-history/i);
   });
 });
@@ -1734,19 +1910,19 @@ describe("monorepo per-instance fan-out (#506)", () => {
     { name: "apps/rag", path: "/target/apps/rag" },
   ];
 
-  it("M4/M5/M9 record one row per enumerated app, tagged with the app name", () => {
-    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+  it("M4/M5/M9 record one row per enumerated app, tagged with the app name", async () => {
+    const rec = (await runAudit(AUDIT_RUNNERS, ctx({ apps }))).recorded;
     for (const m of ["M4", "M5", "M9"] as const) {
       const rows = rec.filter((r) => r.module === m);
       expect(rows.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
     }
   });
 
-  it("runs each per-app probe against that app's own directory, not the repo root", () => {
+  it("runs each per-app probe against that app's own directory, not the repo root", async () => {
     const seen: string[] = [];
-    runAudit(AUDIT_RUNNERS, ctx({
+    await runAudit(AUDIT_RUNNERS, ctx({
       apps,
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("quality-scan")) seen.push(argv[argv.indexOf("quality-scan") + 1]!);
         return cleanRun(argv);
       },
@@ -1754,8 +1930,8 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
   });
 
-  it("an app missing node_modules is an explicit reduced-tier row for THAT app, never absent (M5, #1035)", () => {
-    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" })).recorded;
+  it("an app missing node_modules is an explicit reduced-tier row for THAT app, never absent (M5, #1035)", async () => {
+    const rec = (await runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" }))).recorded;
     const m5 = rec.filter((r) => r.module === "M5");
     expect(m5).toHaveLength(2);
     expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("partial");
@@ -1763,27 +1939,27 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(m5.find((r) => r.instance === "apps/main")?.status).toBe("ran");
   });
 
-  it("M7 advisors record one row per enumerated Supabase project", () => {
-    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+  it("M7 advisors record one row per enumerated Supabase project", async () => {
+    const m7 = (await runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
-    })).recorded.filter((r) => r.module === "M7");
+      exec: async (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
+    }))).recorded.filter((r) => r.module === "M7");
     expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
     // #527: advisor success is `partial` (Lighthouse/CWV tier unmeasured), never `ran`.
     expect(m7.every((r) => r.status === "partial")).toBe(true);
     expect(m7.every((r) => /Lighthouse\/CWV tier not run/.test(r.reason ?? ""))).toBe(true);
   });
 
-  it("a failed advisor for one project names the advisor failure; the other names the Lighthouse gap", () => {
-    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+  it("a failed advisor for one project names the advisor failure; the other names the Lighthouse gap", async () => {
+    const m7 = (await runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("perf-scan")) return { ok: !argv.includes("proj-rag"), output: "advisors 500" };
         return cleanRun(argv);
       },
-    })).recorded.filter((r) => r.module === "M7");
+    }))).recorded.filter((r) => r.module === "M7");
     // #527: both rows are partial now, but for different reasons — the coverage guard needs each row
     // to say why it fell short, so distinguish by reason, not status.
     expect(m7.find((r) => r.instance === "proj-rag")?.status).toBe("partial");
@@ -1795,11 +1971,11 @@ describe("monorepo per-instance fan-out (#506)", () => {
   // #520: with no per-DB URLs supplied, EVERY enumerated project is an explicit requires-live-run
   // row naming its missing connection URL — never a silent skip, and no longer a lone auto-run
   // primary.
-  it("M10 live tier names every Supabase project with no per-DB URL, never dropping one", () => {
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+  it("M10 live tier names every Supabase project with no per-DB URL, never dropping one", async () => {
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-    })).recorded.filter((r) => r.module === "M10");
+    }))).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
     expect(m10.every((r) => r.status === "requires-live-run")).toBe(true);
     expect(m10.find((r) => r.instance === "proj-rag")?.reason).toMatch(/no per-DB connection URL/);
@@ -1807,22 +1983,22 @@ describe("monorepo per-instance fan-out (#506)", () => {
 
   // #520: given a per-DB URL for each project, each is live-classified against its OWN DB — the URL
   // is threaded onto the child env so pii-classify targets project N, not only the env-configured one.
-  it("M10 live tier classifies each project against its own threaded SUPABASE_DB_URL", () => {
+  it("M10 live tier classifies each project against its own threaded SUPABASE_DB_URL", async () => {
     const envByRef = new Map<string, string | undefined>();
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       captureDir: "/cap",
       supabaseRefs: ["proj-main", "proj-rag"],
       supabaseDbUrls: { "proj-main": "postgres://main", "proj-rag": "postgres://rag" },
       readFindings: (p: string) => (p.endsWith(".json") ? [{ id: "M10-01" } as never] : []),
-      exec: (_c, argv, opts) => {
+      exec: async (_c, argv, opts) => {
         if (argv.includes("pii-classify")) {
           const out = argv[argv.indexOf("--out") + 1] ?? "";
           envByRef.set(out, opts?.env?.SUPABASE_DB_URL);
         }
         return cleanRun(argv);
       },
-    })).recorded.filter((r) => r.module === "M10");
+    }))).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
     expect(m10.every((r) => r.status === "partial")).toBe(true);
     // Each project's classify ran with ITS url, not a single shared one.
@@ -1831,18 +2007,18 @@ describe("monorepo per-instance fan-out (#506)", () => {
 
   // #520: a mixed run — one project has a URL, the other does not — classifies the first and keeps
   // an honest requires-live-run row for the second.
-  it("M10 live tier classifies the URL-provided project and keeps the other's requires-live-run row", () => {
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+  it("M10 live tier classifies the URL-provided project and keeps the other's requires-live-run row", async () => {
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
       supabaseDbUrls: { "proj-main": "postgres://main" },
-    })).recorded.filter((r) => r.module === "M10");
+    }))).recorded.filter((r) => r.module === "M10");
     expect(m10.find((r) => r.instance === "proj-main")?.status).not.toBe("requires-live-run");
     expect(m10.find((r) => r.instance === "proj-rag")?.status).toBe("requires-live-run");
   });
 
-  it("M10 schema tier fans out one partial row per app", () => {
-    const m10 = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded.filter((r) => r.module === "M10");
+  it("M10 schema tier fans out one partial row per app", async () => {
+    const m10 = (await runAudit(AUDIT_RUNNERS, ctx({ apps }))).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
     expect(m10.every((r) => r.status === "partial")).toBe(true);
   });
@@ -1850,13 +2026,13 @@ describe("monorepo per-instance fan-out (#506)", () => {
   // #538: a monorepo's per-app schema hint (ctx.schemaHints, keyed by app name) targets that ONE
   // app's schema tier — the other app still falls back to the conventional-location probe, and the
   // single-target ctx.schemaHint (#529) must never leak into either app's fan-out.
-  it("M10 schema tier uses each app's OWN per-app --schema hint, not a shared one", () => {
+  it("M10 schema tier uses each app's OWN per-app --schema hint, not a shared one", async () => {
     const schemasSeen: string[] = [];
-    runAudit(AUDIT_RUNNERS, ctx({
+    await runAudit(AUDIT_RUNNERS, ctx({
       apps,
       schemaHint: "/should/not/apply/on/a/monorepo.sql",
       schemaHints: { "apps/rag": "/given/apps-rag-schema.sql" },
-      exec: (_c, argv) => {
+      exec: async (_c, argv) => {
         if (argv.includes("pii-classify")) schemasSeen.push(argv[argv.indexOf("--schema") + 1]!);
         return cleanRun(argv);
       },
@@ -1868,14 +2044,14 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(schemasSeen).not.toContain("/should/not/apply/on/a/monorepo.sql");
   });
 
-  it("a single-app / single-DB target is unchanged — one untagged row per module", () => {
-    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps: [{ name: "root", path: "/target" }] })).recorded;
+  it("a single-app / single-DB target is unchanged — one untagged row per module", async () => {
+    const rec = (await runAudit(AUDIT_RUNNERS, ctx({ apps: [{ name: "root", path: "/target" }] }))).recorded;
     expect(rec.filter((r) => r.module === "M5")).toHaveLength(1);
     expect(rec.find((r) => r.module === "M5")?.instance).toBeUndefined();
   });
 
-  it("the whole per-instance ledger still passes the coverage gate with no gaps", () => {
-    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+  it("the whole per-instance ledger still passes the coverage gate with no gaps", async () => {
+    const rec = (await runAudit(AUDIT_RUNNERS, ctx({ apps }))).recorded;
     expect(buildAuditCoverage(rec, ctx().env).gaps).toEqual([]);
   });
 });
@@ -1895,31 +2071,31 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
       ...over,
     });
 
-  it("passes --out to the code tier's detect-static run", () => {
+  it("passes --out to the code tier's detect-static run", async () => {
     const argvSeen: string[][] = [];
-    runAudit(AUDIT_RUNNERS, capturing({ exec: (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
+    await runAudit(AUDIT_RUNNERS, capturing({ exec: async (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
     const m7Run = argvSeen.find((argv) => argv.includes("detect-static") && argv.includes("/cap/M7.json"));
     expect(m7Run).toBeDefined();
   });
 
-  it("the source-only branch (no DB creds) carries the code tier's findings, not an empty row", () => {
-    const m7 = runAudit(AUDIT_RUNNERS, capturing()).recorded.find((r) => r.module === "M7");
+  it("the source-only branch (no DB creds) carries the code tier's findings, not an empty row", async () => {
+    const m7 = (await runAudit(AUDIT_RUNNERS, capturing())).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
-    expect(runAudit(AUDIT_RUNNERS, capturing()).findings.map((f) => f.id)).toContain("M7C-01");
+    expect((await runAudit(AUDIT_RUNNERS, capturing())).findings.map((f) => f.id)).toContain("M7C-01");
   });
 
-  it("the connected-but-no-project-ref branch carries them too", () => {
-    const { findings } = runAudit(AUDIT_RUNNERS, capturing({ env: { connected: true, dynamic: false, llm: false } }));
+  it("the connected-but-no-project-ref branch carries them too", async () => {
+    const { findings } = await runAudit(AUDIT_RUNNERS, capturing({ env: { connected: true, dynamic: false, llm: false } }));
     expect(findings.map((f) => f.id)).toContain("M7C-01");
   });
 
-  it("the advisor branch carries the code tier's findings alongside the advisors'", () => {
+  it("the advisor branch carries the code tier's findings alongside the advisors'", async () => {
     const advisor = { id: "M7A-01", taxonomy: "M7 — Missing index", severity: "Perf" } as unknown as Finding;
-    const { findings } = runAudit(AUDIT_RUNNERS, capturing({
+    const { findings } = await runAudit(AUDIT_RUNNERS, capturing({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main"],
       readFindings: (p: string) => (p.endsWith("M7.json") ? [perf, boundary] : p.includes("M7-proj-main") ? [advisor] : []),
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
     }));
     expect(findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M7C-01", "M7A-01"]));
   });
@@ -1927,25 +2103,25 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
   // The code tier scans the target ONCE, so it must not be multiplied by the number of enumerated
   // databases — same reasoning as #1042's Lighthouse pass. (On a multi-project run the row is
   // instance-tagged, so runAudit namespaces the id by the project it rode in on, per #620.)
-  it("the code tier ran once, so its findings appear once even across several Supabase projects", () => {
-    const { findings } = runAudit(AUDIT_RUNNERS, capturing({
+  it("the code tier ran once, so its findings appear once even across several Supabase projects", async () => {
+    const { findings } = await runAudit(AUDIT_RUNNERS, capturing({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
+      exec: async (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
     }));
     expect(findings.filter((f) => f.id.startsWith("M7C-01"))).toHaveLength(1);
   });
 
-  it("does not claim M9's classes from the shared detect-static pass under the M7 row", () => {
-    const m7Outcome = AUDIT_RUNNERS.find((r) => r.module === "M7")!.run(capturing());
+  it("does not claim M9's classes from the shared detect-static pass under the M7 row", async () => {
+    const m7Outcome = await AUDIT_RUNNERS.find((r) => r.module === "M7")!.run(capturing());
     const outcome = Array.isArray(m7Outcome) ? m7Outcome[0]! : m7Outcome;
     const collected = "kind" in outcome && outcome.kind === "examined" ? outcome.findings : [];
     expect(collected.map((f) => f.id)).toEqual(["M7C-01"]);
   });
 
-  it("a scan that found nothing to run still carries no findings — capture is not a status", () => {
-    const noFiles = capturing({ exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files" } : cleanRun(argv)) });
-    const m7 = runAudit(AUDIT_RUNNERS, noFiles).recorded.find((r) => r.module === "M7");
+  it("a scan that found nothing to run still carries no findings — capture is not a status", async () => {
+    const noFiles = capturing({ exec: async (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files" } : cleanRun(argv)) });
+    const m7 = (await runAudit(AUDIT_RUNNERS, noFiles)).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("requires-live-run");
   });
 });
@@ -1967,13 +2143,13 @@ describe("duplicate finding ids are disambiguated, never dropped and never fatal
   const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
   const at = (id: string, location: string): Finding => ({ id, location } as unknown as Finding);
 
-  it("gives two DIFFERENT findings that share an id two different ids", () => {
+  it("gives two DIFFERENT findings that share an id two different ids", async () => {
     const runners = swapIn("M1", () => ({
       status: "ran",
       detail: "quick-scan",
       findings: [at("SB-DEFINER-AUTHZ-public.f()", "a.sql:1"), at("SB-DEFINER-AUTHZ-public.f()", "b.sql:9")],
     }));
-    const { findings, idCollisions } = runAudit(runners, ctx());
+    const { findings, idCollisions } = await runAudit(runners, ctx());
     expect(findings.map((f) => f.id)).toEqual(["SB-DEFINER-AUTHZ-public.f()", "SB-DEFINER-AUTHZ-public.f()#2"]);
     // Both rows still name their own migration — a disambiguated id must not cost the evidence.
     expect(findings.map((f) => f.location)).toEqual(["a.sql:1", "b.sql:9"]);
@@ -1982,16 +2158,16 @@ describe("duplicate finding ids are disambiguated, never dropped and never fatal
     ]);
   });
 
-  it("the assembled deliverable now VALIDATES where it used to be refused outright", () => {
+  it("the assembled deliverable now VALIDATES where it used to be refused outright", async () => {
     const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "y.ts")] }));
-    const { recorded, findings } = runAudit(runners, ctx());
+    const { recorded, findings } = await runAudit(runners, ctx());
     const doc = assembleEngagementDocument(recorded, { connected: false, dynamic: false, llm: false }, findings, m5137Meta);
     expect(validateFindings(doc).errors.filter((e) => e.includes("duplicate id"))).toEqual([]);
   });
 
-  it("keeps the conservation arithmetic exact — the rename reaches findingsByModule too", () => {
+  it("keeps the conservation arithmetic exact — the rename reaches findingsByModule too", async () => {
     const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "y.ts")] }));
-    const { recorded, findings, findingsByModule } = runAudit(runners, ctx());
+    const { recorded, findings, findingsByModule } = await runAudit(runners, ctx());
     const doc = assembleEngagementDocument(recorded, { connected: false, dynamic: false, llm: false }, findings, m5137Meta);
     const ledger = conservationLedger(findings, doc.findings, findingsByModule);
     expect(ledger.ok).toBe(true);
@@ -2001,15 +2177,15 @@ describe("duplicate finding ids are disambiguated, never dropped and never fatal
     expect(findingsByModule.M4?.map((f) => f.id)).toEqual(["M4-97", "M4-97#2"]);
   });
 
-  it("leaves a BYTE-IDENTICAL repeat alone — that is the shared-CLI double capture dedupe collapses", () => {
+  it("leaves a BYTE-IDENTICAL repeat alone — that is the shared-CLI double capture dedupe collapses", async () => {
     const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "x.ts")] }));
-    const { findings, idCollisions } = runAudit(runners, ctx());
+    const { findings, idCollisions } = await runAudit(runners, ctx());
     expect(findings.map((f) => f.id)).toEqual(["M4-97", "M4-97"]);
     expect(idCollisions).toEqual([]);
   });
 
-  it("says nothing on a clean run — a warning that always fires is not a warning", () => {
-    expect(runAudit(allRan(), ctx()).idCollisions).toEqual([]);
+  it("says nothing on a clean run — a warning that always fires is not a warning", async () => {
+    expect((await runAudit(allRan(), ctx())).idCollisions).toEqual([]);
   });
 
   it("names the detector rather than absorbing the collision", () => {

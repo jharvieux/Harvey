@@ -319,7 +319,7 @@ function readRaw(dir: string, ref: FileReceipt): Buffer {
 }
 
 /** Replay has no execution capability in its API: its only inputs are a target and retained bytes. */
-export function replayAuditBundle(dir: string, target: string, options: { now?: number; effectiveConfig?: Record<string, unknown> } = {}) {
+export async function replayAuditBundle(dir: string, target: string, options: { now?: number; effectiveConfig?: Record<string, unknown> } = {}) {
   dir = realpathSync(dir);
   const manifest = JSON.parse(readFileSync(join(dir, "audit-replay.json"), "utf8")) as AuditReplayManifest;
   const { sha256, ...body } = manifest;
@@ -411,7 +411,7 @@ export function replayAuditBundle(dir: string, target: string, options: { now?: 
     },
   }));
   const env: EngagementEnv = { connected: false, dynamic: false, llm: false };
-  const result = runAudit(runners, { targetDir: target, env, exists: existsSync, exec: () => { throw new Error("Replay cannot execute commands"); } });
+  const result = await runAudit(runners, { targetDir: target, env, exists: existsSync, exec: async () => { throw new Error("Replay cannot execute commands"); } });
   // runAudit preserves production order while namespacing and disambiguating IDs. Associate
   // receipts with that final sequence, so colliding bodies retain their own raw evidence.
   if (result.findings.length !== findingSources.length) throw new Error("Replay finding ownership diverged from the produced union");

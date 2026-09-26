@@ -66,6 +66,72 @@ describe("SecretRegistry — the structural spawn rail (#1413)", () => {
   });
 });
 
+describe("SecretRegistry approved-value receipts (#1897)", () => {
+  it("screens short and historical placeholder values when execution explicitly approves them", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register("q7!", "postgres", "", undefined);
+    expect(registry.size).toBe(2);
+    expect(() => registry.assertArgvClean("readiness", ["--value=q7!"])).toThrow(SecretInArgvError);
+    expect(() => registry.assertArgvClean("readiness", ["postgres"])).toThrow(SecretInArgvError);
+    expect(() => registry.assertArgvClean("readiness", ["run", "test"])).not.toThrow();
+    expect(registry.redact("first=q7! second=postgres")).toBe("first=[REDACTED] second=[REDACTED]");
+  });
+
+  it("redacts overlapping matches together instead of exposing the unmatched suffix", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register("abcd", "bcde");
+    expect(registry.redact("<abcde> abcd bcde")).toBe("<[REDACTED]> [REDACTED] [REDACTED]");
+  });
+
+  it("removes partial values at retained head/tail cuts, including UTF-8 decoder boundaries", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register("canary-é-value");
+    expect(registry.redact("head canary-", "head")).toBe("head [REDACTED]");
+    expect(registry.redact("-value FINAL STDERR", "tail")).toBe("[REDACTED] FINAL STDERR");
+    expect(registry.redact("head canary-\uFFFD", "head")).toBe("head [REDACTED]");
+    expect(registry.redact("\uFFFD-value FINAL STDERR", "tail")).toBe("[REDACTED] FINAL STDERR");
+    expect(registry.redact("ordinary FINAL STDERR", "whole")).toBe("ordinary FINAL STDERR");
+  });
+
+  it("covers JSON-escaped and URL-encoded approved values in errors, excerpts and argv", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    const value = 'dummy quoted "value"\\with\nnewline';
+    const json = JSON.stringify(value).slice(1, -1);
+    const uri = encodeURIComponent(value);
+    registry.register(value);
+    expect(registry.size).toBe(1);
+    expect(registry.redact(`JSON=${json} URI=${uri}`)).toBe("JSON=[REDACTED] URI=[REDACTED]");
+    expect(() => registry.assertArgvClean("readiness", [uri])).toThrow(SecretInArgvError);
+    registry.clear();
+    expect(registry.redact(uri)).toBe(uri);
+  });
+
+  it("uses a safe marker when an approved short value matches or bridges the usual marker", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register("REDACTED", "]x");
+    const output = registry.redact("REDACTEDx and ]x");
+    expect(output).not.toContain("REDACTED");
+    expect(output).not.toContain("]x");
+    expect(registry.redact(output)).toBe(output);
+  });
+
+  it("uses transient overlap without retaining it or losing the final stderr marker", () => {
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register("prefix-MIDDLE-suffix");
+    expect(registry.redact("MIDDLE", { boundary: "whole", before: "prefix-", after: "-suffix" })).toBe("[REDACTED]");
+    expect(registry.redact("-suffix FINAL-STDERR", { boundary: "tail", before: "prefix-MIDDLE", after: "" })).toBe("[REDACTED] FINAL-STDERR");
+  });
+
+  it("keeps registered values private and scrubs an unsafe caller-supplied site in refusals", () => {
+    const value = "receipt-secret-canary-not-a-credential";
+    const registry = new SecretRegistry({ includeShortValues: true });
+    registry.register(value);
+    expect(JSON.stringify(registry)).not.toContain(value);
+    expect(() => registry.assertArgvClean(`site ${value}`, [value])).not.toThrowError(new RegExp(value));
+    expect(() => registry.assertArgvClean(`site ${value}`, [value])).toThrowError(/\[REDACTED\]/);
+  });
+});
+
 describe("splitPgPassword (#1297)", () => {
   it("moves a URI password out of the conninfo and percent-decodes it for PGPASSWORD", () => {
     const r = splitPgPassword("postgresql://app:p%40ss%20word@db.example.com:5432/main?sslmode=require");

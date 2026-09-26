@@ -16,10 +16,10 @@
 // failure observed. A guard nobody has watched fail is indistinguishable from an inert one. And no
 // block may depend on what happens to be installed on the machine running it — the M3 block did,
 // and passed on a developer laptop while failing on every CI runner (see its comment).
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { findFreshPass, ingestPassArtifactReceipts, ranFromPass } from "../audit-pass-artifact.js";
@@ -32,24 +32,95 @@ import { SEMANTIC_TARGET_COMMITS } from "../semantic-triage.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(join(tmpdir(), "harvey-pass-cli-"));
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type ChildRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Spawn a repo CLI through tsx, exactly as `pnpm exec tsx <cli>` does. */
-function runCli(cli: string, args: string[], env: NodeJS.ProcessEnv = {}, extraNodeArgs: string[] = []): string {
-  return execFileSync("node", [...extraNodeArgs, "--import", "tsx", join(REPO_ROOT, cli), ...args], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ...env },
+function runChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException
+        : launchError;
+      finish(status, signal, error);
+    });
   });
 }
+
+async function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const result = await runChild(command, args, cwd, env);
+  if (result.error) throw Object.assign(result.error, result);
+  if (result.status !== 0) throw Object.assign(new Error(`${result.stderr}\nchild exited ${result.status ?? result.signal ?? "before-spawn"}`), result);
+  return result.stdout;
+}
+
+/** Spawn a repo CLI through tsx, exactly as `pnpm exec tsx <cli>` does. */
+async function runCli(cli: string, args: string[], env: NodeJS.ProcessEnv = {}, extraNodeArgs: string[] = []): Promise<string> {
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  const stdout = await runCommand("node", [...extraNodeArgs, "--import", "tsx", join(REPO_ROOT, cli), ...args], REPO_ROOT, { ...process.env, ...env });
+  expect(serviced, `${cli} child work must service the Vitest worker event loop`).toBe(true);
+  await heartbeat;
+  return stdout;
+}
+
+it("keeps the original combined 1 MiB output bound for an actual child", async () => {
+  let error: NodeJS.ErrnoException & ChildRun;
+  try {
+    await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], REPO_ROOT, process.env);
+    throw new Error("combined output control unexpectedly completed");
+  } catch (failure) {
+    error = failure as NodeJS.ErrnoException & ChildRun;
+  }
+  expect(error).toMatchObject({ code: "ENOBUFS" });
+  expect(Buffer.byteLength(error.stdout) + Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  expect(error.stdout).not.toHaveLength(0);
+  expect(error.stderr).not.toHaveLength(0);
+});
+
+it("enforces the combined output limit through the actual CLI consumer", async () => {
+  const noisyCli = join(dir, "combined-output.cjs");
+  writeFileSync(noisyCli, 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);');
+  await expect(runCli(relative(REPO_ROOT, noisyCli), [])).rejects.toMatchObject({ code: "ENOBUFS" });
+});
 
 /** The #416 read side, pointed at an artifacts dir the CLI just wrote into. */
 function derives(artifactsDir: string, module: AuditModule, targetDir: string) {
   const ctx: RunContext = {
     targetDir,
     env: { connected: true, dynamic: false, llm: true },
-    exec: () => ({ ok: true, output: "" }),
+    exec: async () => ({ ok: true, output: "" }),
     exists: (p) => existsSync(p),
     artifactsDir,
     readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
@@ -81,9 +152,9 @@ describe("m6-agreement --target/--artifacts-dir writes M6.pass.json (#1407, CLI 
     return p;
   };
 
-  it("the artifact the CLI wrote is read back fresh and derives ran, with the unanimous flag intact", () => {
+  it("the artifact the CLI wrote is read back fresh and derives ran, with the unanimous flag intact", async () => {
     mkdirSync(out, { recursive: true });
-    const stdout = runCli("src/cli/m6-agreement.ts", [
+    const stdout = await runCli("src/cli/m6-agreement.ts", [
       verdict("reviewer-a", "spare"),
       verdict("reviewer-b", "flag"),
       "--target",
@@ -106,8 +177,8 @@ describe("m6-agreement --target/--artifacts-dir writes M6.pass.json (#1407, CLI 
     expect(ran.findings?.map((f) => f.location)).toEqual(["debounce.ts"]);
   });
 
-  it("NEGATIVE CONTROL: --target without --artifacts-dir is refused, so a half-given pair cannot silently write nothing", () => {
-    expect(() => runCli("src/cli/m6-agreement.ts", [verdict("reviewer-a", "spare"), verdict("reviewer-b", "flag"), "--target", "/engagement/target"])).toThrow(
+  it("NEGATIVE CONTROL: --target without --artifacts-dir is refused, so a half-given pair cannot silently write nothing", async () => {
+    await expect(runCli("src/cli/m6-agreement.ts", [verdict("reviewer-a", "spare"), verdict("reviewer-b", "flag"), "--target", "/engagement/target"])).rejects.toThrow(
       /must be given together/,
     );
   });
@@ -136,8 +207,8 @@ describe("hotspot-scan --artifacts-dir writes M3.pass.json (#1407, CLI venue)", 
   mkdirSync(out, { recursive: true });
   mkdirSync(target, { recursive: true });
 
-  it("the artifact the CLI wrote is read back fresh and derives ran, with the ranked table intact", () => {
-    const stdout = runCli("src/cli/hotspot-scan.ts", [target, "--report", report, "--artifacts-dir", out]);
+  it("the artifact the CLI wrote is read back fresh and derives ran, with the ranked table intact", async () => {
+    const stdout = await runCli("src/cli/hotspot-scan.ts", [target, "--report", report, "--artifacts-dir", out]);
     expect(stdout).toContain("M3 pass artifact →");
     expect(existsSync(join(out, "M3.pass.json"))).toBe(true);
 
@@ -152,18 +223,18 @@ describe("hotspot-scan --artifacts-dir writes M3.pass.json (#1407, CLI venue)", 
     expect(ran.findings?.map((f) => f.id)).toContain("M3-TRUCKFACTOR-core/billing.ts");
   });
 
-  it("NEGATIVE CONTROL: no artifact reaches the directory until --artifacts-dir names it", () => {
+  it("NEGATIVE CONTROL: no artifact reaches the directory until --artifacts-dir names it", async () => {
     const control = join(dir, "m3-control");
     mkdirSync(control, { recursive: true });
 
     // The absence alone proves nothing — nothing tells this run about `control`, so it would hold
     // just as well if --artifacts-dir were ignored outright. The second half is the control: the
     // identical command, one flag added, pointed at the same directory.
-    const unflagged = runCli("src/cli/hotspot-scan.ts", [target, "--report", report]);
+    const unflagged = await runCli("src/cli/hotspot-scan.ts", [target, "--report", report]);
     expect(unflagged).not.toContain("M3 pass artifact →");
     expect(readNamesSafe(control)).toEqual([]);
 
-    const flagged = runCli("src/cli/hotspot-scan.ts", [target, "--report", report, "--artifacts-dir", control]);
+    const flagged = await runCli("src/cli/hotspot-scan.ts", [target, "--report", report, "--artifacts-dir", control]);
     expect(flagged).toContain(`M3 pass artifact → ${join(control, "M3.pass.json")}`);
     expect(readNamesSafe(control)).toEqual(["M3.pass.json"]);
   });
@@ -187,9 +258,9 @@ describe("detect-deeper --findings-out → record-pass → M1 live (#1407, CLI v
   // Keyed on a distinctive fragment of each real query in src/cli/detect-deeper.ts.
   const oneGrantFinding = { "t.rowsecurity": [{ schema: "public", table: "invoices" }], role_table_grants: [{ grantee: "anon", privilege: "SELECT" }] };
 
-  it("both CLIs run for real and the M1 live pass derives ran with the findings intact", () => {
+  it("both CLIs run for real and the M1 live pass derives ran with the findings intact", async () => {
     mkdirSync(out, { recursive: true });
-    runCli("src/cli/detect-deeper.ts", ["--findings-out", findingsOut], stubEnv(oneGrantFinding), stubHook);
+    await runCli("src/cli/detect-deeper.ts", ["--findings-out", findingsOut], stubEnv(oneGrantFinding), stubHook);
 
     expect(existsSync(findingsOut)).toBe(true);
     const findings = JSON.parse(readFileSync(findingsOut, "utf8"));
@@ -198,7 +269,7 @@ describe("detect-deeper --findings-out → record-pass → M1 live (#1407, CLI v
     expect(Array.isArray(findings)).toBe(true);
     expect(findings.map((f: { id: string }) => f.id)).toEqual(["M1-GRANT-01"]);
 
-    runCli("src/cli/record-pass.ts", [
+    await runCli("src/cli/record-pass.ts", [
       "--module", "M1",
       "--target", "/engagement/target",
       "--pass", "live",
@@ -215,15 +286,15 @@ describe("detect-deeper --findings-out → record-pass → M1 live (#1407, CLI v
     expect(ran.findings).toEqual(findings);
   });
 
-  it("NEGATIVE CONTROL: no findings file reaches the path until --findings-out names it", () => {
+  it("NEGATIVE CONTROL: no findings file reaches the path until --findings-out names it", async () => {
     const control = join(dir, "m1-control-findings.json");
 
     // Same pairing as the M3 control: the absence half would hold if --findings-out were ignored
     // outright, so the flagged half runs the identical command with the flag pointed at that path.
-    runCli("src/cli/detect-deeper.ts", [], stubEnv(oneGrantFinding), stubHook);
+    await runCli("src/cli/detect-deeper.ts", [], stubEnv(oneGrantFinding), stubHook);
     expect(existsSync(control)).toBe(false);
 
-    runCli("src/cli/detect-deeper.ts", ["--findings-out", control], stubEnv(oneGrantFinding), stubHook);
+    await runCli("src/cli/detect-deeper.ts", ["--findings-out", control], stubEnv(oneGrantFinding), stubHook);
     expect(existsSync(control)).toBe(true);
     expect(JSON.parse(readFileSync(control, "utf8")).map((f: { id: string }) => f.id)).toEqual(["M1-GRANT-01"]);
   });
@@ -252,7 +323,7 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
   // Exact-head failing direction before #1947: the current triage skill's top-level
   // { triage_completed, findings } object exited 1 with "--findings must be a JSON array", so no
   // semantic M1 pass could be recorded without hand-editing the triage artifact.
-  it("drives the real CLI with mixed TP/FP/duplicate input and records only translated TPs", () => {
+  it("drives the real CLI with mixed TP/FP/duplicate input and records only translated TPs", async () => {
     const out = join(dir, "semantic-completed-triage");
     const input = join(dir, "semantic-completed-triage.json");
     writeFileSync(input, JSON.stringify({
@@ -270,7 +341,7 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
       ],
     }));
 
-    runCli("src/cli/record-pass.ts", [
+    await runCli("src/cli/record-pass.ts", [
       "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
     ]);
     const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
@@ -289,10 +360,10 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
     );
   });
 
-  it("records the real Supatest completed triage and preserves the DELETE duplicate for scoring", () => {
+  it("records the real Supatest completed triage and preserves the DELETE duplicate for scoring", async () => {
     const out = join(dir, "semantic-supatest-duplicate-provenance");
     const input = join(REPO_ROOT, "docs/design/semantic-corpus-passes/supatest.2026-09-03.triage.json");
-    runCli("src/cli/record-pass.ts", [
+    await runCli("src/cli/record-pass.ts", [
       "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
     ]);
     const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
@@ -313,13 +384,13 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
   it.each([
     ["incomplete", { triage_completed: false, findings: [] }, /triage_completed: true/],
     ["malformed", { triage_completed: true, triage_context: { votes_per_finding: 3 }, findings: [triageFinding({ rationale: "" })] }, /rationale must be a non-empty string/],
-  ])("refuses %s triage without writing a pass", (label, body, error) => {
+  ])("refuses %s triage without writing a pass", async (label, body, error) => {
     const out = join(dir, `semantic-${label}-triage`);
     const input = join(dir, `semantic-${label}-triage.json`);
     writeFileSync(input, JSON.stringify(body));
-    expect(() => runCli("src/cli/record-pass.ts", [
+    await expect(runCli("src/cli/record-pass.ts", [
       "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
-    ])).toThrow(error as RegExp);
+    ])).rejects.toThrow(error as RegExp);
     expect(existsSync(join(out, "M1.pass.json"))).toBe(false);
   });
 });
@@ -336,9 +407,9 @@ describe("semantic-corpus-triage-policy exact target boundary (#1947)", () => {
   writeFileSync(join(gitDir, "HEAD"), `${commit}\n`);
   writeFileSync(join(gitDir, "config"), `[remote "origin"]\n\turl = https://github.com/${target.repo}.git\n`);
 
-  it("drives the real CLI with clone-root identity and the scoped source directory", () => {
+  it("drives the real CLI with clone-root identity and the scoped source directory", async () => {
     const out = join(dir, "semantic-policy-nocode-rescue.txt");
-    runCli("src/cli/semantic-corpus-triage-policy.ts", [
+    await runCli("src/cli/semantic-corpus-triage-policy.ts", [
       "--measurement", "semantic-recall", "--slug", target.slug, "--repo", cloneRoot,
       "--scope", "before", "--out", out,
     ]);
@@ -353,32 +424,32 @@ describe("semantic-corpus-triage-policy exact target boundary (#1947)", () => {
   it.each([
     ["ordinary measurement", ["--measurement", "client-audit", "--scope", "before"]],
     ["missing source scope", ["--measurement", "semantic-recall"]],
-  ])("refuses an %s without writing a policy", (label, identityArgs) => {
+  ])("refuses an %s without writing a policy", async (label, identityArgs) => {
     const out = join(dir, `semantic-policy-rejected-${label.replaceAll(" ", "-")}.txt`);
-    expect(() => runCli("src/cli/semantic-corpus-triage-policy.ts", [
+    await expect(runCli("src/cli/semantic-corpus-triage-policy.ts", [
       ...identityArgs, "--slug", target.slug, "--repo", cloneRoot, "--out", out,
-    ])).toThrow();
+    ])).rejects.toThrow();
     expect(existsSync(out)).toBe(false);
   });
 });
 
 describe("record-pass schema-v3 effectiveness receipt boundary", () => {
-  it("fails closed when strict effectiveness evidence is missing or malformed", () => {
+  it("fails closed when strict effectiveness evidence is missing or malformed", async () => {
     const out = join(dir, "strict-missing");
-    expect(() => runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--require-effectiveness-receipts"])).toThrow();
+    await expect(runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--require-effectiveness-receipts"])).rejects.toThrow();
     const malformed = join(dir, "malformed-receipts.json");
     writeFileSync(malformed, "[]\n");
-    expect(() => runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", malformed, "--require-effectiveness-receipts"])).toThrow();
+    await expect(runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", malformed, "--require-effectiveness-receipts"])).rejects.toThrow();
   });
 
-  it("writes and reads back producer-specific artifact evidence", () => {
+  it("writes and reads back producer-specific artifact evidence", async () => {
     const out = join(dir, "strict-valid");
     const receipts = join(dir, "valid-receipts.json");
     writeFileSync(receipts, JSON.stringify([createProducerExecutionReceipt({
       executionId: "semantic-1", producerId: "semantic:m1", implementationId: "vuln-scan#triage", module: "M1", tier: "paid",
       findingFamilyIds: ["M1-SEMANTIC-*"], findingIds: ["SEM-1"], edges: [{ kind: "callback", from: "vuln-scan", to: "triage" }],
     })]));
-    runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", receipts, "--require-effectiveness-receipts"]);
+    await runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", receipts, "--require-effectiveness-receipts"]);
     const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
     expect(ingestPassArtifactReceipts(stored, "audit-runner:M1")[0]?.edges.map((edge) => edge.kind)).toEqual(["callback", "artifact-produce", "artifact-ingest"]);
   });

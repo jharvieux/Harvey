@@ -313,7 +313,8 @@ function corpusRows(ctx: AdapterContext): void {
         if (Object.hasOwn(b, "reason") && Object.hasOwn(b, "mutationScore")) throw new Error(`environment census: ambiguous external baseline ${slug}:${module}`);
         const scorerName = Object.hasOwn(b, "reason") ? "revalidateNotRunReasons" : Object.hasOwn(b, "mutationScore") ? "scoreMutationBaseline" : "scoreExternalBaseline";
         const scorer = reference(ctx, external.path, scorerName);
-        const assertionNeedle = scorerName === "scoreMutationBaseline" ? "scoreMutationBaseline(target.slug, baseline, runMutationScan" : `${scorerName}(target, findings)`;
+        // Bind the scorer call; its nested mutation invocation may yield asynchronously.
+        const assertionNeedle = scorerName === "scoreMutationBaseline" ? "scoreMutationBaseline(target.slug, baseline," : `${scorerName}(target, findings)`;
         const note = string(b.note) ?? string(b.reason) ?? "";
         const source = row(ctx, file, `${evidence.anchor}/${module}`, "source-revision", `${slug}@${module}`, {
           evidence: { ...evidence, anchor: `${evidence.anchor}/${module}` }, consumer: consumer(scorer, `The ${scorerName} consumer owns this specific baseline shape. Finding counts, mutation scores and not-run reasons have separate consumers; #1853 owns schema extraction.`),

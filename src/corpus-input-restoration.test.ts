@@ -10,7 +10,7 @@ import { runCorpusScanner } from "./corpus-scanner-runner.js";
 import type { CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 // Execute both shipping propagation boundaries without starting unrelated corpus scanners.
-function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> } {
+async function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): Promise<DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> }> {
   const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
   const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
   const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
@@ -32,12 +32,12 @@ function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolic
     prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
     target: { slug: policy.targetSlug, commit: policy.targetRevision, installationPolicy: policy },
     targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true, forceColdCache: false,
-    timed: (_name: string, fn: () => unknown) => fn(),
+    timedAsync: async (_name: string, fn: () => Promise<unknown>) => await fn(),
     writeFileSync, jsonOut: join(targetDir, "corpus-policy.json"), rows: [], findingsBySlug: {},
     dependencyPreparationsBySlug: {}, detectorRecordsBySlug: {}, mechanicalContextBySlug: {}, currentExecution: undefined,
   };
-  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const handoff = new Function(...Object.keys(bindings), `${code}\nreturn { dependencyPreparation, runQualityScan };`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
+  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = await prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const handoff = await new Function(...Object.keys(bindings), `return (async () => { ${code}\nreturn { dependencyPreparation, runQualityScan }; })();`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
   return Object.assign(handoff.dependencyPreparation, { runQualityScan: handoff.runQualityScan });
 }
 
@@ -140,9 +140,9 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     "install-file-link", "install-identical-link", "install-dangling-link", "install-hard-link", "install-file-directory",
     "install-parent-link", "install-parent-file", "install-parent-deleted", "install-new-parent-link",
     "install-root-link", "install-root-file", "install-root-deleted", "install-deleted-lock",
-  ])("restores %s without following external topology or losing rejection evidence", (mode) => {
+  ])("restores %s without following external topology or losing rejection evidence", async (mode) => {
     const f = fixture(mode);
-    const result = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(result);
+    const result = await installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(result);
     assertRejected(f, result);
     for (const [path, content] of f.originals) {
       expect(lstatSync(join(f.targetDir, path)).isFile()).toBe(true);
@@ -153,23 +153,23 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(JSON.parse(readFileSync(join(f.targetDir, "corpus-policy.json"), "utf8")).dependencyPreparations[f.targetSlug][0]).toEqual(JSON.parse(JSON.stringify(result)));
   });
 
-  it("records a changed ancestor without repairing or cleaning through the lost boundary", () => {
+  it("records a changed ancestor without repairing or cleaning through the lost boundary", async () => {
     const f = fixture("install-ancestor-link");
-    const result = prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
+    const result = await prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
     assertRejected(f, result);
     expect(result.reason).toContain("boundary changed outside the owned target");
     expect(lstatSync(dirname(f.targetDir)).isSymbolicLink()).toBe(true);
     for (const [path, content] of f.originals) expect(readFileSync(join(`${dirname(f.targetDir)}-moved`, "target", path), "utf8")).toBe(content);
   });
 
-  it.each(["file-directory", "dangling-link", "hard-link"])("refuses an un-restorable initial %s before setup and leaves the original topology untouched", (mode) => {
+  it.each(["file-directory", "dangling-link", "hard-link"])("refuses an un-restorable initial %s before setup and leaves the original topology untouched", async (mode) => {
     const f = fixture("success"), lock = join(f.targetDir, "pnpm-lock.yaml");
     rmSync(lock);
     if (mode === "file-directory") mkdirSync(lock);
     else if (mode === "hard-link") linkSync(join(f.outside, "lock"), lock);
     else symlinkSync(join(f.outside, "missing"), lock);
     const initial = lstatSync(lock);
-    const result = prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
+    const result = await prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
     expect(result).toMatchObject({ complete: false, status: "incomplete", installation: { stages: [], operatorPolicy: { policy: f.policy, admission: "rejected" } } });
     expect(result.reason).toMatch(/regular|symbolic link/);
     expect(lstatSync(lock).ino).toBe(initial.ino);
@@ -178,10 +178,10 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     assertSentinels(f);
   });
 
-  it("retains observed stages when restoration is denied and releases the private store", () => {
+  it("retains observed stages when restoration is denied and releases the private store", async () => {
     const f = fixture("install-restoration-denied");
     try {
-      const result = prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
+      const result = await prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
       assertRejected(f, result);
       expect(result.reason).toContain("operator input restoration incomplete");
       expect(result.reason).toContain("EACCES");
@@ -189,19 +189,19 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     } finally { chmodSync(f.targetDir, 0o700); }
   });
 
-  it("records private-store setup failure with the original policy and locks before provisioning", () => {
+  it("records private-store setup failure with the original policy and locks before provisioning", async () => {
     const f = fixture("success");
     const missing = join(f.root, "missing-temp"); vi.stubEnv("TMPDIR", missing);
-    const result = prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
+    const result = await prepareCorpusDependencies({ ...f, installationPolicy: f.policy }); preparations.push(result);
     assertRejected(f, result);
     expect(result.reason).toContain("ENOENT");
     expect(result.installation!.stages).toEqual([]);
     expect(existsSync(join(f.root, "selector-ran"))).toBe(false);
   });
 
-  it("retains install evidence and performs cleanup when an event consumer throws", () => {
+  it("retains install evidence and performs cleanup when an event consumer throws", async () => {
     const f = fixture("success");
-    const result = prepareCorpusDependencies({ ...f, installationPolicy: f.policy, onEvent(message) {
+    const result = await prepareCorpusDependencies({ ...f, installationPolicy: f.policy, onEvent(message) {
       if (message.startsWith("DEPENDENCY PREP OPERATOR")) throw new Error("EVENT_CONSUMER_FAILURE");
     } }); preparations.push(result);
     assertRejected(f, result);
@@ -213,7 +213,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
 
   it("delivers the topology failure and original lock evidence through the real M5 client consumer", async () => {
     const f = fixture("install-file-directory");
-    const preparation = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(preparation);
+    const preparation = await installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(preparation);
     const result = await preparation.runQualityScan();
     expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("not a regular file") }));
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(false);

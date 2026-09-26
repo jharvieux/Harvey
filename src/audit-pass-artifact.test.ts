@@ -49,7 +49,7 @@ describe("schema-v3 pass effectiveness evidence", () => {
 const ctx = (stored: unknown, over: Partial<RunContext> = {}): RunContext => ({
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: () => ({ ok: true, output: "" }),
+  exec: async () => ({ ok: true, output: "" }),
   exists: () => true,
   artifactsDir: "/artifacts",
   readArtifact: () => stored,
@@ -260,7 +260,7 @@ describe("write → derive round-trip (#448 ↔ #416)", () => {
   const realFsCtx: RunContext = {
     targetDir: "/engagement/target",
     env: { connected: false, dynamic: false, llm: true },
-    exec: () => ({ ok: true, output: "" }),
+    exec: async () => ({ ok: true, output: "" }),
     exists: (p) => existsSync(p),
     artifactsDir: dir,
     readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),

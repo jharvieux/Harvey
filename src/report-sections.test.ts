@@ -147,7 +147,7 @@ describe("a real mutation run reaches the rendered report (#1045)", () => {
   const ctx: RunContext = {
     targetDir: "/target",
     env: { connected: false, dynamic: false, llm: false },
-    exec: (_c, argv) => ({
+    exec: async (_c, argv) => ({
       ok: true,
       output: argv.includes("mutation-scan")
         ? JSON.stringify(artifact)
@@ -164,8 +164,8 @@ describe("a real mutation run reaches the rendered report (#1045)", () => {
     readArtifact: (p) => (p.endsWith("M8.json") ? artifact : undefined),
   };
 
-  it("carries M8's per-module rows into the assembled document and out to the page", () => {
-    const { recorded, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
+  it("carries M8's per-module rows into the assembled document and out to the page", async () => {
+    const { recorded, testQuality } = await runAudit(AUDIT_RUNNERS, ctx);
     expect(testQuality?.rows).toHaveLength(1);
     const assembled = assembleEngagementDocument(recorded, ctx.env, [], meta(), undefined, undefined, testQuality);
     expect(validateFindings(assembled).ok).toBe(true);

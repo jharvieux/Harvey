@@ -55,8 +55,23 @@ export class SecretInArgvError extends Error {}
 // is about to pass and the secrets it holds; a secret that reached argv throws before the spawn
 // rather than being discovered by a later inspection. The message names the site and the argv index
 // but NEVER the secret — this throws into logs Harvey writes.
-export function assertNoSecretInArgv(site: string, argv: readonly string[], secrets: readonly (string | undefined)[]): void {
-  const watched = secrets.filter(isWatchableSecret);
+interface SecretRegistryOptions {
+  /** Execution admission knows these are approved values; no length floor or placeholder exemption applies. */
+  includeShortValues?: boolean;
+}
+
+export type SecretExcerptBoundary = "whole" | "head" | "tail" | "both";
+export interface SecretExcerptContext {
+  boundary: SecretExcerptBoundary;
+  /** Transient overlap may prove a match spanning a retained boundary; it is never emitted. */
+  before?: string;
+  after?: string;
+}
+
+export function assertNoSecretInArgv(site: string, argv: readonly string[], secrets: readonly (string | undefined)[], options: SecretRegistryOptions = {}): void {
+  const watched = secrets.filter((value): value is string => options.includeShortValues
+    ? typeof value === "string" && value.length > 0
+    : isWatchableSecret(value));
   for (const [i, arg] of argv.entries()) {
     if (watched.some((s) => arg.includes(s))) {
       throw new SecretInArgvError(
@@ -67,6 +82,25 @@ export function assertNoSecretInArgv(site: string, argv: readonly string[], secr
   }
 }
 
+// Longest proper value prefix at a retained head boundary, in linear time even for long values.
+function partialOverlap(secret: string, text: string): number {
+  const pattern = secret.slice(0, Math.min(secret.length - 1, text.length));
+  if (!pattern) return 0;
+  const fallback = new Array<number>(pattern.length).fill(0);
+  for (let index = 1, length = 0; index < pattern.length; index++) {
+    while (length > 0 && pattern[index] !== pattern[length]) length = fallback[length - 1]!;
+    if (pattern[index] === pattern[length]) length++;
+    fallback[index] = length;
+  }
+  let matched = 0;
+  for (let index = Math.max(0, text.length - pattern.length); index < text.length; index++) {
+    while (matched > 0 && (matched === pattern.length || text[index] !== pattern[matched])) matched = fallback[matched - 1]!;
+    if (text[index] === pattern[matched]) matched++;
+  }
+  return matched;
+}
+function reverseUnits(value: string): string { return value.split("").reverse().join(""); }
+
 // A per-run collection of every secret in scope, so a spawn choke point (`sh`) can screen its argv
 // against ALL of them without each call site re-declaring which parameter holds what. This is what
 // makes the guard STRUCTURAL rather than opt-in (#1413): a new `sh` caller is covered automatically,
@@ -74,19 +108,96 @@ export function assertNoSecretInArgv(site: string, argv: readonly string[], secr
 // request body interpolated into a URL — is caught because the registry, not the call site, decides
 // what a secret is.
 export class SecretRegistry {
-  private readonly secrets = new Set<string>();
+  readonly #secrets = new Set<string>();
+  readonly #patterns = new Set<string>();
+  readonly #includeShortValues: boolean;
+
+  constructor(options: SecretRegistryOptions = {}) {
+    this.#includeShortValues = options.includeShortValues === true;
+  }
+
   register(...values: (string | undefined)[]): void {
-    for (const v of values) if (isWatchableSecret(v)) this.secrets.add(v);
+    for (const value of values) {
+      if (this.#includeShortValues ? typeof value === "string" && value.length > 0 : isWatchableSecret(value)) {
+        const secret = value as string;
+        this.#secrets.add(secret);
+        this.#patterns.add(secret);
+        if (this.#includeShortValues) {
+          this.#patterns.add(JSON.stringify(secret).slice(1, -1));
+          // Errors often quote a value as JSON or include its percent-encoded URL form.
+          try { this.#patterns.add(encodeURIComponent(secret)); } catch { /* Invalid Unicode has no URI representation. */ }
+        }
+      }
+    }
   }
   clear(): void {
-    this.secrets.clear();
+    this.#secrets.clear();
+    this.#patterns.clear();
   }
-  // Throws SecretInArgvError before the spawn if any registered secret is in argv.
+  // All stored values were selected at registration, including explicitly approved short values.
   assertArgvClean(site: string, argv: readonly string[]): void {
-    assertNoSecretInArgv(site, argv, [...this.secrets]);
+    assertNoSecretInArgv(this.redact(site), argv, [...this.#patterns], { includeShortValues: true });
   }
+
+  /**
+   * Redact overlapping matches together at their original positions, before replacement changes
+   * their boundaries. A bounded head/tail can bisect a value; remove the matching partial
+   * boundary too. UTF-8 decoding may place replacement characters beside that boundary.
+   */
+  redact(text: string, context: SecretExcerptBoundary | SecretExcerptContext = "whole"): string {
+    const { boundary, before = "", after = "" } = typeof context === "string" ? { boundary: context } : context;
+    const source = before + text + after;
+    const ranges: [number, number][] = [];
+    const headEnd = text.replace(/\uFFFD+$/, "").length;
+    const tailStart = text.length - text.replace(/^\uFFFD+/, "").length;
+    for (const secret of this.#patterns) {
+      let from = 0;
+      for (let at = source.indexOf(secret, from); at >= 0; at = source.indexOf(secret, from)) {
+        const start = Math.max(0, at - before.length);
+        const end = Math.min(text.length, at + secret.length - before.length);
+        if (start < end) ranges.push([start, end]);
+        from = at + 1;
+      }
+      if (boundary === "head" || boundary === "both") {
+        const length = partialOverlap(secret, text.slice(0, headEnd));
+        if (length > 0) ranges.push([headEnd - length, text.length]);
+      }
+      if (boundary === "tail" || boundary === "both") {
+        const length = partialOverlap(reverseUnits(secret), reverseUnits(text.slice(tailStart)));
+        if (length > 0) ranges.push([0, tailStart + length]);
+      }
+    }
+    if (ranges.length === 0) return text;
+    ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+    const merged: [number, number][] = [];
+    for (const range of ranges) {
+      const previous = merged.at(-1);
+      if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1]);
+      else merged.push([...range]);
+    }
+    const render = (marker: string): string => {
+      let result = "";
+      let previousEnd = 0;
+      for (const [start, end] of merged) {
+        result += text.slice(previousEnd, start) + marker;
+        previousEnd = end;
+      }
+      return result + text.slice(previousEnd);
+    };
+    const ordinary = render("[REDACTED]");
+    if (![...this.#patterns].some((secret) => ordinary.includes(secret))) return ordinary;
+    // A short approved value can itself spell part of a marker, or bridge its edge. Choose a
+    // separator absent from every value, separating replacements from surrounding text.
+    for (let codepoint = 0x2588; codepoint <= 0x10ffff; codepoint++) {
+      if (codepoint >= 0xd800 && codepoint <= 0xdfff) continue;
+      const marker = String.fromCodePoint(codepoint);
+      if (![...this.#patterns].some((secret) => secret.includes(marker))) return render(marker);
+    }
+    throw new Error("A safe redaction marker could not be selected.");
+  }
+
   get size(): number {
-    return this.secrets.size;
+    return this.#secrets.size;
   }
 }
 

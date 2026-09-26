@@ -6,13 +6,13 @@
 // fixture — did not, so the gate failed on a difference between two spellings of "run the tool".
 // A probe's view of the outside world has to be identical in both, so there is one of these.
 //
-// spawnSync, not execFileSync, because execFileSync RETURNS stdout only: a successful tool's stderr
-// was discarded, and that is where quality-scan prints the jscpd/knip scope counts M4 and M5 need to
-// say what they examined. stderr is kept SEPARATE from `output` — M4/M5's non-capturing path parses
-// stdout as a bare Finding[] JSON, so merging the streams would break it.
+// Await both child streams: quality-scan prints the jscpd/knip scope counts M4 and M5 need on
+// stderr, and the event loop must remain available while a module CLI runs. Keep stderr separate
+// from `output`: M4/M5 parse stdout as bare Finding[] JSON, so merging the streams would break it.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type { RunContext } from "./audit-runner.js";
 import {
   commandReceiptSucceeded,
@@ -23,14 +23,128 @@ import {
 
 type ProbeExecOptions = NonNullable<Parameters<RunContext["exec"]>[2]>;
 
-function terminalState(result: ReturnType<typeof spawnSync>): CommandTerminalState {
-  const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === "ETIMEDOUT") return "timed-out";
-  if (code === "ENOBUFS") return "output-limit-exceeded";
+// Match spawnSync's default combined output budget without retaining an unbounded stream.
+const MAX_OUTPUT_BYTES = 1024 * 1024;
+const KILL_GRACE_MS = 500;
+const STREAM_CLOSE_GRACE_MS = 500;
+
+type OutputCompleteness = { stdout: "complete" | "truncated" | "unknown"; stderr: "complete" | "truncated" | "unknown" };
+
+interface ChildResult {
+  stdout: Buffer;
+  stderr: Buffer;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: NodeJS.ErrnoException;
+  completeness: OutputCompleteness;
+}
+
+function terminalState(result: ChildResult): CommandTerminalState {
+  if (result.error?.code === "ETIMEDOUT") return "timed-out";
+  if (result.error?.code === "ENOBUFS") return "output-limit-exceeded";
   if (result.error) return "spawn-failed";
   if (typeof result.status === "number") return "exited";
   if (result.signal) return "signaled";
   return "unknown-exit";
+}
+
+function executeChild(command: string, argv: string[], options: ProbeExecOptions): Promise<ChildResult> {
+  if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) {
+    return Promise.reject(new RangeError("command timeoutMs must be a positive integer"));
+  }
+  return new Promise((resolve, reject) => {
+    const began = performance.now();
+    const child = spawn(command, argv, {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: options.cwd,
+      // Overlay per-project credentials without changing the parent or another invocation.
+      ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
+    });
+    const chunks: Record<"stdout" | "stderr", Buffer[]> = { stdout: [], stderr: [] };
+    const completeness: OutputCompleteness = { stdout: "complete", stderr: "complete" };
+    let capturedBytes = 0;
+    let outputLimited = false;
+    let timedOut = false;
+    let error: NodeJS.ErrnoException | undefined;
+    let streamError: Error | undefined;
+    let deadline: NodeJS.Timeout | undefined;
+    let escalation: NodeJS.Timeout | undefined;
+    let streamDeadline: NodeJS.Timeout | undefined;
+
+    const terminate = () => {
+      if (escalation) return;
+      child.kill("SIGTERM");
+      // A handler may ignore SIGTERM or exit zero. Keep the interruption as the outcome and
+      // wait for actual process termination; never finalize from the deadline callback alone.
+      escalation = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        streamDeadline = setTimeout(() => {
+          // Descendants can inherit these descriptors after the owned child exits. Closing our
+          // read ends bounds cleanup without claiming that an incomplete stream was complete.
+          for (const name of ["stdout", "stderr"] as const) {
+            if (!child[name].readableEnded) {
+              if (completeness[name] === "complete") completeness[name] = "unknown";
+              child[name].destroy();
+            }
+          }
+        }, STREAM_CLOSE_GRACE_MS);
+      }, KILL_GRACE_MS);
+    };
+
+    for (const name of ["stdout", "stderr"] as const) {
+      child[name].on("error", (cause: Error) => {
+        streamError = new Error(`command ${name} stream failed: ${cause.message}`, { cause });
+        completeness[name] = "unknown";
+        terminate();
+      });
+      child[name].on("data", (chunk: Buffer) => {
+        const available = Math.max(0, MAX_OUTPUT_BYTES - capturedBytes);
+        const retained = chunk.subarray(0, available);
+        if (retained.length) {
+          chunks[name].push(retained);
+          capturedBytes += retained.length;
+        }
+        if (retained.length < chunk.length) {
+          outputLimited = true;
+          completeness[name] = "truncated";
+          terminate();
+        }
+      });
+    }
+    child.on("error", (cause: NodeJS.ErrnoException) => { error = cause; });
+    child.once("close", (status, signal) => {
+      clearTimeout(deadline);
+      clearTimeout(escalation);
+      clearTimeout(streamDeadline);
+      if (outputLimited) {
+        for (const name of ["stdout", "stderr"] as const) {
+          if (completeness[name] === "complete") completeness[name] = "unknown";
+        }
+      }
+      if (streamError) { reject(streamError); return; }
+      resolve({
+        stdout: Buffer.concat(chunks.stdout),
+        stderr: Buffer.concat(chunks.stderr),
+        status,
+        signal,
+        completeness,
+        ...(timedOut
+          ? { error: Object.assign(new Error(`command timed out after ${options.timeoutMs}ms`), { code: "ETIMEDOUT" }) }
+          : outputLimited
+            ? { error: Object.assign(new Error("command exceeded the output buffer limit"), { code: "ENOBUFS" }) }
+            : error ? { error } : {}),
+      });
+    });
+    const timeoutMs = options.timeoutMs;
+    if (timeoutMs !== undefined) {
+      const checkDeadline = () => {
+        const remaining = timeoutMs - (performance.now() - began);
+        if (remaining > 0) deadline = setTimeout(checkDeadline, Math.min(remaining, 2_147_483_647));
+        else { timedOut = true; terminate(); }
+      };
+      checkDeadline();
+    }
+  });
 }
 
 function finalizeReceipt(
@@ -39,8 +153,8 @@ function finalizeReceipt(
   opts: ProbeExecOptions,
   startedAt: string,
   finishedAt: string,
-  stdout: string,
-  stderr: string,
+  stdout: string | Buffer,
+  stderr: string | Buffer,
   state: CommandTerminalState,
   observedStatus: number | null,
   signal: string | null,
@@ -78,55 +192,51 @@ function finalizeReceipt(
   });
 }
 
-export const probeExec: RunContext["exec"] = (command, argv, opts) => {
-  const options = opts ?? {};
-  const now = options.receipt?.now ?? (() => new Date().toISOString());
+export const probeExec: RunContext["exec"] = async (command, argv, opts) => {
+  // Receipt inputs must describe the launched invocation even if its caller changes shared
+  // arrays, metadata, or the process cwd while this function yields. Keep only the live signal
+  // and clock callback outside the value snapshot; neither belongs in persisted metadata.
+  const args = [...argv];
+  const { signal, receipt: metadata, ...execution } = opts ?? {};
+  const { now: receiptNow, ...receiptValues } = metadata ?? {};
+  const options: ProbeExecOptions = {
+    ...structuredClone(execution),
+    cwd: resolve(execution.cwd ?? process.cwd()),
+    ...(signal ? { signal } : {}),
+    ...(metadata ? { receipt: { ...structuredClone(receiptValues), ...(receiptNow ? { now: receiptNow } : {}) } } : {}),
+  };
+  const now = receiptNow ?? (() => new Date().toISOString());
   const startedAt = now();
   if (options.receipt?.policyAllowed === false) {
     const receipt = finalizeReceipt(
-      command, argv, options, startedAt, now(), "", options.receipt.policyReason ?? "command denied by policy",
+      command, args, options, startedAt, now(), "", options.receipt.policyReason ?? "command denied by policy",
       "policy-denied", null, null, "POLICY_DENIED",
     );
     return { ok: false, output: options.receipt.policyReason ?? "command denied by policy", stderr: options.receipt.policyReason ?? "command denied by policy", receipt };
   }
-  // spawnSync blocks JavaScript callbacks and does not support AbortSignal. Honor cancellation
-  // before starting, and never relabel a completed child based on a later signal observation.
+  // Cancellation remains pre-start-only. Yielding does not authorize late aborts to kill a child
+  // or relabel the actual exit; callers retain the same cancellation contract.
   if (options.signal?.aborted) {
-    const receipt = finalizeReceipt(command, argv, options, startedAt, now(), "", "command cancelled before start", "cancelled", null, null, "ABORT_ERR");
+    const receipt = finalizeReceipt(command, args, options, startedAt, now(), "", "command cancelled before start", "cancelled", null, null, "ABORT_ERR");
     return { ok: false, output: "command cancelled before start", stderr: "command cancelled before start", receipt };
   }
-  const r = spawnSync(command, argv, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    cwd: options.cwd,
-    timeout: options.timeoutMs,
-    // #520: overlay a per-child env (e.g. a per-project SUPABASE_DB_URL for M10's live tier) onto
-    // the inherited environment; absent ⇒ inherit unchanged.
-    ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
-  });
-  const stdout = r.stdout ?? "";
-  const stderr = r.stderr ?? "";
+  const r = await executeChild(command, args, options);
+  const stdout = r.stdout.toString("utf8");
+  const stderr = r.stderr.toString("utf8");
   const state = terminalState(r);
-  const outputCompleteness = state === "output-limit-exceeded"
-    ? stdout && !stderr
-      ? { stdout: "truncated" as const, stderr: "unknown" as const }
-      : stderr && !stdout
-        ? { stdout: "unknown" as const, stderr: "truncated" as const }
-        : { stdout: "unknown" as const, stderr: "unknown" as const }
-    : undefined;
   const receipt = finalizeReceipt(
     command,
-    argv,
+    args,
     options,
     startedAt,
     now(),
-    stdout,
-    stderr,
+    r.stdout,
+    r.stderr,
     state,
     r.status,
     r.signal,
-    (r.error as NodeJS.ErrnoException | undefined)?.code,
-    outputCompleteness,
+    r.error?.code,
+    r.completeness,
   );
   // A tool that exits non-zero or is not installed is a real outcome the probe must judge, not an
   // orchestrator crash — hand it back and let the module's probe describe it.

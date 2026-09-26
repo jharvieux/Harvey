@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { M8_CORPUS_CONFIGS } from "../scan/m8-corpus.js";
@@ -13,6 +14,71 @@ import { describePreparationStages } from "../corpus-package-manager.js";
 const plan = buildM8CorpusPlan(EXTERNAL_CORPUS, M8_CORPUS_CONFIGS);
 const cli = join(import.meta.dirname, "corpus-m8.ts");
 const tsxLoader = createRequire(import.meta.url).resolve("tsx");
+
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type CliRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
+
+function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<CliRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      if (!overflow) return finish(status, signal, launchError);
+      const error = Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException;
+      finish(status, signal, error);
+    });
+  });
+}
+
+function runCli(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<CliRun> {
+  return runCommand(process.execPath, ["--import", tsxLoader, cli, ...args], cwd, env);
+}
+
+async function runCliResponsive(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<CliRun> {
+  let finished = false;
+  let heartbeats = 0;
+  const heartbeat = setInterval(() => { if (!finished) heartbeats += 1; }, 5);
+  try {
+    const result = await runCli(args, cwd, env);
+    if (result.error) throw result.error;
+    finished = true;
+    // This interval runs during the actual CLI child. A synchronous helper blocks it until close.
+    expect(heartbeats, "M8 corpus CLI child work must service the Vitest worker event loop").toBeGreaterThan(0);
+    return result;
+  } finally {
+    finished = true;
+    clearInterval(heartbeat);
+  }
+}
 
 function writePassingPeerArtifacts(artifacts: string, except: string): void {
   for (const other of plan.configured.filter((slug) => slug !== except)) {
@@ -27,10 +93,39 @@ function writePassingPeerArtifacts(artifacts: string, except: string): void {
 }
 
 describe("M8 target failure evidence (#2057)", () => {
+  it("retains the actual zero-exit close state and overflow error after a termination handler", async () => {
+    const script = 'process.on("SIGTERM", () => process.exit(0)); setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30); setTimeout(() => process.exit(2), 2000);';
+    const result = await runCommand(process.execPath, ["--eval", script], process.cwd(), process.env);
+    expect(result).toMatchObject({ status: 0, signal: null, error: { code: "ENOBUFS" } });
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  });
+
+  it("caps combined local-child stdout and stderr at the former 1 MiB synchronous limit", async () => {
+    const result = await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], process.cwd(), process.env);
+    expect(result).toMatchObject({ status: null, signal: "SIGTERM", error: { code: "ENOBUFS" } });
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+    expect(result.stdout).not.toHaveLength(0);
+    expect(result.stderr).not.toHaveLength(0);
+  });
+
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it.each(["separate streams", "multiline preparation detail"])("retains bounded, redacted %s through target and aggregate artifacts", (shape) => {
+  it("rejects zero-exit overflow through the actual responsive M8 CLI consumer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-responsive-overflow-"));
+    dirs.push(root);
+    const preload = join(root, "overflow.mjs");
+    // The async preload supplies real CLI-child output before any corpus target can run.
+    writeFileSync(preload, `process.on("SIGTERM", () => process.exit(0));
+setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30);
+setTimeout(() => process.exit(2), 2000);
+await new Promise(() => {});
+`);
+    const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`.trim() };
+    await expect(runCliResponsive(["plan", "--github-output", join(root, "output.txt")], root, env)).rejects.toMatchObject({ code: "ENOBUFS" });
+  });
+
+  it.each(["separate streams", "multiline preparation detail"])("retains bounded, redacted %s through target and aggregate artifacts", async (shape) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-wrapper-"));
     dirs.push(root);
     const bin = join(root, "bin");
@@ -64,12 +159,7 @@ describe("M8 target failure evidence (#2057)", () => {
     const targetDir = join(artifacts, target);
     mkdirSync(targetDir, { recursive: true });
     const resultPath = join(targetDir, "result.json");
-    execFileSync(process.execPath, ["--import", tsxLoader, cli, "target", "--target", target, "--out", resultPath], {
-      cwd: root,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-      stdio: "pipe",
-      maxBuffer: 1024 * 1024,
-    });
+    expect((await runCliResponsive(["target", "--target", target, "--out", resultPath], root, { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` })).status).toBe(0);
     const raw = readFileSync(resultPath, "utf8");
     const result = JSON.parse(raw) as M8TargetResult;
     expect(result).toMatchObject({ target, status: "failed", exitCode: 42, scorecard: null });
@@ -86,7 +176,7 @@ describe("M8 target failure evidence (#2057)", () => {
 
     writePassingPeerArtifacts(artifacts, target);
     const reportPath = join(root, "aggregate.json");
-    expect(() => execFileSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], { cwd: root, stdio: "pipe" })).toThrow();
+    expect((await runCliResponsive(["aggregate", "--artifacts", artifacts, "--out", reportPath], root)).status).toBe(1);
     expect(existsSync(reportPath)).toBe(true);
     const report = JSON.parse(readFileSync(reportPath, "utf8")) as { ok: boolean; failed: number; targets: M8TargetResult[] };
     expect(report).toMatchObject({ ok: false, failed: 1 });
@@ -98,7 +188,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it.each(["success", "failure"] as const)("redacts split stdout/stderr credentials on %s and bounds long/final lines", (outcome) => {
+  it.each(["success", "failure"] as const)("redacts split stdout/stderr credentials on %s and bounds long/final lines", async (outcome) => {
     const root = mkdtempSync(join(tmpdir(), `harvey-m8-terminal-${outcome}-`));
     dirs.push(root);
     const bin = join(root, "bin");
@@ -142,12 +232,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const targetDir = join(artifacts, target);
     mkdirSync(targetDir, { recursive: true });
     const resultPath = join(targetDir, "result.json");
-    const targetRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "target", "--target", target, "--out", resultPath], {
-      cwd: root,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
+    const targetRun = await runCliResponsive(["target", "--target", target, "--out", resultPath], root, { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` });
 
     expect(targetRun.status).toBe(0);
     expect(targetRun.stderr).toContain("selected manager pnpm@11.1.3");
@@ -183,11 +268,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     writeFileSync(resultPath, `${JSON.stringify({ ...result, error: `${result.error ?? "legacy diagnostic"}; Authorization: Bearer ${aggregateSecret}` }, null, 2)}\n`);
     writePassingPeerArtifacts(artifacts, target);
     const reportPath = join(root, "aggregate.json");
-    const aggregateRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
+    const aggregateRun = await runCliResponsive(["aggregate", "--artifacts", artifacts, "--out", reportPath], root);
     expect(aggregateRun.status).toBe(outcome === "success" ? 0 : 1);
     expect(aggregateRun.stderr).toContain("M8 AGGREGATE RUNNER COST:");
     expect(aggregateRun.stderr).not.toContain(aggregateSecret);
@@ -196,7 +277,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(aggregateArtifact).toContain("Authorization: Bearer [REDACTED]");
   });
 
-  it.each(["passed", "failed"] as const)("redacts an independently supplied %s target artifact during aggregation", (status) => {
+  it.each(["passed", "failed"] as const)("redacts an independently supplied %s target artifact during aggregation", async (status) => {
     const root = mkdtempSync(join(tmpdir(), `harvey-m8-aggregate-${status}-`));
     dirs.push(root);
     const artifacts = join(root, "artifacts");
@@ -218,11 +299,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     writePassingPeerArtifacts(artifacts, target);
 
     const reportPath = join(root, "aggregate.json");
-    const aggregateRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
+    const aggregateRun = await runCliResponsive(["aggregate", "--artifacts", artifacts, "--out", reportPath], root);
 
     expect(aggregateRun.status).toBe(status === "passed" ? 0 : 1);
     expect(aggregateRun.stderr).toContain("M8 AGGREGATE RUNNER COST:");
@@ -232,7 +309,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(aggregateArtifact).toContain("Authorization: Bearer [REDACTED]");
   });
 
-  it.each(["plan", "target", "aggregate"])("sanitizes %s filesystem failures at the terminal boundary", (mode) => {
+  it.each(["plan", "target", "aggregate"])("sanitizes %s filesystem failures at the terminal boundary", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-io-boundary-"));
     dirs.push(root);
     const secret = "ghp_1234567890ABCDEF";
@@ -245,7 +322,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     const args = mode === "plan" ? ["--github-output", out]
       : mode === "target" ? ["--target", "proposit", "--out", out]
         : ["--artifacts", artifacts, "--out", out];
-    const result = spawnSync(process.execPath, ["--import", tsxLoader, cli, mode, ...args], { cwd: root, encoding: "utf8" });
+    const result = await runCliResponsive([mode, ...args], root);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("M8 CORPUS FAILED:");
     expect(result.stderr).toContain("[REDACTED]");
@@ -253,16 +330,16 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     expect(result.stderr).not.toContain("at Object.");
   });
 
-  it("sanitizes rejected flags without changing exit status or accepted flag context", () => {
+  it("sanitizes rejected flags without changing exit status or accepted flag context", async () => {
     const secret = "ghp_1234567890ABCDEF";
-    const result = spawnSync(process.execPath, ["--import", tsxLoader, cli, "plan", `--${secret}`], { encoding: "utf8" });
+    const result = await runCliResponsive(["plan", `--${secret}`], process.cwd());
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("Unrecognized flag: --[REDACTED]");
     expect(result.stderr).toContain("--github-output");
     expect(result.stderr).not.toContain(secret);
   });
 
-  it.each(["schemaVersion", "target"])("redacts credential-shaped %s values from aggregate validation failures", (field) => {
+  it.each(["schemaVersion", "target"])("redacts credential-shaped %s values from aggregate validation failures", async (field) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-invalid-aggregate-"));
     dirs.push(root);
     const artifacts = join(root, "artifacts");
@@ -273,11 +350,7 @@ describe("M8 terminal and aggregate redaction (#2060)", () => {
     writeFileSync(join(targetDir, "result.json"), `${JSON.stringify(field === "schemaVersion" ? { schemaVersion: schemaSecret } : { schemaVersion: 1, target: schemaSecret, status: "failed", exitCode: 42, durationMs: 1, phases: null, scorecard: null })}\n`);
 
     const reportPath = join(root, "aggregate.json");
-    const aggregateRun = spawnSync(process.execPath, ["--import", tsxLoader, cli, "aggregate", "--artifacts", artifacts, "--out", reportPath], {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
+    const aggregateRun = await runCliResponsive(["aggregate", "--artifacts", artifacts, "--out", reportPath], root);
 
     expect(aggregateRun.status).toBe(1);
     expect(aggregateRun.stderr).toContain(field === "schemaVersion" ? "M8 AGGREGATE INPUT INVALID: proposit" : "M8 CORPUS FAILED:");

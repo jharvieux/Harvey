@@ -156,10 +156,10 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
       expect(rows[0]!.evidence).toContain("query failed");
       expect(rows[0]!.evidence).toContain("no absence or clean result is inferred");
       const target = join(root, "target"); mkdirSync(target); writeFileSync(join(target, "schema.sql"), "create table synthetic (email text);");
-      const context = { targetDir: target, env: { connected: true, dynamic: false, llm: false }, captureDir: root, exists: () => true, exec: () => ({ ok: false, output: failedOutput }), readFindings: () => rows };
-      const report = AUDIT_RUNNERS.find((r) => r.module === "M10")!.run(context) as ProbeResult;
+      const context = { targetDir: target, env: { connected: true, dynamic: false, llm: false }, captureDir: root, exists: () => true, exec: async () => ({ ok: false, output: failedOutput }), readFindings: () => rows };
+      const report = await AUDIT_RUNNERS.find((r) => r.module === "M10")!.run(context) as ProbeResult;
       expect(report).toMatchObject({ kind: "not-assessed", findings: rows });
-      const fresh = runAudit(AUDIT_MODULES.map((module) => ({ module, producers: [], typed: true as const, run: () => module === "M10" ? report : { kind: "not-assessed" as const, reason: "outside focused synthetic fixture", provenance: "MEASURED" as const, falsifier: "run this module separately" } })), context);
+      const fresh = await runAudit(AUDIT_MODULES.map((module) => ({ module, producers: [], typed: true as const, run: () => module === "M10" ? report : { kind: "not-assessed" as const, reason: "outside focused synthetic fixture", provenance: "MEASURED" as const, falsifier: "run this module separately" } })), context);
       expect(fresh.findingsByModule.M10).toEqual(rows);
       const direct = { meta: META, findings: fresh.findings };
       expect(buildHtml(direct)).toContain("unexamined unknown schema(s)");
@@ -167,7 +167,7 @@ describe.runIf(process.env.HARVEY_M10_POSTGRES_TESTS === "1")("M10 actual Postgr
       const bundle = join(root, "bundle");
       const scope = { module: "M10" as const, workspace: ".", tier: "connected", surface: "catalog", wholeModule: true };
       writeAuditReplayBundle(bundle, { binding: createAuditReplayBinding(target, { schemas: ["public", "private"], sampling: false }), scopes: [scope], passes: [{ scope, generatedAt: new Date().toISOString(), producer: { name: "pii-classify", version: "synthetic-catalog-fixture" }, result: report, rawArtifacts: [out] }], meta: META });
-      const replay = replayAuditBundle(bundle, target);
+      const replay = await replayAuditBundle(bundle, target);
       expect(replay.result.recorded.find((r) => r.module === "M10")).toMatchObject({ status: "requires-live-run" });
       expect(replay.result.findingsByModule.M10).toEqual(rows);
       const owner = replay.evidence.findingOwners.find((r) => r.id === "M10-PROT-00")!;

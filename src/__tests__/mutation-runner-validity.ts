@@ -105,14 +105,14 @@ describe("installed Vitest/Stryker completed-test validity (#2089)", () => {
     const context: RunContext = {
       targetDir: dir, env: {connected: false, dynamic: false, llm: false}, captureDir: dirname(artifactPath),
       exists: existsSync, readFindings: () => [], readArtifact: () => artifact,
-      exec: (_command, args) => args.includes("mutation-scan")
+      exec: async (_command, args) => args.includes("mutation-scan")
         ? {ok: true, output: cli.stdout, receipt: artifact.executionReceipt}
         : {ok: false, output: "This fixture measures the installed mutation runner only"},
     };
     const runners = AUDIT_RUNNERS.map(runner => runner.module === "M8" ? runner : {
       ...runner, run: () => ({kind: "not-assessed" as const, reason: "Outside this installed-runner fixture", provenance: "TRIED" as const, falsifier: "pnpm audit"}),
     });
-    const delivered = runAudit(runners, context);
+    const delivered = await runAudit(runners, context);
     const meta: ReportMeta = {client: "Synthetic", subtitle: "Runner validity", date: "2026-09-25", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Installed runner", scope: "Synthetic mutants", methodology: "M8", outOfScope: "Other modules"};
     const document = assembleEngagementDocument(delivered.recorded, context.env, delivered.findings, meta, undefined, undefined, delivered.testQuality);
     expect(delivered.recorded.find(row => row.module === "M8")).toMatchObject({status: "partial", reason: expect.stringContaining("uncheckable")});

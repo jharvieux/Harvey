@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,8 @@ export interface InstallInvocation {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** Test and bounded diagnostic override; production stages retain their established limits. */
+  timeoutMs?: number;
 }
 
 export interface SelectedPackageManager {
@@ -89,18 +91,24 @@ function resolveLauncher(bin: string, cwd: string, environment: NodeJS.ProcessEn
 }
 
 function failureReason(error: unknown): string {
-  const e = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
+  const e = error as { code?: number | string; message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
   // pnpm writes its concrete ERR_PNPM_* errors to stdout; retaining only stderr loses the cause.
   const output = [e.stdout?.toString(), e.stderr?.toString()].filter(Boolean).join("\n").trim();
+  const interruption = e.code === "ENOBUFS" || e.code === "ETIMEDOUT" ? `${e.code}: ${e.message}` : undefined;
+  if (interruption) {
+    const prefix = interruption.slice(0, 6000);
+    const remaining = 6000 - prefix.length - 1;
+    return prefix + (output && remaining > 0 ? `\n${output.slice(-remaining)}` : "");
+  }
   return output.slice(-6000) || e.message || String(error);
 }
 
-export function observePackageManager(
+export async function observePackageManager(
   manager: PackageManager,
   stage: DependencyPreparationStage["stage"],
   invocation: InstallInvocation,
   boundSelection?: SelectedPackageManager,
-): DependencyPreparationStage {
+): Promise<DependencyPreparationStage> {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-manager-observation-"));
   const trace = join(scratch, "trace.jsonl");
   const preload = join(scratch, "observe.cjs");
@@ -120,19 +128,77 @@ export function observePackageManager(
     writeFileSync(trace, "");
     let stdout = "";
     try {
-      stdout = execFileSync(launcher, args, {
-        cwd: invocation.cwd,
-        env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
-        encoding: "utf8",
-        timeout: stage === "version-probe" ? 120_000 : 600_000,
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
+      stdout = await new Promise<string>((resolveRun, rejectRun) => {
+        let stdinFailure: Error | undefined;
+        let limitFailure: NodeJS.ErrnoException | undefined;
+        let deadline: NodeJS.Timeout | undefined;
+        const timeoutMs = invocation.timeoutMs ?? (stage === "version-probe" ? 120_000 : 600_000);
+        if (!Number.isInteger(timeoutMs) || timeoutMs < 0) throw new RangeError("package-manager timeoutMs must be a nonnegative integer");
+        const maxBuffer = 16 * 1024 * 1024;
+        let remaining = maxBuffer;
+        const retained = { stdout: 0, stderr: 0 };
+        const child = execFile(launcher, args, {
+          cwd: invocation.cwd,
+          env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
+          encoding: "buffer",
+          maxBuffer,
+          windowsHide: true,
+        }, (error, childStdout, childStderr) => {
+          clearTimeout(deadline);
+          const stdout = childStdout.subarray(0, retained.stdout);
+          const stderr = childStderr.subarray(0, retained.stderr);
+          const failure = limitFailure ?? error ?? stdinFailure;
+          if (failure) {
+            rejectRun(Object.assign(failure, { status: child.exitCode !== null && child.exitCode >= 0 ? child.exitCode : null, signal: child.signalCode ?? undefined, stdout, stderr }));
+            return;
+          }
+          resolveRun(stdout.toString("utf8"));
+        });
+        // execFile budgets each stream separately; the native synchronous contract used one
+        // combined byte budget. Record its interruption even if a SIGTERM handler exits zero.
+        for (const name of ["stdout", "stderr"] as const) {
+          child[name]?.on("data", (chunk: Buffer) => {
+            const accepted = Math.min(remaining, chunk.length);
+            retained[name] += accepted;
+            remaining -= accepted;
+            if (accepted < chunk.length) {
+              limitFailure ??= Object.assign(new Error("package-manager output exceeded the combined 16 MiB limit"), { code: "ENOBUFS" });
+              child.stdout?.destroy();
+              child.stderr?.destroy();
+              child.kill("SIGTERM");
+            }
+          });
+        }
+        if (timeoutMs > 0) deadline = setTimeout(() => {
+          limitFailure ??= Object.assign(new Error(`package-manager exceeded its ${timeoutMs}ms deadline`), { code: "ETIMEDOUT" });
+          child.kill("SIGTERM");
+        }, timeoutMs);
+        const stdin = child.stdin;
+        if (!stdin) {
+          stdinFailure = new Error("package-manager child stdin pipe was unavailable");
+          child.kill();
+          return;
+        }
+        stdin.on("error", (error: NodeJS.ErrnoException) => {
+          // A fast-exiting child may close its reader before the parent's EOF arrives.
+          if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
+          stdinFailure = error;
+          child.kill();
+        });
+        try {
+          // execFile defaults to a writable pipe. The previous synchronous invocation supplied
+          // no input, so preserve that EOF contract for managers that wait for stdin to close.
+          stdin.end();
+        } catch (error) {
+          stdinFailure = error instanceof Error ? error : new Error(String(error));
+          child.kill();
+        }
       });
       result.exitCode = 0;
       result.outcome = "completed";
     } catch (error) {
-      const failure = error as { status?: number | null; signal?: string };
-      result.exitCode = failure.status ?? null;
+      const failure = error as { status?: number | null; code?: number | string; signal?: string };
+      result.exitCode = failure.status ?? (typeof failure.code === "number" ? failure.code : null);
       result.signal = failure.signal;
       result.reason = failureReason(error);
     }
@@ -149,7 +215,7 @@ export function observePackageManager(
     }
     const identityFailure = !selected
       ? `the selected ${manager} executable/version could not be observed after selector provisioning`
-      : stage === "version-probe" && result.exitCode === 0 && stdout.trim() !== selected.version
+      : stage === "version-probe" && result.outcome === "completed" && stdout.trim() !== selected.version
         ? `version-probe output ${JSON.stringify(stdout.trim())} disagrees with the executed ${manager}@${selected.version}`
         : undefined;
     if (identityFailure) {
@@ -165,22 +231,22 @@ export function observePackageManager(
   return result;
 }
 
-export function selectPackageManager(
+export async function selectPackageManager(
   manager: PackageManager,
   cwd: string,
   env: NodeJS.ProcessEnv,
   requestedVersion?: string,
   source: "target-declaration" | "operator-policy" = "target-declaration",
-): DependencyPreparationStage[] {
+): Promise<DependencyPreparationStage[]> {
   const invocation = { bin: manager, args: ["--version"], cwd, env };
   // A validated corpus policy selects an exact pnpm without changing either original lock or
   // inventing a packageManager field. Its caller separately rejects a mismatched observation.
   if (source === "operator-policy" && manager === "pnpm" && requestedVersion && /^\d+\.\d+\.\d+$/.test(requestedVersion)) {
-    return [observePackageManager(manager, "version-probe", {
+    return [await observePackageManager(manager, "version-probe", {
       ...invocation, bin: "corepack", launcherArgs: [`pnpm@${requestedVersion}`],
     })];
   }
-  const native = observePackageManager(manager, "version-probe", invocation);
+  const native = await observePackageManager(manager, "version-probe", invocation);
   const stages = [native];
   // npm shipped with Node ignores packageManager. Corepack's explicit npm launcher supports
   // the target's exact declaration without installing a global npm or rewriting its manifest.
@@ -188,7 +254,7 @@ export function selectPackageManager(
   // exact native npm remains usable even when Corepack or its registry is unavailable.
   if (manager === "npm" && requestedVersion && native.outcome === "completed"
     && native.selected && native.selected.version !== requestedVersion.split("+")[0]) {
-    stages.push(observePackageManager(manager, "version-probe", {
+    stages.push(await observePackageManager(manager, "version-probe", {
       ...invocation, bin: "corepack", launcherArgs: [`npm@${requestedVersion}`],
     }));
   }

@@ -173,9 +173,9 @@ export interface RunContext {
     env?: Record<string, string>;
     cwd?: string;
     timeoutMs?: number;
-    // REASON: Synchronous execution cannot process abort callbacks; cancellation is checked before start only.
+    // REASON: The audit execution contract permits cancellation before start only; a later abort does not change a real child outcome.
     // KIND: empirical
-    // PROVENANCE: MEASURED 2026-09-25 — the actual child completes before queued AbortController callbacks run.
+    // PROVENANCE: MEASURED 2026-09-26 — a delayed child exits 7 after a late AbortController callback, retaining its exited receipt and pre-start-only policy.
     // FALSIFIER: test -f src/probe-exec.ts && test -d node_modules/tsx || exit 127; node --import tsx --input-type=module -e 'try { const {probeExec}=await import("./src/probe-exec.ts"); const c=new AbortController(); setTimeout(()=>c.abort(),1); const r=await probeExec(process.execPath,["-e","setTimeout(()=>process.exit(7),100)"],{signal:c.signal}); process.exit(r.receipt?.outcome.state==="cancelled"?0:1); } catch { process.exit(127); }'
     // TOUCHES: src/probe-exec.ts, src/audit-runner.ts
     signal?: AbortSignal;
@@ -192,7 +192,7 @@ export interface RunContext {
       policyReason?: string;
       now?: () => string;
     };
-  }) => { ok: boolean; output: string; stderr?: string; receipt?: CommandExecutionReceipt };
+  }) => Promise<{ ok: boolean; output: string; stderr?: string; receipt?: CommandExecutionReceipt }>;
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
   // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in
@@ -293,7 +293,7 @@ export interface ModuleRunner {
   // runner that declares itself migrated is HELD to it at runtime, so a helper cannot quietly
   // launder the result back into the untyped shape while the compile-time guarantee reads as kept.
   typed?: true;
-  run: (ctx: RunContext) => ProbeReport | ProbeReport[];
+  run: (ctx: RunContext) => ProbeReport | ProbeReport[] | Promise<ProbeReport | ProbeReport[]>;
 }
 
 interface ModuleFailure {
@@ -447,7 +447,7 @@ export function assertRegistryComplete(runners: ModuleRunner[]): void {
 }
 
 // Runs every module and derives the coverage ledger from what each probe actually reported.
-export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResult {
+export async function runAudit(runners: ModuleRunner[], ctx: RunContext): Promise<AuditRunResult> {
   assertRegistryComplete(runners);
 
   const byModule = new Map(runners.map((r) => [r.module, r]));
@@ -470,7 +470,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
     if (!runner) continue; // unreachable — assertRegistryComplete has already thrown.
     let outcomes: ProbeOutcome[];
     try {
-      const result = runner.run(ctx);
+      const result = await runner.run(ctx);
       const reports = Array.isArray(result) ? result : [result];
       // #1096: a runner that declares itself migrated and hands back a legacy outcome means a
       // helper somewhere laundered the typed result back into the untyped shape — the compile-time

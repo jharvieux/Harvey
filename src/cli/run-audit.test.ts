@@ -15,15 +15,25 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AUDIT_MODULES } from "../audit-coverage.js";
-import type { ReadinessPlanV1 } from "../audit-readiness.js";
+import { discoverReadinessPlan, type ReadinessPlanV1 } from "../audit-readiness.js";
+import { bindReadinessPlanV1 } from "../audit-readiness-authority.js";
+import { parseReadinessArtifactsV1 } from "../audit-readiness-artifacts.js";
+import { captureSourceSentinel } from "../disposable-target.js";
+import { createReadinessReceiptContext, validateReadinessExecutionV1, type ReadinessExecutionV1 } from "../audit-readiness-receipts.js";
 import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
+import type { ReadinessContainmentConfig } from "../readiness-process-containment.js";
+
+const readinessContainment: ReadinessContainmentConfig | undefined = process.env.HARVEY_READINESS_DOCKER_SOCKET && process.env.HARVEY_READINESS_DOCKER_IMAGE ? {
+  kind: "docker-local", socketPath: process.env.HARVEY_READINESS_DOCKER_SOCKET, imageId: process.env.HARVEY_READINESS_DOCKER_IMAGE,
+} : undefined;
 
 // #1470: a valid meta to mutate one field of, for the refused-export negative control below.
 const m1470Meta: ReportMeta = {
@@ -75,10 +85,10 @@ function killChildGroup(pid: number | undefined): void {
   }
 }
 
-function startChild(command: string, args: string[]) {
+function startChild(command: string, args: string[], env: Record<string, string> = {}) {
   // tsx -> run-audit -> pnpm -> scanner all belong to this group. Killing only tsx leaves
   // scanners writing into a fixture after its suite has failed and begun removing it.
-  const child = spawn(command, args, { cwd: REPO_ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd: REPO_ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   const completion = new Promise<ChildResult>((res, rej) => {
     let out = "";
     let timedOut = false;
@@ -110,9 +120,9 @@ function startChild(command: string, args: string[]) {
   return { child, completion };
 }
 
-async function runCapturing(args: string[]): Promise<ChildResult> {
+async function runCapturing(args: string[], env: Record<string, string> = {}): Promise<ChildResult> {
   const started = performance.now();
-  const result = await startChild("node_modules/.bin/tsx", [CLI, ...args]).completion;
+  const result = await startChild("node_modules/.bin/tsx", [CLI, ...args], env).completion;
   console.info(`run-audit ${args.filter((arg) => arg.startsWith("--")).join(" ")}: exit ${result.code} in ${Math.round(performance.now() - started)}ms`);
   return result;
 }
@@ -343,6 +353,320 @@ describe("run-audit CLI export capture", () => {
     expect(auditedApps).toEqual(readinessPlan.workspaceInventory.applicationWorkspaceIds);
     expect(readinessEngagement.coverage).toEqual(engagement.coverage);
     expect(readinessEngagement.findings).toEqual(engagement.findings);
+  }, CASE_TIMEOUT_MS);
+});
+
+describe("run-audit readiness continuity through real CLI children (#1897)", () => {
+  let root: string, target: string, authority: string;
+  let plan: ReadinessPlanV1;
+  let baseline: FindingsDocument;
+  let source: Awaited<ReturnType<typeof captureSourceSentinel>>;
+  const approvedEnvNames = ["READINESS_MODE", "READINESS_TOKEN"];
+  const environment = (mode: string) => ({ READINESS_MODE: mode, READINESS_TOKEN: "cli-readiness-secret-canary" });
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(process.env.HARVEY_READINESS_SHARED_PARENT ?? tmpdir(), "harvey-readiness-cli-"));
+    target = join(root, "source");
+    const tools = join(root, "tools");
+    mkdirSync(target); mkdirSync(tools);
+    const scripts = { codegen: "node generator.cjs", build: "node builder.cjs", typecheck: "node checker.cjs", lint: "node linter.cjs", test: "node tester.cjs" };
+    const pkg = { name: "readiness-cli", version: "1.0.0", private: true, packageManager: "npm@10.9.2", scripts };
+    writeFileSync(join(target, "package.json"), JSON.stringify(pkg));
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({ name: pkg.name, version: pkg.version, lockfileVersion: 3, packages: { "": pkg } }));
+    writeFileSync(join(target, "application.ts"), "export const sourceCanary = 'unchanged';\n");
+    for (const [kind, command] of Object.entries(scripts)) {
+      writeFileSync(join(target, command.split(" ")[1]!), `const fs = require('node:fs');
+fs.writeFileSync('${kind}.marker', process.cwd());
+process.stdout.write('${kind} ' + process.env.READINESS_TOKEN + '\\n');
+if (!process.env.READINESS_TOKEN) process.exitCode = 8;
+if ('${kind}' === 'codegen' && process.env.READINESS_MODE === 'failed') process.exitCode = 7;
+`);
+    }
+    const npm = join(tools, "npm");
+    writeFileSync(npm, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'ci' || args[0] === 'install') { fs.writeFileSync('install.marker', process.cwd()); process.stdout.write('install complete\\n'); }
+else {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const file = pkg.scripts[args[1]].split(' ')[1];
+  const result = require('node:child_process').spawnSync(process.execPath, [file], { stdio: 'inherit', env: process.env });
+  process.exitCode = result.status === null ? 9 : result.status;
+}
+`);
+    chmodSync(npm, 0o755);
+    source = await captureSourceSentinel(target);
+    plan = discoverReadinessPlan(target);
+    const binding = bindReadinessPlanV1(plan, source);
+    authority = join(root, "authority.json");
+    writeFileSync(authority, JSON.stringify({
+      schemaVersion: 1, planSha256: binding.planSha256, approvedEnvNames, containment: readinessContainment, disposableTempParent: root, timeoutMs: 5_000,
+      stageAuthorizations: plan.stages.filter((stage) => stage.assessment === "planned").map((stage) => ({
+        stageId: stage.id, effect: stage.kind === "install" ? "target-install" : "disposable-local",
+        source: "reviewed CLI fixture", reason: "These commands write only disposable markers.",
+        falsifier: "A command writes in the original source or reaches a service.",
+      })),
+    }));
+  });
+  afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+
+  it("retains the disabled audit's exact module population, findings and conservation", async () => {
+    const out = join(root, "disabled.json");
+    const result = await runCapturing([target, "--allow-target-install", "--findings-out", out], environment("success"));
+    expect(result.code, result.out).toBe(0);
+    baseline = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument;
+    expect(new Set(baseline.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(baseline.findings.length).toBeGreaterThan(0);
+    expect(baseline.conservation?.ok).toBe(true);
+    expect(await captureSourceSentinel(target)).toEqual(source);
+  }, CASE_TIMEOUT_MS);
+
+  it.skipIf(!readinessContainment).each(["success", "failed"])("preserves every module after %s readiness and delivers bounded independent receipts", async (mode) => {
+    const out = join(root, `${mode}-findings.json`);
+    // Emitting into the source tests the production ordering as well as disposable isolation.
+    const receiptPath = join(target, "readiness-execution.json");
+    const planPath = join(target, "readiness-plan.json");
+    const result = await runCapturing([target, "--allow-target-install", "--findings-out", out,
+      "--readiness-plan-out", planPath, "--readiness-execute-out", receiptPath,
+      "--readiness-authorizations", authority], environment(mode));
+    const bytes = readFileSync(receiptPath, "utf8");
+    const execution: ReadinessExecutionV1 = validateReadinessExecutionV1(
+      createReadinessReceiptContext(plan, { approvedEnvNames, environment: environment(mode) }), JSON.parse(bytes),
+    );
+    const descriptorPath = `${receiptPath}.validation.json`;
+    expect(parseReadinessArtifactsV1({ descriptorJson: readFileSync(descriptorPath, "utf8"), executionJson: bytes }).execution).toEqual(execution);
+    expect(JSON.parse(readFileSync(planPath, "utf8"))).toEqual(plan);
+    rmSync(receiptPath); rmSync(planPath); rmSync(descriptorPath);
+    expect(result.code, result.out).toBe(mode === "success" ? 0 : 1);
+    const engagement = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument;
+    expect(engagement.coverage).toEqual(baseline.coverage);
+    expect(engagement.findings).toEqual(baseline.findings);
+    expect(engagement.conservation).toEqual(baseline.conservation);
+    expect(engagement.auditContext?.provenance?.moduleObservations).toEqual(baseline.auditContext?.provenance?.moduleObservations);
+    expect(execution.stages.map((stage) => stage.stageId).sort()).toEqual(plan.stages.map((stage) => stage.id).sort());
+    expect(execution.cleanup).toMatchObject({ status: "passed", removal: { status: "removed" }, source: { status: "passed" } });
+    expect(bytes).not.toContain(environment(mode).READINESS_TOKEN);
+    expect(await captureSourceSentinel(target)).toEqual(source);
+    const row = (kind: string) => execution.stages.find((stage) => stage.kind === kind)!;
+    expect(row("install"), JSON.stringify(row("install"))).toMatchObject({ status: "passed", execution: { kind: "process", process: { containment: { kind: "docker-pid-namespace", imageId: readinessContainment!.imageId, namespace: "terminated", cleanup: "removed", targetWork: "begun", metadata: "verified" } } } });
+    expect(row("lint")).toMatchObject({ status: "passed", execution: { kind: "process" } });
+    if (mode === "success") {
+      expect(execution.status).toBe("passed");
+      expect(execution.stages.every((stage) => stage.status === "passed")).toBe(true);
+    } else {
+      expect(execution.status).toBe("failed");
+      expect(row("codegen")).toMatchObject({ status: "failed", execution: { kind: "process", process: { exit: { code: 7 }, close: { code: 7 } } } });
+      for (const kind of ["build", "typecheck", "test"]) expect(row(kind)).toMatchObject({ status: "not-assessed", diagnostic: { reasonCode: "prerequisite-not-passed" } });
+      expect(result.out).toContain("READINESS FAIL");
+    }
+  }, CASE_TIMEOUT_MS);
+
+  it("withholds a secret-bearing raw plan even when every stage is denied and an old export exists", async () => {
+    const canary = "plan-export-private-value-1897";
+    const manifestPath = join(target, "package.json");
+    const originalManifest = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(originalManifest) as { scripts: Record<string, string> };
+    manifest.scripts.build = `node -e 'console.log("${canary}")'`;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    try {
+      const before = await captureSourceSentinel(target);
+      const deniedPlan = discoverReadinessPlan(target);
+      const binding = bindReadinessPlanV1(deniedPlan, before);
+      const deniedAuthority = join(root, "denied-authority.json");
+      writeFileSync(deniedAuthority, JSON.stringify({ schemaVersion: 1, planSha256: binding.planSha256, approvedEnvNames: ["PROOF_TOKEN"], stageAuthorizations: [] }));
+      const planPath = join(root, "withheld-plan.json");
+      const receiptPath = join(root, "denied-execution.json");
+      const findingsPath = join(root, "denied-findings.json");
+      writeFileSync(planPath, "previous export must be preserved\n");
+      const result = await runCapturing([target, "--findings-out", findingsPath,
+        "--readiness-plan-out", planPath, "--readiness-execute-out", receiptPath,
+        "--readiness-authorizations", deniedAuthority], { PROOF_TOKEN: canary });
+      const executionJson = readFileSync(receiptPath, "utf8");
+      const descriptorJson = readFileSync(`${receiptPath}.validation.json`, "utf8");
+      const artifacts = parseReadinessArtifactsV1({ descriptorJson, executionJson }, { originalPlanSha256: binding.planSha256, sourceContentSha256: before.contentSha256 });
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("READINESS PLAN EXPORT WITHHELD");
+      expect(result.out).toContain("DELIVERY FAIL");
+      expect(result.out).not.toContain(canary);
+      expect(executionJson).not.toContain(canary);
+      expect(descriptorJson).not.toContain(canary);
+      expect(readFileSync(planPath, "utf8")).toBe("previous export must be preserved\n");
+      expect(artifacts.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+      const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+      expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+      expect(engagement.conservation?.ok).toBe(true);
+      expect(await captureSourceSentinel(target)).toEqual(before);
+    } finally {
+      writeFileSync(manifestPath, originalManifest);
+    }
+  }, CASE_TIMEOUT_MS);
+
+  it("redacts an approved value from source/output paths when unsupported grant fields force a not-run disclosure", async () => {
+    const canary = "cli-approved-path-canary-1897";
+    const sourceAlias = join(root, canary);
+    if (!existsSync(sourceAlias)) symlinkSync(target, sourceAlias);
+    const invalidAuthority = join(root, "unsupported-authority.json");
+    writeFileSync(invalidAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["READINESS_TOKEN"],
+      stageAuthorizations: [],
+      unsupportedOption: true,
+    }));
+    const outputDir = join(root, `outputs-${canary}`);
+    mkdirSync(outputDir);
+    const findingsPath = join(outputDir, "findings.json");
+    const executionPath = join(outputDir, "execution.json");
+    const result = await runCapturing([sourceAlias, "--findings-out", findingsPath,
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", invalidAuthority], {
+      READINESS_TOKEN: canary,
+    });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    const executionJson = readFileSync(executionPath, "utf8");
+    const descriptorJson = readFileSync(`${executionPath}.validation.json`, "utf8");
+    const artifacts = parseReadinessArtifactsV1({ descriptorJson, executionJson });
+    expect(artifacts.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+    expect(artifacts.execution.stages.every((stage) => stage.environment.approvedNames.length === 0 && stage.environment.presentNames.length === 0)).toBe(true);
+    expect(executionJson).not.toContain(canary);
+    expect(descriptorJson).not.toContain(canary);
+    const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+    expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(engagement.conservation?.ok).toBe(true);
+  }, CASE_TIMEOUT_MS);
+
+  it("redacts an approved value from a readiness export write failure", async () => {
+    const canary = "cli-write-error-canary-1897";
+    const invalidAuthority = join(root, "write-error-authority.json");
+    writeFileSync(invalidAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["READINESS_TOKEN"],
+      stageAuthorizations: [],
+      unsupportedOption: true,
+    }));
+    const findingsPath = join(root, "write-error-findings.json");
+    const executionPath = join(root, `missing-${canary}`, "execution.json");
+    const result = await runCapturing([target, "--findings-out", findingsPath,
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", invalidAuthority], {
+      READINESS_TOKEN: canary,
+    });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    expect(result.out).toContain("--readiness-execute-out export failed at the public CLI boundary");
+    expect(result.out).toContain("DELIVERY FAIL");
+    const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+    expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(engagement.conservation?.ok).toBe(true);
+  }, CASE_TIMEOUT_MS);
+
+  it("reads the authorization file once before discovery", async () => {
+    const capturedAuthority = join(root, "single-capture-authority.json");
+    writeFileSync(capturedAuthority, readFileSync(authority));
+    const executionPath = join(root, "single-capture-execution.json");
+    const running = startChild("node_modules/.bin/tsx", [CLI, target, "--allow-target-install",
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", capturedAuthority], environment("success"));
+    await once(running.child.stdout, "data", { signal: AbortSignal.timeout(10_000) });
+    writeFileSync(capturedAuthority, "{\"changedAfterCapture\":true}\n");
+    const result = await running.completion;
+    expect(result.code, result.out).toBe(0);
+    const captured = parseReadinessArtifactsV1({
+      executionJson: readFileSync(executionPath, "utf8"),
+      descriptorJson: readFileSync(`${executionPath}.validation.json`, "utf8"),
+    });
+    expect(captured.execution.status).toBe(readinessContainment ? "passed" : "not-assessed");
+    expect(captured.descriptor.environment.approvedNames).toEqual([...approvedEnvNames].sort());
+  }, CASE_TIMEOUT_MS);
+
+  it("withholds identity-colliding readiness artifacts after rejected authorization while M1–M10 deliver", async () => {
+    const canary = "identity-collision-canary-1897";
+    const isolated = join(root, "identity-source");
+    const workspace = join(isolated, "apps", canary);
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(isolated, "package.json"), JSON.stringify({ name: "identity-root", private: true, workspaces: ["apps/*"] }));
+    writeFileSync(join(workspace, "package.json"), JSON.stringify({ name: "identity-app", private: true, scripts: { build: "node builder.cjs" } }));
+    writeFileSync(join(workspace, "application.ts"), "export const value = 1;\n");
+    const before = await captureSourceSentinel(isolated);
+    const binding = bindReadinessPlanV1(discoverReadinessPlan(isolated), before);
+    const rejected = join(root, "identity-authority.json");
+    writeFileSync(rejected, JSON.stringify({ schemaVersion: 1, planSha256: binding.planSha256, approvedEnvNames: ["PROOF_TOKEN"], stageAuthorizations: [], unsupportedOption: true }));
+    const executionPath = join(root, "identity-execution.json");
+    const descriptorPath = `${executionPath}.validation.json`;
+    const findingsPath = join(root, "identity-findings.json");
+    writeFileSync(executionPath, "old execution\n"); writeFileSync(descriptorPath, "old descriptor\n");
+    const result = await runCapturing([isolated, "--findings-out", findingsPath, "--readiness-execute-out", executionPath,
+      "--readiness-authorizations", rejected], { PROOF_TOKEN: canary });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    expect(result.out).toContain("DELIVERY FAIL");
+    expect(readFileSync(executionPath, "utf8")).toBe("old execution\n");
+    expect(readFileSync(descriptorPath, "utf8")).toBe("old descriptor\n");
+    const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+    expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(engagement.conservation?.ok).toBe(true);
+    expect(await captureSourceSentinel(isolated)).toEqual(before);
+  }, CASE_TIMEOUT_MS);
+
+  it("does not read unsafe authorization names or replace old files with an unproven safe artifact", async () => {
+    const canary = "unsafe-name-value-must-remain-unread-1897";
+    const unsafeAuthority = join(root, "unsafe-name-authority.json");
+    writeFileSync(unsafeAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["unsafe_name"],
+      stageAuthorizations: [],
+    }));
+    const executionPath = join(root, "unsafe-name-execution.json");
+    const descriptorPath = `${executionPath}.validation.json`;
+    writeFileSync(executionPath, "old execution\n");
+    writeFileSync(descriptorPath, "old descriptor\n");
+    const result = await runCapturing([target, "--readiness-execute-out", executionPath,
+      "--readiness-authorizations", unsafeAuthority], { unsafe_name: canary });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    expect(result.out).toContain("DELIVERY FAIL");
+    expect(readFileSync(executionPath, "utf8")).toBe("old execution\n");
+    expect(readFileSync(descriptorPath, "utf8")).toBe("old descriptor\n");
+  }, CASE_TIMEOUT_MS);
+
+  it("refuses aliased requested destinations before writing either artifact", async () => {
+    const alias = join(root, "aliased-readiness.json");
+    writeFileSync(alias, "old artifact must survive\n");
+    const result = await runCapturing([target, "--readiness-plan-out", alias, "--readiness-execute-out", alias]);
+    expect(result.code, result.out).toBe(2);
+    expect(result.out).toMatch(/Requested artifact destinations.*alias/);
+    expect(readFileSync(alias, "utf8")).toBe("old artifact must survive\n");
+    expect(existsSync(`${alias}.validation.json`)).toBe(false);
+  }, CASE_TIMEOUT_MS);
+
+  it("does not let old execution files satisfy a run whose readiness producer emitted no current bytes", async () => {
+    // Unix-domain socket paths are tightly bounded on macOS, so this one uses its own short root.
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "h1897-"));
+    const isolated = join(isolatedRoot, "t");
+    mkdirSync(isolated);
+    writeFileSync(join(isolated, "package.json"), JSON.stringify({ name: "sentinel-refusal", private: true }));
+    const socketPath = join(isolated, "unsupported.sock");
+    const server = createServer();
+    await new Promise<void>((resolveListen, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolveListen);
+    });
+    const executionPath = join(root, "stale-execution.json");
+    const descriptorPath = `${executionPath}.validation.json`;
+    writeFileSync(executionPath, "old execution\n");
+    writeFileSync(descriptorPath, "old descriptor\n");
+    try {
+      const result = await runCapturing([isolated, "--readiness-execute-out", executionPath]);
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("DELIVERY FAIL");
+      expect(result.out).toContain("--readiness-execute-out");
+      expect(readFileSync(executionPath, "utf8")).toBe("old execution\n");
+      expect(readFileSync(descriptorPath, "utf8")).toBe("old descriptor\n");
+      for (const module of AUDIT_MODULES) expect(result.out).toContain(module);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
   }, CASE_TIMEOUT_MS);
 });
 

@@ -7,7 +7,7 @@ const flag = (name: string): string | undefined => { const index = args.indexOf(
 const out = flag("--out");
 try {
   if (!out) throw new Error("usage: pass-artifact-bundle --recipe <json> --out <new-bundle-dir> OR --legacy-document <json> --snapshot <json> --validation <json> --sbom <json> [--reconciliation <json>] [--mutation <json>] --out <new-bundle-dir>");
-  if (flag("--recipe")) console.log(bundleAuditEvidenceRecipe(resolve(flag("--recipe")!), resolve(out)));
+  if (flag("--recipe")) console.log(await bundleAuditEvidenceRecipe(resolve(flag("--recipe")!), resolve(out)));
   else {
     const document = flag("--legacy-document"), snapshot = flag("--snapshot"), validation = flag("--validation"), sbom = flag("--sbom");
     if (!document || !snapshot || !validation || !sbom) throw new Error("Legacy import requires document, snapshot, validation and SBOM; missing historical identity cannot be invented");

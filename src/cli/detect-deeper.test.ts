@@ -40,7 +40,7 @@ describe("detect-deeper --findings-out → record-pass → M1 (live) round trip 
     const ctx: RunContext = {
       targetDir: "/engagement/target",
       env: { connected: true, dynamic: false, llm: false },
-      exec: () => ({ ok: true, output: "" }),
+      exec: async () => ({ ok: true, output: "" }),
       exists: (p) => existsSync(p),
       artifactsDir: dir,
       readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),

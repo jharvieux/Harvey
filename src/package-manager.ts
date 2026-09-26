@@ -217,3 +217,21 @@ export function withRestoredManifest<T>(dirs: string | readonly string[], pm: Pa
     }
   }
 }
+
+export async function withRestoredManifestAsync<T>(dirs: string | readonly string[], pm: PackageManager, fn: () => Promise<T>): Promise<T> {
+  if (pm === "npm") return fn();
+  const lockName = lockfileFor(pm);
+  const paths = [...new Set((typeof dirs === "string" ? [dirs] : dirs).map((dir) => resolve(dir)))].flatMap((dir) => [
+    join(dir, "package.json"),
+    ...(lockName ? [join(dir, lockName)] : []),
+  ]);
+  const before = paths.map((path) => ({ path, content: existsSync(path) ? readFileSync(path) : undefined }));
+  try {
+    return await fn();
+  } finally {
+    for (const { path, content } of before) {
+      if (content !== undefined) writeFileSync(path, content);
+      else rmSync(path, { force: true });
+    }
+  }
+}

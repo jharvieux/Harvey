@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -227,19 +227,78 @@ function named(doc: WorkflowDocument, job: string, name: string): WorkflowStep {
   return found;
 }
 
-function shell(step: WorkflowStep, ctx: Context, options: { dir?: string; env?: Record<string, string>; prelude?: string } = {}) {
+const MAX_BUFFER_BYTES = 1024 * 1024;
+const SHELL_TIMEOUT_MS = 10_000;
+type ShellRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
+
+function shellError(code: "ENOBUFS" | "ETIMEDOUT", message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code }) as NodeJS.ErrnoException;
+}
+
+function runShell(command: string, dir: string, env: NodeJS.ProcessEnv): Promise<ShellRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let timedOut = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn("bash", ["-c", command], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, SHELL_TIMEOUT_MS);
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? shellError("ENOBUFS", `stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`)
+        : timedOut ? shellError("ETIMEDOUT", `workflow shell exceeded ${SHELL_TIMEOUT_MS}ms`)
+          : launchError;
+      finish(status, signal, error);
+    });
+  });
+}
+
+async function shell(step: WorkflowStep, ctx: Context, options: { dir?: string; env?: Record<string, string>; prelude?: string } = {}) {
   if (!step.run) throw new Error(`missing shipping shell: ${step.name}`);
+  const run = step.run;
   const dir = options.dir ?? temporary("corpus-workflow-shell-");
   const output = join(dir, "github-output");
-  const result = spawnSync("bash", ["-c", `${options.prelude ?? ""}\n${render(step.run, ctx)}`], {
-    cwd: dir, encoding: "utf8", timeout: 10_000,
-    env: { ...process.env, GITHUB_OUTPUT: output, ...Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value, ctx)])), ...options.env },
-  });
-  expect(result.error).toBeUndefined();
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  const result = await runShell(`${options.prelude ?? ""}\n${render(run, ctx)}`, dir, { ...process.env, GITHUB_OUTPUT: output, ...Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value, ctx)])), ...options.env });
+  expect(serviced, `${step.name ?? "workflow shell"} child work must service the Vitest worker event loop`).toBe(true);
+  await heartbeat;
+  if (result.error) throw Object.assign(result.error, result);
   return { ...result, dir, output: statSafe(output) ? readFileSync(output, "utf8") : "" };
 }
 
-function assertTopology(doc: WorkflowDocument, event: string, relevant = true, executeTransport = false): void {
+async function assertTopology(doc: WorkflowDocument, event: string, relevant = true, executeTransport = false): Promise<void> {
   const ctx = context(event, relevant);
   const snapshot = ["push", "pull_request", "merge_group"].includes(event);
   const shardJob = doc.jobs.shard!;
@@ -295,7 +354,7 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
       if (executeTransport) {
         const dir = temporary("corpus-transport-routing-");
         const calls = join(dir, "calls");
-        const result = shell(step, ctx, { dir, env: { CALLS: calls }, prelude: 'pnpm() { printf "%s\\n" "$*" >> "$CALLS"; }' });
+        const result = await shell(step, ctx, { dir, env: { CALLS: calls }, prelude: 'pnpm() { printf "%s\\n" "$*" >> "$CALLS"; }' });
         expect(result.status, result.stderr).toBe(0);
         const commands = readFileSync(calls, "utf8").trim().split("\n");
         expect(commands.map((line) => Number(/--namespace (\d+)/.exec(line)?.[1]))).toEqual(owners);
@@ -309,10 +368,10 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
     if (executeTransport) {
       const dir = temporary("corpus-score-routing-");
       const calls = join(dir, "calls");
-      const targetScope = shell(named(doc, "shard", "Declare the complete target population"), ctx);
+      const targetScope = await shell(named(doc, "shard", "Declare the complete target population"), ctx);
       expect(targetScope.status).toBe(0);
       expect(targetScope.output).toBe("scope=all\n");
-      const scored = shell(score, ctx, { dir, env: { CALLS: calls }, prelude: 'pnpm() { printf "%s\\n" "$*" >> "$CALLS"; }' });
+      const scored = await shell(score, ctx, { dir, env: { CALLS: calls }, prelude: 'pnpm() { printf "%s\\n" "$*" >> "$CALLS"; }' });
       expect(scored.status, scored.stderr).toBe(0);
       expect(readFileSync(calls, "utf8").trim()).toBe(`corpus-drift --install --shard ${shard}/4 --json corpus-drift-shard${shard}.json${snapshot ? "" : ` --advisory-observation corpus-advisory-observation-shard${shard}.json`}`);
     }
@@ -374,7 +433,7 @@ function scorecardParts(): Record<string, Scorecard> {
   }]));
 }
 
-function runMerge(parts: Record<string, unknown>, expected = JSON.stringify(liveSlugs), run?: string) {
+async function runMerge(parts: Record<string, unknown>, expected = JSON.stringify(liveSlugs), run?: string) {
   const dir = temporary("corpus-scorecard-merge-");
   mkdirSync(join(dir, "parts"));
   for (const [file, body] of Object.entries(parts)) writeFileSync(join(dir, "parts", file), typeof body === "string" ? body : JSON.stringify(body));
@@ -382,15 +441,15 @@ function runMerge(parts: Record<string, unknown>, expected = JSON.stringify(live
   return shell({ ...step, run: run ?? step.run }, context("pull_request"), { dir, env: { EXPECTED_TARGET_SLUGS: expected } });
 }
 
-function assertRejectedMerge(result: ReturnType<typeof runMerge>): void {
+function assertRejectedMerge(result: Awaited<ReturnType<typeof runMerge>>): void {
   expect(result.status, result.stdout + result.stderr).not.toBeNull();
   expect(result.status, result.stdout + result.stderr).not.toBe(0);
   expect(result.output).not.toContain("merged=true");
   expect(statSafe(join(result.dir, "corpus-drift.json"))).toBeUndefined();
 }
 
-function assertCompleteMerge(parts: Record<string, Scorecard>, run?: string): void {
-  const result = runMerge(parts, JSON.stringify(liveSlugs), run);
+async function assertCompleteMerge(parts: Record<string, Scorecard>, run?: string): Promise<void> {
+  const result = await runMerge(parts, JSON.stringify(liveSlugs), run);
   expect(result.status, result.stderr).toBe(0);
   expect(result.output).toBe("merged=true\n");
   const merged = JSON.parse(readFileSync(join(result.dir, "corpus-drift.json"), "utf8")) as Scorecard;
@@ -405,18 +464,30 @@ function assertCompleteMerge(parts: Record<string, Scorecard>, run?: string): vo
 }
 
 describe("#1870 actual corpus workflow event and artifact topology", () => {
-  it.each(events)("binds %s scorers, every transport owner, artifacts, merge and replay to the shipping expressions", (event) => {
-    assertTopology(document, event, true, true);
+  it("preserves the shell's combined output cap and deadline errors", async () => {
+    const runNode = (source: string) => `exec ${JSON.stringify(process.execPath)} --eval ${JSON.stringify(source)}`;
+    const overflow = await shell({ name: "combined output control", run: runNode('process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);') }, context("pull_request")).catch((error: NodeJS.ErrnoException & ShellRun) => error);
+    expect(overflow).toMatchObject({ code: "ENOBUFS" });
+    expect(Buffer.byteLength(overflow.stdout) + Buffer.byteLength(overflow.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+    expect(overflow.stdout).not.toHaveLength(0);
+    expect(overflow.stderr).not.toHaveLength(0);
+
+    const deadline = await shell({ name: "deadline control", run: runNode('process.on("SIGTERM", () => process.exit(0)); setTimeout(() => process.exit(0), 11000);') }, context("pull_request")).catch((error: NodeJS.ErrnoException & ShellRun) => error);
+    expect(deadline).toMatchObject({ code: "ETIMEDOUT", status: 0, signal: null });
   });
 
-  it.each([...events.map((event) => [event, "full-scan"]), ["pull_request", "declared-no-op"], ["merge_group", "declared-no-op"]])("threads live target slugs through the actual %s/%s route shell and merge environment", (event, decision) => {
+  it.each(events)("binds %s scorers, every transport owner, artifacts, merge and replay to the shipping expressions", async (event) => {
+    await assertTopology(document, event, true, true);
+  });
+
+  it.each([...events.map((event) => [event, "full-scan"]), ["pull_request", "declared-no-op"], ["merge_group", "declared-no-op"]])("threads live target slugs through the actual %s/%s route shell and merge environment", async (event, decision) => {
     const ctx = context(event!);
     const dir = temporary("corpus-route-output-");
     const ownership = join(dir, "ownership-fixture.json");
     const receipt = join(dir, "receipt-fixture.json");
     writeFileSync(ownership, JSON.stringify({ consumers: [{ targetSelection: { targets: [...liveSlugs].reverse() } }] }));
     writeFileSync(receipt, JSON.stringify({ decision, closureDigest: "closure-fixture" }));
-    const result = shell(named(document, "prepare-current-inputs", "Generate live corpus ownership and classify the exact Git range"), ctx, {
+    const result = await shell(named(document, "prepare-current-inputs", "Generate live corpus ownership and classify the exact Git range"), ctx, {
       dir, env: { RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir, PR_BASE_SHA: "b".repeat(40), MERGE_GROUP_BASE_SHA: "c".repeat(40), OWNERSHIP_FIXTURE: ownership, RECEIPT_FIXTURE: receipt },
       prelude: 'pnpm() { case "$4" in ownership) cp "$OWNERSHIP_FIXTURE" "${@: -1}" ;; classify) cp "$RECEIPT_FIXTURE" "${@: -1}" ;; *) return 99 ;; esac; }',
     });
@@ -434,9 +505,9 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     expect(JSON.parse(render(merge.env!.EXPECTED_TARGET_SLUGS!, ctx))).toEqual(selected);
   });
 
-  it.each(["pull_request", "merge_group"])("allocates no scorer/cache and records only nothing-assessed for a proven %s no-op", (event) => {
+  it.each(["pull_request", "merge_group"])("allocates no scorer/cache and records only nothing-assessed for a proven %s no-op", async (event) => {
     const ctx = context(event, false);
-    assertTopology(document, event, false);
+    await assertTopology(document, event, false);
     expect(active(document.jobs.drift!, ctx)).toBe(true);
     expect(active(named(document, "drift", "Declare the proven-disjoint no-op"), ctx)).toBe(true);
     expect(named(document, "drift", "Declare the proven-disjoint no-op").with).toMatchObject({ status: "declared-no-op" });
@@ -445,7 +516,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     for (const verb of ["Validate", "Record"]) expect(active(named(document, "shard", `${verb} corpus phase-cache transport provenance`), ctx)).toBe(false);
   });
 
-  it.each(["failure", "cancelled", "skipped"])("keeps the aggregate fail-closed for %s preparation, scoring and push replay", (result) => {
+  it.each(["failure", "cancelled", "skipped"])("keeps the aggregate fail-closed for %s preparation, scoring and push replay", async (result) => {
     for (const event of events) {
       const ctx = context(event);
       ctx.needs["prepare-current-inputs"].result = result;
@@ -453,14 +524,14 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       expect(active(document.jobs["current-replay"]!, ctx)).toBe(false);
       expect(active(document.jobs.drift!, ctx)).toBe(true);
       const preparation = named(document, "drift", "Shared preparation and relevance classification must have succeeded");
-      expect(shell(preparation, ctx).status).toBe(1);
+      expect((await shell(preparation, ctx)).status).toBe(1);
       ctx.needs["prepare-current-inputs"].result = "success";
       ctx.needs.shard.result = result;
       const required = named(document, "drift", "Every required corpus execution must have succeeded");
-      expect(shell(required, ctx).status).toBe(1);
+      expect((await shell(required, ctx)).status).toBe(1);
       ctx.needs.shard.result = "success";
       ctx.needs["current-replay"].result = result;
-      expect(shell(required, ctx).status).toBe(["push", "pull_request", "merge_group"].includes(event) ? 1 : 0);
+      expect((await shell(required, ctx)).status).toBe(["push", "pull_request", "merge_group"].includes(event) ? 1 : 0);
       ctx.status = "failure";
       expect(active(named(document, "drift", "Record the measured full-population outcome"), ctx)).toBe(false);
       expect(active(named(document, "drift", "Gate liveness — did this required context declare its outcome?"), ctx)).toBe(true);
@@ -476,14 +547,14 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     }
   });
 
-  it("preserves distinct manual liveness and alert drills without invoking an alert action", () => {
+  it("preserves distinct manual liveness and alert drills without invoking an alert action", async () => {
     for (const drill of ["liveness_drill", "alert_drill"] as const) {
       const ctx = context("workflow_dispatch");
       ctx.inputs[drill] = true;
       if (drill === "alert_drill") {
         const alertStep = document.jobs.shard!.steps.find((step) => step.if === "inputs.alert_drill")!;
         expect(active(alertStep, ctx)).toBe(true);
-        expect(shell(alertStep, ctx).status).toBe(1);
+        expect((await shell(alertStep, ctx)).status).toBe(1);
         ctx.status = "failure";
       }
       expect(active(named(document, "shard", "Score the corpus against its baselines"), ctx)).toBe(false);
@@ -577,23 +648,23 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     expect(() => expect(unresolvedStepReferences(changed)).toEqual([])).toThrow();
   });
 
-  it("merges all four live partitions without losing rows, findings, detectors or mechanical contexts", () => {
-    assertCompleteMerge(scorecardParts());
+  it("merges all four live partitions without losing rows, findings, detectors or mechanical contexts", async () => {
+    await assertCompleteMerge(scorecardParts());
   });
 
-  it.each([1, 2, 3, 4])("rejects missing part %i before publishing anything", (n) => {
+  it.each([1, 2, 3, 4])("rejects missing part %i before publishing anything", async (n) => {
     const parts = scorecardParts();
     delete parts[`corpus-drift-shard${n}.json`];
-    assertRejectedMerge(runMerge(parts));
+    assertRejectedMerge(await runMerge(parts));
   });
 
-  it.each(["corpus-drift-shard0.json", "corpus-drift-shard5.json", "corpus-drift-shard01.json"])("rejects extra part %s before publishing anything", (file) => {
+  it.each(["corpus-drift-shard0.json", "corpus-drift-shard5.json", "corpus-drift-shard01.json"])("rejects extra part %s before publishing anything", async (file) => {
     const parts = scorecardParts();
     parts[file] = parts["corpus-drift-shard1.json"]!;
-    assertRejectedMerge(runMerge(parts));
+    assertRejectedMerge(await runMerge(parts));
   });
 
-  it.each(["duplicate", "unknown", "missing"])("rejects a %s target even when each part's four fields agree", (mode) => {
+  it.each(["duplicate", "unknown", "missing"])("rejects a %s target even when each part's four fields agree", async (mode) => {
     const parts = scorecardParts();
     const part = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(part.findings)[0]!;
@@ -603,7 +674,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       if (mode !== "missing") map[replacement] = map[slug]!;
       delete map[slug];
     }
-    assertRejectedMerge(runMerge(parts));
+    assertRejectedMerge(await runMerge(parts));
   });
 
   it.each([
@@ -612,36 +683,36 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     ["detectors", {}], ["detectors", []], ["detectors", null],
     ["mechanicalContexts", {}], ["mechanicalContexts", []], ["mechanicalContexts", null],
     ["dependencyPreparations", {}], ["dependencyPreparations", []], ["dependencyPreparations", null],
-  ])("rejects malformed or empty %s=%j", (field, value) => {
+  ])("rejects malformed or empty %s=%j", async (field, value) => {
     const parts = scorecardParts();
     const file = "corpus-drift-shard1.json";
-    assertRejectedMerge(runMerge({ ...parts, [file]: { ...parts[file], [String(field)]: value } }));
+    assertRejectedMerge(await runMerge({ ...parts, [file]: { ...parts[file], [String(field)]: value } }));
   });
 
-  it.each(["rows", "findings", "detectors", "mechanicalContexts", "dependencyPreparations"] as const)("rejects loss of one target from %s", (field) => {
+  it.each(["rows", "findings", "detectors", "mechanicalContexts", "dependencyPreparations"] as const)("rejects loss of one target from %s", async (field) => {
     const parts = scorecardParts();
     const part = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(part.findings)[0]!;
     if (field === "rows") part.rows = part.rows.filter((row) => row.slug !== slug);
     else delete part[field][slug];
-    assertRejectedMerge(runMerge(parts));
+    assertRejectedMerge(await runMerge(parts));
   });
 
-  it("rejects malformed JSON and a non-array per-target findings payload", () => {
+  it("rejects malformed JSON and a non-array per-target findings payload", async () => {
     const parts = scorecardParts();
     const file = "corpus-drift-shard1.json";
-    assertRejectedMerge(runMerge({ ...parts, [file]: "{invalid json" }));
+    assertRejectedMerge(await runMerge({ ...parts, [file]: "{invalid json" }));
     const slug = Object.keys(parts[file]!.findings)[0]!;
-    assertRejectedMerge(runMerge({ ...parts, [file]: { ...parts[file], findings: { [slug]: {} } } }));
+    assertRejectedMerge(await runMerge({ ...parts, [file]: { ...parts[file], findings: { [slug]: {} } } }));
   });
 
-  it.each(["[]", "null", "{}", '[""]', "[42]", "not-json", JSON.stringify([...liveSlugs, liveSlugs[0]]), JSON.stringify([...liveSlugs.slice(1), "unknown-target"])])("rejects invalid expected target population %s", (expected) => {
-    assertRejectedMerge(runMerge(scorecardParts(), expected));
+  it.each(["[]", "null", "{}", '[""]', "[42]", "not-json", JSON.stringify([...liveSlugs, liveSlugs[0]]), JSON.stringify([...liveSlugs.slice(1), "unknown-target"])])("rejects invalid expected target population %s", async (expected) => {
+    assertRejectedMerge(await runMerge(scorecardParts(), expected));
   });
 
   // Mutate only disposable parsed YAML / extracted shell. These are the same assertions used
   // above: each independent reversion must make the positive production contract go red.
-  it.each(events)("detects independent matrix and count regressions for %s", (event) => {
+  it.each(events)("detects independent matrix and count regressions for %s", async (event) => {
     for (const field of ["matrix", "count"]) {
       const changed = structuredClone(document);
       if (field === "matrix") changed.jobs.shard!.strategy!.matrix.shard = [1];
@@ -649,7 +720,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
         const score = named(changed, "shard", "Score the corpus against its baselines");
         score.env!.SHARD_COUNT = 1;
       }
-      expect(() => assertTopology(changed, event)).toThrow();
+      await expect(assertTopology(changed, event)).rejects.toThrow();
     }
   });
 
@@ -659,50 +730,50 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     "Save current-run corpus phase results for an exact retry — owner 4",
     "Validate corpus phase-cache transport provenance",
     "Record corpus phase-cache transport provenance",
-  ])("detects schedule/manual transport spilling into other owners at %s", (name) => {
+  ])("detects schedule/manual transport spilling into other owners at %s", async (name) => {
     const changed = structuredClone(document);
     const step = named(changed, "shard", name);
     if (step.run) step.run = step.run.replace("active=false", "active=true");
     else step.if = step.if!.replace("matrix.shard == 4", "true");
     expect(step).not.toEqual(named(document, "shard", name));
-    for (const event of ["schedule", "workflow_dispatch"]) expect(() => assertTopology(changed, event, true, true)).toThrow();
+    for (const event of ["schedule", "workflow_dispatch"]) await expect(assertTopology(changed, event, true, true)).rejects.toThrow();
   });
 
-  it("detects a trusted-main save spilling across owner namespaces", () => {
+  it("detects a trusted-main save spilling across owner namespaces", async () => {
     const changed = structuredClone(document);
     const step = named(changed, "shard", "Save successful main-shard corpus phase results — owner 4");
     step.if = step.if!.replace("matrix.shard == 4", "true");
-    expect(() => assertTopology(changed, "push")).toThrow();
+    await expect(assertTopology(changed, "push")).rejects.toThrow();
   });
 
-  it.each(["Upload drift scorecard", "Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"])("detects independent event part routing loss at %s", (name) => {
+  it.each(["Upload drift scorecard", "Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"])("detects independent event part routing loss at %s", async (name) => {
     const changed = structuredClone(document);
     const step = named(changed, name === "Upload drift scorecard" ? "shard" : "drift", name);
     if (name === "Upload drift scorecard") step.with!.name = "corpus-drift-scorecard";
     else step.if += " && github.event_name == 'push'";
-    for (const event of ["pull_request", "merge_group", "schedule", "workflow_dispatch"]) expect(() => assertTopology(changed, event)).toThrow();
+    for (const event of ["pull_request", "merge_group", "schedule", "workflow_dispatch"]) await expect(assertTopology(changed, event)).rejects.toThrow();
   });
 
-  it("detects producer/replay proof disappearing from a relevant PR or queue head", () => {
+  it("detects producer/replay proof disappearing from a relevant PR or queue head", async () => {
     const changed = structuredClone(document);
     changed.jobs["current-replay"]!.if = changed.jobs["current-replay"]!.if!.replace(" || github.event_name == 'pull_request' || github.event_name == 'merge_group'", "");
-    for (const event of ["pull_request", "merge_group"]) expect(() => assertTopology(changed, event)).toThrow();
+    for (const event of ["pull_request", "merge_group"]) await expect(assertTopology(changed, event)).rejects.toThrow();
   });
 
-  it("goes red when the exact-part guard is removed even with the complete live population", () => {
+  it("goes red when the exact-part guard is removed even with the complete live population", async () => {
     const parts = scorecardParts();
     parts["corpus-drift-shard0.json"] = parts["corpus-drift-shard1.json"]!;
     delete parts["corpus-drift-shard1.json"];
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace(/if \[ "\$\{#parts\[@\]\}" -ne 4 \][\s\S]*?\nfi\n/, "");
     expect(changed).not.toBe(run);
-    assertRejectedMerge(runMerge(parts));
-    const unguarded = runMerge(parts, JSON.stringify(liveSlugs), changed);
+    assertRejectedMerge(await runMerge(parts));
+    const unguarded = await runMerge(parts, JSON.stringify(liveSlugs), changed);
     expect(unguarded.status, unguarded.stderr).toBe(0);
     expect(() => assertRejectedMerge(unguarded)).toThrow();
   });
 
-  it("goes red when the exact-population guard is removed", () => {
+  it("goes red when the exact-population guard is removed", async () => {
     const parts = scorecardParts();
     const part = parts["corpus-drift-shard2.json"]!;
     const slug = Object.keys(part.findings)[0]!;
@@ -711,13 +782,13 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace(/^jq -e -s[\s\S]*?\n\}\n/m, "");
     expect(changed).not.toBe(run);
-    assertRejectedMerge(runMerge(parts));
-    const unguarded = runMerge(parts, JSON.stringify(liveSlugs), changed);
+    assertRejectedMerge(await runMerge(parts));
+    const unguarded = await runMerge(parts, JSON.stringify(liveSlugs), changed);
     expect(unguarded.status, unguarded.stderr).toBe(0);
     expect(() => assertRejectedMerge(unguarded)).toThrow();
   });
 
-  it("goes red if the population union silently deduplicates a target scored twice", () => {
+  it("goes red if the population union silently deduplicates a target scored twice", async () => {
     const parts = scorecardParts();
     const from = parts["corpus-drift-shard1.json"]!;
     const into = parts["corpus-drift-shard2.json"]!;
@@ -727,17 +798,17 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace("([.[].findings | keys[]] | sort)", "([.[].findings | keys[]] | unique)");
     expect(changed).not.toBe(run);
-    assertRejectedMerge(runMerge(parts));
-    const deduplicated = runMerge(parts, JSON.stringify(liveSlugs), changed);
+    assertRejectedMerge(await runMerge(parts));
+    const deduplicated = await runMerge(parts, JSON.stringify(liveSlugs), changed);
     expect(deduplicated.status, deduplicated.stderr).toBe(0);
     expect(() => assertRejectedMerge(deduplicated)).toThrow();
   });
 
-  it.each(["findings", "detectors", "mechanicalContexts", "dependencyPreparations"])("goes red if the merger loses %s values", (field) => {
+  it.each(["findings", "detectors", "mechanicalContexts", "dependencyPreparations"])("goes red if the merger loses %s values", async (field) => {
     const run = named(document, "drift", "Merge the shard scorecards into corpus-drift.json").run!;
     const changed = run.replace(`(map(.${field}) | add)`, "{}");
     expect(changed).not.toBe(run);
-    expect(() => assertCompleteMerge(scorecardParts(), changed)).toThrow();
+    await expect(assertCompleteMerge(scorecardParts(), changed)).rejects.toThrow();
   });
 
   it("keeps evidence assembly ahead of final liveness and the only scheduled alert", () => {
@@ -782,7 +853,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     const revertedCli = corpusCli.replaceAll("cacheDir: targetPhaseCacheDir", "cacheDir: phaseCacheDir");
     expect(transportWorkflowErrors(workflow, revertedCli)).toContain("target owner routing");
   });
-  it("keeps the required context reporting while PR and merge-group relevance may declare a no-op", () => {
+  it("keeps the required context reporting while PR and merge-group relevance may declare a no-op", async () => {
     expect(workflow).toMatch(/^\s{2}pull_request:\s*$/m);
     expect(workflow).toMatch(/^\s{2}merge_group:\s*$/m);
     expect(workflow).toContain("fail-fast: false");
@@ -794,7 +865,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("name: Declare the proven-disjoint no-op");
     expect(workflow).toContain("Gate liveness — did this required context declare its outcome?");
     expect(workflow).toContain("nothing assessed; exact Git change is disjoint from immutable closure");
-    for (const event of ["pull_request", "merge_group"]) assertTopology(document, event, false);
+    for (const event of ["pull_request", "merge_group"]) await assertTopology(document, event, false);
     expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
   });
 
@@ -822,12 +893,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("CORPUS CACHE OWNER $namespace SIZE:");
   });
 
-  it("runs and seeds the full corpus after merge while preserving unconditional PR reporting", () => {
+  it("runs and seeds the full corpus after merge while preserving unconditional PR reporting", async () => {
     expect(workflow).toMatch(/push:\n\s+branches: \[main\]/);
     expect(workflow).toContain("--default-ref 'refs/heads/${{ github.event.repository.default_branch }}'");
     expect(workflow).toContain("--event '${{ github.event_name }}'");
     expect(workflow).toContain("--ref '${{ github.ref }}'");
-    assertTopology(document, "push");
+    await assertTopology(document, "push");
     expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
     expect(workflow).toContain("if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
     expect(workflow.match(/Save successful main-shard corpus phase results — owner [1-4]/g)).toHaveLength(4);
@@ -839,8 +910,8 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) && matrix\.shard == [1-4]/g)).toHaveLength(4);
   });
 
-  it("keeps every event in four isolated owners and seeds the whole-pin cache before partitioning", () => {
-    for (const event of events) assertTopology(document, event);
+  it("keeps every event in four isolated owners and seeds the whole-pin cache before partitioning", async () => {
+    for (const event of events) await assertTopology(document, event);
     expect(workflow).toContain('pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT"');
     expect(named(document, "prepare-current-inputs", "Seed every pinned clone before partitioning").run).toContain('--seed-cache "$CORPUS_CLONE_SEED_DIR"');
     expect(named(document, "prepare-current-inputs", "Save the complete pinned clone cache").with).toEqual({ mode: "save" });
@@ -1007,12 +1078,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
-  it.each([false, true])("executes the manual shipping shell with force_cold_cache=%s and preserves full live verification", (forceCold) => {
+  it.each([false, true])("executes the manual shipping shell with force_cold_cache=%s and preserves full live verification", async (forceCold) => {
     const ctx = context("workflow_dispatch");
     ctx.inputs.force_cold_cache = forceCold;
     const dir = temporary("corpus-cold-workflow-");
     const capture = join(dir, "invocation");
-    const result = shell(named(document, "shard", "Score the corpus against its baselines"), ctx, {
+    const result = await shell(named(document, "shard", "Score the corpus against its baselines"), ctx, {
       dir,
       env: { CAPTURE: capture, pnpm_config_verify_deps_before_run: "false" },
       prelude: 'pnpm() { printf "%s\\n" "$HARVEY_CORPUS_EXTERNAL_STATE_MODE" "$HARVEY_CURRENT_MECHANICAL_READINESS" "$HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE" "$@" > "$CAPTURE"; }',

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -22,10 +22,75 @@ import {
 } from "./corpus-drift-relevance.js";
 
 const disposable: string[] = [];
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type ChildRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
 
-function git(root: string, args: string[]): string {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+function runChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException
+        : launchError;
+      finish(status, signal, error);
+    });
+  });
 }
+
+async function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const result = await runChild(command, args, cwd, env);
+  if (result.error) throw Object.assign(result.error, result);
+  if (result.status !== 0) throw Object.assign(new Error(`${result.stderr}\nchild exited ${result.status ?? result.signal ?? "before-spawn"}`), result);
+  return result.stdout;
+}
+
+async function git(root: string, args: string[]): Promise<string> {
+  return (await runCommand("git", ["-C", root, ...args], process.cwd(), process.env)).trim();
+}
+
+it("keeps the original combined 1 MiB output bound for an actual child", async () => {
+  let error: NodeJS.ErrnoException & ChildRun;
+  try {
+    await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], process.cwd(), process.env);
+    throw new Error("combined output control unexpectedly completed");
+  } catch (failure) {
+    error = failure as NodeJS.ErrnoException & ChildRun;
+  }
+  expect(error).toMatchObject({ code: "ENOBUFS" });
+  expect(Buffer.byteLength(error.stdout) + Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  expect(error.stdout).not.toHaveLength(0);
+  expect(error.stderr).not.toHaveLength(0);
+});
 
 function put(root: string, path: string, body: string | Buffer): void {
   const absolute = join(root, path);
@@ -33,9 +98,9 @@ function put(root: string, path: string, body: string | Buffer): void {
   writeFileSync(absolute, body);
 }
 
-function commit(root: string, message: string, add = true): string {
-  if (add) git(root, ["add", "-A"]);
-  git(root, ["commit", "-qm", message]);
+async function commit(root: string, message: string, add = true): Promise<string> {
+  if (add) await git(root, ["add", "-A"]);
+  await git(root, ["commit", "-qm", message]);
   return git(root, ["rev-parse", "HEAD"]);
 }
 
@@ -98,12 +163,12 @@ function putDiscoveryInputs(root: string): void {
   ].join("\n"));
 }
 
-function createRepository(): { root: string; base: string; ownership: CorpusInputOwnership } {
+async function createRepository(): Promise<{ root: string; base: string; ownership: CorpusInputOwnership }> {
   const root = mkdtempSync(join(tmpdir(), "harvey-corpus-relevance-"));
   disposable.push(root);
-  git(root, ["init", "-q", "-b", "main"]);
-  git(root, ["config", "user.name", "Fixture"]);
-  git(root, ["config", "user.email", "fixture@example.test"]);
+  await git(root, ["init", "-q", "-b", "main"]);
+  await git(root, ["config", "user.name", "Fixture"]);
+  await git(root, ["config", "user.email", "fixture@example.test"]);
 
   for (const runtimeRoot of CORPUS_DRIFT_RUNTIME_ROOTS) {
     put(root, runtimeRoot, 'export { sharedValue } from "../shared/common.js";\n');
@@ -130,13 +195,13 @@ function createRepository(): { root: string; base: string; ownership: CorpusInpu
   putDiscoveryInputs(root);
   put(root, "report-template/render.mjs", "export const render = true;\n");
   put(root, "site/app/page.tsx", "export default function Page() { return null; }\n");
-  return { root, base: commit(root, "base"), ownership: ownership() };
+  return { root, base: await commit(root, "base"), ownership: ownership() };
 }
 
-function mutate(path: string, body: string | Buffer): { receipt: CorpusDriftRelevanceReceipt; root: string } {
-  const fixture = createRepository();
+async function mutate(path: string, body: string | Buffer): Promise<{ receipt: CorpusDriftRelevanceReceipt; root: string }> {
+  const fixture = await createRepository();
   put(fixture.root, path, body);
-  commit(fixture.root, `change ${path}`);
+  await commit(fixture.root, `change ${path}`);
   return {
     root: fixture.root,
     receipt: classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership }),
@@ -151,13 +216,38 @@ afterEach(() => {
   for (const root of disposable.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+async function cloneRepository(source: string, destination: string): Promise<void> {
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  await runCommand("git", ["clone", "-q", "--no-hardlinks", source, destination], process.cwd(), process.env);
+  expect(serviced, "corpus closure clone must service the Vitest worker event loop").toBe(true);
+  await heartbeat;
+}
+
+it.each(["git", "cloneRepository"] as const)("enforces the combined output limit through the actual %s consumer", async (consumer) => {
+  const bin = mkdtempSync(join(tmpdir(), "harvey-git-combined-output-"));
+  disposable.push(bin);
+  writeFileSync(join(bin, "git"), `#!${process.execPath}
+process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);
+`, { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = `${bin}:${originalPath ?? dirname(process.execPath)}`;
+    const result = consumer === "git" ? git(bin, ["status"]) : cloneRepository(bin, join(bin, "clone"));
+    await expect(result).rejects.toMatchObject({ code: "ENOBUFS" });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
+
 describe("corpus-drift immutable runtime closure", () => {
-  it("keeps the live manifest, baseline, schema, taxonomy, and mechanical implementation in runtime closure", () => {
+  it("keeps the live manifest, baseline, schema, taxonomy, and mechanical implementation in runtime closure", async () => {
     const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
     const root = mkdtempSync(join(tmpdir(), "harvey-corpus-live-closure-"));
     disposable.push(root);
-    execFileSync("git", ["clone", "-q", "--no-hardlinks", sourceRoot, root]);
-    const head = git(root, ["rev-parse", "HEAD"]);
+    await cloneRepository(sourceRoot, root);
+    const head = await git(root, ["rev-parse", "HEAD"]);
     const liveOwnership = defaultCorpusInputOwnership(["fixture"]);
     const receipt = classifyCorpusDriftRelevance({ repoRoot: root, base: head, ownership: liveOwnership });
     const runtimePaths = receipt.closure?.head.runtimeRootClosure.files.map((file) => file.path) ?? [];
@@ -182,8 +272,8 @@ describe("corpus-drift immutable runtime closure", () => {
     ]));
   });
 
-  it("discovers every live non-import path class and newly referenced members automatically", () => {
-    const fixture = createRepository();
+  it("discovers every live non-import path class and newly referenced members automatically", async () => {
+    const fixture = await createRepository();
     const initial = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["beta", "alpha", "alpha"] });
     const initialPaths = initial.map((input) => input.path);
     expect(initialPaths).toEqual(expect.arrayContaining([
@@ -228,7 +318,7 @@ describe("corpus-drift immutable runtime closure", () => {
       "      - run: node src/cli/corpus-cache-transport.ts",
       "",
     ].join("\n"));
-    commit(fixture.root, "add discovered path-class members");
+    await commit(fixture.root, "add discovered path-class members");
     const expandedPaths = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["alpha", "beta"] }).map((input) => input.path);
     expect(expandedPaths).toEqual(expect.arrayContaining([
       "src/scan/rules/semgrep/new-rule.yaml",
@@ -237,8 +327,8 @@ describe("corpus-drift immutable runtime closure", () => {
     ]));
   });
 
-  it("classifies known config, action, and runtime identity changes as owned inputs", () => {
-    const fixture = createRepository();
+  it("classifies known config, action, and runtime identity changes as owned inputs", async () => {
+    const fixture = await createRepository();
     const discovered = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["alpha", "beta"] });
     const registeredOwnership = buildCorpusInputOwnership({
       pinnedTargets: ["alpha", "beta"],
@@ -251,7 +341,7 @@ describe("corpus-drift immutable runtime closure", () => {
     put(fixture.root, "src/scan/rules/gitleaks-supabase.toml", "title = \"changed\"\n");
     put(fixture.root, ".github/actions/fixture/run.sh", "#!/usr/bin/env bash\nexit 1\n");
     put(fixture.root, "package.json", '{"name":"changed"}\n');
-    commit(fixture.root, "change registered inputs");
+    await commit(fixture.root, "change registered inputs");
     const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: registeredOwnership });
 
     expect(receipt.decision).toBe("full-scan");
@@ -262,8 +352,8 @@ describe("corpus-drift immutable runtime closure", () => {
     expect(receipt.targetSelections.every((selection) => selection.targets.join(",") === "alpha,beta")).toBe(true);
   });
 
-  it("walks the exact nine roots plus the workflow command with runtime-only static/dynamic edges", () => {
-    const fixture = createRepository();
+  it("walks the exact nine roots plus the workflow command with runtime-only static/dynamic edges", async () => {
+    const fixture = await createRepository();
     const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership });
 
     expect(receipt.decision).toBe("declared-no-op");
@@ -292,19 +382,19 @@ describe("corpus-drift immutable runtime closure", () => {
     ["helper", "src/shared/common.ts", "export const sharedValue = 2;\n", "beta"],
     ["registered data", "src/scan/rules/semgrep/fixture.yml", "rules:\n  - id: changed\n", "alpha"],
     ["workflow-discovered helper", "src/corpus-cache-helper.ts", "export const cacheHelper = 2;\n", "alpha"],
-  ])("forces a full scan for a representative %s change", (_label, path, body, expectedTarget) => {
-    const { receipt } = mutate(path, body);
+  ])("forces a full scan for a representative %s change", async (_label, path, body, expectedTarget) => {
+    const { receipt } = await mutate(path, body);
     expect(receipt.decision).toBe("full-scan");
     expect(codes(receipt)).toContain("owned-input-change");
     expect(receipt.targetSelections.some((selection) => selection.targets.includes(expectedTarget))).toBe(true);
     expect(receipt.hostedBackstop.mode).toBe("required-full-pinned-corpus");
   });
 
-  it("declares exact report-template and site changes disjoint without claiming they were assessed", () => {
-    const fixture = createRepository();
+  it("declares exact report-template and site changes disjoint without claiming they were assessed", async () => {
+    const fixture = await createRepository();
     put(fixture.root, "report-template/render.mjs", "export const render = false;\n");
     put(fixture.root, "site/app/page.tsx", "export default function Page() { return <main />; }\n");
-    commit(fixture.root, "change disjoint apps");
+    await commit(fixture.root, "change disjoint apps");
 
     const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership });
     expect(receipt.decision).toBe("declared-no-op");
@@ -316,8 +406,8 @@ describe("corpus-drift immutable runtime closure", () => {
     expect(receipt.targetSelections).toEqual([]);
   });
 
-  it("checks both sides of a Git rename against their own immutable closures", () => {
-    const fixture = createRepository();
+  it("checks both sides of a Git rename against their own immutable closures", async () => {
+    const fixture = await createRepository();
     renameSync(join(fixture.root, "src/shared/helper.ts"), join(fixture.root, "src/shared/helper-renamed.ts"));
     put(fixture.root, "src/cli/corpus-drift.ts", [
       'import "../shared/side.js";',
@@ -327,7 +417,7 @@ describe("corpus-drift immutable runtime closure", () => {
       "void required;",
       "",
     ].join("\n"));
-    commit(fixture.root, "rename runtime helper");
+    await commit(fixture.root, "rename runtime helper");
 
     const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership });
     expect(receipt.decision).toBe("full-scan");
@@ -338,32 +428,32 @@ describe("corpus-drift immutable runtime closure", () => {
     ]));
   });
 
-  it("fails open on nonliteral dynamic and unresolved literal runtime edges", () => {
-    const dynamic = mutate("src/cli/corpus-drift.ts", 'const name = "../shared/dynamic.js";\nvoid import(name);\n');
+  it("fails open on nonliteral dynamic and unresolved literal runtime edges", async () => {
+    const dynamic = await mutate("src/cli/corpus-drift.ts", 'const name = "../shared/dynamic.js";\nvoid import(name);\n');
     expect(dynamic.receipt.decision).toBe("full-scan");
     expect(codes(dynamic.receipt)).toContain("nonliteral-dynamic-edge");
 
-    const unresolved = mutate("src/cli/corpus-drift.ts", 'import "../shared/missing.js";\n');
+    const unresolved = await mutate("src/cli/corpus-drift.ts", 'import "../shared/missing.js";\n');
     expect(unresolved.receipt.decision).toBe("full-scan");
     expect(codes(unresolved.receipt)).toContain("unresolved-runtime-edge");
   });
 
-  it("fails open on an unknown tracked runtime file and an untracked physical file", () => {
-    const unknown = mutate("src/unowned-runtime.ts", "export const unknown = true;\n");
+  it("fails open on an unknown tracked runtime file and an untracked physical file", async () => {
+    const unknown = await mutate("src/unowned-runtime.ts", "export const unknown = true;\n");
     expect(unknown.receipt.decision).toBe("full-scan");
     expect(codes(unknown.receipt)).toContain("unknown-runtime-input");
 
-    const fixture = createRepository();
+    const fixture = await createRepository();
     put(fixture.root, "src/physical-untracked.ts", "export const unknown = true;\n");
     const dirty = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership });
     expect(dirty.decision).toBe("full-scan");
     expect(codes(dirty)).toContain("dirty-root");
   });
 
-  it("binds classification to the checked-out head rather than reading another commit through a mutable root", () => {
-    const fixture = createRepository();
+  it("binds classification to the checked-out head rather than reading another commit through a mutable root", async () => {
+    const fixture = await createRepository();
     put(fixture.root, "report-template/render.mjs", "export const render = false;\n");
-    commit(fixture.root, "advance head");
+    await commit(fixture.root, "advance head");
 
     const receipt = classifyCorpusDriftRelevance({
       repoRoot: fixture.root,
@@ -376,14 +466,14 @@ describe("corpus-drift immutable runtime closure", () => {
     expect(receipt.git).toBeNull();
   });
 
-  it("fails open before reading a copied non-Git root or conflicting ownership registry", () => {
+  it("fails open before reading a copied non-Git root or conflicting ownership registry", async () => {
     const nonGit = mkdtempSync(join(tmpdir(), "harvey-corpus-nongit-"));
     disposable.push(nonGit);
     const nonGitReceipt = classifyCorpusDriftRelevance({ repoRoot: nonGit, base: "HEAD", ownership: ownership() });
     expect(nonGitReceipt.decision).toBe("full-scan");
     expect(codes(nonGitReceipt)).toContain("non-git-root");
 
-    const fixture = createRepository();
+    const fixture = await createRepository();
     const conflicted: CorpusInputOwnership = {
       ...fixture.ownership,
       consumers: [...fixture.ownership.consumers, fixture.ownership.consumers[0]!],
@@ -403,30 +493,30 @@ describe("corpus-drift immutable runtime closure", () => {
     expect(malformed.git).toBeNull();
   });
 
-  it("fails open on unreadable and malformed implementation blobs", () => {
-    const unreadable = mutate("src/shared/common.ts", Buffer.from([0xff, 0xfe, 0xfd]));
+  it("fails open on unreadable and malformed implementation blobs", async () => {
+    const unreadable = await mutate("src/shared/common.ts", Buffer.from([0xff, 0xfe, 0xfd]));
     expect(unreadable.receipt.decision).toBe("full-scan");
     expect(codes(unreadable.receipt)).toContain("unreadable-input");
 
-    const malformed = mutate("src/cli/corpus-drift.ts", "export const = ;\n");
+    const malformed = await mutate("src/cli/corpus-drift.ts", "export const = ;\n");
     expect(malformed.receipt.decision).toBe("full-scan");
     expect(codes(malformed.receipt)).toContain("malformed-source");
   });
 
-  it("fails open on tracked symlink and gitlink seams", () => {
-    const symlinkFixture = createRepository();
+  it("fails open on tracked symlink and gitlink seams", async () => {
+    const symlinkFixture = await createRepository();
     symlinkSync("common.ts", join(symlinkFixture.root, "src/shared/link.ts"));
     put(symlinkFixture.root, "src/cli/corpus-drift.ts", 'import "../shared/link.js";\n');
-    commit(symlinkFixture.root, "add runtime symlink");
+    await commit(symlinkFixture.root, "add runtime symlink");
     const symlink = classifyCorpusDriftRelevance({ repoRoot: symlinkFixture.root, base: symlinkFixture.base, ownership: symlinkFixture.ownership });
     expect(symlink.decision).toBe("full-scan");
     expect(codes(symlink)).toContain("symlink-seam");
 
-    const gitlinkFixture = createRepository();
+    const gitlinkFixture = await createRepository();
     const object = "8c92f838e2b4c6311c5b970d2b32635d36de9a24";
-    git(gitlinkFixture.root, ["update-index", "--add", "--cacheinfo", `160000,${object},vendor/nested-repo`]);
+    await git(gitlinkFixture.root, ["update-index", "--add", "--cacheinfo", `160000,${object},vendor/nested-repo`]);
     mkdirSync(join(gitlinkFixture.root, "vendor/nested-repo"), { recursive: true });
-    commit(gitlinkFixture.root, "add gitlink", false);
+    await commit(gitlinkFixture.root, "add gitlink", false);
     const gitlink = classifyCorpusDriftRelevance({ repoRoot: gitlinkFixture.root, base: gitlinkFixture.base, ownership: gitlinkFixture.ownership });
     expect(gitlink.decision).toBe("full-scan");
     expect(codes(gitlink)).toContain("gitlink-seam");
