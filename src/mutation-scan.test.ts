@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
+import { createCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 import {
   applyReportedMutation,
   coveredScopeLine,
@@ -18,6 +18,8 @@ import {
   isIncompatibleTypeScript7,
   isPlaceholderSpec,
   mutationNotRunModuleRecord,
+  mutationCommandFailureReason,
+  mutationExecutionFailureReason,
   mutationScore,
   mutationScoreBasedOnCoveredCode,
   noCoverageFindings,
@@ -53,6 +55,71 @@ import {
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
+
+describe("mutation result receipt policy (#2215)", () => {
+  const report: StrykerReport = {
+    config: { thresholds: { break: 80 } },
+    files: { "a.ts": { mutants: [{ id: "1", mutatorName: "BooleanLiteral", status: "Survived", testsCompleted: 1, location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } },
+  };
+  const receipt = (outcome: CommandExecutionReceipt["outcome"], invocationId = "current") => createCommandExecutionReceipt({
+    invocationId, command: { executable: "stryker", argv: ["run"], cwd: "/target" }, target: { identity: "target", value: "snapshot" }, toolchain: [{ name: "StrykerJS", version: "9.6.1" }], configuration: { identity: "selection", value: "a.ts" }, startedAt: "2026-09-25T00:00:00Z", finishedAt: "2026-09-25T00:00:01Z", outcome, comparisonIdentity: { sourceSha256: "a".repeat(64), selectionSha256: "b".repeat(64), toolchainSha256: "c".repeat(64) },
+    ...(outcome.state === "output-limit-exceeded" ? { stdout: "partial", outputCompleteness: { stdout: "truncated" as const, stderr: "unknown" as const } } : {}),
+  });
+  const artifact = (executionReceipt: CommandExecutionReceipt) => ({ executionReceipt, rawReport: report, summary: summarizeMutationReport(report), reportRows: toReportRows(summarizeMutationReport(report)), scope: { verified: true, scoped: false, note: "Complete fixture population" } });
+
+  it("accepts success and explicit threshold exit 1 while preserving the original receipt", () => {
+    for (const code of [0, 1]) {
+      const original = receipt({ state: "exited", exitCode: code, signal: null });
+      expect(mutationCommandFailureReason(original, report)).toBeUndefined();
+      expect(testQualityFromArtifact(artifact(original))).toMatchObject({ mutationScore: 0, wholeRepo: true });
+      expect(mutationRunFromArtifact("fixture", artifact(original))).toMatchObject({ mutationScore: 0 });
+      expect(compareMutationRuns({ rawReport: report, executionReceipt: original }, { rawReport: report, executionReceipt: receipt({ state: "exited", exitCode: code, signal: null }, "previous") }).status).toBe("stable");
+      expect(original.outcome).toEqual({ state: "exited", exitCode: code, signal: null });
+    }
+  });
+
+  it.each([
+    { state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" },
+    { state: "output-limit-exceeded", exitCode: null, observedExitCode: 1, signal: null, errorCode: "ENOBUFS" },
+    { state: "timed-out", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ETIMEDOUT" },
+    { state: "signaled", exitCode: null, signal: "SIGTERM" },
+    { state: "spawn-failed", exitCode: null, signal: null, errorCode: "ENOENT" },
+    { state: "cancelled", exitCode: null, signal: null, errorCode: "ABORT_ERR" },
+    { state: "unknown-exit", exitCode: null, signal: null },
+    { state: "exited", exitCode: 2, signal: null },
+  ] satisfies CommandExecutionReceipt["outcome"][])("rejects $state (observed $observedExitCode, exit $exitCode) at score and comparison consumers", outcome => {
+    const original = receipt(outcome);
+    expect(mutationCommandFailureReason(original, report)).toContain(outcome.state);
+    expect(testQualityFromArtifact(artifact(original))).toBeUndefined();
+    expect(() => mutationRunFromArtifact("fixture", artifact(original))).toThrow(/no mutation score is certified/);
+    expect(() => compareMutationRuns({ rawReport: report, executionReceipt: original }, { rawReport: report, executionReceipt: receipt({ state: "exited", exitCode: 0, signal: null }, "previous") })).toThrow(/no mutation score is certified/);
+    expect(original.outcome).toEqual(outcome);
+  });
+
+  it("does not infer threshold completion from exit 1 or an unfinished population", () => {
+    const nonzero = receipt({ state: "exited", exitCode: 1, signal: null });
+    expect(mutationCommandFailureReason(nonzero)).toContain("exit 1");
+    expect(mutationCommandFailureReason(nonzero, { ...report, config: undefined })).toContain("exit 1");
+    expect(mutationCommandFailureReason(nonzero, { ...report, config: { thresholds: { break: 0 } } })).toContain("exit 1");
+    const pending = structuredClone(report);
+    pending.files["a.ts"]!.mutants.push({ ...pending.files["a.ts"]!.mutants[0]!, id: "pending", status: "Pending" });
+    expect(mutationCommandFailureReason(nonzero, pending)).toContain("exit 1");
+    const corrupt = { ...nonzero, outcome: { state: "exited", exitCode: 0, signal: null, errorCode: "ENOBUFS" } };
+    expect(mutationCommandFailureReason(corrupt, report)).toContain("invalid");
+  });
+
+  it("rejects a falsely complete retained workspace without suppressing a healthy sibling's score", () => {
+    const interrupted = receipt({ state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" });
+    const run = { ...artifact(receipt({ state: "exited", exitCode: 0, signal: null })), workspaces: [{ id: "app", state: "complete", receipts: [interrupted] }] };
+    expect(mutationExecutionFailureReason(run)).toContain("app: Mutation command");
+    expect(testQualityFromArtifact(run)).toBeUndefined();
+    run.workspaces[0]!.state = "discovery-failed";
+    expect(testQualityFromArtifact(run)).toMatchObject({ mutationScore: 0 });
+    const nested = { ...artifact(receipt({ state: "exited", exitCode: 0, signal: null })), workspaces: [{ id: "app", state: "complete", receipts: [receipt({ state: "exited", exitCode: 0, signal: null })], artifact: artifact(interrupted) }] };
+    expect(mutationExecutionFailureReason(nested)).toContain("app: Mutation command");
+    expect(testQualityFromArtifact(nested)).toBeUndefined();
+  });
+});
 
 describe("bound mutation status comparison", () => {
   const report = { files: { "a.ts": { mutants: [{ id: "1", mutatorName: "BooleanLiteral", status: "Killed" as const, replacement: "false", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } };
