@@ -121,7 +121,7 @@ export type ReadinessStageExpectationV1 = StageExpectationBase & (
 export interface ReadinessValidationProjectionV1 {
   originalPlanSha256: string;
   environment: { approvedNames: string[]; presentNames: string[] };
-  /** Paths and names are redacted display text; identity fields retain upstream V1 identities. */
+  /** Names/provenance are redacted; V1 identities and their paths are retained or export is withheld. */
   workspaces: ReadinessWorkspaceV1[];
   stages: ReadinessStageExpectationV1[];
   workspaceObservations: ReadinessPlanV1["workspaceInventory"]["observations"];
@@ -189,6 +189,27 @@ function stageOf(state: ReceiptState, stageId: StageId): ReadinessStageV1 {
   return stage;
 }
 
+function assertPublicIdentities(state: ReceiptState, additional: readonly string[] = []): void {
+  const { plan } = state;
+  const identities = [
+    ...additional,
+    ...state.approvedNames, ...state.presentNames,
+    plan.workspaceInventory.repoRootId,
+    ...plan.workspaceInventory.packages.flatMap((workspace) => [workspace.id, workspace.dir, workspace.manifestPath]),
+    ...plan.workspaceInventory.applicationWorkspaceIds,
+    ...plan.workspaceInventory.observations.flatMap((observation) => [
+      observation.kind, ...("path" in observation ? [observation.path] : []),
+      ...("glob" in observation ? [observation.glob, observation.sourcePath] : []),
+      ...(observation.kind === "excluded" ? [observation.reason] : []),
+    ]),
+    ...plan.workspaces.flatMap((workspace) => [workspace.id, workspace.dir, workspace.manifestPath, workspace.installStageId, ...workspace.stageIds]),
+    ...plan.stages.flatMap((stage) => [stage.id, stage.workspaceId, ...stage.prerequisiteStageIds, ...stage.requiredEnvNames, ...(stage.assessment === "implicit" ? [stage.fulfilledByStageId] : [])]),
+  ];
+  // V1 embeds source-controlled paths in identities. Redaction would break their binding;
+  // even short-value collisions must fail closed instead of exempting the identity text.
+  if (identities.some((value) => state.registry.redact(value) !== value)) invalid("producer-known value in identity");
+}
+
 /** The context itself is safe to stringify: no plan text, approved value, or environment is enumerable. */
 export function createReadinessReceiptContext(planInput: unknown, options: {
   approvedEnvNames: readonly string[];
@@ -242,6 +263,7 @@ function safeProvenance(state: ReceiptState, provenance: Provenance): Provenance
 function safeAuthority(state: ReceiptState, input: ReadinessAuthorityReceipt | null): ReadinessAuthorityReceipt | null {
   if (input === null) return null;
   validateAuthority(input);
+  assertPublicIdentities(state, [input.stageId, ...input.requiredEnvNames, ...input.approvedEnvNames]);
   return {
     stageId: input.stageId, decision: input.decision, effect: input.effect,
     source: state.registry.redact(input.source), reasonCode: state.registry.redact(input.reasonCode),
@@ -255,6 +277,7 @@ function diagnostic(state: ReceiptState, input: ReadinessDiagnosticV1): Readines
   return { reasonCode: state.registry.redact(input.reasonCode), reason: state.registry.redact(input.reason), provenance: input.provenance.map((row) => state.registry.redact(row)), falsifier: state.registry.redact(input.falsifier) };
 }
 function base(state: ReceiptState, stage: ReadinessStageV1, authority: ReadinessAuthorityReceipt | null, request?: ReadinessSpawnRequest): ReadinessStageReceiptBaseV1 {
+  assertPublicIdentities(state);
   return {
     schemaVersion: 1, stageId: stage.id, kind: stage.kind, workspaceId: stage.workspaceId,
     prerequisiteStageIds: [...stage.prerequisiteStageIds], requiredEnvNames: [...stage.requiredEnvNames],
@@ -319,6 +342,7 @@ function executionExpectations(state: ReceiptState): ExecutionExpectations {
 /** Snapshot only after execution and secret registration settle. Nothing in this view authorizes work. */
 export function createReadinessValidationProjectionV1(context: ReadinessReceiptContext): ReadinessValidationProjectionV1 {
   const state = stateOf(context);
+  assertPublicIdentities(state);
   const redact = (value: string): string => state.registry.redact(value);
   const expectations = executionExpectations(state);
   return immutable({
@@ -331,9 +355,8 @@ export function createReadinessValidationProjectionV1(context: ReadinessReceiptC
       provenance: safeProvenance(state, workspace.provenance),
     })).sort((a, b) => a.id.localeCompare(b.id, "en")),
     workspaceObservations: state.plan.workspaceInventory.observations.map((observation) => {
-      if (observation.kind === "excluded") return { ...observation, path: redact(observation.path), glob: redact(observation.glob), sourcePath: redact(observation.sourcePath) };
-      if (observation.kind === "unreadable-manifest") return { ...observation, path: redact(observation.path), reason: redact(observation.reason) };
-      return { ...observation, glob: redact(observation.glob), sourcePath: redact(observation.sourcePath), reason: redact(observation.reason) };
+      if (observation.kind === "excluded") return { ...observation };
+      return { ...observation, reason: redact(observation.reason) };
     }),
     applicationWorkspaceIds: [...state.plan.workspaceInventory.applicationWorkspaceIds].sort(),
   });
@@ -351,7 +374,7 @@ export function prepareReadinessPlanExportV1(context: ReadinessReceiptContext):
   };
   if (unsafe(state.plan)) return {
     status: "withheld", reasonCode: "approved-value-in-plan",
-    reason: "The raw executable plan cannot be exported because it contains a producer-known value. Use the redacted validation descriptor for delivery.",
+    reason: "The raw executable plan cannot be exported because it contains a producer-known value. A redacted validation descriptor is available only when its identities contain no known values.",
     provenance: ["producer receipt registry and original readiness plan"],
     falsifier: "Remove the known value from the source plan and rediscover it before requesting a raw plan export.",
   };
@@ -672,8 +695,9 @@ function safeReceipt(state: ReceiptState, input: StageReceiptV1): StageReceiptV1
   return receipt;
 }
 function safeExecution(state: ReceiptState, input: ReadinessExecutionV1): ReadinessExecutionV1 {
-  // Identity/version/status/time/hash fields are typed observations, not free-form value sinks.
-  // Redacting them as arbitrary text would corrupt valid digests and IDs for a short value like "a".
+  assertPublicIdentities(state);
+  // Version/status/time/hash fields are typed observations. Identity text is checked above;
+  // it must never be silently exempted from the producer's known-value guard.
   return { ...input, source: safeSource(state, input.source), stages: input.stages.map((stage) => safeReceipt(state, stage)), cleanup: safeCleanup(state, input.cleanup) };
 }
 
@@ -684,6 +708,7 @@ export function closeReadinessExecutionV1(context: ReadinessReceiptContext, inpu
   cleanup: DisposableCleanupReceipt;
 }): ReadinessExecutionV1 {
   const state = stateOf(context);
+  assertPublicIdentities(state);
   object(input.binding, ["schemaVersion", "planSha256", "source"]);
   if (input.binding.schemaVersion !== 1 || input.binding.planSha256 !== state.planSha256) invalid("plan hash binding");
   validateSource(input.binding.source);
@@ -700,7 +725,9 @@ export function closeReadinessExecutionV1(context: ReadinessReceiptContext, inpu
 }
 
 export function validateReadinessExecutionV1(context: ReadinessReceiptContext, input: unknown): ReadinessExecutionV1 {
-  return validateReadinessExecutionAgainstExpectationsV1(executionExpectations(stateOf(context)), input);
+  const state = stateOf(context);
+  assertPublicIdentities(state);
+  return validateReadinessExecutionAgainstExpectationsV1(executionExpectations(state), input);
 }
 
 /** Pure evidence checks shared by the live producer and offline importer; never grants execution authority. */
@@ -737,6 +764,7 @@ export function validateReadinessExecutionAgainstExpectationsV1(expected: Execut
 
 /** Revalidate at the final artifact boundary against the supported environment/error field set. */
 export function serializeReadinessExecutionV1(context: ReadinessReceiptContext, input: unknown): string {
+  assertPublicIdentities(stateOf(context));
   const value = validateReadinessExecutionV1(context, input);
   const safe = validateReadinessExecutionV1(context, safeExecution(stateOf(context), value));
   return JSON.stringify(safe, null, 2) + "\n";

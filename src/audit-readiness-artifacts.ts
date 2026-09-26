@@ -98,6 +98,36 @@ function workspaceId(value: unknown): asserts value is `workspace:${string}` {
   const path = value.slice("workspace:".length);
   if (path.includes("\\") || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) invalid("workspace identity");
 }
+function manifestWorkspaceId(path: unknown): `workspace:${string}` {
+  text(path);
+  if (path !== "package.json" && !path.endsWith("/package.json")) invalid("workspace observation manifest path");
+  const id = `workspace:${path === "package.json" ? "root" : path.slice(0, -"/package.json".length)}`;
+  workspaceId(id);
+  return id;
+}
+
+/** Only retained identity facts participate; producer-redacted prose is not raw-plan evidence. */
+function identityPopulation(value: Pick<ReadinessValidationProjectionV1, "workspaces" | "applicationWorkspaceIds" | "workspaceObservations"> & {
+  stages: readonly (Pick<ReadinessStageExpectationV1, "id" | "kind" | "workspaceId" | "prerequisiteStageIds" | "requiredEnvNames" | "assessment" | "safety"> & { fulfilledByStageId?: string })[];
+}): unknown {
+  return {
+    workspaces: value.workspaces.map((workspace) => ({
+      id: workspace.id, dir: workspace.dir, manifestPath: workspace.manifestPath,
+      installStageId: workspace.installStageId, stageIds: [...workspace.stageIds].sort(),
+    })).sort((a, b) => a.id.localeCompare(b.id, "en")),
+    stages: value.stages.map((stage) => ({
+      id: stage.id, kind: stage.kind, workspaceId: stage.workspaceId, assessment: stage.assessment, safety: stage.safety,
+      prerequisiteStageIds: [...stage.prerequisiteStageIds].sort(), requiredEnvNames: [...stage.requiredEnvNames].sort(),
+      fulfilledByStageId: stage.fulfilledByStageId ?? null,
+    })).sort((a, b) => a.id.localeCompare(b.id, "en")),
+    applicationWorkspaceIds: [...value.applicationWorkspaceIds].sort(),
+    observations: value.workspaceObservations.map((observation) => ({
+      kind: observation.kind, ...("path" in observation ? { path: observation.path } : {}),
+      ...("glob" in observation ? { glob: observation.glob, sourcePath: observation.sourcePath } : {}),
+      ...(observation.kind === "excluded" ? { reason: observation.reason } : {}),
+    })).sort((a, b) => JSON.stringify(canonical(a)).localeCompare(JSON.stringify(canonical(b)), "en")),
+  };
+}
 function provenance(value: unknown): void {
   if (!Array.isArray(value)) invalid("provenance");
   for (const item of value) {
@@ -150,6 +180,8 @@ function validateProjection(row: Record<string, unknown>): asserts row is Record
   for (const item of row.workspaces) {
     const workspace = object(item, ["id", "dir", "manifestPath", "installStageId", "stageIds", "provenance"], ["name"]);
     workspaceId(workspace.id); text(workspace.dir); text(workspace.manifestPath);
+    const dir = workspace.id === "workspace:root" ? "." : workspace.id.slice("workspace:".length);
+    if (workspace.dir !== dir || workspace.manifestPath !== (dir === "." ? "package.json" : `${dir}/package.json`)) invalid("workspace identity paths");
     if (workspace.name !== undefined) text(workspace.name, true);
     provenance(workspace.provenance); unique(workspace.stageIds, true);
     workspaceIds.push(workspace.id);
@@ -163,6 +195,7 @@ function validateProjection(row: Record<string, unknown>): asserts row is Record
     if (READINESS_STAGE_KINDS.some((kind) => !referencedKinds.has(kind))) invalid("workspace stage kinds");
   }
   if (new Set(workspaceIds).size !== workspaceIds.length || !equal(workspaceIds, [...workspaceIds].sort((a, b) => a.localeCompare(b, "en")))) invalid("duplicate or unordered workspaces");
+  if (!workspaceIds.includes("workspace:root")) invalid("missing root workspace");
   if (!byStage.has(SHARED_INSTALL) || referenced.size !== stageIds.length || stageIds.some((id) => !referenced.has(id))) invalid("unreferenced plan stage");
   for (const stage of stages) {
     if (!workspaceIds.includes(stage.workspaceId) && stage.workspaceId !== "workspace:root") invalid("stage workspace");
@@ -177,17 +210,26 @@ function validateProjection(row: Record<string, unknown>): asserts row is Record
   unique(row.applicationWorkspaceIds, true);
   for (const id of row.applicationWorkspaceIds) workspaceId(id);
   if (!Array.isArray(row.workspaceObservations)) invalid("workspace observations");
+  const negativelyExcludedIds = new Set<string>();
+  const observations = new Set<string>();
   for (const item of row.workspaceObservations) {
     const kind = (item as Record<string, unknown> | null)?.kind;
     const observation = object(item, kind === "excluded" ? ["kind", "path", "glob", "sourcePath", "reason"] : kind === "unreadable-manifest" ? ["kind", "path", "reason"] : ["kind", "glob", "sourcePath", "reason"]);
+    const key = JSON.stringify(canonical(observation));
+    if (observations.has(key)) invalid("duplicate workspace observation");
+    observations.add(key);
     text(observation.reason);
     if (kind === "excluded") {
       if (!["implicit-directory-policy", "negative-workspace-glob"].includes(observation.reason)) invalid("excluded workspace reason");
       text(observation.path); text(observation.glob); text(observation.sourcePath);
-    } else if (kind === "unreadable-manifest") text(observation.path);
-    else if (kind === "unresolved-glob" || kind === "invalid-glob") { text(observation.glob); text(observation.sourcePath); }
+      const excludedId = manifestWorkspaceId(observation.path);
+      if (observation.reason === "negative-workspace-glob") negativelyExcludedIds.add(excludedId);
+    } else if (kind === "unreadable-manifest") {
+      if (!workspaceIds.includes(manifestWorkspaceId(observation.path))) invalid("unreadable workspace observation population");
+    } else if (kind === "unresolved-glob" || kind === "invalid-glob") { text(observation.glob); text(observation.sourcePath); }
     else invalid("workspace observation kind");
   }
+  if (row.applicationWorkspaceIds.some((id) => !workspaceIds.includes(id) && !negativelyExcludedIds.has(id))) invalid("application workspace population");
 }
 
 function validateDescriptor(input: unknown): ReadinessValidationDescriptorV1 {
@@ -229,6 +271,10 @@ export function parseReadinessArtifactsV1(input: { descriptorJson: string; execu
       try { plan = validateReadinessPlanV1(expected.originalPlan); planSha256 = hash(serializeReadinessPlanV1(plan)); }
       catch { return invalid("original plan"); }
       if (planSha256 !== descriptor.originalPlanSha256) invalid("original plan binding");
+      if (!equal(identityPopulation(descriptor), identityPopulation({
+        workspaces: plan.workspaces, stages: plan.stages, applicationWorkspaceIds: plan.workspaceInventory.applicationWorkspaceIds,
+        workspaceObservations: plan.workspaceInventory.observations,
+      }))) invalid("original workspace identity population");
       const originalStages = new Map(plan.stages.map((stage) => [stage.id, stage]));
       if (originalStages.size !== descriptor.stages.length || descriptor.stages.some((stage) => {
         const original = originalStages.get(stage.id);

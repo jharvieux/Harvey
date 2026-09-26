@@ -12,7 +12,7 @@ import { bindReadinessPlanV1 } from "./audit-readiness-authority.js";
 import { captureSourceSentinel, type SourceSentinelV1 } from "./disposable-target.js";
 import {
   closeReadinessExecutionV1, createReadinessNotAssessedReceipt, createReadinessReceiptContext,
-  prepareReadinessPlanExportV1, validateReadinessExecutionV1,
+  createReadinessValidationProjectionV1, prepareReadinessPlanExportV1, serializeReadinessExecutionV1, validateReadinessExecutionV1,
   type ReadinessExecutionV1,
 } from "./audit-readiness-receipts.js";
 import { createReadinessArtifactsV1, parseReadinessArtifactsV1, type ReadinessValidationDescriptorV1 } from "./audit-readiness-artifacts.js";
@@ -30,6 +30,7 @@ function produce(plan: ReadinessPlanV1, source: SourceSentinelV1, value: string)
   const receipts = plan.stages.map((stage) => createReadinessNotAssessedReceipt(context, stage.id, {
     reasonCode: "fixture-withheld", reason: `The fixture withheld execution ${value}.`, provenance: [`operator fixture ${value}`], falsifier: `Authorize after reviewing ${value}.`,
     assessedAt: "2026-09-25T00:00:00.000Z",
+    blockedByStageIds: stage.prerequisiteStageIds,
   }));
   const execution = closeReadinessExecutionV1(context, {
     binding, receipts, cleanup: { status: "not-required", root: null, reason: "This schema fixture does no target process work." },
@@ -37,14 +38,15 @@ function produce(plan: ReadinessPlanV1, source: SourceSentinelV1, value: string)
   return { plan, binding, context, ...createReadinessArtifactsV1(context, { binding, execution }) };
 }
 
-async function fixture(value = CANARY, scriptValue = value) {
+async function fixture(value = CANARY, scriptValue = value, options: { member?: string; excluded?: boolean; unreadable?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), "harvey-artifact-contract-")); roots.push(root);
-  await mkdir(join(root, "packages", "child"), { recursive: true });
+  const member = options.member ?? "child";
+  await mkdir(join(root, "packages", member), { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({
-    name: "artifact-fixture", packageManager: "npm@10.9.2", workspaces: ["packages/*", "missing/*"],
+    name: "artifact-fixture", packageManager: "npm@10.9.2", workspaces: ["packages/*", "missing/*", ...(options.excluded ? [`!packages/${member}`] : [])],
     scripts: { postinstall: "prisma generate", build: `node build.cjs # ${scriptValue}`, test: "node test.cjs" },
   }));
-  await writeFile(join(root, "packages", "child", "package.json"), JSON.stringify({ name: "child", scripts: { build: "node build.cjs" } }));
+  await writeFile(join(root, "packages", member, "package.json"), options.unreadable ? "{invalid" : JSON.stringify({ name: "child", scripts: { codegen: "node generate.cjs", build: "node build.cjs" } }));
   await writeFile(join(root, "package-lock.json"), '{"lockfileVersion":3,"packages":{}}');
   const source = await captureSourceSentinel(root);
   return produce(discoverReadinessPlan(root), source, value);
@@ -103,7 +105,7 @@ describe("producer-owned readiness artifacts", () => {
     for (const spy of spies) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
   });
 
-  it.each([CANARY, "a", "npm"])("redacts supported free-text sinks for a known value of length %s without corrupting identities", async (value) => {
+  it.each([CANARY, "q", "npm"])("redacts supported free-text sinks for a known value %s when identities stay safe", async (value) => {
     const pair = await fixture(value);
     const build = pair.descriptor.stages.find((stage) => stage.workspaceId === "workspace:root" && stage.kind === "build")!;
     const script = build.provenance.find((source) => source.rawScript !== undefined)!.rawScript!;
@@ -113,6 +115,92 @@ describe("producer-owned readiness artifacts", () => {
     expect(pair.descriptor.originalPlanSha256).toBe(pair.binding.planSha256);
     expect(parseReadinessArtifactsV1({ descriptorJson: pair.descriptorJson, executionJson: pair.executionJson }).execution).toEqual(pair.execution);
     if (value === "npm" && build.assessment === "planned") expect(build.command.bin).toBe("[REDACTED]");
+  });
+
+  it.each([
+    { member: CANARY }, { member: CANARY, excluded: true }, { member: CANARY, unreadable: true },
+  ])("refuses known-value identities across every public artifact boundary: %j", async (options) => {
+    // Register after a valid packet exists to test revalidation of stale, formerly safe values.
+    const pair = await fixture("", "ordinary script", options);
+    const known = createReadinessReceiptContext(pair.plan, { approvedEnvNames: ["ARTIFACT_TOKEN"], environment: { ARTIFACT_TOKEN: CANARY } });
+    pair.context.registerSecret(CANARY);
+    const refusal = "Invalid readiness execution evidence: producer-known value in identity.";
+    for (const context of [known, pair.context]) {
+      const attempts = [
+        () => createReadinessValidationProjectionV1(context),
+        () => validateReadinessExecutionV1(context, pair.execution),
+        () => serializeReadinessExecutionV1(context, pair.execution),
+        () => createReadinessArtifactsV1(context, { binding: pair.binding, execution: pair.execution }),
+        () => closeReadinessExecutionV1(context, { binding: pair.binding, receipts: pair.execution.stages, cleanup: pair.execution.cleanup }),
+        () => createReadinessNotAssessedReceipt(context, pair.plan.stages[0]!.id, {
+          reasonCode: "withheld", reason: "No target execution.", provenance: ["schema fixture"], falsifier: "Review the identity.",
+        }),
+      ];
+      for (const attempt of attempts) {
+        expect(attempt).toThrow(new Error(refusal));
+        try { attempt(); } catch (error) { expect(String(error)).not.toContain(CANARY); }
+      }
+      const withheld = prepareReadinessPlanExportV1(context);
+      expect(withheld).toMatchObject({ status: "withheld", reasonCode: "approved-value-in-plan" });
+      expect(withheld).not.toHaveProperty("json");
+      expect(JSON.stringify(withheld)).not.toContain(CANARY);
+    }
+  });
+
+  it("refuses short-value and nested identity collisions instead of exempting typed strings", async () => {
+    const pair = await fixture("", "ordinary script");
+    const root = pair.descriptor.workspaces.find((workspace) => workspace.id === "workspace:root")!;
+    const implicit = pair.descriptor.stages.find((stage) => stage.assessment === "implicit")!;
+    const values = ["a", "ARTIFACT_TOKEN", root.id, root.installStageId, root.stageIds[0]!, pair.descriptor.applicationWorkspaceIds[0]!,
+      implicit.prerequisiteStageIds[0]!, implicit.assessment === "implicit" ? implicit.fulfilledByStageId : "unreachable"];
+    for (const value of values) {
+      const context = createReadinessReceiptContext(pair.plan, { approvedEnvNames: ["ARTIFACT_TOKEN"], environment: { ARTIFACT_TOKEN: value } });
+      expect(() => createReadinessValidationProjectionV1(context)).toThrow(/producer-known value in identity/);
+      expect(() => serializeReadinessExecutionV1(context, pair.execution)).toThrow(/producer-known value in identity/);
+      if (value !== "ARTIFACT_TOKEN") expect(prepareReadinessPlanExportV1(context).status).toBe("withheld");
+    }
+  });
+
+  it("withholds observation scope selectors containing known values without rewriting their scope", async () => {
+    const pair = await fixture("", "ordinary script", { excluded: true });
+    for (const value of ["unresolved-glob", "missing/*", "!packages/child", "package.json", "negative-workspace-glob"]) {
+      const context = createReadinessReceiptContext(pair.plan, { approvedEnvNames: ["ARTIFACT_TOKEN"], environment: { ARTIFACT_TOKEN: value } });
+      expect(() => createReadinessValidationProjectionV1(context)).toThrow(/producer-known value in identity/);
+      expect(() => serializeReadinessExecutionV1(context, pair.execution)).toThrow(/producer-known value in identity/);
+      expect(() => createReadinessArtifactsV1(context, { binding: pair.binding, execution: pair.execution })).toThrow(/producer-known value in identity/);
+      expect(prepareReadinessPlanExportV1(context).status).toBe("withheld");
+    }
+    for (const key of ["glob", "sourcePath"] as const) {
+      const plan = structuredClone(pair.plan);
+      const observation = plan.workspaceInventory.observations.find((row) => row.kind === "unresolved-glob")!;
+      if (observation.kind !== "unresolved-glob") throw new Error("expected unresolved fixture glob");
+      observation[key] = `scope-${CANARY}`;
+      const context = createReadinessReceiptContext(plan, { approvedEnvNames: ["ARTIFACT_TOKEN"], environment: { ARTIFACT_TOKEN: CANARY } });
+      expect(() => createReadinessValidationProjectionV1(context)).toThrow(new Error("Invalid readiness execution evidence: producer-known value in identity."));
+      expect(prepareReadinessPlanExportV1(context).status).toBe("withheld");
+    }
+  });
+
+  it("refuses known values in supplied nested authority identities at receipt and execution boundaries", async () => {
+    const pair = await fixture();
+    const stage = pair.plan.stages.find((row) => row.kind === "build")!;
+    const authority = {
+      stageId: stage.id, decision: "denied" as const, effect: "unknown" as const,
+      source: "schema fixture", reasonCode: "withheld", reason: "No target execution.", falsifier: "Review the stage.",
+      requiredEnvNames: [] as string[], approvedEnvNames: [...pair.descriptor.environment.approvedNames], lifecycle: [],
+    };
+    for (const identity of [
+      { ...authority, stageId: `stage:workspace:${CANARY}:build` as const },
+      { ...authority, requiredEnvNames: [CANARY] },
+      { ...authority, approvedEnvNames: [CANARY] },
+    ]) {
+      expect(() => createReadinessNotAssessedReceipt(pair.context, stage.id, {
+        reasonCode: authority.reasonCode, reason: authority.reason, falsifier: authority.falsifier, provenance: ["schema fixture"], authority: identity,
+      })).toThrow(/producer-known value in identity/);
+    }
+    const execution = structuredClone(pair.execution);
+    execution.stages.find((row) => row.stageId === stage.id)!.authority = { ...authority, requiredEnvNames: [CANARY] };
+    expect(() => serializeReadinessExecutionV1(pair.context, execution)).toThrow(/producer-known value in identity/);
   });
 
   it("withholds unsafe raw plan bytes and preserves the original schema for a safe export", async () => {
@@ -178,6 +266,98 @@ describe("producer-owned readiness artifacts", () => {
     expect(parsed.execution.stages).toHaveLength(11);
     expect(parsed.execution.stages.filter((stage) => stage.execution.kind === "process")).toHaveLength(0);
     expect(parsed.descriptor.workspaceObservations).toContainEqual(expect.objectContaining({ kind: "unresolved-glob", glob: "missing/*" }));
+  });
+
+  it("rejects orphan application identities and binds the original application population", async () => {
+    const pair = await fixture();
+    const descriptor = structuredClone(pair.descriptor);
+    descriptor.applicationWorkspaceIds = ["workspace:never-enumerated"];
+    const orphan = replaceExecution(pair, pair.execution, descriptor);
+    expect(() => parseReadinessArtifactsV1(orphan)).toThrow(/application workspace population/);
+    expect(() => parseReadinessArtifactsV1(orphan, { originalPlan: pair.plan })).toThrow(/application workspace population/);
+    for (const ids of [[], ["workspace:root"]] as ReadinessValidationDescriptorV1["applicationWorkspaceIds"][]) {
+      descriptor.applicationWorkspaceIds = ids;
+      const replaced = replaceExecution(pair, pair.execution, descriptor);
+      // Without an original-plan anchor, membership alone cannot prove discovery completeness.
+      expect(parseReadinessArtifactsV1(replaced).descriptor.proof.executionAuthenticity).toBe("not-established");
+      expect(() => parseReadinessArtifactsV1(replaced, { originalPlan: pair.plan })).toThrow(/original workspace identity population/);
+    }
+  });
+
+  it("preserves explicit negative-exclusion application evidence and legitimate empty populations", async () => {
+    const empty = await fixture(CANARY, "ordinary script", { excluded: true });
+    expect(empty.descriptor.applicationWorkspaceIds).toEqual([]);
+    expect(parseReadinessArtifactsV1({ descriptorJson: empty.descriptorJson, executionJson: empty.executionJson }, { originalPlan: empty.plan }).descriptor.workspaces).toHaveLength(1);
+    const plan = structuredClone(empty.plan);
+    // V1 also admits the historical app census when an explicit negative-glob row explains it.
+    plan.workspaceInventory.applicationWorkspaceIds = ["workspace:packages/child"];
+    const pair = produce(plan, empty.binding.source, CANARY);
+    expect(parseReadinessArtifactsV1({ descriptorJson: pair.descriptorJson, executionJson: pair.executionJson }, { originalPlan: plan }).descriptor.applicationWorkspaceIds).toEqual(["workspace:packages/child"]);
+    const edits: ((d: ReadinessValidationDescriptorV1) => void)[] = [
+      (d) => { d.workspaceObservations = d.workspaceObservations.filter((row) => row.kind !== "excluded"); },
+      (d) => { const row = d.workspaceObservations.find((row) => row.kind === "excluded")!; if (row.kind === "excluded") row.reason = "implicit-directory-policy"; },
+      (d) => { const row = d.workspaceObservations.find((row) => row.kind === "excluded")!; if (row.kind === "excluded") row.path = "packages/other/package.json"; },
+      (d) => { const row = d.workspaceObservations.find((row) => row.kind === "excluded")!; if (row.kind === "excluded") row.path = "packages/child"; },
+      (d) => { const row = d.workspaceObservations.find((row) => row.kind === "excluded")!; if (row.kind === "excluded") row.path = "packages/../child/package.json"; },
+    ];
+    for (const edit of edits) {
+      const descriptor = structuredClone(pair.descriptor); edit(descriptor);
+      expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, descriptor))).toThrow(/Invalid readiness artifact/);
+    }
+    const descriptor = structuredClone(pair.descriptor);
+    descriptor.applicationWorkspaceIds = [];
+    descriptor.workspaceObservations = descriptor.workspaceObservations.filter((row) => row.kind !== "excluded");
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, descriptor), { originalPlan: plan })).toThrow(/original workspace identity population/);
+  });
+
+  it("requires the root workspace and its complete references even when child-only receipts close", async () => {
+    const pair = await fixture();
+    const descriptor = structuredClone(pair.descriptor);
+    const execution = structuredClone(pair.execution);
+    descriptor.workspaces = descriptor.workspaces.filter((workspace) => workspace.id !== "workspace:root");
+    descriptor.stages = descriptor.stages.filter((stage) => stage.workspaceId !== "workspace:root" || stage.kind === "install");
+    execution.stages = execution.stages.filter((stage) => stage.workspaceId !== "workspace:root" || stage.kind === "install");
+    expect(descriptor.stages).toHaveLength(6);
+    expect(execution.stages).toHaveLength(6);
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, execution, descriptor))).toThrow(/missing root workspace/);
+    descriptor.workspaces.push(structuredClone(pair.descriptor.workspaces.find((workspace) => workspace.id === "workspace:root")!));
+    descriptor.workspaces.sort((a, b) => a.id.localeCompare(b.id, "en"));
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, execution, descriptor))).toThrow(/unknown or borrowed workspace stage/);
+  });
+
+  it("binds the original observation population and scope selectors while allowing redacted prose", async () => {
+    const original = await fixture();
+    const plan = structuredClone(original.plan);
+    const glob = plan.workspaceInventory.observations.find((row) => row.kind === "unresolved-glob")!;
+    if (glob.kind !== "unresolved-glob") throw new Error("expected unresolved fixture glob");
+    glob.reason += ` ${CANARY}`;
+    const pair = produce(plan, original.binding.source, CANARY);
+    expect(pair.descriptor.workspaceObservations).not.toEqual(plan.workspaceInventory.observations);
+    expect(pair.descriptorJson).not.toContain(CANARY);
+    expect(parseReadinessArtifactsV1({ descriptorJson: pair.descriptorJson, executionJson: pair.executionJson }, { originalPlan: plan }).descriptor.workspaceObservations).toHaveLength(1);
+    for (const key of ["glob", "sourcePath", "kind"] as const) {
+      const substituted = structuredClone(pair.descriptor);
+      const observation = substituted.workspaceObservations[0]!;
+      if (observation.kind !== "unresolved-glob") throw new Error("expected unresolved fixture glob");
+      if (key === "kind") observation.kind = "invalid-glob";
+      else observation[key] = key === "glob" ? "other-unresolved/*" : "other-scope-input.yml";
+      expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, substituted), { originalPlan: plan })).toThrow(/original workspace identity population/);
+    }
+    const removed = structuredClone(pair.descriptor); removed.workspaceObservations = [];
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, removed), { originalPlan: plan })).toThrow(/original workspace identity population/);
+    const duplicate = structuredClone(pair.descriptor); duplicate.workspaceObservations.push(duplicate.workspaceObservations[0]!);
+    for (const expected of [{}, { originalPlan: plan }]) {
+      expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, duplicate), expected)).toThrow(/duplicate workspace observation/);
+    }
+    const orphan = structuredClone(pair.descriptor);
+    orphan.workspaceObservations.push({ kind: "unreadable-manifest", path: "never-enumerated/package.json", reason: "Unproven read failure." });
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, orphan))).toThrow(/unreadable workspace observation population/);
+    const extra = structuredClone(pair.descriptor);
+    extra.workspaceObservations.push({ kind: "unreadable-manifest", path: "package.json", reason: "Unsupported extra read failure." });
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, extra), { originalPlan: plan })).toThrow(/original workspace identity population/);
+    const unsupported = structuredClone(pair.descriptor);
+    Object.assign(unsupported.workspaceObservations[0]!, { kind: "unknown-observation" });
+    expect(() => parseReadinessArtifactsV1(replaceExecution(pair, pair.execution, unsupported))).toThrow(/workspace observation kind/);
   });
 
   it("detects config changes hidden by redaction while ignoring presentation and collection order", async () => {
