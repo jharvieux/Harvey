@@ -55,7 +55,7 @@ function derives(artifactsDir: string, module: AuditModule, targetDir: string) {
   const ctx: RunContext = {
     targetDir,
     env: { connected: true, dynamic: false, llm: true },
-    exec: () => ({ ok: true, output: "" }),
+    exec: async () => ({ ok: true, output: "" }),
     exists: (p) => existsSync(p),
     artifactsDir,
     readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),

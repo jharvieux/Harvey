@@ -183,9 +183,9 @@ describe("quality-scan CLI — context-aware product inventory (#2132)", () => {
       }
       if (shape === "external-only") {
         expect(receipt.observation.zeroSourceDisposition!.reason).toContain("external-src");
-        const assessment = AUDIT_RUNNERS.find((runner) => runner.module === "M4")!.run({
+        const assessment = await AUDIT_RUNNERS.find((runner) => runner.module === "M4")!.run({
           targetDir: repo, env: { connected: false, dynamic: false, llm: false }, exists: existsSync,
-          exec: () => ({ ok: true, output: readFileSync(outPath, "utf8"), stderr }),
+          exec: async () => ({ ok: true, output: readFileSync(outPath, "utf8"), stderr }),
         });
         expect(assessment).toMatchObject({
           kind: "not-assessed", reason: expect.stringContaining(findings.find((finding) => finding.id === "M4-99")!.evidence),

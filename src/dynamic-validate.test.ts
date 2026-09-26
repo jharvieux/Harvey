@@ -383,7 +383,7 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
     const ctx: RunContext = {
       targetDir: target,
       env: { connected: false, dynamic: true, llm: false },
-      exec: () => ({ ok: true, output: "" }),
+      exec: async () => ({ ok: true, output: "" }),
       exists: (p) => existsSync(p),
       artifactsDir: dir,
       readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),

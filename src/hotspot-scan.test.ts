@@ -479,7 +479,7 @@ describe("buildM3PassArtifact + write → derive round trip (#1364)", () => {
     const ctx: RunContext = {
       targetDir: "/engagement/target",
       env: { connected: false, dynamic: false, llm: false },
-      exec: () => ({ ok: true, output: "" }),
+      exec: async () => ({ ok: true, output: "" }),
       exists: (p) => existsSync(p),
       artifactsDir: dir,
       readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),

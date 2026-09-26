@@ -443,10 +443,10 @@ describe("readiness failures leave the audit orchestrator independent", () => {
     });
     const auditContext: RunContext = {
       targetDir: target.sourceRoot, env: { connected: false, dynamic: false, llm: false },
-      exec: () => { throw new Error("The fixture modules use no external tools."); },
+      exec: async () => { throw new Error("The fixture modules use no external tools."); },
       exists: () => true, isGitRepoRoot: () => false,
     };
-    const baseline = runAudit(runners, auditContext);
+    const baseline = await runAudit(runners, auditContext);
     expect(baseline.findings.map((finding) => finding.id)).toEqual(AUDIT_MODULES.map((module) => `${module}-READINESS-CONTINUITY`));
     for (const mode of ["passed", "failed"] as const) {
       invocations.length = 0;
@@ -454,7 +454,7 @@ describe("readiness failures leave the audit orchestrator independent", () => {
         if (mode === "failed" && row.kind === "codegen") throw new Error("failed readiness adapter");
         return pass(row);
       } });
-      const observed = runAudit(runners, auditContext);
+      const observed = await runAudit(runners, auditContext);
       const rows = await readiness;
       expect(rows.some((row) => row.status === "failed")).toBe(mode === "failed");
       expect(invocations).toEqual([...AUDIT_MODULES]);
