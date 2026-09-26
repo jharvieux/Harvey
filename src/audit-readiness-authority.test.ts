@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -7,13 +7,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { discoverReadinessPlan, type ReadinessPlanV1, type ReadinessStageV1 } from "./audit-readiness.js";
 import { admitReadinessStage, bindReadinessPlanV1, createReadinessAdmission, type ReadinessAuthorityOptions, type ReadinessStageAdmission, type ReadinessStageAuthorization } from "./audit-readiness-authority.js";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget, type DisposableTarget } from "./disposable-target.js";
+import { executeBoundReadinessPlan } from "./audit-readiness-run.js";
 
 const exec = promisify(execFile);
 const roots: string[] = [];
 
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(options: { requiredEnv?: boolean; postinstall?: boolean; implicitPostinstall?: boolean; lockfile?: boolean } = {}) {
+async function fixture(options: { requiredEnv?: boolean | string; postinstall?: boolean; implicitPostinstall?: boolean; lockfile?: boolean } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "harvey-readiness-authority-test-")));
   roots.push(root);
   const source = join(root, "source");
@@ -27,10 +28,10 @@ async function fixture(options: { requiredEnv?: boolean; postinstall?: boolean; 
     scripts: { build: "node runner.cjs", typecheck: "node runner.cjs", lint: "node runner.cjs", test: "node runner.cjs", ...(options.implicitPostinstall ? { postinstall: "prisma generate" } : options.postinstall ? { postinstall: "node postinstall.cjs" } : {}) },
   }));
   if (options.lockfile !== false) await writeFile(join(source, "package-lock.json"), JSON.stringify({ name: "fixture", version: "1.0.0", lockfileVersion: 3, requires: true, packages: { "": { name: "fixture", version: "1.0.0" } } }));
-  await writeFile(join(source, "runner.cjs"), `const fs=require('node:fs');fs.writeFileSync('stage-ran',JSON.stringify({cwd:process.cwd(),token:process.env.TEST_CREDENTIAL,unapproved:process.env.HARVEY_UNAPPROVED_TEST,names:Object.keys(process.env),dotenv:fs.existsSync('.env')}));`);
+  await writeFile(join(source, "runner.cjs"), `const fs=require('node:fs');fs.writeFileSync('stage-ran',JSON.stringify({cwd:process.cwd(),token:process.env.TEST_CREDENTIAL,nodeEnv:process.env.NODE_ENV,unapproved:process.env.HARVEY_UNAPPROVED_TEST,names:Object.keys(process.env),dotenv:fs.existsSync('.env')}));`);
   await writeFile(join(source, "postinstall.cjs"), "require('node:fs').writeFileSync('install-ran','declared postinstall executed');");
   await writeFile(join(source, ".env"), "TEST_CREDENTIAL=UNAPPROVED_DOTENV_CANARY");
-  if (options.requiredEnv) await writeFile(join(source, "vitest.config.ts"), "export default { value: process.env.TEST_CREDENTIAL };\n");
+  if (options.requiredEnv) await writeFile(join(source, "vitest.config.ts"), `export default { value: process.env.${typeof options.requiredEnv === "string" ? options.requiredEnv : "TEST_CREDENTIAL"} };\n`);
   if (options.implicitPostinstall) await writeFile(join(source, "codegen.ts"), "export default { key: process.env.GENERATOR_TOKEN };\n");
   const before = await captureSourceSentinel(source);
   const plan = discoverReadinessPlan(source);
@@ -227,9 +228,136 @@ describe("environment names and values", () => {
     }
   });
 
-  it.each(["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NPM_CONFIG_USERCONFIG", "BASH_ENV", "GIT_CONFIG", "HTTP_PROXY", "INVALID-NAME"])("refuses approved environment overrides of %s", async (name) => {
+  it.each([
+    "NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "NODE_REDIRECT_WARNINGS", "NODE_COMPILE_CACHE",
+    "NODE_REPL_HISTORY", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS", "NODE_ICU_DATA", "NODE_DEBUG",
+    "NODE_ENV_", "NODE_ENV_TOKEN", "NODE_ENVIRONMENT", "NODE_FUTURE_RUNTIME_CONTROL", "NODE_",
+    "BUN_OPTIONS", "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "BUN_INSTALL_CACHE_DIR", "BUN_FUTURE_RUNTIME_CONTROL", "BUN_",
+    "TS_NODE_COMPILER_OPTIONS", "TS_NODE_PROJECT", "TSX_TSCONFIG_PATH", "TSX_CACHE_DIR",
+    "OPENSSL_CONF", "OPENSSL_MODULES", "SSL_CERT_FILE", "SSL_CERT_DIR", "SSLKEYLOGFILE", "UV_THREADPOOL_SIZE",
+    "PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NPM_CONFIG_USERCONFIG", "BASH_ENV", "BASHOPTS",
+    "GIT_CONFIG", "HTTP_PROXY", "FORCE_COLOR", "INVALID-NAME", "node_env", "Node_Env",
+  ])("refuses approved environment overrides of %s", async (name) => {
     const { plan, binding } = await fixture();
     expect(() => createReadinessAdmission(plan, binding, optionsFor(plan, { approvedEnvNames: [name], environment: { [name]: "value" } }))).toThrow(/protected runtime\/toolchain control/);
+    expect(() => createReadinessAdmission(plan, binding, optionsFor(plan, { approvedEnvNames: [name], environment: {} }))).toThrow(/protected runtime\/toolchain control/);
+  });
+
+  it("rejects reserved application credential names before reading values and without echoing either", async () => {
+    const { plan, binding } = await fixture();
+    const name = "NODE_PRIVATE_CREDENTIAL_CANARY";
+    const value = "PRIVATE_RUNTIME_VALUE_CANARY";
+    const reads: string[] = [];
+    const registered: string[] = [];
+    const environment: Record<string, string | undefined> = {};
+    for (const key of ["APP_SECRET", name]) Object.defineProperty(environment, key, { get: () => { reads.push(key); return value; } });
+    let error: unknown;
+    try {
+      createReadinessAdmission(plan, binding, optionsFor(plan, { approvedEnvNames: ["APP_SECRET", name], environment, registerSecret: (secret) => registered.push(secret) }));
+    } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("reserved even when used for application credentials");
+    expect(String(error)).not.toContain(name);
+    expect(String(error)).not.toContain(value);
+    expect(reads).toEqual([]);
+    expect(registered).toEqual([]);
+  });
+
+  it.each(["NODE_REDIRECT_WARNINGS", "NODE_ENV_TOKEN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "TS_NODE_PROJECT"])("discloses required protected %s as policy refusal rather than a missing value", async (name) => {
+    const { plan, binding, target } = await fixture({ requiredEnv: name });
+    const context = createReadinessAdmission(plan, binding, optionsFor(plan));
+    const denial = await admitReadinessStage(context, stage(plan, "test").id, target);
+    expect(denial).toMatchObject({ status: "not-assessed", reasonCode: "required-environment-protected", authority: { requiredEnvNames: [name] } });
+    expect(denial.authority.reason).toContain("reserved even when used for application credentials");
+    expect(await runIfAdmitted(denial)).toBe(false);
+    await noMarker(target);
+  });
+
+  it.each([
+    "NODE", "NODEENV", "NODE_ENV", "NODEJS_TOKEN", "BUN", "BUNNY_TOKEN", "TS_NODEJS_TOKEN", "TSXTOKEN",
+    "APP_NODE_OPTIONS", "APP_BUN_OPTIONS", "APP_TSX_CACHE_DIR", "OPENSSLKEY", "SSL_CERT_FILE_TOKEN", "SSLKEYLOGFILE_TOKEN", "UV_SERVICE_TOKEN",
+  ])("keeps neighboring application name %s admissible and its value private", async (name) => {
+    const { plan, binding, target } = await fixture();
+    const value = "APPLICATION_VALUE_CANARY";
+    const registered: string[] = [];
+    const context = createReadinessAdmission(plan, binding, optionsFor(plan, {
+      approvedEnvNames: [name], environment: { [name]: value }, registerSecret: (secret) => registered.push(secret),
+    }));
+    const admission = await admitReadinessStage(context, stage(plan, "test").id, target);
+    expect(admission.status).toBe("admitted");
+    if (admission.status !== "admitted") throw new Error("expected application environment admission");
+    expect(admission.request.env[name]).toBe(value);
+    expect(registered).toEqual([value]);
+    expect(JSON.stringify(admission)).not.toContain(value);
+    expect(JSON.stringify(context)).not.toContain(value);
+  });
+
+  it.each([
+    { value: "development", kind: "test" as const },
+    { value: "production", kind: "build" as const },
+    { value: "test", kind: "lint" as const },
+  ])("passes explicitly approved NODE_ENV=$value without changing value privacy on $kind argv", async ({ value, kind }) => {
+    const { plan, binding, target } = await fixture();
+    const registered: string[] = [];
+    const context = createReadinessAdmission(plan, binding, optionsFor(plan, {
+      approvedEnvNames: ["NODE_ENV"], environment: { NODE_ENV: value }, registerSecret: (secret) => registered.push(secret),
+    }));
+    const admission = await admitReadinessStage(context, stage(plan, kind).id, target);
+    expect(registered).toEqual([value]);
+    expect(admission.status).toBe("admitted");
+    if (admission.status !== "admitted") throw new Error("expected NODE_ENV application-mode admission");
+    expect(admission.request.env.NODE_ENV).toBe(value);
+    expect(Object.keys(admission.request)).not.toContain("env");
+    expect(await runIfAdmitted(admission)).toBe(true);
+    expect(JSON.parse(await readFile(join(target.targetRoot, "stage-ran"), "utf8"))).toMatchObject({ nodeEnv: value });
+    expect((await cleanupDisposableTarget(target)).status).toBe("passed");
+  });
+
+  it("does not inherit NODE_ENV without approval or treat its argv-colliding value as public", async () => {
+    const { plan, binding, target } = await fixture();
+    const test = stage(plan, "test");
+    const unapproved = createReadinessAdmission(plan, binding, optionsFor(plan, { environment: { NODE_ENV: "development" } }));
+    const admission = await admitReadinessStage(unapproved, test.id, target);
+    if (admission.status !== "admitted") throw new Error("expected clean environment admission");
+    expect(admission.request.env.NODE_ENV).toBeUndefined();
+    const approved = createReadinessAdmission(plan, binding, optionsFor(plan, { approvedEnvNames: ["NODE_ENV"], environment: { NODE_ENV: "test" } }));
+    const denial = await admitReadinessStage(approved, test.id, target);
+    expect(denial).toMatchObject({ status: "not-assessed", reasonCode: "unsafe-argv" });
+    expect(await runIfAdmitted(denial)).toBe(false);
+    await noMarker(target);
+  });
+
+  it.each(["NODE_REDIRECT_WARNINGS", "NODE_COMPILE_CACHE"])("withholds %s before the bound runner can alter original source", async (name) => {
+    const { root, source, plan } = await fixture();
+    const canary = join(source, "original-warning-canary");
+    const cache = join(source, "original-cache-canary");
+    await writeFile(canary, "original warning canary\n");
+    await mkdir(cache);
+    await writeFile(join(cache, "keep"), "original cache canary");
+    const before = await captureSourceSentinel(source);
+    const binding = bindReadinessPlanV1(plan, before);
+    const tools = join(root, "tools");
+    const commandStarted = join(root, "command-started");
+    await mkdir(tools);
+    await writeFile(join(tools, "npm"), `#!${process.execPath}
+require('node:fs').writeFileSync(${JSON.stringify(commandStarted)}, 'command started');
+process.emitWarning('runtime-output-canary');
+`);
+    await chmod(join(tools, "npm"), 0o755);
+    const value = name === "NODE_REDIRECT_WARNINGS" ? canary : cache;
+    const result = await executeBoundReadinessPlan({
+      sourceRoot: source, plan, binding,
+      ...optionsFor(plan, { approvedEnvNames: [name], environment: { [name]: value }, toolchainPath: tools }),
+      limits: { timeoutMs: 3_000, headBytes: 512, tailBytes: 512 },
+    });
+    expect(await captureSourceSentinel(source)).toEqual(before);
+    expect(await readFile(canary, "utf8")).toBe("original warning canary\n");
+    expect(await readFile(join(cache, "keep"), "utf8")).toBe("original cache canary");
+    await expect(lstat(commandStarted)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result.execution.stages.every((row) => row.execution.kind !== "process")).toBe(true);
+    expect(result.execution.cleanup).toMatchObject({ status: "passed", source: { status: "passed" }, removal: { status: "removed" } });
+    expect(result.json).not.toContain(value);
+    expect(result.json).not.toContain("runtime-output-canary");
   });
 
   it.each([{ value: "npm", kind: "test" as const }, { value: "typecheck", kind: "typecheck" as const }])("rejects a $value approved value in argv, including values below the shared secret-length floor", async ({ value, kind }) => {

@@ -77,7 +77,31 @@ interface AdmissionState {
 }
 
 const admissions = new WeakMap<ReadinessAdmissionContext, AdmissionState>();
-const PROTECTED_NAMES = /^(?:PATH|HOME|USERPROFILE|TMP|TEMP|TMPDIR|CI|LANG|LC_ALL|NO_COLOR|NODE_OPTIONS|NODE_PATH|NODE_V8_COVERAGE|BASH_ENV|ENV|SHELLOPTS|CDPATH|IFS|COMSPEC|PATHEXT|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|XDG_.*|GIT_.*|LD_.*|DYLD_.*|NPM_CONFIG_.*|PNPM_.*|YARN_.*|COREPACK_.*)$/;
+// Reserve runtime namespaces, not just today's known output flags: newer Node/Bun
+// controls must not turn an approved application value into a loader or host write.
+// NODE_ENV is the deliberate application-mode exception; it still needs approval.
+// Sources: nodejs.org/api/cli.html#environment-variables,
+// bun.sh/docs/runtime/environment-variables, typestrong.org/ts-node/docs/options/.
+const ENVIRONMENT_POLICY = immutable({
+  protectedNames: [
+    "PATH", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "CI", "LANG", "LC_ALL", "NO_COLOR", "FORCE_COLOR",
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH", "IFS", "COMSPEC", "PATHEXT",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    // Node's native TLS/configuration controls do not all use the NODE_ prefix.
+    "SSL_CERT_DIR", "SSL_CERT_FILE", "SSLKEYLOGFILE", "UV_THREADPOOL_SIZE",
+  ],
+  protectedPrefixes: [
+    "NODE_", "BUN_", "TS_NODE_", "TSX_", "OPENSSL_",
+    "XDG_", "GIT_", "LD_", "DYLD_", "NPM_CONFIG_", "PNPM_", "YARN_", "COREPACK_",
+  ],
+  applicationNames: ["NODE_ENV"],
+});
+const PROTECTED_ENVIRONMENT_REASON = "Runtime/toolchain environment names are reserved even when used for application credentials. NODE_* is reserved except the explicitly approved NODE_ENV application mode.";
+
+function protectedEnvironmentName(name: string): boolean {
+  return !ENVIRONMENT_POLICY.applicationNames.includes(name)
+    && (ENVIRONMENT_POLICY.protectedNames.includes(name) || ENVIRONMENT_POLICY.protectedPrefixes.some((prefix) => name.startsWith(prefix)));
+}
 
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -130,8 +154,8 @@ export function createReadinessAdmission(planInput: unknown, bindingInput: Readi
     authorizations.set(authorization.stageId, immutable(structuredClone(authorization)));
   }
   const approvedEnvNames = [...new Set(options.approvedEnvNames)].sort();
-  if (approvedEnvNames.some((name) => !/^[A-Z][A-Z0-9_]*$/.test(name) || PROTECTED_NAMES.test(name))) {
-    throw new Error("The approved environment contains an invalid name or a protected runtime/toolchain control.");
+  if (approvedEnvNames.some((name) => !/^[A-Z][A-Z0-9_]*$/.test(name) || protectedEnvironmentName(name))) {
+    throw new Error(`The approved environment contains an invalid name or a protected runtime/toolchain control. ${PROTECTED_ENVIRONMENT_REASON}`);
   }
   const values: Record<string, string> = Object.create(null) as Record<string, string>;
   const secrets = new SecretRegistry();
@@ -234,6 +258,9 @@ export async function admitReadinessStage(context: ReadinessAdmissionContext, st
     return denied(authority, "effect-scope-mismatch", "The target-install grant does not authorize a separate package script.", "Approve the bound script separately after establishing disposable local effects.");
   }
   if (!sourceEqual(context.binding.source, target.sourceBefore)) return denied(authority, "source-binding-mismatch", "The target copy does not match the source root, content, or Git state bound to this readiness plan.", "Capture, discover, and bind a new plan from the exact current source before creating the disposable target.");
+  if (requiredEnvNames.some(protectedEnvironmentName)) {
+    return denied(authority, "required-environment-protected", PROTECTED_ENVIRONMENT_REASON, "Use application-specific environment names outside the reserved runtime/toolchain namespaces and rediscover the plan before approving execution.");
+  }
   const missing = requiredEnvNames.filter((name) => !state.approvedEnvNames.includes(name) || !Object.hasOwn(state.values, name));
   if (missing.length) return denied(authority, "required-environment-missing", `Required environment names are not approved and present: ${missing.join(", ")}.`, "Provide nonempty values for every required name through the operator-approved environment allowlist.");
   const root = await verifyRunRoot(target, stage.command.cwd);
