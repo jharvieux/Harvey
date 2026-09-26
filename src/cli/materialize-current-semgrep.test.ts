@@ -106,28 +106,56 @@ process.stdout.write(JSON.stringify({ errors: [], paths: { scanned: [] }, skippe
   return { bin, state };
 }
 
-type CliRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type CliRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
+
+function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<CliRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      if (!overflow) return finish(status, signal, launchError);
+      const error = Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException;
+      finish(null, "SIGTERM", error);
+    });
+  });
+}
 
 function run(dir: string, fixtureRoot: { bin: string; state: string }, mode: string): Promise<CliRun> {
-  return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, "--dir", dir, "--out", join(dir, "receipt.json")], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        PATH: `${fixtureRoot.bin}:${process.env.PATH ?? ""}`,
-        FAKE_CURL_MODE: mode,
-        FAKE_CURL_STATE: fixtureRoot.state,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.once("error", rejectRun);
-    child.once("close", (status, signal) => resolveRun({ status, signal, stdout, stderr }));
+  return runCommand(process.execPath, ["--import", "tsx", CLI, "--dir", dir, "--out", join(dir, "receipt.json")], ROOT, {
+    ...process.env,
+    PATH: `${fixtureRoot.bin}:${process.env.PATH ?? ""}`,
+    FAKE_CURL_MODE: mode,
+    FAKE_CURL_STATE: fixtureRoot.state,
   });
 }
 
@@ -164,6 +192,14 @@ function validate(dir: string, fixtureRoot: { bin: string; state: string }) {
 }
 
 describe("current Semgrep registry materialization transport (#2171)", () => {
+  it("caps combined local-child stdout and stderr at the former 1 MiB synchronous limit", async () => {
+    const result = await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], ROOT, process.env);
+    expect(result).toMatchObject({ status: null, signal: "SIGTERM", error: { code: "ENOBUFS" } });
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+    expect(result.stdout).not.toHaveLength(0);
+    expect(result.stderr).not.toHaveLength(0);
+  });
+
   it("keeps the six-pack retry budget within the prior six times 60 second bound", () => {
     expect(REGISTRY_PACK_FETCH_POLICY.perPackBudgetMs).toBe(60_000);
     expect(REGISTRY_PACK_FETCH_POLICY.perPackBudgetMs * REGISTRY_PACKS.length).toBe(360_000);
