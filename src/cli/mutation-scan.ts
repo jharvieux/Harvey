@@ -31,7 +31,7 @@
 //
 //   pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental]
 //                       [--report <path>] [--hotspots <file>] [--out <file>] [--install]
-//                       [--stub-check [--test-cmd "<cmd>"]] [--detect-only]
+//                       [--stub-check [--test-cmd "<cmd>"] [--stub-timeout-ms <ms>]] [--detect-only]
 //
 // --detect-only (#470) runs ONLY the suite-absent detection (#224/#252) and never invokes
 // Stryker: if the target has no meaningful suite it emits the M8-00 zero-coverage finding
@@ -120,13 +120,15 @@ import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
-import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
+import { classifyStubCheckReceipt, interruptedStubBaselineModuleRecord, interruptedStubCheckModuleRecord, runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
 import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
 import { redactSecrets } from "../secret-redact.js";
 import { createCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
+import { probeExec } from "../probe-exec.js";
 import {
   coveredScopeLine,
+  validMutantCount,
   compareMutationRuns,
   applyReportedMutation,
   detectDryRunFailure,
@@ -188,7 +190,7 @@ function arg(flag: string): string | undefined {
 const targetArg = args.find((a) => !a.startsWith("--"));
 
 if (!targetArg) {
-  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>] [--install] [--stub-check [--test-cmd \"<cmd>\"]] [--detect-only]");
+  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>] [--install] [--stub-check [--test-cmd \"<cmd>\"] [--stub-timeout-ms <ms>]] [--detect-only]");
   process.exit(2);
 }
 
@@ -999,6 +1001,12 @@ if (stubCheck) {
     console.error("--test-cmd is empty");
     process.exit(2);
   }
+  const timeoutValue = arg("--stub-timeout-ms");
+  const stubTimeoutMs = timeoutValue === undefined ? undefined : Number(timeoutValue);
+  if (stubTimeoutMs !== undefined && (!Number.isSafeInteger(stubTimeoutMs) || stubTimeoutMs <= 0)) {
+    console.error("--stub-timeout-ms must be a positive integer");
+    process.exit(2);
+  }
 
   // #600: copy the target into a scratch dir the stubbing writes to, excluding the same heavy/
   // irrelevant dirs walkRelPaths already skips (node_modules is symlinked back in below rather
@@ -1006,6 +1014,7 @@ if (stubCheck) {
   const copyDir = mkdtempSync(temporaryPrefix("harvey-stub-check-"));
   const sources = loadSourceFiles(targetDir); // read from the ORIGINAL — read-only, and the copy is a byte-identical mirror
   const pristineBefore = snapshotPristine(targetDir, sources);
+  const stubSourceSha256 = createHash("sha256").update(JSON.stringify(sources.map(source => [source.path, createHash("sha256").update(source.text).digest("hex")]))).digest("hex");
   // process.exit() does NOT run pending finally blocks (it terminates before the stack unwinds),
   // so the copyDir cleanup is a real try/finally and the exit happens AFTER it, not inside it.
   let stubJson: string;
@@ -1026,15 +1035,26 @@ if (stubCheck) {
     // between iterations (the next stubbed export in the same file must start from unstubbed
     // text), not crash-safety — the target directory this could leak into was never written to
     // in the first place.
+    const invokeStubTest = (argv: string[], configuration: Record<string, unknown>): { receipt: CommandExecutionReceipt; output: string } => {
+      const result = probeExec(testBin, argv, {
+        cwd: copyDir,
+        env: Object.fromEntries(detectedEnv.map((entry) => [entry.key, entry.value])),
+        ...(stubTimeoutMs === undefined ? {} : { timeoutMs: stubTimeoutMs }),
+        receipt: {
+          target: { identity: targetDir, value: { targetDir, sourceSha256: stubSourceSha256 } },
+          toolchain: [{ name: testBin, version: testBin === "node" || resolve(testBin) === process.execPath ? process.version : "not-measured" }],
+          configuration: { identity: "stub-check-test-selection", value: { ...configuration, timeoutMs: stubTimeoutMs ?? null } },
+        },
+      });
+      if (!result.receipt) throw new Error("stub-check test runner returned no native command receipt");
+      return { receipt: result.receipt, output: result.stderr || result.output };
+    };
     const runner: StubTestRunner = (stub, tests) => {
       const copyAbs = join(copyDir, stub.file);
       const original = readFileSync(copyAbs, "utf8");
       writeFileSync(copyAbs, stub.stubbedText);
       try {
-        execFileSync(testBin, [...testBaseArgs, ...tests], { cwd: copyDir, stdio: "ignore", env: suiteEnv });
-        return true; // exit 0 with the body deleted — the suite survived
-      } catch {
-        return false;
+        return invokeStubTest([...testBaseArgs, ...tests], { mode: "stubbed", file: stub.file, exportName: stub.exportName, coveringTests: tests }).receipt;
       } finally {
         writeFileSync(copyAbs, original);
       }
@@ -1047,20 +1067,23 @@ if (stubCheck) {
     // suite, and this CLI printed the strongest possible test-quality result having measured
     // nothing. Stryker's own ladder already has this rung (dryRunFailureModuleRecord, #503); the
     // stub-check tier did not.
-    const baseline = ((): { passed: boolean; detail: string } => {
-      try {
-        execFileSync(testBin, testBaseArgs, { cwd: copyDir, stdio: ["ignore", "ignore", "pipe"], env: suiteEnv });
-        return { passed: true, detail: "" };
-      } catch (err) {
-        const e = err as { stderr?: Buffer; message?: string };
-        const tail = e.stderr?.toString().trim().split("\n").slice(-4).join(" | ");
-        return { passed: false, detail: tail || (e.message ?? "non-zero exit, no output") };
-      }
-    })();
+    const baselineExecution = invokeStubTest(testBaseArgs, { mode: "unmutated-baseline" });
+    const baselineClassification = classifyStubCheckReceipt(baselineExecution.receipt);
+    const baseline = {
+      passed: baselineClassification.status === "completed" && baselineClassification.suitePassed,
+      detail: baselineClassification.status === "interrupted"
+        ? baselineClassification.reason
+        : baselineExecution.output.trim().split("\n").slice(-4).join(" | ") || `completed exit ${baselineExecution.receipt.outcome.exitCode}`,
+      classification: baselineClassification,
+      executionReceipt: baselineExecution.receipt,
+    };
 
     if (!baseline.passed) {
       console.error(`✗ M8 stub-check: the target suite FAILED its own UNMUTATED run under \`${[testBin, ...testBaseArgs].join(" ")}\` — nothing was measured. ${baseline.detail}`);
-      stubJson = JSON.stringify({ runs: [], findings: [], baselineFailed: true, moduleRecord: stubCheckBaselineModuleRecord([testBin, ...testBaseArgs].join(" "), baseline.detail) }, null, 2);
+      const moduleRecord = baseline.classification.status === "interrupted"
+        ? interruptedStubBaselineModuleRecord([testBin, ...testBaseArgs].join(" "), baseline.classification)
+        : stubCheckBaselineModuleRecord([testBin, ...testBaseArgs].join(" "), baseline.detail);
+      stubJson = JSON.stringify({ runs: [], findings: [], baseline, baselineFailed: true, moduleRecord }, null, 2);
     } else {
       const runs = runStubCheck(sources, runner);
       const findings = stubSurvivalFindings(runs);
@@ -1071,9 +1094,11 @@ if (stubCheck) {
       }
       // Recorded because it is the shape a broken invocation used to wear: with the baseline green
       // it means every deletion was caught, but the number belongs in the artifact either way.
-      const allRunsFailed = runs.length > 0 && runs.every((r) => !r.suitePassed);
+      const allRunsFailed = runs.length > 0 && runs.every((r) => r.classification.status === "completed" && r.suitePassed === false);
       if (allRunsFailed) console.error(`M8 stub-check: every one of the ${runs.length} stubbed run(s) failed its covering tests — the suite is green unmutated, so this reads as full deletion coverage.`);
-      stubJson = JSON.stringify({ runs, findings, baselineFailed: false, allRunsFailed }, null, 2);
+      const moduleRecord = interruptedStubCheckModuleRecord(runs);
+      if (moduleRecord) console.error(moduleRecord.note);
+      stubJson = JSON.stringify({ runs, findings, baseline, baselineFailed: false, allRunsFailed, ...(moduleRecord ? { moduleRecord } : {}) }, null, 2);
     }
 
     // #600 acceptance: prove the live checkout is still exactly what it was — fail loud (not a
@@ -1726,7 +1751,7 @@ const hotspotFiles = hotspotsPath
 
 const summary = summarizeMutationReport(report, hotspotFiles);
 
-console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors - summary.overall.runtimeErrors} valid mutants killed)`);
+console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${validMutantCount(summary.overall)} valid mutants detected)`);
 // #1076: Stryker's OTHER published score — detected/(detected+survived), i.e. over only the code
 // the suite actually reached. Printed alongside so "your tests are bad" and "your tests are decent
 // but reach half the code" don't collapse into one number.

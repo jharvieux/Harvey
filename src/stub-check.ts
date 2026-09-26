@@ -15,6 +15,7 @@ import ts from "typescript";
 import type { Finding } from "./findings.js";
 import { parse, type SourceInput } from "./detectors/common.js";
 import { isTestFile, resolveModule } from "./detectors/test-intent.js";
+import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 const PARSEABLE = /\.([cm]?[jt]s|[jt]sx)$/;
 
@@ -88,11 +89,54 @@ interface StubCheckRun {
   exportName: string;
   line: number;
   coveringTests: string[];
-  // true = the covering suite still passed with the body deleted — the survival verdict.
-  suitePassed: boolean;
+  // true = the covering suite still passed with the body deleted; false = a completed non-zero
+  // test exit caught the deletion. Interrupted children have no suite verdict.
+  suitePassed?: boolean;
+  classification: StubCheckClassification;
+  executionReceipt: CommandExecutionReceipt;
 }
 
-export type StubTestRunner = (stub: { file: string; exportName: string; stubbedText: string }, coveringTests: string[]) => boolean;
+export type StubTestRunner = (stub: { file: string; exportName: string; stubbedText: string }, coveringTests: string[]) => CommandExecutionReceipt;
+
+type StubCheckClassification =
+  | { status: "completed"; suitePassed: boolean }
+  | { status: "interrupted"; reason: string };
+
+/** A completed non-zero test exit proves the deletion was noticed; interruption proves nothing. */
+export function classifyStubCheckReceipt(receipt: CommandExecutionReceipt): StubCheckClassification {
+  try {
+    assertCommandExecutionReceipt(receipt);
+  } catch (error) {
+    return { status: "interrupted", reason: `invalid command receipt: ${(error as Error).message}` };
+  }
+  const { outcome } = receipt;
+  if (outcome.state === "exited") return { status: "completed", suitePassed: outcome.exitCode === 0 };
+  const detail = [
+    `state ${outcome.state}`,
+    `exit ${outcome.exitCode ?? "null"}`,
+    ...(outcome.observedExitCode === undefined ? [] : [`observed exit ${outcome.observedExitCode}`]),
+    `signal ${outcome.signal ?? "null"}`,
+    ...(outcome.errorCode ? [`error ${outcome.errorCode}`] : []),
+  ].join(", ");
+  return { status: "interrupted", reason: `stubbed test command did not complete (${detail})` };
+}
+
+export function interruptedStubCheckModuleRecord(runs: readonly StubCheckRun[]): { status: "partial"; note: string } | undefined {
+  const interrupted = runs.filter((run) => run.classification.status === "interrupted");
+  if (interrupted.length === 0) return undefined;
+  const details = interrupted.map((run) => `${run.file}:${run.line} \`${run.exportName}\`: ${run.classification.status === "interrupted" ? run.classification.reason : ""}`).join("; ");
+  return {
+    status: "partial",
+    note: `M8 stub-check is partial: ${interrupted.length} of ${runs.length} stubbed test command(s) was interrupted and cannot prove deletion coverage. ${details}. Completed non-zero test exits remain distinct and count as caught deletions. [MEASURED from retained native command receipts; falsifier: rerun pnpm mutation-scan <target> --stub-check --out /tmp/m8-stub.json, then run node -e 'const a=require(process.argv[1]);process.exit(a.baseline?.classification?.status==="completed"&&a.baseline.classification.suitePassed===true&&Array.isArray(a.runs)&&a.runs.length>0&&a.runs.every(r=>r.classification?.status==="completed")?0:1)' /tmp/m8-stub.json].`,
+  };
+}
+
+export function interruptedStubBaselineModuleRecord(testCmd: string, classification: Extract<StubCheckClassification, { status: "interrupted" }>): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `M8 stub-check did not run: the target suite's UNMUTATED baseline was interrupted under \`${testCmd}\` (${classification.reason}). No deletion-survival result is reported. [MEASURED from the retained native command receipt; falsifier: rerun pnpm mutation-scan <target> --stub-check --out /tmp/m8-stub.json, then run node -e 'const a=require(process.argv[1]);process.exit(a.baseline?.classification?.status==="completed"?0:1)' /tmp/m8-stub.json].`,
+  };
+}
 
 // Every covered exported function is stubbed and re-run — a file with NO covering tests is
 // skipped, not failed: "nothing covers this" is the mutation scan's NoCoverage / #224 signal,
@@ -105,12 +149,16 @@ export function runStubCheck(files: SourceInput[], runTests: StubTestRunner): St
     const tests = coveringTests(file.path, files);
     if (tests.length === 0) continue;
     for (const v of stubExportedFunctions(file)) {
+      const executionReceipt = runTests({ file: file.path, exportName: v.exportName, stubbedText: v.stubbedText }, tests);
+      const classification = classifyStubCheckReceipt(executionReceipt);
       runs.push({
         file: file.path,
         exportName: v.exportName,
         line: v.line,
         coveringTests: tests,
-        suitePassed: runTests({ file: file.path, exportName: v.exportName, stubbedText: v.stubbedText }, tests),
+        ...(classification.status === "completed" ? { suitePassed: classification.suitePassed } : {}),
+        classification,
+        executionReceipt,
       });
     }
   }
@@ -122,7 +170,7 @@ export function runStubCheck(files: SourceInput[], runTests: StubTestRunner): St
 export function stubSurvivalFindings(runs: StubCheckRun[]): Finding[] {
   let n = 0;
   return runs
-    .filter((r) => r.suitePassed)
+    .filter((r) => r.classification.status === "completed" && r.suitePassed === true)
     .map((r) => ({
       id: `M8-01-${String(++n).padStart(2, "0")}`,
       status: "Open",

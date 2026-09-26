@@ -167,7 +167,7 @@ export interface ModuleNotRun {
 export interface MutationBaseline {
   mutationScore: number; // percent, as summarizeMutationReport computes it
   killed: number;
-  valid: number; // mutants Stryker could actually judge (excludes Ignored/CompileError)
+  valid: number; // Killed + Timeout + Survived + NoCoverage; excludes all unjudged statuses
   // #319: the files the score is measured over — Stryker's `mutate` scope, a subset of the repo,
   // NEVER the whole tree. Always non-empty; this is the denominator that keeps the score honest.
   coveredScope: string[];
@@ -1421,8 +1421,8 @@ interface DriftRow {
 // #300: scores a REAL Stryker run against a target's recorded MutationBaseline. Exact equality on
 // killed/valid is the DEFAULT (tolerance 0): the target tree is pinned, so a change in the count
 // should mean something moved, and comparing counts (not just the rounded score) means a change
-// that swaps a killed mutant for a survivor at a constant percentage still fails — that is a real
-// test-quality movement, and the percentage alone would hide it.
+// in killed/valid counts at a constant percentage still fails. This aggregate contract does not
+// compare mutant identities: a killed/surviving identity exchange with equal counts is unmeasured.
 //
 // #432 corrected this comment's original claim that "the mutators are deterministic, so the same
 // suite against the same code kills the same mutants" — that is false in general. boxyhq's suite
@@ -1459,11 +1459,12 @@ export function scoreMutationBaseline(
     // and the percentage moves independently because Stryker counts a TIMEOUT as detected but not as
     // killed. So the two numbers legitimately differ on a pass, and the row now says both and which
     // is which rather than silently substituting one for the other.
-    detail: pass
+    detail: (pass
       ? identical
         ? `matches baseline exactly: ${formatMutationClaim(baseline, actual)}`
         : `MEASURED ${formatMutationClaim(baseline, actual)} — within the baseline's band; RECORDED baseline is ${baseline.mutationScore}% (${baseline.killed}/${baseline.valid} killed)`
-      : `DRIFT: expected ${formatMutationClaim(baseline)}, got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`,
+      : `DRIFT: expected ${formatMutationClaim(baseline)}, got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`)
+      + "; aggregate-count drift only — survivor-identity changes are unmeasured",
   };
 }
 

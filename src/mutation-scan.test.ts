@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { scoreMutationBaseline } from "./scan/external-corpus.js";
 import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
 import {
   applyReportedMutation,
@@ -1328,10 +1329,43 @@ describe("reRootReportToApp (#655)", () => {
 // harness rather than a handled degradation of one target, and the target it happened to was not
 // named at all.
 describe("mutationRunFromArtifact (#1419)", () => {
-  const real = { summary: { overall: { mutationScore: 76, killed: 80, totalMutants: 130, ignored: 3, compileErrors: 2 } } };
+  const real = { summary: { overall: { mutationScore: 76, killed: 80, timeout: 15, survived: 20, noCoverage: 10, totalMutants: 130, ignored: 3, compileErrors: 2 } } };
 
   it("reads the score, killed count and Stryker's own valid denominator", () => {
     expect(mutationRunFromArtifact("inbox-zero", real)).toEqual({ mutationScore: 76, killed: 80, valid: 125 });
+  });
+
+  it.each([
+    ["Killed", 1, 2, 100], ["Timeout", 1, 1, 100],
+    ["Survived", 1, 1, 50], ["NoCoverage", 1, 1, 50],
+    ["Ignored", 0, 1, 100], ["CompileError", 0, 1, 100],
+    ["RuntimeError", 0, 1, 100], ["Pending", 0, 1, 100],
+  ] as const)("counts %s consistently at the producer and corpus consumer (#2219)", (status, additionalValid, killed, mutationScore) => {
+    const summary = summarizeMutationReport({ files: { "a.ts": { mutants: [mutant({ status: "Killed" }), mutant({ id: "2", status })] } } });
+    const actual = mutationRunFromArtifact("fixture", JSON.parse(JSON.stringify({ summary })));
+    expect(actual).toEqual({ mutationScore, killed, valid: 1 + additionalValid });
+    expect(scoreMutationBaseline("fixture", { ...actual, coveredScope: ["a.ts"], note: "judged fixture population" }, actual).pass).toBe(true);
+  });
+
+  it("accepts the real producer's 1/1 baseline with RuntimeError and Pending excluded (#2219)", () => {
+    const summary = summarizeMutationReport({ files: { "a.ts": { mutants: ["Killed", "RuntimeError", "Pending"].map((status, id) => mutant({ id: String(id), status: status as StrykerMutant["status"] })) } } });
+    const actual = mutationRunFromArtifact("fixture", JSON.parse(JSON.stringify({ summary })));
+    const row = scoreMutationBaseline("fixture", { mutationScore: 100, killed: 1, valid: 1, coveredScope: ["a.ts"], note: "one judged mutant" }, actual);
+    expect(actual).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("1/1 killed");
+    expect(row.detail).not.toContain("1/3");
+  });
+
+  it.each(["m8-mutation-broad.json", "m8-mutation-fresh.json"])("preserves retained summary compatibility: %s (#2219)", file => {
+    const artifact = JSON.parse(readFileSync(new URL(`../reports/atc/captures/${file}`, import.meta.url), "utf8"));
+    const overall = artifact.summary.overall;
+    expect(overall).not.toHaveProperty("pending");
+    const actual = mutationRunFromArtifact("atc", artifact);
+    expect(actual.valid).toBe(overall.killed + overall.timeout + overall.survived + overall.noCoverage);
+    expect(actual.mutationScore).toBe(overall.mutationScore);
+    expect(actual.killed).toBe(overall.killed);
+    expect(Number.isFinite(actual.valid)).toBe(true);
   });
 
   it("NEGATIVE CONTROL: an artifact with no `summary` names the TARGET and the degradation, not a TypeError", () => {

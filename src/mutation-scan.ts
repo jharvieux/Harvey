@@ -335,18 +335,25 @@ interface MutationSummary {
   coveredScope: string[];
 }
 
-// #1076: RuntimeError added — MEASURED 2026-07-25 against upstream's calculateMetrics.ts, which
-// puts RuntimeError in totalInvalid alongside CompileError (both excluded from the valid/scored
-// set); Harvey previously counted a RuntimeError mutant as valid-but-undetected, silently pulling
-// the score down whenever one occurred (runtimeErrors was 0 in the one real capture measured, so
-// this has never actually bitten a real report — but the header comment claimed the mirror while
-// the code diverged).
-const NOT_VALID: ReadonlySet<MutantStatus> = new Set(["Ignored", "CompileError", "Pending", "RuntimeError"]);
+// One population for scoring and retained-summary consumers. Invalid statuses (Ignored,
+// CompileError, Pending, RuntimeError) have no entry; count the judged buckets positively
+// so older summaries need not have recorded every invalid status separately.
+const VALID_MUTANT_COUNTS = {
+  Killed: "killed",
+  Timeout: "timeout",
+  Survived: "survived",
+  NoCoverage: "noCoverage",
+} as const;
+
+export function validMutantCount(summary: Pick<ModuleMutationSummary, typeof VALID_MUTANT_COUNTS[keyof typeof VALID_MUTANT_COUNTS]>): number {
+  return Object.values(VALID_MUTANT_COUNTS).reduce((total, field) => total + summary[field], 0);
+}
+
 const DETECTED: ReadonlySet<MutantStatus> = new Set(["Killed", "Timeout"]);
 const SURVIVING: ReadonlySet<MutantStatus> = new Set(["Survived", "NoCoverage"]);
 
 export function mutationScore(mutants: StrykerMutant[]): number {
-  const valid = mutants.filter((m) => !NOT_VALID.has(m.status));
+  const valid = mutants.filter((m) => Object.hasOwn(VALID_MUTANT_COUNTS, m.status));
   if (valid.length === 0) return 0;
   const detected = valid.filter((m) => DETECTED.has(m.status)).length;
   return Math.round((detected / valid.length) * 1000) / 10;
@@ -356,7 +363,7 @@ export function mutationScore(mutants: StrykerMutant[]): number {
 // survived) — i.e. valid mutants MINUS the ones with no coverage at all. Harvey computed only the
 // first score; this is the second one Stryker's own report always shows alongside it.
 export function mutationScoreBasedOnCoveredCode(mutants: StrykerMutant[]): number {
-  const valid = mutants.filter((m) => !NOT_VALID.has(m.status));
+  const valid = mutants.filter((m) => Object.hasOwn(VALID_MUTANT_COUNTS, m.status));
   if (valid.length === 0) return 0;
   const detected = valid.filter((m) => DETECTED.has(m.status)).length;
   const covered = valid.filter((m) => m.status !== "NoCoverage").length;
@@ -570,7 +577,7 @@ export function mutationRunFromArtifact(slug: string, artifact: unknown): { muta
     );
   }
   // "valid" is Stryker's own denominator for the score: everything it could actually judge.
-  return { mutationScore: o.mutationScore, killed: o.killed, valid: o.totalMutants - o.ignored - o.compileErrors };
+  return { mutationScore: o.mutationScore, killed: o.killed, valid: validMutantCount(o) };
 }
 
 // #819: the Istanbul `coverage-summary.json` shape (the json-summary reporter, produced by both

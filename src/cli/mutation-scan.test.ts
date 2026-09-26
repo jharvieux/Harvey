@@ -10,17 +10,23 @@ import "../__tests__/mutation-runner-validity.js";
 // The same fixtures exercise #252's suite-absent threshold end-to-end through the CLI: a harness
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Finding } from "../findings.js";
+import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
+import { conservationLedger } from "../conservation-ledger.js";
 import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { runAudit, type RunContext } from "../audit-runner.js";
+import { assembleEngagementDocument } from "../audit-report.js";
+import { renderReport } from "../../report-template/render.mjs";
 import { readNamesSafe, statSafe } from "../fs-walk.js";
-import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
+import { mutationRunFromArtifact, TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
+import { scoreMutationBaseline } from "../scan/external-corpus.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "mutation-scan.ts");
@@ -55,19 +61,21 @@ function fixtureRepo(testFiles: Record<string, string>): string {
 // constraint is "no single blocking window may approach 60s" for every heavy CLI test, not only the
 // one already found over it. This also folds in the three near-identical `runCliOn` copies that used
 // to live in the describe blocks below (#623/#932/#655) — same body, different local name.
-function runCli(target: string, extraArgs: string[], extraEnv: Record<string, string> = {}): Promise<{ status: number; out: string }> {
+function runCli(target: string, extraArgs: string[], extraEnv: Record<string, string> = {}): Promise<{ status: number; out: string; stderr: string }> {
   const outPath = join(target, "m8-out.json");
   return new Promise((resolve) => {
     const child = spawn("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
       cwd: REPO_ROOT,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       // A PATH with node but no stryker anywhere — the exact CI condition of issue #470.
       env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, ...extraEnv },
     });
-    child.on("error", () => resolve({ status: 1, out: "" }));
+    let stderr = "";
+    child.stderr!.on("data", chunk => { stderr += String(chunk); });
+    child.on("error", () => resolve({ status: 1, out: "", stderr }));
     child.on("close", (code) => {
       const status = code ?? 1;
-      resolve({ status, out: status === 0 && existsSync(outPath) ? readFileSync(outPath, "utf8") : "" });
+      resolve({ status, out: status === 0 && existsSync(outPath) ? readFileSync(outPath, "utf8") : "", stderr });
     });
   });
 }
@@ -200,6 +208,20 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(reportFiles.map((f) => [f, { mutants: [killed] }])) }));
     return { repo, reportPath };
   }
+
+  it("replays unjudged mutants with a consistent CLI and corpus denominator (#2219)", async () => {
+    const { repo, reportPath } = scopedFixture(["src/add.ts"]);
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: ["Killed", "RuntimeError", "Pending", "Timeout"].map((status, id) => ({ ...killed, id: String(id), status })) } } }));
+    const result = await runCli(repo, ["--report", reportPath]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("100% (2/2 valid mutants detected)");
+    const actual = mutationRunFromArtifact("fixture", JSON.parse(result.out));
+    expect(actual).toEqual({ mutationScore: 100, killed: 1, valid: 2 });
+    const row = scoreMutationBaseline("fixture", { ...actual, coveredScope: ["src/add.ts"], note: "one killed and one timed out" }, actual);
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("1/2 killed");
+    expect(row.detail).not.toContain("1/3");
+  });
 
   it("a report covering a subset of the configured mutate scope emits the partial moduleRecord alongside its summary", async () => {
     const { repo, reportPath } = scopedFixture(["src/add.ts"]);
@@ -571,9 +593,11 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
     // actually being installed in the fixture.
     const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", "true"]);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[] };
+    const parsed = JSON.parse(out) as { runs: Array<{ classification: { status: string; suitePassed: boolean }; executionReceipt: CommandExecutionReceipt }>; findings: unknown[]; baseline: { classification: { status: string; suitePassed: boolean }; executionReceipt: CommandExecutionReceipt } };
     expect(parsed.runs).toHaveLength(1);
     expect(parsed.findings).toHaveLength(1);
+    expect(parsed.baseline).toMatchObject({ classification: { status: "completed", suitePassed: true }, executionReceipt: { outcome: { state: "exited", exitCode: 0, signal: null } } });
+    expect(parsed.runs[0]).toMatchObject({ classification: { status: "completed", suitePassed: true }, executionReceipt: { outcome: { state: "exited", exitCode: 0, signal: null } } });
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
   });
 
@@ -584,12 +608,175 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
     const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", "false"]);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[]; baselineFailed: boolean; moduleRecord?: { status: string; note: string } };
+    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[]; baseline: { classification: { status: string; suitePassed: boolean }; executionReceipt: CommandExecutionReceipt }; baselineFailed: boolean; moduleRecord?: { status: string; note: string } };
     expect(parsed.baselineFailed).toBe(true);
     expect(parsed.runs).toEqual([]);
     expect(parsed.findings).toEqual([]);
+    expect(parsed.baseline).toMatchObject({ classification: { status: "completed", suitePassed: false }, executionReceipt: { outcome: { state: "exited", exitCode: 1, signal: null } } });
     expect(parsed.moduleRecord?.status).toBe("partial");
     expect(parsed.moduleRecord?.note).toMatch(/UNMUTATED baseline/);
+  });
+
+  it.each([
+    { mode: "exit", state: "exited", exitCode: 7, interrupted: false },
+    { mode: "signal", state: "signaled", exitCode: null, interrupted: true },
+    { mode: "timeout", state: "timed-out", exitCode: null, interrupted: true },
+    { mode: "overflow", state: "output-limit-exceeded", exitCode: null, interrupted: true },
+    { mode: "spawn", state: "spawn-failed", exitCode: null, interrupted: true },
+  ])("retains native $state outcome from a real stubbed child and classifies it without raw-status guessing", async ({ mode, state, exitCode, interrupted }) => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const control = mkdtempSync(join(tmpdir(), `harvey-stub-${mode}-`));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    writeFileSync(runner, `#!/usr/bin/env node
+const fs = require('node:fs');
+const source = fs.readFileSync('src/add.ts', 'utf8');
+const stubbed = source.includes('return undefined;');
+if (!stubbed) {
+  process.stdout.write('PASS baseline (1 test passed)\\n');
+  if (process.env.STUB_OUTCOME === 'spawn') fs.unlinkSync(__filename);
+  process.exit(0);
+}
+process.stdout.write('PASS src/add.test.ts (1 test passed)\\n');
+switch (process.env.STUB_OUTCOME) {
+  case 'exit': process.exit(7);
+  case 'signal': process.kill(process.pid, 'SIGKILL'); break;
+  case 'timeout': setInterval(() => {}, 1000); break;
+  case 'overflow': process.stdout.write('x'.repeat(2 * 1024 * 1024)); break;
+  default: process.exit(19);
+}
+`);
+    chmodSync(runner, 0o755);
+    const extra = mode === "timeout" ? ["--stub-timeout-ms", "300"] : [];
+    const testCommand = mode === "spawn" ? runner : `node ${runner}`;
+    const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", testCommand, ...extra], { STUB_OUTCOME: mode });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as {
+      runs: Array<{ suitePassed?: boolean; classification: { status: string; reason?: string; suitePassed?: boolean }; executionReceipt: CommandExecutionReceipt }>;
+      baseline: { classification: { status: string; suitePassed: boolean }; executionReceipt: CommandExecutionReceipt };
+      allRunsFailed: boolean;
+      moduleRecord?: { status: string; note: string };
+    };
+    expect(parsed.baseline).toMatchObject({ classification: { status: "completed", suitePassed: true }, executionReceipt: { outcome: { state: "exited", exitCode: 0, signal: null } } });
+    expect(parsed.runs).toHaveLength(1);
+    expect(parsed.runs[0]!.executionReceipt.outcome).toMatchObject({ state, exitCode });
+    if (interrupted) {
+      expect(parsed.runs[0]).not.toHaveProperty("suitePassed");
+      expect(parsed.runs[0]!.classification).toMatchObject({ status: "interrupted", reason: expect.stringContaining(state) });
+      expect(parsed.allRunsFailed).toBe(false);
+      expect(parsed.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining(state) });
+      expect(parsed.moduleRecord?.note).toContain("falsifier:");
+    } else {
+      expect(parsed.runs[0]).toMatchObject({ suitePassed: false, classification: { status: "completed", suitePassed: false } });
+      expect(parsed.allRunsFailed).toBe(true);
+      expect(parsed).not.toHaveProperty("moduleRecord");
+    }
+  });
+
+  it("requires a passing baseline and nonempty completed runs in the emitted stub falsifier (#2221)", async () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const control = mkdtempSync(join(tmpdir(), "harvey-stub-falsifier-"));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    writeFileSync(runner, "const fs = require('node:fs'); if (fs.readFileSync('src/add.ts', 'utf8').includes('return undefined;')) process.kill(process.pid, 'SIGKILL');\n");
+    const interrupted = await runCli(repo, ["--stub-check", "--test-cmd", `node ${runner}`]);
+    const interruptedArtifact = JSON.parse(interrupted.out);
+    const program = interruptedArtifact.moduleRecord.note.match(/then run node -e '([^']+)'/)[1];
+    const baselineFailed = await runCli(repo, ["--stub-check", "--test-cmd", "false"]);
+    const completed = await runCli(repo, ["--stub-check", "--test-cmd", "true"]);
+    const noExports = fixtureRepo({ "src/add.ts": "const add = (a: number, b: number) => a + b;\n", "src/add.test.ts": COVERING_TEST });
+    const empty = await runCli(noExports, ["--stub-check", "--test-cmd", "true"]);
+    expect(JSON.parse(baselineFailed.out)).toMatchObject({ baselineFailed: true, runs: [] });
+    expect(JSON.parse(empty.out)).toMatchObject({ runs: [], baseline: { classification: { suitePassed: true } } });
+    expect(JSON.parse(completed.out).runs.length).toBeGreaterThan(0);
+    for (const [name, result, expected] of [["interrupted", interrupted, 1], ["baseline-failed", baselineFailed, 1], ["empty", empty, 1], ["completed", completed, 0]] as const) {
+      expect(result.status).toBe(0);
+      const artifact = join(control, `${name}.json`);
+      writeFileSync(artifact, result.out);
+      const check = spawnSync(process.execPath, ["-e", program, artifact], { encoding: "utf8", timeout: 2000 });
+      expect(check.status, `${name}: ${check.stderr}`).toBe(expected);
+    }
+  });
+
+  it.each([
+    { mode: "signal", expected: "signaled", extra: [] },
+    { mode: "timeout", expected: "timed-out", extra: ["--stub-timeout-ms", "300"] },
+    { mode: "overflow", expected: "output-limit-exceeded", extra: [] },
+    { mode: "spawn", expected: "spawn-failed", extra: [] },
+  ])("retains an interrupted $expected receipt for the unmutated baseline", async ({ mode, expected, extra }) => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const control = mkdtempSync(join(tmpdir(), `harvey-stub-baseline-${mode}-`));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    writeFileSync(runner, `process.stdout.write('PASS-looking baseline output\\n');
+if (process.env.STUB_OUTCOME === 'signal') process.kill(process.pid, 'SIGKILL');
+else if (process.env.STUB_OUTCOME === 'timeout') setInterval(() => {}, 1000);
+else process.stdout.write('x'.repeat(2 * 1024 * 1024));
+`);
+    const testCommand = mode === "spawn" ? join(control, "missing-runner") : `node ${runner}`;
+    const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", testCommand, ...extra], { STUB_OUTCOME: mode });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { runs: unknown[]; baseline: { classification: { status: string; reason: string }; executionReceipt: CommandExecutionReceipt }; baselineFailed: boolean; moduleRecord: { status: string; note: string } };
+    expect(parsed.runs).toEqual([]);
+    expect(parsed.baselineFailed).toBe(true);
+    expect(parsed.baseline).toMatchObject({ classification: { status: "interrupted", reason: expect.stringContaining(expected) }, executionReceipt: { outcome: { state: expected } } });
+    expect(parsed.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining(expected) });
+    expect(parsed.moduleRecord.note).toContain("falsifier:");
+  });
+
+  it("delivers a real signaled stub receipt through the ordinary audit M8 consumer, rendered disclosure, and conservation", async () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const control = mkdtempSync(join(tmpdir(), "harvey-stub-audit-signal-"));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    writeFileSync(runner, `const fs = require('node:fs');
+const source = fs.readFileSync('src/add.ts', 'utf8');
+if (source.includes('return undefined;')) {
+  process.stdout.write('PASS src/add.test.ts (1 test passed)\\n');
+  process.kill(process.pid, 'SIGKILL');
+}
+process.stdout.write('PASS baseline (1 test passed)\\n');
+`);
+    const cliResult = await runCli(repo, ["--stub-check", "--test-cmd", `node ${runner}`]);
+    expect(cliResult.status).toBe(0);
+    const artifact = JSON.parse(cliResult.out);
+    expect(artifact.runs[0]).toMatchObject({ classification: { status: "interrupted" }, executionReceipt: { outcome: { state: "signaled", signal: "SIGKILL" } } });
+    let ordinaryMutationArgs: string[] | undefined;
+    const context: RunContext = {
+      targetDir: repo,
+      env: { connected: false, dynamic: false, llm: false },
+      captureDir: repo,
+      exists: existsSync,
+      readFindings: () => [],
+      readArtifact: path => path.endsWith("M8.json") ? artifact : undefined,
+      exec: (_command, args) => {
+        if (args.includes("mutation-scan")) {
+          ordinaryMutationArgs = args;
+          return { ok: true, output: cliResult.out };
+        }
+        if (args.includes("detect-static")) return { ok: true, output: "loaded 2 source files (1 product source, 1 test)" };
+        return { ok: true, output: "" };
+      },
+    };
+    const runners = AUDIT_RUNNERS.map(module => module.module === "M8" ? module : {
+      ...module,
+      run: () => ({ kind: "not-assessed" as const, reason: "Outside the M8 stub receipt fixture", provenance: "TRIED" as const, falsifier: "pnpm run-audit" }),
+    });
+    const delivered = runAudit(runners, context);
+    expect(ordinaryMutationArgs).toBeDefined();
+    expect(ordinaryMutationArgs).not.toContain("--stub-check");
+    expect(delivered.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial", reason: expect.stringContaining("state signaled") });
+    const meta: ReportMeta = { client: "Synthetic", subtitle: "Stub receipt acceptance", date: "2026-09-26", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Stub receipts", scope: "Synthetic child", methodology: "M8", outOfScope: "Other modules" };
+    const document = assembleEngagementDocument(delivered.recorded, context.env, delivered.findings, meta, undefined, undefined, delivered.testQuality);
+    expect(validateFindings(document)).toEqual({ ok: true, errors: [] });
+    expect(conservationLedger(delivered.findings, document.findings).unaccounted).toBe(0);
+    const htmlPath = join(repo, "report.html");
+    await renderReport(document, { htmlPath });
+    const html = readFileSync(htmlPath, "utf8");
+    expect(html).toContain("state signaled");
+    expect(html).toContain("SIGKILL");
+    expect(html).toContain("falsifier:");
+    expect(html).not.toContain("full deletion coverage");
   });
 
   it("a run killed (SIGTERM) mid-mutation leaves the target checkout byte-identical", async () => {
