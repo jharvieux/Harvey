@@ -495,6 +495,47 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     }
   });
 
+  it("isolates advisory freshness from drills while retaining it before ordinary allocation", () => {
+    const prepare = document.jobs["prepare-current-inputs"]!;
+    const freshness = named(document, "prepare-current-inputs", "Check every pinned advisory snapshot before allocating hosted work");
+    const receipt = named(document, "prepare-current-inputs", "Retain advisory freshness receipt");
+    const allocation = named(document, "prepare-current-inputs", "Authenticate private corpus mirrors for the whole-pin seed");
+    expect(freshness.run).toBe('pnpm exec tsx src/cli/corpus-advisory-freshness.ts --out "$RUNNER_TEMP/corpus-advisory-freshness.json" ${{ github.event_name == \'schedule\' && \'--fail-warning\' || \'\' }}\n');
+    expect(prepare.steps.indexOf(freshness)).toBeLessThan(prepare.steps.indexOf(allocation));
+    expect(prepare.steps.indexOf(freshness)).toBeLessThan(prepare.steps.indexOf(receipt));
+    for (const drill of ["alert_drill", "liveness_drill"] as const) {
+      const ctx = context("workflow_dispatch");
+      ctx.inputs[drill] = true;
+      expect(active(freshness, ctx), `${drill} must bypass stale-snapshot preflight`).toBe(false);
+      expect(active(receipt, ctx), `${drill} must not upload an absent freshness receipt`).toBe(false);
+    }
+    for (const event of events) {
+      const ctx = context(event);
+      expect(active(freshness, ctx), `${event} relevant preflight`).toBe(true);
+      expect(active(receipt, ctx), `${event} successful receipt`).toBe(true);
+      ctx.status = "failure";
+      expect(active(receipt, ctx), `${event} failed freshness receipt`).toBe(true);
+    }
+  });
+
+  it("turns red when the in-memory advisory-freshness drill isolation is removed", () => {
+    const withoutPreflight = structuredClone(document);
+    withoutPreflight.jobs["prepare-current-inputs"]!.steps = withoutPreflight.jobs["prepare-current-inputs"]!.steps
+      .filter((step) => step.name !== "Check every pinned advisory snapshot before allocating hosted work");
+    expect(() => named(withoutPreflight, "prepare-current-inputs", "Check every pinned advisory snapshot before allocating hosted work")).toThrow("missing prepare-current-inputs step");
+
+    for (const name of ["Check every pinned advisory snapshot before allocating hosted work", "Retain advisory freshness receipt"]) {
+      const bypassed = structuredClone(document);
+      const step = named(bypassed, "prepare-current-inputs", name);
+      step.if = step.if!.replace(" && !inputs.alert_drill && !inputs.liveness_drill", "");
+      for (const drill of ["alert_drill", "liveness_drill"] as const) {
+        const ctx = context("workflow_dispatch");
+        ctx.inputs[drill] = true;
+        expect(() => expect(active(step, ctx)).toBe(false), `${name}/${drill}`).toThrow();
+      }
+    }
+  });
+
   it("gives exactly one aggregate alert to genuine schedules and isolated alert drills", () => {
     const alertSteps = Object.entries(document.jobs).flatMap(([job, value]) =>
       value.steps.filter((step) => step.name === "Open or update the drift tracking issue").map((step) => ({ job, step })),

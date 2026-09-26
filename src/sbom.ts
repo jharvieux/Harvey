@@ -546,7 +546,7 @@ export function parsePackageLock(text: string): ParsedLock {
 export function parsePnpmLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
   const installations = new Map<string, DependencyInstallation>();
-  const selectedPackages = new Map<string, { name: string; selected: string }>();
+  const selectedPackages = new Map<string, { name: string; selected: string; declaredAliasName?: string; malformedAlias: boolean }>();
   try {
     const lock: unknown = parseYaml(text);
     if (isRecord(lock)) {
@@ -564,7 +564,11 @@ export function parsePnpmLock(text: string): ParsedLock {
             if (typeof selected !== "string") continue;
             if (!selected.startsWith("link:")) {
               installations.delete(path);
-              selectedPackages.set(path, { name, selected });
+              const declared = (isRecord(rawDependency) ? rawDependency.specifier : undefined)
+                ?? (isRecord(rawImporter.specifiers) ? rawImporter.specifiers[name] : undefined);
+              const declaredAlias = npmAliasTarget(declared);
+              selectedPackages.set(path, { name, selected, declaredAliasName: declaredAlias?.name,
+                malformedAlias: typeof declared === "string" && declared.startsWith("npm:") && !declaredAlias });
               continue;
             }
             selectedPackages.delete(path);
@@ -610,12 +614,16 @@ export function parsePnpmLock(text: string): ParsedLock {
       unmatched++;
     }
   }
-  for (const { name, selected } of selectedPackages.values()) {
-    const alias = npmAliasTarget(selected);
-    const selectedName = alias?.name ?? name;
-    const rawVersion = alias?.range ?? selected;
+  for (const { name, selected, declaredAliasName, malformedAlias } of selectedPackages.values()) {
+    const alias = npmAliasTarget(selected.replace(/\(.*$/, ""));
+    const selectedName = alias?.name ?? declaredAliasName ?? name;
+    let rawVersion = alias?.range ?? selected;
+    if (!alias && declaredAliasName && rawVersion.startsWith(`${declaredAliasName}@`)) {
+      rawVersion = rawVersion.slice(declaredAliasName.length + 1);
+    }
     const version = /^([0-9][^:(]*)/.exec(rawVersion)?.[1];
-    if (!version || !out.has(`${selectedName}@${version}`)) unmatched++;
+    if (malformedAlias || (alias && declaredAliasName && alias.name !== declaredAliasName)
+      || !version || !out.has(`${selectedName}@${version}`)) unmatched++;
   }
   return { components: [...out.values()], installations: [...installations.values()], licenseOrigins: [...out.values()].map((component) => ({ component, explicitName: true })), unresolvedLockAliases: [], unmatched, ranges: pnpmRanges(text) };
 }

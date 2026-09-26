@@ -120,6 +120,44 @@ describe("lockfile parsing", () => {
     });
   });
 
+  it.each([
+    ["@scope/actual", "0.5.0"],
+    ["@scope/actual", "@scope/actual@0.5.0"],
+    ["@scope/actual", "@scope/actual@0.5.0(peer@1.0.0)"],
+    ["@scope/actual", "npm:@scope/actual@0.5.0"],
+    ["@scope/actual", "npm:@scope/actual@0.5.0(peer@1.0.0)"],
+    ["actual", "0.5.0"],
+    ["actual", "actual@0.5.0(peer@1.0.0)"],
+  ])("binds pnpm's declared alias %s to its selected registry coordinate %s", (name, selected) => {
+    const text = `lockfileVersion: '9.0'\nimporters:\n  apps/web:\n    devDependencies:\n      installed-alias:\n        specifier: npm:${name}@^0.5.0\n        version: '${selected}'\npackages:\n  '${name}@0.5.0':\n    resolution: {integrity: sha512-alias}\n`;
+    expect(inventory(parsePnpmLock(text))).toEqual({ components: [{ name, version: "0.5.0", integrity: "sha512-alias" }], unmatched: 0 });
+  });
+
+  it.each(["latest", "^1.0.0"])("retains the concrete pnpm alias coordinate under declared range %s", (range) => {
+    const text = `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      installed-alias:\n        specifier: npm:actual@${range}\n        version: 'actual@0.5.0'\npackages:\n  'actual@0.5.0':\n`;
+    expect(inventory(parsePnpmLock(text))).toEqual({ components: [{ name: "actual", version: "0.5.0" }], unmatched: 0 });
+  });
+
+  it.each(["npm:@@@", "npm:"])("keeps malformed declared alias %s unmatched even when the selected coordinate exists", (specifier) => {
+    const text = `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      installed-alias:\n        specifier: '${specifier}'\n        version: 'npm:actual@0.5.0'\npackages:\n  'actual@0.5.0':\n`;
+    expect(inventory(parsePnpmLock(text))).toEqual({ components: [{ name: "actual", version: "0.5.0" }], unmatched: 1 });
+  });
+
+  it("uses pnpm v5 specifiers to bind a selected alias without inventing an installed component", () => {
+    const text = "lockfileVersion: '5.4'\nspecifiers:\n  installed-alias: npm:actual@^0.5.0\ndependencies:\n  installed-alias: 0.5.0\npackages:\n  /actual/0.5.0:\n    resolution: {integrity: sha512-alias}\n";
+    expect(inventory(parsePnpmLock(text))).toEqual({ components: [{ name: "actual", version: "0.5.0", integrity: "sha512-alias" }], unmatched: 0 });
+  });
+
+  it.each([
+    "@scope/other@0.5.0",
+    "npm:@scope/other@0.5.0",
+    "@scope/actual@0.6.0",
+    "@scope/actual@latest",
+  ])("keeps a mismatched or unresolved pnpm alias selected coordinate %s unmatched", (selected) => {
+    const text = `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      installed-alias:\n        specifier: npm:@scope/actual@^0.5.0\n        version: '${selected}'\npackages:\n  '@scope/actual@0.5.0':\n  '@scope/other@0.5.0':\n`;
+    expect(inventory(parsePnpmLock(text))).toEqual({ components: [{ name: "@scope/actual", version: "0.5.0" }, { name: "@scope/other", version: "0.5.0" }], unmatched: 1 });
+  });
+
   it("reads both yarn v1 and Berry entries", () => {
     const v1 = ['braces@^2.3.1:', '  version "2.3.2"', '', '"@babel/core@^7.0.0":', '  version "7.29.7"'].join("\n");
     expect(inventory(parseYarnLock(v1))).toEqual({
