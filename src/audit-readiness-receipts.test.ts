@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +7,7 @@ import { discoverReadinessPlan, type ReadinessStageV1 } from "./audit-readiness.
 import { admitReadinessStage, bindReadinessPlanV1, createReadinessAdmission, type ReadinessSpawnRequest, type ReadinessStageAdmission } from "./audit-readiness-authority.js";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget } from "./disposable-target.js";
 import { createReadinessArtifactsV1, parseReadinessArtifactsV1 } from "./audit-readiness-artifacts.js";
+import { createBoundedProcessRunner } from "./bounded-process.js";
 import {
   closeReadinessExecutionV1, createReadinessFailureReceipt, createReadinessImplicitReceipt, createReadinessNotAssessedReceipt,
   createReadinessProcessReceipt, createReadinessReceiptContext, prepareReadinessSpawn,
@@ -36,7 +36,7 @@ async function fixture(mode: "success" | "failure" | "timeout" | "truncated" | "
   await writeFile(join(source, "worker.cjs"), `
     const fs = require('node:fs');
     fs.writeFileSync('physical-stage-ran', 'spawned');
-    const testing = process.argv.includes('test');
+    const testing = true;
     if (testing && ${JSON.stringify(mode)} === 'boundary') {
       process.stdout.write('H'.repeat(244) + process.env.RECEIPT_TOKEN + 'M'.repeat(2048) + process.env.RECEIPT_TOKEN + 'Z'.repeat(233) + 'STDOUT-TAIL');
       process.stderr.write('H'.repeat(244) + process.env.RECEIPT_TOKEN + 'M'.repeat(2048) + process.env.RECEIPT_TOKEN + 'Z'.repeat(226) + 'FINAL-STDERR-TAIL');
@@ -75,82 +75,52 @@ async function fixture(mode: "success" | "failure" | "timeout" | "truncated" | "
   return { root, source, plan, binding, context, admission, target: created.target, mode };
 }
 
-/** Collect actual child observations for the receipt adapter; B2 separately owns the production lifecycle. */
-async function observe(request: ReadinessSpawnRequest, context: ReadinessReceiptContext, timeout: boolean, outputLimits = limits): Promise<ReadinessProcessEvidenceV1> {
-  const startedAt = new Date().toISOString();
-  const monotonicStart = performance.now();
-  let spawnedAt: string | null = null;
-  let firstByteAt: string | null = null;
-  let firstByteTime: number | null = null;
-  let exit: ReadinessProcessEvidenceV1["exit"] = null;
-  const errors: ReadinessProcessEvidenceV1["errors"] = [];
-  const attempts: ReadinessProcessEvidenceV1["termination"]["attempts"] = [];
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const child = spawn(request.bin, [...request.args], { cwd: request.cwd, env: request.env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-  const safeguard = setTimeout(() => child.kill("SIGKILL"), 4000);
-  const received = (chunks: Buffer[]) => (chunk: Buffer) => {
-    chunks.push(chunk);
-    if (firstByteAt !== null) return;
-    firstByteAt = new Date().toISOString(); firstByteTime = performance.now();
-    if (timeout) timer = setTimeout(() => {
-      timedOut = true;
-      attempts.push({ at: new Date().toISOString(), signal: "SIGTERM", status: child.kill("SIGTERM") ? "sent" : "absent", code: null });
-    }, 50);
-  };
-  child.stdout.on("data", received(stdout)); child.stderr.on("data", received(stderr));
-  child.on("spawn", () => { spawnedAt = new Date().toISOString(); });
-  child.on("error", (error: NodeJS.ErrnoException) => { errors.push({ phase: "spawn", code: error.code ?? "SPAWN_ERROR" }); });
-  child.on("exit", (code, signal) => { exit = { at: new Date().toISOString(), code, signal }; });
-  const close = await new Promise<NonNullable<ReadinessProcessEvidenceV1["close"]>>((resolve) => {
-    child.on("close", (code, signal) => resolve({ at: new Date().toISOString(), code, signal }));
+/** This physical native helper proves only its own process group, never readiness containment. */
+async function observe(request: ReadinessSpawnRequest, context: ReadinessReceiptContext, outputLimits = limits): Promise<ReadinessProcessEvidenceV1> {
+  return createBoundedProcessRunner().run(request, {
+    ...outputLimits, output: { headBytes: outputLimits.headBytes, tailBytes: outputLimits.tailBytes }, redact: context.redact,
   });
-  clearTimeout(timer); clearTimeout(safeguard);
-  const endedAt = new Date().toISOString();
-  const evidence = (chunks: Buffer[], stream: "stdout" | "stderr") => {
-    const bytes = Buffer.concat(chunks);
-    const headBytes = Math.min(outputLimits.headBytes, bytes.length);
-    const tailBytes = Math.min(outputLimits.tailBytes, bytes.length - headBytes);
-    const head = bytes.subarray(0, headBytes).toString("utf8");
-    const tail = bytes.subarray(bytes.length - tailBytes).toString("utf8");
-    return {
-      bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), headBytes, tailBytes,
-      head: context.redact(head, { stream, boundary: "head", before: "", after: bytes.subarray(headBytes).toString("utf8") }),
-      tail: context.redact(tail, { stream, boundary: "tail", before: bytes.subarray(0, bytes.length - tailBytes).toString("utf8"), after: "" }),
-      omittedBytes: bytes.length - headBytes - tailBytes, truncated: bytes.length > headBytes + tailBytes,
-      redactionTruncated: false, complete: true,
-    };
-  };
-  const output = evidence(stdout, "stdout"); const errorOutput = evidence(stderr, "stderr");
-  return {
-    state: timedOut ? "timed-out" : errors.length ? "spawn-error" : "exited",
-    succeeded: !timedOut && errors.length === 0 && close.code === 0 && close.signal === null && !output.truncated && !errorOutput.truncated,
-    pid: child.pid ?? null, queuedAt: startedAt, startedAt, spawnedAt, firstByteAt, endedAt,
-    queueDurationMs: 0, durationMs: performance.now() - monotonicStart,
-    fromFirstByteMs: firstByteTime === null ? null : performance.now() - firstByteTime,
-    exit, close, errors, stdout: output, stderr: errorOutput,
-    termination: { reason: timedOut ? "timeout" : errors.length ? "process-error" : null, attempts, tree: child.pid ? "absent" : "not-started", stdioForcedClosed: false },
-  };
 }
 
 async function execute(f: Awaited<ReturnType<typeof fixture>>, outputLimits = limits): Promise<StageReceiptV1[]> {
+  const install = f.plan.stages.find((row) => row.kind === "install")!;
+  const admission = await admitReadinessStage(f.admission, install.id, f.target);
+  if (admission.status !== "admitted") throw new Error("fixture install admission missing");
+  const result = await observe(prepareReadinessSpawn(f.context, admission), f.context, outputLimits);
+  const receipt = createReadinessProcessReceipt(f.context, admission, result, outputLimits);
+  return withheld(f).map((row) => row.stageId === install.id ? receipt : row);
+}
+
+/** SCHEMA ONLY: invented containment facts exercise validation; no container or target is run. */
+function schemaOnlyContainedProcess(): ReadinessProcessEvidenceV1 {
+  const at = new Date().toISOString();
+  const stream = (head: string) => ({ bytes: Buffer.byteLength(head), sha256: createHash("sha256").update(head).digest("hex"), head, tail: "", headBytes: Buffer.byteLength(head), tailBytes: 0, omittedBytes: 0, truncated: false, redactionTruncated: false, complete: true });
+  return {
+    state: "exited", succeeded: true, pid: 2, queuedAt: at, startedAt: at, spawnedAt: at, firstByteAt: at, endedAt: at,
+    queueDurationMs: 0, durationMs: 0, fromFirstByteMs: 0, exit: { at, code: 0, signal: null }, close: { at, code: 0, signal: null }, errors: [],
+    termination: { reason: null, attempts: [], tree: "absent", stdioForcedClosed: false },
+    stdout: stream("schema-only output"), stderr: stream("schema-only stderr"),
+    containment: {
+      kind: "docker-pid-namespace", imageId: `sha256:${"a".repeat(64)}`, containerId: "b".repeat(64), leaseName: `harvey-readiness-${"c".repeat(32)}`,
+      runtimeVersion: "28.5.1", apiVersion: "1.51", namespace: "terminated", targetWork: "begun", terminalObservation: { at, running: false, pid: 0 },
+      metadata: "verified", cleanup: "removed", isolationVerified: true,
+      isolation: { privatePidNamespace: true, network: "none", noNewPrivileges: true, capDrop: "ALL", observerCapabilities: ["SETUID", "SETGID"], targetUid: 1000, targetGid: 1000, mountScope: "disposable-root-only", rootfs: "private-writable-overlay" },
+      targetIdentity: { uid: 1000, gid: 1000, capEff: "0000000000000000", noNewPrivileges: true }, observerNodeVersion: "v24.13.0",
+    },
+  };
+}
+
+async function schemaOnlyReceipts(f: Awaited<ReturnType<typeof fixture>>): Promise<StageReceiptV1[]> {
   const receipts: StageReceiptV1[] = [];
   for (const kind of ["install", "codegen", "build", "typecheck", "lint", "test"] as const) {
     const stage = f.plan.stages.find((row) => row.kind === kind)!;
-    if (stage.assessment === "implicit") {
-      receipts.push(createReadinessImplicitReceipt(f.context, stage.id, receipts.find((row) => row.stageId === stage.fulfilledByStageId)!));
-      continue;
+    if (stage.assessment === "implicit") receipts.push(createReadinessImplicitReceipt(f.context, stage.id, receipts.find((row) => row.stageId === stage.fulfilledByStageId)!));
+    else {
+      const admission = await admitReadinessStage(f.admission, stage.id, f.target);
+      if (admission.status !== "admitted") throw new Error("schema fixture admission missing");
+      prepareReadinessSpawn(f.context, admission);
+      receipts.push(createReadinessProcessReceipt(f.context, admission, schemaOnlyContainedProcess(), limits));
     }
-    const admission = await admitReadinessStage(f.admission, stage.id, f.target);
-    if (admission.status !== "admitted") {
-      receipts.push(createReadinessNotAssessedReceipt(f.context, stage.id, { ...admission, authority: admission.authority, provenance: [admission.authority.source] }));
-      continue;
-    }
-    const request = prepareReadinessSpawn(f.context, admission);
-    const result = await observe(request, f.context, f.mode === "timeout" && kind === "test", outputLimits);
-    receipts.push(createReadinessProcessReceipt(f.context, admission, result, outputLimits));
   }
   return receipts;
 }
@@ -161,7 +131,7 @@ function withheld(f: Awaited<ReturnType<typeof fixture>>): StageReceiptV1[] {
   }));
 }
 
-function processStage(receipts: StageReceiptV1[], kind: ReadinessStageV1["kind"] = "test") {
+function processStage(receipts: StageReceiptV1[], kind: ReadinessStageV1["kind"] = "install") {
   const receipt = receipts.find((row) => row.kind === kind)!;
   if (receipt.execution.kind !== "process") throw new Error("expected a physical process receipt");
   return receipt;
@@ -177,17 +147,141 @@ function importChanged(f: Awaited<ReturnType<typeof fixture>>, original: ReturnT
   return parseReadinessArtifactsV1({ descriptorJson: JSON.stringify(descriptor), executionJson });
 }
 
+function docker(process: ReadinessProcessEvidenceV1) {
+  if (process.containment.kind !== "docker-pid-namespace") throw new Error("expected schema-only Docker evidence");
+  return process.containment;
+}
+
+function noTargetFacts(process: ReadinessProcessEvidenceV1): void {
+  process.succeeded = false; process.pid = null; process.spawnedAt = null; process.exit = null; process.close = null;
+  process.firstByteAt = null; process.fromFirstByteMs = null;
+  for (const stream of [process.stdout, process.stderr]) Object.assign(stream, { bytes: 0, sha256: createHash("sha256").digest("hex"), head: "", tail: "", headBytes: 0, tailBytes: 0, omittedBytes: 0, truncated: false, redactionTruncated: false, complete: false });
+}
+
+describe("schema-only contained receipt guards (no container execution)", () => {
+  it("requires complete exact containment proof in both live and offline validation", async () => {
+    const f = await fixture();
+    const receipts = await schemaOnlyReceipts(f);
+    const original = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup: await cleanupDisposableTarget(f.target) });
+    expect(original.status).toBe("passed");
+    expect(importChanged(f, original).execution).toEqual(original);
+    const edits: [string, (p: ReadinessProcessEvidenceV1) => void][] = [
+      ["missing containment", (p) => { delete (p as Partial<typeof p>).containment; }],
+      ["native group cannot substitute for ownership", (p) => { p.containment = { kind: "native-process-group", descendantOwnership: "unproven", groupObservation: "absent" }; }],
+      ["unknown arm", (p) => { Object.assign(p.containment, { kind: "imagined-sandbox" }); }],
+      ["extra proof field", (p) => { Object.assign(p.containment, { ownershipGuaranteed: true }); }],
+      ["mutable image tag", (p) => { docker(p).imageId = "node:latest"; }],
+      ["partial container ID", (p) => { docker(p).containerId = "b".repeat(12); }],
+      ["unowned lease", (p) => { docker(p).leaseName = "another-container"; }],
+      ["missing lease", (p) => { docker(p).leaseName = null; }],
+      ["invalid API", (p) => { docker(p).apiVersion = "old"; }],
+      ["observer is not target pid", (p) => { p.pid = 1; }],
+      ["unverified isolation", (p) => { docker(p).isolationVerified = false; }],
+      ["missing terminal proof", (p) => { docker(p).terminalObservation = null; }],
+      ["running namespace", (p) => { Object.assign(docker(p).terminalObservation!, { running: true }); }],
+      ["nonzero namespace pid", (p) => { Object.assign(docker(p).terminalObservation!, { pid: 17 }); }],
+      ["future namespace proof", (p) => { docker(p).terminalObservation!.at = "2099-01-01T00:00:00.000Z"; }],
+      ["extra namespace field", (p) => { Object.assign(docker(p).terminalObservation!, { exitCode: 0 }); }],
+      ["unknown work", (p) => { docker(p).targetWork = "unknown"; }],
+      ["unverified metadata", (p) => { docker(p).metadata = "unavailable"; }],
+      ["retained container cannot pass", (p) => { docker(p).cleanup = "retained"; }],
+      ["missing target identity", (p) => { docker(p).targetIdentity = null; }],
+      ["wrong target UID", (p) => { docker(p).targetIdentity!.uid++; }],
+      ["wrong target GID", (p) => { docker(p).targetIdentity!.gid++; }],
+      ["root UID", (p) => { docker(p).targetIdentity!.uid = docker(p).isolation.targetUid = 0; }],
+      ["root GID", (p) => { docker(p).targetIdentity!.gid = docker(p).isolation.targetGid = 0; }],
+      ["target capabilities", (p) => { Object.assign(docker(p).targetIdentity!, { capEff: "0000000000000001" }); }],
+      ["target privileges", (p) => { Object.assign(docker(p).targetIdentity!, { noNewPrivileges: false }); }],
+      ["missing observer version", (p) => { docker(p).observerNodeVersion = null; }],
+      ["extra target identity", (p) => { Object.assign(docker(p).targetIdentity!, { user: "root" }); }],
+      ["inconsistent Docker success flag", (p) => { p.succeeded = false; }],
+    ];
+    for (const key of Object.keys(docker(schemaOnlyContainedProcess()))) edits.push([`missing ${key}`, (p) => { delete (docker(p) as unknown as Record<string, unknown>)[key]; }]);
+    for (const [key, bad] of Object.entries({ privatePidNamespace: false, network: "host", noNewPrivileges: false, capDrop: "NONE", observerCapabilities: ["SETUID", "SETGID", "SYS_ADMIN"], mountScope: "host", rootfs: "shared", targetUid: -1, targetGid: "1000" })) {
+      edits.push([`altered isolation ${key}`, (p) => { Object.assign(docker(p).isolation, { [key]: bad }); }]);
+      edits.push([`missing isolation ${key}`, (p) => { delete (docker(p).isolation as unknown as Record<string, unknown>)[key]; }]);
+    }
+    for (const [label, edit] of edits) {
+      const changed = structuredClone(original);
+      const stage = processStage(changed.stages, "test");
+      if (stage.execution.kind !== "process") throw new Error("schema fixture process missing");
+      edit(stage.execution.process);
+      expect(() => validateReadinessExecutionV1(f.context, changed), label).toThrow(/Invalid readiness/);
+      expect(() => importChanged(f, original, changed), label).toThrow(/Invalid readiness/);
+    }
+  });
+
+  it("preserves factual failed, unconfirmed, retained and no-target-work evidence", async () => {
+    const f = await fixture();
+    const admission = await admitReadinessStage(f.admission, f.plan.stages.find((row) => row.kind === "install")!.id, f.target) as Admitted;
+    prepareReadinessSpawn(f.context, admission);
+    const variants: ((p: ReadinessProcessEvidenceV1) => void)[] = [
+      (p) => { p.succeeded = false; docker(p).cleanup = "retained"; p.errors.push({ phase: "termination", code: "CONTAINER_REMOVAL_UNCONFIRMED" }); },
+      (p) => {
+        noTargetFacts(p); p.state = "observer-error"; docker(p).metadata = "unavailable"; docker(p).targetWork = "unknown"; docker(p).targetIdentity = null; docker(p).observerNodeVersion = null;
+        p.errors.push({ phase: "observer", code: "OBSERVER_METADATA_UNVERIFIED" }); p.termination.stdioForcedClosed = true;
+      },
+      (p) => {
+        noTargetFacts(p); p.state = "termination-unconfirmed";
+        Object.assign(docker(p), { containerId: null, namespace: "unconfirmed", targetWork: "unknown", terminalObservation: null, metadata: "unavailable", targetIdentity: null, observerNodeVersion: null, cleanup: "retained" });
+        p.termination.tree = "unconfirmed"; p.termination.stdioForcedClosed = true; p.errors.push({ phase: "termination", code: "NAMESPACE_TERMINATION_UNCONFIRMED" });
+      },
+      (p) => {
+        noTargetFacts(p); p.state = "containment-unavailable";
+        Object.assign(docker(p), { namespace: "not-started", targetWork: "not-started", metadata: "unavailable", targetIdentity: null, observerNodeVersion: null, isolationVerified: false });
+        p.termination.tree = "not-started"; p.errors.push({ phase: "spawn", code: "ABORTED_BEFORE_START" });
+      },
+      (p) => {
+        noTargetFacts(p); p.state = "containment-unavailable";
+        p.containment = { kind: "unavailable", reasonCode: "containment-not-configured" }; p.termination.tree = "not-started";
+      },
+    ];
+    const receipts = variants.map((edit) => { const p = schemaOnlyContainedProcess(); edit(p); return createReadinessProcessReceipt(f.context, admission, p, limits); });
+    const cleanup = await cleanupDisposableTarget(f.target);
+    for (const receipt of receipts) {
+      expect(receipt.status).toBe("failed");
+      const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts: withheld(f).map((row) => row.kind === "install" ? receipt : row), cleanup });
+      expect(importChanged(f, execution).execution).toEqual(execution);
+      const forged = structuredClone(execution); const row = forged.stages.find((row) => row.kind === "install")!;
+      Object.assign(row, { status: "passed" }); delete (row as Partial<Extract<StageReceiptV1, { status: "failed" }>>).diagnostic;
+      expect(() => validateReadinessExecutionV1(f.context, forged)).toThrow(/process status mismatch/);
+      expect(() => importChanged(f, execution, forged)).toThrow(/process status mismatch/);
+    }
+  });
+
+  it("refuses late known-value collisions in exact containment identities at every public boundary", async () => {
+    const f = await fixture();
+    const install = f.plan.stages.find((row) => row.kind === "install")!;
+    const admission = await admitReadinessStage(f.admission, install.id, f.target) as Admitted;
+    const receipts = await schemaOnlyReceipts(f);
+    const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup: await cleanupDisposableTarget(f.target) });
+    const proof = docker(schemaOnlyContainedProcess());
+    for (const value of [proof.imageId, proof.containerId!, proof.leaseName!, proof.runtimeVersion, proof.apiVersion, proof.observerNodeVersion!, proof.targetIdentity!.capEff]) {
+      const context = createReadinessReceiptContext(f.plan, { approvedEnvNames: ["RECEIPT_TOKEN"], environment: { RECEIPT_TOKEN: secret } });
+      context.registerSecret(value); prepareReadinessSpawn(context, admission);
+      for (const attempt of [
+        () => createReadinessProcessReceipt(context, admission, schemaOnlyContainedProcess(), limits),
+        () => validateReadinessExecutionV1(context, execution),
+        () => serializeReadinessExecutionV1(context, execution),
+        () => closeReadinessExecutionV1(context, { binding: f.binding, receipts, cleanup: execution.cleanup }),
+        () => createReadinessArtifactsV1(context, { binding: f.binding, execution }),
+      ]) expect(attempt).toThrow(new Error("Invalid readiness execution evidence: producer-known value in identity."));
+    }
+  });
+});
+
 describe("versioned receipt closure", () => {
-  it("retains real success facts, names-only environment, source/argv provenance and canonical independent stages", async () => {
+  it("retains real native lifecycle facts but refuses readiness success without containment", async () => {
     const f = await fixture();
     const receipts = await execute(f);
     const cleanup = await cleanupDisposableTarget(f.target);
     const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts: [...receipts].reverse(), cleanup });
-    expect(execution.status).toBe("passed");
+    expect(execution.status).toBe("failed");
     expect(execution.stages.map((row) => row.stageId)).toEqual(f.plan.stages.map((row) => row.id).sort());
     expect(execution.stages).toHaveLength(6);
     for (const receipt of execution.stages) {
-      expect(receipt.status).toBe("passed");
+      if (receipt.kind !== "install") { expect(receipt.status).toBe("not-assessed"); continue; }
+      expect(receipt).toMatchObject({ status: "failed", diagnostic: { reasonCode: "containment-unproven" } });
       expect(receipt.environment).toEqual({ approvedNames: ["RECEIPT_TOKEN"], presentNames: ["RECEIPT_TOKEN"] });
       expect(receipt.command?.actualCwd).toBe(f.target.targetRoot);
       expect(receipt.toolchain?.observedVersion.status).toBe("not-assessed");
@@ -209,7 +303,7 @@ describe("versioned receipt closure", () => {
 
   it.each(["failure", "timeout", "truncated"] as const)("counts a physical %s and retains redacted final stderr", async (mode) => {
     const f = await fixture(mode);
-    const receipts = await execute(f);
+    const receipts = await execute(f, mode === "timeout" ? { ...limits, timeoutMs: 400 } : limits);
     const cleanup = await cleanupDisposableTarget(f.target);
     const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup });
     expect(importChanged(f, execution).execution).toEqual(execution);
@@ -247,7 +341,7 @@ describe("versioned receipt closure", () => {
     const f = await fixture("missing");
     const install = f.plan.stages.find((row) => row.kind === "install")!;
     const admission = await admitReadinessStage(f.admission, install.id, f.target) as Admitted;
-    const result = await observe(prepareReadinessSpawn(f.context, admission), f.context, false);
+    const result = await observe(prepareReadinessSpawn(f.context, admission), f.context);
     const receipt = createReadinessProcessReceipt(f.context, admission, result, limits);
     expect(receipt.status).toBe("failed");
     expect(result).toMatchObject({ state: "spawn-error", pid: null, spawnedAt: null, exit: null, errors: [{ phase: "spawn", code: "ENOENT" }] });
@@ -255,9 +349,9 @@ describe("versioned receipt closure", () => {
     expect(closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup: await cleanupDisposableTarget(f.target) }).status).toBe("failed");
   });
 
-  it("references the real install lifecycle and rejects a missing or failed fulfillment", async () => {
+  it("schema-only: binds lifecycle references to a contained install and rejects missing or failed fulfillment", async () => {
     const f = await fixture("success", true);
-    const receipts = await execute(f);
+    const receipts = await schemaOnlyReceipts(f);
     const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup: await cleanupDisposableTarget(f.target) });
     const codegen = execution.stages.find((row) => row.kind === "codegen")!;
     expect(codegen.status).toBe("passed");
@@ -272,7 +366,7 @@ describe("versioned receipt closure", () => {
 
   it("rejects missing/duplicate/unknown stage IDs, extra raw fields and absent lifecycle observations", async () => {
     const f = await fixture();
-    const receipts = await execute(f);
+    const receipts = await schemaOnlyReceipts(f);
     const cleanup = await cleanupDisposableTarget(f.target);
     for (const rows of [[...receipts, receipts[0]!], receipts.slice(1)]) {
       expect(() => closeReadinessExecutionV1(f.context, { binding: f.binding, receipts: rows, cleanup })).toThrow(/missing|duplicate/);
@@ -311,10 +405,10 @@ describe("versioned receipt closure", () => {
     expect(() => importChanged(f, execution, unknown)).toThrow(/identity/);
   });
 
-  it("never reports clean after a physical cleanup identity failure or source mutation", async () => {
+  it("schema-only passed stages cannot override physical cleanup identity failure or source mutation", async () => {
     for (const failure of ["cleanup", "source"] as const) {
       const f = await fixture();
-      const receipts = await execute(f);
+      const receipts = await schemaOnlyReceipts(f);
       if (failure === "cleanup") { await rename(f.target.root, f.target.root + "-moved"); await mkdir(f.target.root); }
       else await writeFile(join(f.source, "mutation-canary"), "changed");
       const cleanup = await cleanupDisposableTarget(f.target);
@@ -363,13 +457,13 @@ describe("versioned receipt closure", () => {
     const f = await fixture();
     const stage = f.plan.stages.find((row) => row.kind === "install")!;
     const admission = await admitReadinessStage(f.admission, stage.id, f.target) as Admitted;
-    const result = await observe(admission.request, f.context, false);
+    const result = await observe(admission.request, f.context);
     expect(() => createReadinessProcessReceipt(f.context, admission, result, limits)).toThrow(/unprepared/);
     await rm(join(f.target.targetRoot, "physical-stage-ran"));
     f.context.registerSecret("npm");
     await expect((async () => {
       const request = prepareReadinessSpawn(f.context, admission);
-      await observe(request, f.context, false);
+      await observe(request, f.context);
     })()).rejects.toThrow(/refusing to spawn/);
     await expect(readFile(join(f.target.targetRoot, "physical-stage-ran"))).rejects.toMatchObject({ code: "ENOENT" });
     await cleanupDisposableTarget(f.target);

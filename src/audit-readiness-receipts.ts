@@ -5,6 +5,7 @@ import { serializeReadinessPlanV1, validateReadinessPlanV1, type ReadinessPlanV1
 import { type ReadinessAuthorityReceipt, type ReadinessPlanBindingV1, type ReadinessSpawnRequest, type ReadinessStageAdmission } from "./audit-readiness-authority.js";
 import { type DisposableCleanupReceipt, type SourceSentinelV1 } from "./disposable-target.js";
 import { SecretRegistry, type SecretExcerptContext } from "./secret-argv.js";
+import type { ReadinessProcessContainment } from "./bounded-process.js";
 
 type StageId = ReadinessStageV1["id"];
 type Admitted = Extract<ReadinessStageAdmission, { status: "admitted" }>;
@@ -12,7 +13,8 @@ type Provenance = ReadinessStageV1["provenance"];
 
 /** Structural input boundary shared with the bounded runner; no argv, environment, or raw error objects. */
 export interface ReadinessProcessEvidenceV1 {
-  state: "exited" | "timed-out" | "aborted" | "spawn-error" | "io-error" | "observer-error" | "redaction-error" | "descendant-cleanup" | "termination-unconfirmed" | "unsupported-platform";
+  state: "exited" | "timed-out" | "aborted" | "spawn-error" | "io-error" | "observer-error" | "redaction-error" | "descendant-cleanup" | "termination-unconfirmed" | "unsupported-platform" | "containment-unavailable";
+  containment: ReadinessProcessContainment;
   succeeded: boolean;
   pid: number | null;
   queuedAt: string;
@@ -147,7 +149,7 @@ interface ReceiptState {
 const states = new WeakMap<ReadinessReceiptContext, ReceiptState>();
 const SHA256 = /^[a-f0-9]{64}$/;
 const EMPTY_SHA256 = createHash("sha256").digest("hex");
-const PROCESS_STATES = ["exited", "timed-out", "aborted", "spawn-error", "io-error", "observer-error", "redaction-error", "descendant-cleanup", "termination-unconfirmed", "unsupported-platform"];
+const PROCESS_STATES = ["exited", "timed-out", "aborted", "spawn-error", "io-error", "observer-error", "redaction-error", "descendant-cleanup", "termination-unconfirmed", "unsupported-platform", "containment-unavailable"];
 
 function invalid(part: string): never { throw new Error(`Invalid readiness execution evidence: ${part}.`); }
 function object(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
@@ -392,13 +394,14 @@ export function createReadinessProcessReceipt(context: ReadinessReceiptContext, 
   const common = base(state, stage, admission.authority, admission.request);
   if (cleanProcess(processEvidence)) return immutable({ ...common, status: "passed", execution });
   const reasonCode = processEvidence.stdout.truncated || processEvidence.stderr.truncated || processEvidence.stdout.redactionTruncated || processEvidence.stderr.redactionTruncated
-    ? "output-truncated" : result.state === "exited" ? "process-failed" : result.state;
+    ? "output-truncated" : successfulLifecycle(processEvidence) && !containedWork(processEvidence.containment)
+      ? "containment-unproven" : result.state === "exited" ? "process-failed" : result.state;
   return immutable({
     ...common, status: "failed", execution,
     diagnostic: diagnostic(state, {
       reasonCode, reason: `The stage did not produce complete successful process evidence (${reasonCode}).`,
       provenance: [`bounded process observation for ${stage.id}`, ...result.errors.map((error) => `${error.phase}: ${error.code}`)],
-      falsifier: "Rerun the authorized stage and retain actual spawn, exit 0, close 0, complete bounded streams, and confirmed process-tree termination without truncation or errors.",
+      falsifier: "Rerun the authorized stage with verified private-namespace containment; retain actual target spawn, exit 0, close 0, complete bounded streams, matching unprivileged target identity, terminal namespace evidence, and confirmed owned-container removal.",
     }),
   });
 }
@@ -477,7 +480,7 @@ function validateStream(value: unknown, limits: ReadinessProcessLimitsV1): void 
     || (row.bytes === 0 && (row.sha256 !== EMPTY_SHA256 || row.head !== "" || row.tail !== ""))) invalid("stream conservation/bounds");
 }
 function validateProcess(value: unknown, limits: ReadinessProcessLimitsV1): asserts value is ReadinessProcessEvidenceV1 {
-  const row = object(value, ["state", "succeeded", "pid", "queuedAt", "startedAt", "spawnedAt", "firstByteAt", "endedAt", "queueDurationMs", "durationMs", "fromFirstByteMs", "exit", "close", "errors", "termination", "stdout", "stderr"]);
+  const row = object(value, ["state", "containment", "succeeded", "pid", "queuedAt", "startedAt", "spawnedAt", "firstByteAt", "endedAt", "queueDurationMs", "durationMs", "fromFirstByteMs", "exit", "close", "errors", "termination", "stdout", "stderr"]);
   if (!PROCESS_STATES.includes(row.state as string)) invalid("process state");
   flag(row.succeeded); if (row.pid !== null) integer(row.pid, 1);
   instant(row.queuedAt); instant(row.startedAt); instant(row.endedAt); duration(row.queueDurationMs); duration(row.durationMs);
@@ -511,15 +514,94 @@ function validateProcess(value: unknown, limits: ReadinessProcessLimitsV1): asse
   validateStream(row.stdout, limits); validateStream(row.stderr, limits);
   const process = value as ReadinessProcessEvidenceV1;
   if (process.stdout.bytes + process.stderr.bytes > 0 && process.firstByteAt === null) invalid("missing first byte observation");
-  if (process.succeeded && !cleanProcess(process)) invalid("inconsistent successful process");
+  validateContainment(process);
+  if (process.succeeded && !successfulLifecycle(process)) invalid("inconsistent successful process");
+  if (process.containment.kind === "docker-pid-namespace" && process.succeeded !== (successfulLifecycle(process) && containedWork(process.containment))) invalid("inconsistent contained process success");
 }
-function cleanProcess(process: ReadinessProcessEvidenceV1): boolean {
-  return process.succeeded && process.state === "exited" && process.pid !== null && process.spawnedAt !== null
+
+function validateContainment(process: ReadinessProcessEvidenceV1): void {
+  const value = process.containment;
+  const kind = (value as ReadinessProcessContainment | null)?.kind;
+  if (kind === "native-process-group") {
+    const row = object(value, ["kind", "descendantOwnership", "groupObservation"]);
+    if (row.descendantOwnership !== "unproven" || row.groupObservation !== process.termination.tree || process.state === "containment-unavailable") invalid("native containment scope");
+    return;
+  }
+  if (kind === "unavailable") {
+    const row = object(value, ["kind", "reasonCode"]); text(row.reasonCode);
+    if (!["containment-unavailable", "aborted"].includes(process.state) || process.succeeded || process.pid !== null || process.spawnedAt !== null
+      || process.exit !== null || process.close !== null || process.firstByteAt !== null || process.termination.tree !== "not-started"
+      || process.termination.attempts.length !== 0 || process.termination.stdioForcedClosed
+      || process.termination.reason !== (process.state === "aborted" ? "abort" : null)
+      || [process.stdout, process.stderr].some((stream) => stream.bytes !== 0 || stream.complete)) invalid("unavailable containment has execution facts");
+    return;
+  }
+  if (kind !== "docker-pid-namespace") invalid("containment kind");
+  const row = object(value, ["kind", "imageId", "containerId", "leaseName", "runtimeVersion", "apiVersion", "namespace", "targetWork", "terminalObservation", "metadata", "cleanup", "isolationVerified", "isolation", "targetIdentity", "observerNodeVersion"]);
+  if (typeof row.imageId !== "string" || !/^sha256:[a-f0-9]{64}$/.test(row.imageId)
+    || (row.containerId !== null && (typeof row.containerId !== "string" || !SHA256.test(row.containerId)))
+    || (row.leaseName !== null && (typeof row.leaseName !== "string" || !/^harvey-readiness-[a-f0-9]{32}$/.test(row.leaseName)))) invalid("containment identity");
+  text(row.runtimeVersion); text(row.apiVersion);
+  if (!/^\d+\.\d+$/.test(row.apiVersion) || Number(row.apiVersion) < 1.44) invalid("containment API version");
+  flag(row.isolationVerified);
+  if (!["not-started", "terminated", "unconfirmed"].includes(row.namespace as string) || !["not-started", "begun", "unknown"].includes(row.targetWork as string)
+    || !["verified", "unavailable"].includes(row.metadata as string) || !["not-required", "removed", "retained"].includes(row.cleanup as string)) invalid("containment observations");
+  const isolation = object(row.isolation, ["privatePidNamespace", "network", "noNewPrivileges", "capDrop", "observerCapabilities", "targetUid", "targetGid", "mountScope", "rootfs"]);
+  integer(isolation.targetUid); integer(isolation.targetGid);
+  if (isolation.privatePidNamespace !== true || isolation.network !== "none" || isolation.noNewPrivileges !== true || isolation.capDrop !== "ALL"
+    || !equal(isolation.observerCapabilities, ["SETUID", "SETGID"]) || isolation.mountScope !== "disposable-root-only" || isolation.rootfs !== "private-writable-overlay") invalid("containment hardening");
+  if (row.terminalObservation !== null) {
+    const terminal = object(row.terminalObservation, ["at", "running", "pid"]); instant(terminal.at);
+    const at = Date.parse(terminal.at);
+    if (terminal.running !== false || terminal.pid !== 0 || at < Date.parse(process.startedAt) || at > Date.parse(process.endedAt)
+      || [process.spawnedAt, process.exit?.at, process.close?.at].some((time) => time != null && Date.parse(time) > at)) invalid("terminal namespace observation");
+  }
+  if (row.observerNodeVersion !== null && (typeof row.observerNodeVersion !== "string" || !/^v\d+\.\d+\.\d+$/.test(row.observerNodeVersion))) invalid("observer Node version");
+  if (row.targetIdentity !== null) {
+    const identity = object(row.targetIdentity, ["uid", "gid", "capEff", "noNewPrivileges"]); integer(identity.uid); integer(identity.gid);
+    if (identity.uid !== isolation.targetUid || identity.gid !== isolation.targetGid || identity.capEff !== "0000000000000000" || identity.noNewPrivileges !== true
+      || row.metadata !== "verified" || row.targetWork !== "begun") invalid("contained target identity");
+  }
+  if (process.pid !== null) integer(process.pid, 2);
+  if (row.namespace === "unconfirmed" && (row.terminalObservation !== null || row.cleanup !== "retained" || process.termination.tree !== "unconfirmed")) invalid("unconfirmed namespace evidence");
+  if (row.namespace === "terminated" && (row.terminalObservation === null || row.containerId === null || process.termination.tree !== "absent" || row.cleanup === "not-required")) invalid("terminated namespace evidence");
+  if (row.namespace === "not-started" && (row.targetWork !== "not-started" || process.termination.tree !== "not-started" || row.metadata !== "unavailable")) invalid("unstarted namespace evidence");
+  if (row.cleanup === "removed" && (row.containerId === null || row.leaseName === null || row.terminalObservation === null)) invalid("owned container removal evidence");
+  if (row.cleanup === "not-required" && (row.containerId !== null || row.namespace !== "not-started" || row.terminalObservation !== null)) invalid("unrequired container cleanup");
+  if (row.metadata === "unavailable") {
+    if (row.targetIdentity !== null || row.observerNodeVersion !== null || process.pid !== null || process.spawnedAt !== null || process.exit !== null || process.close !== null
+      || row.targetWork === "begun") invalid("unverified target metadata");
+  } else if (row.namespace !== "terminated" || row.isolationVerified !== true || row.observerNodeVersion === null
+    || row.targetWork !== (process.pid === null ? "not-started" : "begun")) invalid("verified target metadata");
+  if (process.state === "containment-unavailable" && (process.pid !== null || process.exit !== null || process.close !== null || row.targetWork !== "not-started")) invalid("unavailable target lifecycle");
+}
+
+/** Generic adapter success describes only the lifecycle that the adapter actually observed. */
+function successfulLifecycle(process: ReadinessProcessEvidenceV1): boolean {
+  return process.state === "exited" && process.pid !== null && process.spawnedAt !== null
     && process.exit?.code === 0 && process.exit.signal === null && process.close?.code === 0 && process.close.signal === null
     && Date.parse(process.spawnedAt) <= Date.parse(process.exit.at) && Date.parse(process.exit.at) <= Date.parse(process.close.at)
     && process.errors.length === 0 && process.termination.reason === null && process.termination.attempts.length === 0
     && process.termination.tree === "absent" && !process.termination.stdioForcedClosed
     && [process.stdout, process.stderr].every((stream) => stream.complete && !stream.truncated && !stream.redactionTruncated);
+}
+
+function containedWork(containment: ReadinessProcessContainment): boolean {
+  return containment.kind === "docker-pid-namespace" && containment.containerId !== null && containment.leaseName !== null
+    && containment.isolationVerified && containment.namespace === "terminated" && containment.terminalObservation !== null
+    && containment.targetWork === "begun" && containment.metadata === "verified" && containment.cleanup === "removed"
+    && containment.targetIdentity !== null && containment.isolation.targetUid > 0 && containment.isolation.targetGid > 0;
+}
+
+function cleanProcess(process: ReadinessProcessEvidenceV1): boolean {
+  return process.succeeded && successfulLifecycle(process) && containedWork(process.containment);
+}
+
+function assertContainmentIdentities(state: ReceiptState, containment: ReadinessProcessContainment): void {
+  if (containment.kind !== "docker-pid-namespace") return;
+  const stringsIn = (value: unknown): string[] => typeof value === "string" ? [value]
+    : value && typeof value === "object" ? Object.values(value).flatMap(stringsIn) : [];
+  assertPublicIdentities(state, stringsIn(containment));
 }
 
 function clipUtf8(value: string, limit: number, tail: boolean): string {
@@ -536,6 +618,8 @@ function clipUtf8(value: string, limit: number, tail: boolean): string {
 }
 function sanitizeProcess(state: ReceiptState, input: ReadinessProcessEvidenceV1, limits: ReadinessProcessLimitsV1): ReadinessProcessEvidenceV1 {
   const copy = structuredClone(input);
+  assertContainmentIdentities(state, copy.containment);
+  if (copy.containment.kind === "unavailable") copy.containment.reasonCode = state.registry.redact(copy.containment.reasonCode);
   for (const stream of [copy.stdout, copy.stderr]) {
     const head = state.registry.redact(stream.head, "head");
     const tail = state.registry.redact(stream.tail, "tail");
@@ -727,7 +811,9 @@ export function closeReadinessExecutionV1(context: ReadinessReceiptContext, inpu
 export function validateReadinessExecutionV1(context: ReadinessReceiptContext, input: unknown): ReadinessExecutionV1 {
   const state = stateOf(context);
   assertPublicIdentities(state);
-  return validateReadinessExecutionAgainstExpectationsV1(executionExpectations(state), input);
+  const execution = validateReadinessExecutionAgainstExpectationsV1(executionExpectations(state), input);
+  for (const stage of execution.stages) if (stage.execution.kind === "process") assertContainmentIdentities(state, stage.execution.process.containment);
+  return execution;
 }
 
 /** Pure evidence checks shared by the live producer and offline importer; never grants execution authority. */
