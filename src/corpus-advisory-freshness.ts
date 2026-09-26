@@ -6,12 +6,12 @@ import {
   parseCorpusAdvisorySnapshotManifest,
 } from "./corpus-advisory-snapshot.js";
 
-export interface AdvisoryFreshnessTarget {
+interface AdvisoryFreshnessTarget {
   slug: string;
   commit: string;
 }
 
-export interface AdvisoryFreshnessRow {
+interface AdvisoryFreshnessRow {
   slug: string;
   status: "current" | "warning" | "run-window" | "expired" | "invalid";
   capturedAt?: string;
@@ -21,7 +21,7 @@ export interface AdvisoryFreshnessRow {
   reason: string;
 }
 
-export interface AdvisoryFreshnessReceipt {
+interface AdvisoryFreshnessReceipt {
   schema: 1;
   checkedAt: string;
   requiredThrough: string;
