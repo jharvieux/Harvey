@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -253,6 +253,51 @@ describe("probeExec command execution receipts", () => {
     } finally {
       process.chdir(originalCwd);
     }
+  });
+
+  it("binds a relative cwd artifact to the launch directory despite a later process chdir", async () => {
+    const originalCwd = process.cwd();
+    const launch = join(root, "relative-launch");
+    const later = join(root, "relative-later");
+    mkdirSync(join(launch, "run"), { recursive: true });
+    mkdirSync(join(later, "run"), { recursive: true });
+    const actual = '{"actual":1}';
+    const decoy = '{"decoy":"later"}';
+    writeFileSync(join(later, "run", "report.json"), decoy);
+    try {
+      process.chdir(launch);
+      const launchedCwd = join(process.cwd(), "run");
+      const options = { cwd: "run", receipt: { artifacts: [{ role: "report" as const, path: "report.json" }] } };
+      const pending = probeExec(process.execPath, ["-e", `
+        setTimeout(() => {
+          require('node:fs').writeFileSync('report.json', ${JSON.stringify(actual)});
+          process.stdout.write(process.cwd());
+        }, 80);
+      `], options);
+      process.chdir(later);
+      const result = await pending;
+      expect(result).toMatchObject({ ok: true, output: launchedCwd });
+      expect(readFileSync(join(launch, "run", "report.json"), "utf8")).toBe(actual);
+      expect(result.receipt?.artifacts).toEqual([expect.objectContaining({
+        path: join(launchedCwd, "report.json"), bytes: Buffer.byteLength(actual),
+        sha256: createHash("sha256").update(actual).digest("hex"),
+      })]);
+      expect(result.receipt?.command.cwd).toBe(launchedCwd);
+      expect(result.receipt?.target.sha256).toBe(createHash("sha256").update(JSON.stringify(launchedCwd)).digest("hex"));
+      expect(options.cwd).toBe("run");
+      expect(readFileSync(join(later, "run", "report.json"), "utf8")).toBe(decoy);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("keeps a nonexistent relative cwd as a disclosed spawn failure", async () => {
+    const relativeCwd = "missing-probe-cwd-do-not-create";
+    const result = await probeExec(process.execPath, ["-e", "process.stdout.write('must-not-run')"], { cwd: relativeCwd });
+    expect(result.ok).toBe(false);
+    expect(result.receipt?.outcome).toEqual({ state: "spawn-failed", exitCode: null, signal: null, errorCode: "ENOENT" });
+    expect(result.receipt?.command.cwd).toBe(join(process.cwd(), relativeCwd));
+    expect(result.receipt?.stdout.bytes).toBe(0);
   });
 
   it("rejects non-cloneable receipt metadata without silently replacing its identity", async () => {

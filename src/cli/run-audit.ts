@@ -89,7 +89,7 @@ import "./sync-stdio.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
 import { beginFreshAuditContext, auditContextDigest } from "../audit-context.js";
 import { discoverReadinessPlan, serializeReadinessPlanV1, type ReadinessPlanV1 } from "../audit-readiness.js";
@@ -390,18 +390,28 @@ const ctx: RunContext = {
   targetDir,
   env,
   exec: async (command, argv, options) => {
-    const actualArgv = invocationOutputPaths(argv, options?.cwd);
+    const launchCwd = resolve(options?.cwd ?? process.cwd());
+    const launchEnvironment = Object.fromEntries(Object.entries({ ...process.env, ...options?.env }).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    // The observer runs after the child settles; bind relative PATH entries to the same launch
+    // directory now, while preserving the child's original environment values.
+    const observedEnvironment = {
+      ...launchEnvironment,
+      ...(launchEnvironment.PATH !== undefined ? { PATH: launchEnvironment.PATH.split(delimiter).map((path) => resolve(launchCwd, path)).join(delimiter) } : {}),
+    };
+    const actualArgv = invocationOutputPaths(argv, launchCwd);
     const result = await probeExec(command, actualArgv, {
       ...options,
+      cwd: launchCwd,
+      env: launchEnvironment,
       receipt: {
         ...options?.receipt,
         target: { identity: "audit-target", value: { path: targetDir, revision: replayBinding?.target.revision ?? null, treeSha256: replayBinding?.target.sha256 ?? null } },
         toolchain: [{ name: command, version: replayBinding?.engine.sha256 ?? process.version }],
         configuration: { identity: "audit-command-effective-input", value: { argv: actualArgv, env, options: options?.env ? Object.keys(options.env).sort() : [] } },
-        artifacts: [...(options?.receipt?.artifacts ?? []).map((artifact) => ({ ...artifact, path: capturedPath(artifact.path) })), ...commandArtifacts(actualArgv, options?.cwd)],
+        artifacts: [...(options?.receipt?.artifacts ?? []).map((artifact) => ({ ...artifact, path: capturedPath(artifact.path) })), ...commandArtifacts(actualArgv, launchCwd)],
       },
     });
-    freshCapture?.observeCommand(command, result.receipt, options?.env ? { ...process.env, ...options.env } : process.env);
+    freshCapture?.observeCommand(command, result.receipt, observedEnvironment);
     if (retainDir) {
       if (!result.receipt) throw new Error(`command ${command} completed without a versioned execution receipt`);
       commandReceipts.push(result.receipt);

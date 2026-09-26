@@ -12,6 +12,7 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type { RunContext } from "./audit-runner.js";
 import {
   commandReceiptSucceeded,
@@ -200,7 +201,7 @@ export const probeExec: RunContext["exec"] = async (command, argv, opts) => {
   const { now: receiptNow, ...receiptValues } = metadata ?? {};
   const options: ProbeExecOptions = {
     ...structuredClone(execution),
-    cwd: execution.cwd ?? process.cwd(),
+    cwd: resolve(execution.cwd ?? process.cwd()),
     ...(signal ? { signal } : {}),
     ...(metadata ? { receipt: { ...structuredClone(receiptValues), ...(receiptNow ? { now: receiptNow } : {}) } } : {}),
   };
