@@ -78,6 +78,58 @@ const ISSUE_700 = {
   comments: [],
 };
 
+const ISSUE_2189_BODY = `Independent acceptance review of wave 4 at \`e8e401a38b2becfa34d54ac06e885b97a363f1a9\` found a remaining command receipt outcome distinction in \`src/probe-exec.ts\`.
+
+A real child emitting 2 MiB exceeded \`spawnSync\`'s output buffer. The child did start, but the receipt classified \`ENOBUFS\` as \`spawn-failed\`. Only 1,114,112 captured bytes were retained, without an explicit truncation flag. The receipt remained non-success, so this does not establish false acceptance. It does make the command history and output-digest coverage ambiguous.
+
+A related malformed input control found that the receipt parser accepts an outcome combining \`state: timed-out\` and \`exitCode: 0\`; the success predicate correctly rejects it. The parser should enforce coherent outcome fields.
+
+Acceptance:
+
+- Distinguish failures before process start from a started process interrupted by output limits, retaining observed exit/signal/error information without inventing success.
+- Explicitly record whether captured stdout/stderr are complete or truncated, and state that their hashes cover captured bytes when completeness is unknown or false.
+- Reject contradictory outcome field combinations at the receipt parser boundary.
+- Exercise a real output-overflow child and malformed receipt controls, with failing directions; keep all affected receipts non-success and preserve secret redaction.
+
+This bounded follow-up comes from the #2139 same-class census. Existing broader journey and install-execution issues do not own this concrete receipt contract defect. No timeout, buffer, or acceptance threshold should be raised merely to avoid the control.
+`;
+
+const ISSUE_2209_BODY = `Independent acceptance of #2138 at \`02e2969143a3e4f8f7f9d196d38dae81f58cd565\` confirms correct production behavior: installed pg_net/http are capability inventory (Info/review), not proof of exploitable outbound access. Actual scanner → assembly → HTML preserves that distinction.
+
+The three existing \`src/scan/supabase-config.test.ts:245\` extension controls remain green when production severity is physically changed from Info to High (baseline/mutation/restored exits 0/0/0). The separate independent shipping-consumer control detects the same mutation (0/1/0). Retain that control in the repository so future regression protection does not depend on a temporary acceptance script.
+
+Acceptance:
+- Exercise installed and absent pg_net/http through the shipping scanner, canonical assembly, and rendered report using an owned API fixture.
+- Assert installed capability remains Info/review with the provenance limitation and no attacker-controlled URL/exploit claim; absent extensions emit no capability row.
+- Physically change the production capability severity to High or remove the limitation: the relevant consumer assertion must fail, then pass after restoration.
+- Preserve existing extension controls and run the required local gate.
+
+This is a regression-coverage follow-up, not an observed current exposure-classification defect. Deduplication found only the parent #2138, whose full authorization behavior and six acceptance criteria have independent passing evidence.
+
+Evidence: \`/tmp/harvey-authorization-final-acceptance.json\`; source controls and actual results in \`/private/tmp/harvey-authorization-independent-inverses-n9tyw84m/acceptance-evidence/extension-consumer.ts\`, \`extension-consumer-inverse.json\`, and \`extra-inverses.json\`. The immutable revision and observed exit sequences are retained here because those temporary artifacts are local.
+`;
+
+const PLAIN_ACCEPTANCE_ISSUES = [
+  { issue: 2189, pr: 940, body: ISSUE_2189_BODY },
+  { issue: 2209, pr: 941, body: ISSUE_2209_BODY },
+] as const;
+
+function issueFixture(number: number, body: string, linkedPrs: number[] = []): Record<string, unknown> {
+  return {
+    number,
+    state: "OPEN",
+    body,
+    comments: [],
+    closedByPullRequestsReferences: linkedPrs.map((linked) => ({ number: linked })),
+  };
+}
+
+function disposition(issue: number, count = 4): string {
+  return Array.from({ length: count }, (_, index) =>
+    `ACCEPTANCE #${issue}.${index + 1} met: src/cli/validate-acceptance.test.ts exercises criterion ${index + 1}`,
+  ).join("\n");
+}
+
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -201,6 +253,101 @@ describe("validate-acceptance --body-file discloses exactly what it did not cons
     expect(result.out).not.toContain("and nothing else");
     // And the row still has to say what it DID read, or the fix trades one half-truth for another.
     expect(result.out).toContain("Issue comments and every LINKED PR body WERE read");
+  });
+});
+
+describe("validate-acceptance CLI — standalone Acceptance: labels are criteria-bearing (#2214)", () => {
+  for (const sample of PLAIN_ACCEPTANCE_ISSUES) {
+    it(`rejects no-stated-criteria for the exact #${sample.issue} body`, async () => {
+      const r = await cli(["--pr", String(sample.pr), "--repo", REPO], {
+        [`pr-${sample.pr}`]: {
+          body: `Closes #${sample.issue}\n\nACCEPTANCE #${sample.issue} no-stated-criteria: the production behavior described by the issue body`,
+          closingIssuesReferences: [{ number: sample.issue }],
+        },
+        [`issue-${sample.issue}`]: issueFixture(sample.issue, sample.body),
+      });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`declares \`no-stated-criteria\` but the issue states 4`);
+      expect(r.out).toContain(`0/4 criteria dispositioned`);
+    });
+
+    it(`passes complete positional mappings for the exact #${sample.issue} body`, async () => {
+      const r = await cli(["--pr", String(sample.pr), "--repo", REPO], {
+        [`pr-${sample.pr}`]: {
+          body: `Closes #${sample.issue}\n\n${disposition(sample.issue)}`,
+          closingIssuesReferences: [{ number: sample.issue }],
+        },
+        [`issue-${sample.issue}`]: issueFixture(sample.issue, sample.body),
+      });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain(`4/4 criteria dispositioned`);
+      expect(r.out).toContain(`every acceptance bullet of every issue this PR closes is mapped`);
+    });
+
+    it(`treats the Markdown heading equivalent of #${sample.issue} identically`, async () => {
+      const markdownBody = sample.body.replace(/^Acceptance:$/m, "## Acceptance");
+      const r = await cli(["--pr", String(sample.pr), "--repo", REPO], {
+        [`pr-${sample.pr}`]: {
+          body: `Closes #${sample.issue}\n\n${disposition(sample.issue)}`,
+          closingIssuesReferences: [{ number: sample.issue }],
+        },
+        [`issue-${sample.issue}`]: issueFixture(sample.issue, markdownBody),
+      });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain(`4/4 criteria dispositioned`);
+    });
+  }
+
+  it("fails when one bullet from a plain Acceptance: section is unmapped", async () => {
+    const r = await cli(["--pr", "942", "--repo", REPO], {
+      "pr-942": {
+        body: `Closes #2189\n\n${disposition(2189, 3)}`,
+        closingIssuesReferences: [{ number: 2189 }],
+      },
+      "issue-2189": issueFixture(2189, ISSUE_2189_BODY),
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("2189.4");
+    expect(r.out).toContain("UNMAPPED");
+  });
+
+  it("preserves linked-venue conservation for a plain Acceptance: section", async () => {
+    const r = await cli(["--pr", "943", "--repo", REPO], {
+      "pr-943": {
+        body: `Closes #2189\n\n${disposition(2189, 2)}`,
+        closingIssuesReferences: [{ number: 2189 }],
+      },
+      "pr-944": {
+        body: [
+          "ACCEPTANCE #2189.3 met: src/cli/validate-acceptance.test.ts exercises linked criterion 3",
+          "ACCEPTANCE #2189.4 met: src/cli/validate-acceptance.test.ts exercises linked criterion 4",
+        ].join("\n"),
+      },
+      "issue-2189": issueFixture(2189, ISSUE_2189_BODY, [944]),
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("2 venues supplied disposition lines");
+    expect(r.out).toContain("4/4 criteria dispositioned");
+  });
+
+  it("keeps the genuine no-criteria contract: declaration passes and omission fails", async () => {
+    const issue = issueFixture(22140, "Please make the scanner faster.\n");
+    const declared = await cli(["--pr", "945", "--repo", REPO], {
+      "pr-945": {
+        body: "Closes #22140\n\nACCEPTANCE #22140 no-stated-criteria: the scanner must complete its documented verification",
+        closingIssuesReferences: [{ number: 22140 }],
+      },
+      "issue-22140": issue,
+    });
+    expect(declared.code).toBe(0);
+    expect(declared.out).toContain("0/0 criteria dispositioned");
+
+    const omitted = await cli(["--pr", "946", "--repo", REPO], {
+      "pr-946": { body: "Closes #22140\n", closingIssuesReferences: [{ number: 22140 }] },
+      "issue-22140": issue,
+    });
+    expect(omitted.code).toBe(1);
+    expect(omitted.out).toContain("states no acceptance criteria");
   });
 });
 
