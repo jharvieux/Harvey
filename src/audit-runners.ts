@@ -404,9 +404,9 @@ const recordedPassNote = (artifact: PassArtifact, now: number): [string, Finding
 
 const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
   ...runner,
-  run: (ctx) => {
+  run: async (ctx) => {
     const pass = findFreshPass(ctx, runner.module);
-    const result = runner.run(ctx);
+    const result = await runner.run(ctx);
     if (!pass.fresh && !pass.reason) return result;
     const outcomes = Array.isArray(result) ? result : [result];
     // Folded into the FIRST outcome only: on a per-app fan-out the pass covers the MODULE, not each
@@ -468,8 +468,8 @@ const uniqueEvidence = (findings: Finding[]): Finding[] => {
 };
 
 // Runs a module's CLI and returns the raw result plus a printable command for the ledger's detail.
-const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean; output: string; command: string } => {
-  const { ok, output } = ctx.exec("pnpm", [script, ...argv]);
+const runCli = async (ctx: RunContext, script: string, argv: string[]): Promise<{ ok: boolean; output: string; command: string }> => {
+  const { ok, output } = await ctx.exec("pnpm", [script, ...argv]);
   return { ok, output, command: `pnpm ${script} ${argv.join(" ")}`.trim() };
 };
 
@@ -479,10 +479,18 @@ const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetD
 // app (the common single-app target) it runs once against ctx.targetDir, untagged — behaviour is
 // exactly as before. With >1, it runs per app dir and tags each outcome with the app's name, so the
 // ledger records one row per (module × app) and no second app is silently folded into the first.
-const perApp = <T extends { instance?: string }>(base: (ctx: RunContext) => T) => (ctx: RunContext): T | T[] => {
+// Capture paths and per-project state are shared within a module. Await each instance in the
+// same order as the former synchronous loop before another instance can reuse those resources.
+async function runInOrder<T, R>(values: readonly T[], run: (value: T, index: number) => R | Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (const [index, value] of values.entries()) results.push(await run(value, index));
+  return results;
+}
+
+const perApp = <T extends { instance?: string }>(base: (ctx: RunContext) => Promise<T>) => async (ctx: RunContext): Promise<T | T[]> => {
   const apps = ctx.apps;
   if (!apps || apps.length <= 1) return base(ctx);
-  return apps.map((app) => ({ ...base({ ...ctx, targetDir: app.path }), instance: app.name }));
+  return runInOrder(apps, async (app) => ({ ...await base({ ...ctx, targetDir: app.path }), instance: app.name }));
 };
 
 // #506: the enumerated Supabase project refs for M7's advisor tier. Falls back to the single
@@ -675,10 +683,10 @@ const m1: ModuleRunner = {
   module: "M1",
   typed: true,
   producers: [...M1_AUDIT_PRODUCERS, typedNotAssessed("M1", "m1")],
-  run: (ctx): ProbeResult => {
+  run: async (ctx): Promise<ProbeResult> => {
     const outPath = captureOut(ctx, "M1");
     const command = `pnpm quick-scan --dir ${ctx.targetDir}`;
-    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(outPath ? ["--findings-out", outPath] : [])]);
+    const { ok, output } = await ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(outPath ? ["--findings-out", outPath] : [])]);
     if (!ok) return { kind: "not-assessed", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
     // #1109: the file count is the evidence a scan happened, the same rule M9 applies to
     // detect-static's product-source count. quick-scan exits 0 over a directory with no application
@@ -854,9 +862,9 @@ const m3: ModuleRunner = {
   module: "M3",
   typed: true,
   producers: [...M3_PRODUCERS, typedNotAssessed("M3", "m3")],
-  run: (ctx): ProbeResult => {
+  run: async (ctx): Promise<ProbeResult> => {
     const outPath = captureOut(ctx, "M3");
-    const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+    const { ok, output } = await ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
     const ranked = rankedFiles(output);
     // A fresh pass artifact is the one thing these branches demonstrably read; #530's hotspot
@@ -960,10 +968,10 @@ const scopesAnalysed = (stderr: string | undefined): number | undefined => {
 // (src/cli/run-audit.ts), so the line total jscpd actually compared is readable without changing
 // quality-scan's bare-Finding[] --out schema. No stderr ⇒ no unit ⇒ NotAssessed, because "jscpd
 // exited 0" without a line total is exactly the reassuring silence #1096 exists to remove.
-const m4Run = (ctx: RunContext): ProbeResult => {
+const m4Run = async (ctx: RunContext): Promise<ProbeResult> => {
   const outPath = captureOut(ctx, "M4");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
-  const { ok, output, stderr } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output, stderr } = await ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
   if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
@@ -1017,10 +1025,10 @@ const m4: ModuleRunner = { module: "M4", typed: true, producers: [...forModule(Q
 // carries `own` (the completed findings plus the M5-00 disclosure row), mirroring how m4Run carries
 // M4-99. The tell is scopesAnalysed: >0 means knip ran somewhere, so the M5-00 is a coverage gap,
 // not an "it never ran".
-const m5Run = (ctx: RunContext): ProbeResult => {
+const m5Run = async (ctx: RunContext): Promise<ProbeResult> => {
   const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M5-static.json") : undefined;
   const staticCommand = `pnpm detect-static ${ctx.targetDir}`;
-  const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
+  const staticRun = await ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
   const staticReceipt = staticRun.ok ? parseSourcePopulationReceipt(staticRun.output, "M5") : undefined;
   const staticFindings = staticReceipt ? readCaptured(ctx, staticOutPath).filter((finding) => finding.taxonomy.startsWith("M5 — ")) : [];
   const identified = staticReceipt?.populations.reduce((sum, row) => sum + row.identified.count, 0) ?? 0;
@@ -1062,7 +1070,7 @@ const m5Run = (ctx: RunContext): ProbeResult => {
   const depsInstalled = hasNodeModules(ctx);
   const outPath = captureOut(ctx, "M5");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
-  const { ok, output, stderr } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output, stderr } = await ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return withSourceTier({ kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command });
   // The verdict array is read from the captured --out file when capturing (quality-scan writes a
   // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
@@ -1142,7 +1150,7 @@ const m6: ModuleRunner = {
   module: "M6",
   typed: true,
   producers: [typedNotAssessed("M6", "m6")],
-  run: (ctx) => {
+  run: async (ctx) => {
     // #416: a fresh verdict artifact is the recorded reviewed judgment #351 said a packet is not. It
     // is the one thing that clears M6's never-run alarm — checked before the packet path so a real
     // verdict reads `ran` regardless of whether the paid tier is flagged this run.
@@ -1154,7 +1162,7 @@ const m6: ModuleRunner = {
 
     const indicatorOutPath = captureOut(ctx, "M6");
     const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
-    const indicatorRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
+    const indicatorRun = await ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
     const indicatorScanned = indicatorRun.ok ? productFilesScanned(indicatorRun.output) : undefined;
     const indicatorReceipt = indicatorRun.ok ? parseSourcePopulationReceipt(indicatorRun.output, "M6") : undefined;
     const indicatorGap = indicatorReceipt ? populationGap(indicatorReceipt) : undefined;
@@ -1178,7 +1186,7 @@ const m6: ModuleRunner = {
         falsifier: `${indicatorCommand} — a non-zero product-source count on that line makes the indicator half of this reason false`,
       };
     }
-    const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
+    const { ok, output, command } = await runCli(ctx, "simplify-scan", [ctx.targetDir]);
     // #683 (sibling of #682): when the paid simplify-scan sub-step is blocked, the free indicator
     // sub-step above may already have scanned and produced findings. Degrading to requires-live-run
     // would DISCARD them — the silent omission the coverage doctrine forbids — so if the indicator
@@ -1259,7 +1267,7 @@ const m7: ModuleRunner = {
   module: "M7",
   typed: true,
   producers: [...forModule(STATIC_DETECT_PRODUCERS, "M7"), ...M7_PRODUCERS, typedNotAssessed("M7", "m7")],
-  run: (ctx) => {
+  run: async (ctx) => {
     const lh = findFreshPass(ctx, "M7");
     // #1522: every fresh pass the slot holds, not just the newest — a second recorded M7 tier no
     // longer overwrites the first, so both must reach the row.
@@ -1287,7 +1295,7 @@ const m7: ModuleRunner = {
     // (MEASURED 2026-07-25: root-scope detect-static reported 2, the deliverable carried 1).
     const codeOutPath = captureOut(ctx, "M7");
     const codeCommand = `pnpm detect-static ${ctx.targetDir}`;
-    const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(codeOutPath ? ["--out", codeOutPath] : [])]);
+    const { ok, output } = await ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(codeOutPath ? ["--out", codeOutPath] : [])]);
     if (!ok) return withCwv({ kind: "not-assessed", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: codeCommand });
     const scanned = productFilesScanned(output);
     if (!scanned) {
@@ -1316,10 +1324,10 @@ const m7: ModuleRunner = {
     const multi = refs.length > 1;
     // #1042: the CWV note/findings ride on the FIRST project's row only — the Lighthouse pass covers
     // the app, not each enumerated database, so repeating it would multiply one measurement.
-    return refs.map((ref, i): ProbeResult => {
+    return runInOrder(refs, async (ref, i): Promise<ProbeResult> => {
       const instance = multi ? { instance: ref } : {};
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
-      const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
+      const advisors = await ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
       const fold = (outcome: ProbeResult): ProbeResult => (i === 0 ? withCode(withCwv(outcome)) : outcome);
       if (!advisors.ok) return fold(codeTier({ reason: `advisors failed for ${ref}: ${advisors.output.trim()} [TRIED; falsifier: rerun pnpm perf-scan ${ref} with the required project permissions]`, ...instance }));
       // #527: code + advisors both ran; without a recorded Lighthouse pass the CWV tier did not, so
@@ -1375,13 +1383,13 @@ const m8: ModuleRunner = {
   module: "M8",
   typed: true,
   producers: [...forModule(STATIC_DETECT_PRODUCERS, "M8"), ...M8_PRODUCERS, typedNotAssessed("M8", "m8")],
-  run: (ctx): ProbeResult => {
+  run: async (ctx): Promise<ProbeResult> => {
     // #401: the free-tier test-intent detectors (src/detectors/test-intent.ts) are source-only AST
     // passes — they need no installed deps. Run this first so its status/findings are available
     // whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).
     const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M8-static.json") : undefined;
     const staticCmd = `pnpm detect-static ${ctx.targetDir}`;
-    const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
+    const staticRun = await ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
     const staticScanned = staticRun.ok ? (identifiedSourceFilesScanned(staticRun.output) ?? filesScanned(staticRun.output)) : undefined;
     const staticFindings = staticScanned ? testIntentFindings(readCaptured(ctx, staticOutPath)) : [];
 
@@ -1408,7 +1416,7 @@ const m8: ModuleRunner = {
             findings: staticFindings,
           }
         : { kind: "not-assessed", reason: `mutation tier blocked and the test-intent tier could not scan either — ${why}`, provenance: "MEASURED", falsifier: `${staticCmd} && ${command}` };
-    const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...installArg, ...(outPath ? ["--out", outPath] : [])]);
+    const { ok, output } = await ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...installArg, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return mutationBlocked(`${command} exited non-zero: ${trimOut(output)}`);
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
@@ -1474,10 +1482,10 @@ const M9_OWNED_BY_OTHER_PROBE = ["M5 — ", M6_TAXONOMY_PREFIX, M7_TAXONOMY_PREF
 const m9CollectorFindings = (findings: Finding[]): Finding[] =>
   findings.filter((f) => !M9_OWNED_BY_OTHER_PROBE.some((prefix) => f.taxonomy.startsWith(prefix)));
 
-const m9Run = (ctx: RunContext): ProbeResult => {
+const m9Run = async (ctx: RunContext): Promise<ProbeResult> => {
   const outPath = captureOut(ctx, "M9");
   const command = `pnpm detect-static ${ctx.targetDir}`;
-  const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output } = await ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const scanned = productFilesScanned(output);
   if (scanned === undefined) {
@@ -1568,7 +1576,7 @@ const notClassified = (ctx: RunContext, output: string, columns: number | undefi
 // instanceName) that's ctx.schemaHint; on a monorepo fan-out, it's ctx.schemaHints[instanceName] —
 // its OWN app's hint, never smeared across the fan-out — so an app with an unconventional layout
 // still gets pointed at the right place.
-const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeResult => {
+const m10Schema = async (ctx: RunContext, appPath: string, instanceName?: string): Promise<ProbeResult> => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
   const hintPath = instanceName ? ctx.schemaHints?.[instanceName] : ctx.schemaHint;
@@ -1597,7 +1605,7 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
   const schemaOnly =
     "schema tier only — name/type classification; row values were not sampled and PII protection was not verified. Effective column grants and row policies need connected catalog evidence; source encryption/masking behavior and infrastructure controls need attributable review. See the M10-PROT-00 row";
   const mapPath = dataMapOut(ctx, instanceName);
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])]);
+  const { ok, output } = await ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])]);
   const command = `pnpm pii-classify --schema ${schemas.join(" ")}`;
   if (!ok) return { kind: "not-assessed", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command, ...instance };
   const columns = columnsClassified(output);
@@ -1619,12 +1627,12 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
 // inherited env, so it reaches exactly the one project the operator pointed it at. `dbUrl` (#520)
 // overlays a per-project SUPABASE_DB_URL onto the child env so a monorepo classifies EACH enumerated
 // project against its own DB, not only the env-configured one.
-const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeResult => {
+const m10Live = async (ctx: RunContext, instanceName?: string, dbUrl?: string): Promise<ProbeResult> => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
   const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
   const mapPath = dataMapOut(ctx, instanceName);
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])], execOpts);
+  const { ok, output } = await ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])], execOpts);
   const columns = columnsClassified(output);
   const captured = outPath ? readCaptured(ctx, outPath) : [];
   const scopeEvidence = captured.find((f) => f.id === "M10-PROT-00")?.evidence ?? output.split("\n").find((line) => line.startsWith("M10 scope:"));
@@ -1651,7 +1659,7 @@ const m10: ModuleRunner = {
   module: "M10",
   typed: true,
   producers: [...M10_PRODUCERS, typedNotAssessed("M10", "m10")],
-  run: (ctx) => {
+  run: async (ctx) => {
     if (ctx.env.connected) {
       const refs = supabaseRefs(ctx);
       // Single project (or none enumerated): one live row off the inherited SUPABASE_DB_URL, as before.
@@ -1660,7 +1668,7 @@ const m10: ModuleRunner = {
       // (run-audit reads SUPABASE_DB_URL_<ref>, the first ref also falling back to plain SUPABASE_DB_URL).
       // A ref with a URL is live-classified against that DB; a ref WITHOUT one keeps an honest
       // requires-live-run row naming the missing credential — never a silent skip.
-      return refs.map((ref): ProbeResult => {
+      return runInOrder(refs, async (ref): Promise<ProbeResult> => {
         const dbUrl = ctx.supabaseDbUrls?.[ref];
         if (!dbUrl) {
           return {
@@ -1671,13 +1679,13 @@ const m10: ModuleRunner = {
             instance: ref,
           };
         }
-        return { ...m10Live(ctx, ref, dbUrl), instance: ref };
+        return { ...await m10Live(ctx, ref, dbUrl), instance: ref };
       });
     }
     // Schema tier: per app on a monorepo, single-target otherwise.
     const apps = ctx.apps && ctx.apps.length > 1 ? ctx.apps : undefined;
     if (!apps) return m10Schema(ctx, ctx.targetDir);
-    return apps.map((app) => m10Schema(ctx, app.path, app.name));
+    return runInOrder(apps, (app) => m10Schema(ctx, app.path, app.name));
   },
 };
 

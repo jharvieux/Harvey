@@ -25,6 +25,33 @@ describe("probeExec command execution receipts", () => {
     },
   });
 
+  it("advances a heartbeat within the real child's delayed process window", async () => {
+    const beats: bigint[] = [];
+    let heartbeat: NodeJS.Immediate;
+    const tick = () => {
+      beats.push(process.hrtime.bigint());
+      heartbeat = setImmediate(tick);
+    };
+    heartbeat = setImmediate(tick);
+    try {
+      const result = await probeExec(process.execPath, ["-e", `
+        process.stdout.write(process.hrtime.bigint().toString() + "\\n");
+        setTimeout(() => {
+          process.stdout.write(process.hrtime.bigint().toString() + "\\n");
+        }, 180);
+      `], receiptOptions({ invocationId: "heartbeat" }));
+      const [started, finished] = result.output.trim().split("\n").map(BigInt);
+      expect(result.ok).toBe(true);
+      expect(started).toBeDefined();
+      expect(finished).toBeDefined();
+      // Child timestamps bound the actual process window; ticks before launch or after exit
+      // cannot make a synchronous implementation appear to yield.
+      expect(beats.some((beat) => beat > started! && beat < finished!)).toBe(true);
+    } finally {
+      clearImmediate(heartbeat);
+    }
+  });
+
   it("records real success and non-zero exit without inferring either from output shape", () => {
     const zeroTests = probeExec(process.execPath, ["-e", "process.stdout.write('0 tests completed')"], receiptOptions());
     expect(zeroTests.ok).toBe(true);
