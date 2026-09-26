@@ -152,6 +152,59 @@ else {
     expect(timedOut).toMatchObject({ outcome: "failed", exitCode: null, signal: "SIGTERM" });
   });
 
+  it.each([8, 9])("applies the combined 16 MiB manager budget to %i MiB on each real stream", async (streamMiB) => {
+    const f = fixture("npm", "9.9.9");
+    const handled = join(f.targetDir, "overflow-signal-handled");
+    writeFileSync(join(f.root, "native/manager.cjs"), `
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+process.on('SIGTERM', () => {
+  require('node:fs').writeFileSync(${JSON.stringify(handled)}, 'handled');
+  process.exit(0);
+});
+const bytes = ${streamMiB} * 1024 * 1024;
+process.stdout.write(Buffer.alloc(bytes, 'α'), () => {
+  process.stderr.write(Buffer.alloc(bytes, 'β'), () => setTimeout(() => process.exit(0), 150));
+});
+`);
+    const result = await observePackageManager("npm", "frozen", { bin: "npm", args: ["install"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } });
+    if (streamMiB === 8) {
+      expect(result).toMatchObject({ outcome: "completed", exitCode: 0, selected: { version: "9.9.9" } });
+      expect(existsSync(handled)).toBe(false);
+    } else {
+      expect(result).toMatchObject({ outcome: "failed", exitCode: 0 });
+      expect(result.signal).toBeUndefined();
+      expect(result.reason).toContain("ENOBUFS");
+      expect(result.reason!.length).toBeLessThan(6200);
+      expect(existsSync(handled)).toBe(true);
+    }
+  });
+
+  it("keeps a manager deadline failed after a ready SIGTERM handler exits zero", async () => {
+    const f = fixture("npm", "9.9.9");
+    const ready = join(f.targetDir, "deadline-ready");
+    const handled = join(f.targetDir, "deadline-handled");
+    writeFileSync(join(f.root, "native/manager.cjs"), `
+const fs = require('node:fs');
+process.on('SIGTERM', () => {
+  fs.writeFileSync(${JSON.stringify(handled)}, 'handled');
+  process.stdout.write('final-out-α');
+  process.stderr.write('final-err-β');
+  process.exit(0);
+});
+fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+setTimeout(() => process.exit(23), 2500);
+`);
+    const result = await observePackageManager("npm", "frozen", { bin: "npm", args: ["install"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin }, timeoutMs: 1000 });
+    expect(existsSync(ready)).toBe(true);
+    expect(existsSync(handled)).toBe(true);
+    expect(result).toMatchObject({ outcome: "failed", exitCode: 0 });
+    expect(result.signal).toBeUndefined();
+    expect(result.reason).toContain("ETIMEDOUT");
+    expect(result.reason).toContain("final-out-α");
+    expect(result.reason).toContain("final-err-β");
+  });
+
   it("closes manager stdin so a real child waiting for EOF can finish", async () => {
     const f = fixture("npm", "9.9.9");
     const managerEntry = join(f.root, "native/manager.cjs");

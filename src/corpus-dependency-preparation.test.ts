@@ -455,6 +455,37 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(heartbeats).toBeGreaterThan(0);
   });
 
+  it.each([4, 5])("applies the combined 8 MiB Knip discovery budget to %i MiB on each real stream", async (streamMiB) => {
+    const target = fixture("npm");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-knip-combined-output-"));
+    dirs.push(cacheDir);
+    const preload = join(cacheDir, "combined-output.cjs");
+    writeFileSync(preload, `
+if (process.env.HARVEY_KNIP_CONFIG_REQUEST) {
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk, ...rest) => {
+    const output = Buffer.from(chunk);
+    const padded = Buffer.concat([output, Buffer.alloc(${streamMiB} * 1024 * 1024 - output.length, ' ')]);
+    process.stderr.write(Buffer.alloc(${streamMiB} * 1024 * 1024, 'e'), () => write(padded, ...rest));
+    return true;
+  };
+}
+`);
+    const originalNodeOptions = process.env.NODE_OPTIONS;
+    try {
+      process.env.NODE_OPTIONS = `${originalNodeOptions ?? ""} --require=${preload}`.trim();
+      const result = await prepareCorpusDependencies({ targetDir: target, cacheDir, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.12.1", runInstall: vi.fn() });
+      expect(result).toMatchObject({ complete: true, status: "miss", cacheable: streamMiB === 4 });
+      if (streamMiB === 5) {
+        expect(result.reason).toContain("provider/config catalog could not be enumerated");
+        expect(result.reason).toContain("ENOBUFS");
+      }
+    } finally {
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = originalNodeOptions;
+    }
+  });
+
   it("closes Knip discovery stdin and retains a real nonzero child status", async () => {
     const target = fixture("npm");
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-knip-stdin-"));

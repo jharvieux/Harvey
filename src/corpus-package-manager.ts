@@ -91,9 +91,15 @@ function resolveLauncher(bin: string, cwd: string, environment: NodeJS.ProcessEn
 }
 
 function failureReason(error: unknown): string {
-  const e = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
+  const e = error as { code?: number | string; message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
   // pnpm writes its concrete ERR_PNPM_* errors to stdout; retaining only stderr loses the cause.
   const output = [e.stdout?.toString(), e.stderr?.toString()].filter(Boolean).join("\n").trim();
+  const interruption = e.code === "ENOBUFS" || e.code === "ETIMEDOUT" ? `${e.code}: ${e.message}` : undefined;
+  if (interruption) {
+    const prefix = interruption.slice(0, 6000);
+    const remaining = 6000 - prefix.length - 1;
+    return prefix + (output && remaining > 0 ? `\n${output.slice(-remaining)}` : "");
+  }
   return output.slice(-6000) || e.message || String(error);
 }
 
@@ -124,20 +130,49 @@ export async function observePackageManager(
     try {
       stdout = await new Promise<string>((resolveRun, rejectRun) => {
         let stdinFailure: Error | undefined;
+        let limitFailure: NodeJS.ErrnoException | undefined;
+        let deadline: NodeJS.Timeout | undefined;
+        const timeoutMs = invocation.timeoutMs ?? (stage === "version-probe" ? 120_000 : 600_000);
+        if (!Number.isInteger(timeoutMs) || timeoutMs < 0) throw new RangeError("package-manager timeoutMs must be a nonnegative integer");
+        const maxBuffer = 16 * 1024 * 1024;
+        let remaining = maxBuffer;
+        const retained = { stdout: 0, stderr: 0 };
         const child = execFile(launcher, args, {
           cwd: invocation.cwd,
           env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
-          encoding: "utf8",
-          timeout: invocation.timeoutMs ?? (stage === "version-probe" ? 120_000 : 600_000),
-          maxBuffer: 16 * 1024 * 1024,
+          encoding: "buffer",
+          maxBuffer,
           windowsHide: true,
         }, (error, childStdout, childStderr) => {
-          if (error || stdinFailure) {
-            rejectRun(Object.assign(error ?? stdinFailure!, { stdout: childStdout, stderr: childStderr }));
+          clearTimeout(deadline);
+          const stdout = childStdout.subarray(0, retained.stdout);
+          const stderr = childStderr.subarray(0, retained.stderr);
+          const failure = limitFailure ?? error ?? stdinFailure;
+          if (failure) {
+            rejectRun(Object.assign(failure, { status: child.exitCode !== null && child.exitCode >= 0 ? child.exitCode : null, signal: child.signalCode ?? undefined, stdout, stderr }));
             return;
           }
-          resolveRun(childStdout);
+          resolveRun(stdout.toString("utf8"));
         });
+        // execFile budgets each stream separately; the native synchronous contract used one
+        // combined byte budget. Record its interruption even if a SIGTERM handler exits zero.
+        for (const name of ["stdout", "stderr"] as const) {
+          child[name]?.on("data", (chunk: Buffer) => {
+            const accepted = Math.min(remaining, chunk.length);
+            retained[name] += accepted;
+            remaining -= accepted;
+            if (accepted < chunk.length) {
+              limitFailure ??= Object.assign(new Error("package-manager output exceeded the combined 16 MiB limit"), { code: "ENOBUFS" });
+              child.stdout?.destroy();
+              child.stderr?.destroy();
+              child.kill("SIGTERM");
+            }
+          });
+        }
+        if (timeoutMs > 0) deadline = setTimeout(() => {
+          limitFailure ??= Object.assign(new Error(`package-manager exceeded its ${timeoutMs}ms deadline`), { code: "ETIMEDOUT" });
+          child.kill("SIGTERM");
+        }, timeoutMs);
         const stdin = child.stdin;
         if (!stdin) {
           stdinFailure = new Error("package-manager child stdin pipe was unavailable");
@@ -162,8 +197,8 @@ export async function observePackageManager(
       result.exitCode = 0;
       result.outcome = "completed";
     } catch (error) {
-      const failure = error as { code?: number | string; signal?: string };
-      result.exitCode = typeof failure.code === "number" ? failure.code : null;
+      const failure = error as { status?: number | null; code?: number | string; signal?: string };
+      result.exitCode = failure.status ?? (typeof failure.code === "number" ? failure.code : null);
       result.signal = failure.signal;
       result.reason = failureReason(error);
     }
@@ -180,7 +215,7 @@ export async function observePackageManager(
     }
     const identityFailure = !selected
       ? `the selected ${manager} executable/version could not be observed after selector provisioning`
-      : stage === "version-probe" && result.exitCode === 0 && stdout.trim() !== selected.version
+      : stage === "version-probe" && result.outcome === "completed" && stdout.trim() !== selected.version
         ? `version-probe output ${JSON.stringify(stdout.trim())} disagrees with the executed ${manager}@${selected.version}`
         : undefined;
     if (identityFailure) {

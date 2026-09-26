@@ -346,14 +346,16 @@ function qualityWorkspaceRequest(root: string): { root: string; workspacePattern
 function knipDiscoveryFailure(error: unknown): string {
   if (!error || typeof error !== "object") return String(error);
   const failure = error as { code?: number | string; signal?: string; status?: number; stderr?: Buffer | string };
+  const status = failure.status ?? (typeof failure.code === "number" ? failure.code : undefined);
+  const code = typeof failure.code === "string" ? failure.code : undefined;
+  const terminal = `discovery process failed (status ${status ?? "unknown"}, signal ${failure.signal ?? "none"}, code ${code ?? "none"})`;
   const stderr = failure.stderr?.toString().trim();
   if (stderr) {
     const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
-    return lines.slice(-3).join(" ").slice(0, 600);
+    const detail = lines.slice(-3).join(" ");
+    return (code === "ENOBUFS" || code === "ETIMEDOUT" ? `${terminal}; ${detail}` : detail).slice(0, 600);
   }
-  const status = failure.status ?? (typeof failure.code === "number" ? failure.code : undefined);
-  const code = typeof failure.code === "string" ? failure.code : undefined;
-  return `discovery process failed (status ${status ?? "unknown"}, signal ${failure.signal ?? "none"}, code ${code ?? "none"})`;
+  return terminal;
 }
 
 async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutableConfigDiscovery> {
@@ -362,10 +364,13 @@ async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutab
     const knipDist = dirname(require.resolve("knip"));
     const stdout = await new Promise<string>((resolveRun, rejectRun) => {
       let stdinFailure: Error | undefined;
+      let limitFailure: NodeJS.ErrnoException | undefined;
+      const maxBuffer = 1024 * 1024 * 8;
+      let remaining = maxBuffer;
+      const retained = { stdout: 0, stderr: 0 };
       const child = execFile(process.execPath, ["--input-type=module", "--eval", KNIP_CONFIG_DISCOVERY_SCRIPT], {
-        encoding: "utf8",
-        timeout: 30_000,
-        maxBuffer: 1024 * 1024 * 8,
+        encoding: "buffer",
+        maxBuffer,
         windowsHide: true,
         env: {
           ...process.env,
@@ -373,12 +378,35 @@ async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutab
           HARVEY_KNIP_CONFIG_REQUEST: JSON.stringify(qualityWorkspaceRequest(root)),
         },
       }, (error, childStdout, childStderr) => {
-        if (error || stdinFailure) {
-          rejectRun(Object.assign(error ?? stdinFailure!, { stdout: childStdout, stderr: childStderr }));
+        clearTimeout(deadline);
+        const stdout = childStdout.subarray(0, retained.stdout);
+        const stderr = childStderr.subarray(0, retained.stderr);
+        const failure = limitFailure ?? error ?? stdinFailure;
+        if (failure) {
+          rejectRun(Object.assign(failure, { status: child.exitCode !== null && child.exitCode >= 0 ? child.exitCode : null, signal: child.signalCode ?? undefined, stdout, stderr }));
           return;
         }
-        resolveRun(childStdout);
+        resolveRun(stdout.toString("utf8"));
       });
+      // Keep the original combined native budget and deadline as failures independently of
+      // callback errors: a signal handler can exit zero after either limit interrupted discovery.
+      for (const name of ["stdout", "stderr"] as const) {
+        child[name]?.on("data", (chunk: Buffer) => {
+          const accepted = Math.min(remaining, chunk.length);
+          retained[name] += accepted;
+          remaining -= accepted;
+          if (accepted < chunk.length) {
+            limitFailure ??= Object.assign(new Error("Knip discovery output exceeded the combined 8 MiB limit"), { code: "ENOBUFS" });
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            child.kill("SIGTERM");
+          }
+        });
+      }
+      const deadline = setTimeout(() => {
+        limitFailure ??= Object.assign(new Error("Knip discovery exceeded its 30000ms deadline"), { code: "ETIMEDOUT" });
+        child.kill("SIGTERM");
+      }, 30_000);
       const stdin = child.stdin;
       if (!stdin) {
         stdinFailure = new Error("Knip discovery child stdin pipe was unavailable");
