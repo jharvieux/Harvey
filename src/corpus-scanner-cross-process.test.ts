@@ -303,7 +303,7 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       symlinkSync(join(fixture, "outside"), join(targetDir, "external-src"), "dir");
     }
     const identity = { targetRevision: "zero-quality-pin", targetTree: "zero-quality-tree" };
-    const preparation = prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
+    const preparation = await prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
     expect(preparation).toMatchObject({ complete: true, cacheable: true });
     try {
       const events: string[] = [];
@@ -376,7 +376,7 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     write("apps/web/src/ignored.ts", "export const ignored = true;\n");
     await execFileAsync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir });
     const identity = { targetRevision: "root-knip-pin", targetTree: "root-knip-tree" };
-    const preparation = prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
+    const preparation = await prepareCorpusDependencies({ targetDir, cacheDir, ...identity });
     expect(preparation).toMatchObject({ complete: true, cacheable: true });
     try {
       const events: string[] = [];
@@ -569,7 +569,7 @@ const module = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-
 const preparationModule = await import(pathToFileURL(join(repoRoot, "src", "corpus-dependency-preparation.ts")).href);
 const targetTree = execFileSync("git", ["-C", targetDir, "write-tree"], { encoding: "utf8" }).trim();
 const events = [];
-const preparation = preparationModule.prepareCorpusDependencies({ targetDir, cacheDir, targetRevision: "fixture-pinned-revision", targetTree, onEvent: (message) => events.push(message) });
+const preparation = await preparationModule.prepareCorpusDependencies({ targetDir, cacheDir, targetRevision: "fixture-pinned-revision", targetTree, onEvent: (message) => events.push(message) });
 const cache = { dir: cacheDir, mode: "read-write", targetRevision: "fixture-pinned-revision", targetTree, dependencyPreparation: preparation };
 const common = { repoRoot, targetDir, targetConfig: "knip-provider-falsifier", onEvent: (message) => events.push(message) };
 const detected = await module.runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", scriptArgs: [targetDir], cache });
@@ -682,7 +682,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     try {
       const run = async () => {
         const events: string[] = [];
-        const preparation = prepareCorpusDependencies({
+        const preparation = await prepareCorpusDependencies({
           targetDir,
           cacheDir,
           targetRevision: "vite-provider-pin",
@@ -775,7 +775,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     try {
       const run = async () => {
         const events: string[] = [];
-        const preparation = prepareCorpusDependencies({
+        const preparation = await prepareCorpusDependencies({
           targetDir,
           cacheDir,
           targetRevision: "transitive-lifecycle-pin",
@@ -871,7 +871,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       "",
     ].join("\n"));
 
-    const dependencyPreparation = prepareCorpusDependencies({
+    const dependencyPreparation = await prepareCorpusDependencies({
       targetDir,
       cacheDir,
       targetRevision: "multi-tenant-pin",
@@ -1091,7 +1091,7 @@ function corpusInstallConsumer() {
   const code = ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   return new Function(...Object.keys(bindings), `${code}\nreturn {installTargetDeps,runScanner};`)(...Object.values(bindings)) as {
     installTargetDeps: (dir: string, flags: string[], identity: { targetRevision: string; targetTree: string; sourceRoot: string }, cacheDir?: string) => ReturnType<typeof prepareCorpusDependencies>;
-    runScanner: (options: { script: "quality-scan"; scanner: "quality-scan"; scriptArgs: string[]; targetDir: string; targetRevision: string; targetTree: string; targetConfig: string; records: unknown[]; cacheDir?: string; dependencyPreparation?: ReturnType<typeof prepareCorpusDependencies> }) => Promise<Finding[]>;
+    runScanner: (options: { script: "quality-scan"; scanner: "quality-scan"; scriptArgs: string[]; targetDir: string; targetRevision: string; targetTree: string; targetConfig: string; records: unknown[]; cacheDir?: string; dependencyPreparation?: Awaited<ReturnType<typeof prepareCorpusDependencies>> }) => Promise<Finding[]>;
   };
 }
 
@@ -1167,9 +1167,9 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     const consumer = corpusInstallConsumer();
     const identity = { targetRevision: "pin", targetTree: "tree", sourceRoot };
     const cacheDir = cached ? f.cacheDir : undefined;
-    const run = (preparation: ReturnType<typeof prepareCorpusDependencies>, extra: string[] = []) => consumer.runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir, ...extra], targetDir: f.targetDir, ...identity, targetConfig: sourceRoot, records: [], cacheDir, dependencyPreparation: preparation });
+    const run = (preparation: Awaited<ReturnType<typeof prepareCorpusDependencies>>, extra: string[] = []) => consumer.runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir, ...extra], targetDir: f.targetDir, ...identity, targetConfig: sourceRoot, records: [], cacheDir, dependencyPreparation: preparation });
     writeFileSync(join(f.targetDir, "control-mode"), "success");
-    const complete = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
+    const complete = await consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
     const control = await run(complete);
     expect(complete.complete).toBe(true);
     expect(control.some((finding) => finding.id === "M5-98")).toBe(false);
@@ -1177,7 +1177,7 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(true);
     rmSync(join(f.targetDir, "provider-consumed"));
     writeFileSync(join(f.targetDir, "control-mode"), "fail");
-    const rejected = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
+    const rejected = await consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
     const findings = await run(rejected);
     const html = buildHtml({ meta, findings });
     expect(rejected).toMatchObject({ complete: false, status: "incomplete", packageManagerVersion: "9.9.9" });
@@ -1208,13 +1208,13 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     }
   });
 
-  it.each(["npm", "pnpm", "yarn"] as const)("retains selector environment and canonical store on %s fallback; classifies provisioning separately", (manager) => {
+  it.each(["npm", "pnpm", "yarn"] as const)("retains selector environment and canonical store on %s fallback; classifies provisioning separately", async (manager) => {
     const f = fixture(".", manager);
     vi.stubEnv("HARVEY_UNKEYED_SELECTOR_2047", "select-a-different-manager-in-the-full-environment");
     writeFileSync(join(f.targetDir, "control-mode"), "fallback");
-    const full = observePackageManager(manager, "version-probe", { bin: manager, args: ["--version"], cwd: f.targetDir, env: process.env });
+    const full = await observePackageManager(manager, "version-probe", { bin: manager, args: ["--version"], cwd: f.targetDir, env: process.env });
     expect(full.selected?.version).toBe("10.10.10");
-    const shards = [1, 2].map((shard) => prepareCorpusDependencies({ ...f, cacheDir: relative(process.cwd(), join(f.cacheDir, `shard${shard}`)), targetRevision: "pin", targetTree: "tree" }));
+    const shards = await Promise.all([1, 2].map((shard) => prepareCorpusDependencies({ ...f, cacheDir: relative(process.cwd(), join(f.cacheDir, `shard${shard}`)), targetRevision: "pin", targetTree: "tree" })));
     const [first, second] = shards;
     expect(first).toMatchObject({ complete: true, cacheable: false, status: "non-cacheable", packageManagerVersion: "9.9.9" });
     expect(first!.installation?.stages.map((stage) => [stage.stage, stage.outcome, stage.selected?.version])).toEqual([["version-probe", "completed", "9.9.9"], ["frozen", "failed", "9.9.9"], ["legacy", "completed", "9.9.9"]]);
@@ -1235,22 +1235,22 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     expect(existsSync(join(f.targetDir, "setup-attempted"))).toBe(true);
   });
 
-  it.each(["change", "change-same-version"])("rejects a successful fallback when its selected executable changes: %s", (mode) => {
+  it.each(["change", "change-same-version"])("rejects a successful fallback when its selected executable changes: %s", async (mode) => {
     const f = fixture();
     writeFileSync(join(f.targetDir, "control-mode"), mode);
-    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    const result = await prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
     expect(result).toMatchObject({ complete: false, cacheable: false, status: "incomplete" });
     expect(result.installation?.stages.at(-1)).toMatchObject({ stage: "legacy", exitCode: 0, outcome: "failed", reason: expect.stringContaining("identity changed") });
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
     expect(readNamesSafe(join(f.cacheDir, "dependency-preparation")).includes("receipts")).toBe(false);
   });
 
-  it("binds the selected executable when the launcher's known-good choice moves after the frozen attempt", () => {
+  it("binds the selected executable when the launcher's known-good choice moves after the frozen attempt", async () => {
     const f = fixture();
     writeFileSync(join(f.targetDir, "package.json"), '{"name":"unpinned-selector-control","private":true}');
     writeFileSync(join(f.targetDir, "control-mode"), "launcher-change");
-    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
-    const moved = observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: process.env });
+    const result = await prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    const moved = await observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: process.env });
     expect(moved.selected?.version).toBe("10.10.10");
     expect(result).toMatchObject({ complete: true, status: "non-cacheable", packageManagerVersion: "9.9.9" });
     expect(result.installation?.stages.map((stage) => stage.selected?.version)).toEqual(["9.9.9", "9.9.9", "9.9.9"]);
@@ -1260,7 +1260,7 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
   it("discloses a failed version-probe as installation setup without attempting installation", async () => {
     const f = fixture();
     writeFileSync(join(f.targetDir, "control-mode"), "probe-fail");
-    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    const result = await prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
     expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("ERR_SETUP_2047") });
     expect(result.installation?.stages).toHaveLength(1);
     expect(result.installation?.stages[0]).toMatchObject({ stage: "version-probe", outcome: "failed", exitCode: 41 });
@@ -1284,13 +1284,13 @@ function corpusMutationConsumer(onMutation: (appDir: string, out: string) => voi
   };
   const code = ts.transpileModule(declaration.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   return new Function(...Object.keys(bindings), `${code}\nreturn runMutationScan;`)(...Object.values(bindings)) as (
-    slug: string, dir: string, config: M8CorpusConfig, preparation: ReturnType<typeof prepareCorpusDependencies> | undefined,
-  ) => { mutationScore: number; killed: number; valid: number };
+    slug: string, dir: string, config: M8CorpusConfig, preparation: Awaited<ReturnType<typeof prepareCorpusDependencies>> | undefined,
+  ) => Promise<{ mutationScore: number; killed: number; valid: number }>;
 }
 
 describe("M8 consumes the live dependency installation (#2047)", () => {
   const dirs: string[] = [];
-  const preparations: ReturnType<typeof prepareCorpusDependencies>[] = [];
+  const preparations: Awaited<ReturnType<typeof prepareCorpusDependencies>>[] = [];
   afterEach(() => {
     preparations.splice(0).forEach((preparation) => releaseCorpusDependencies(preparation));
     dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
@@ -1298,8 +1298,8 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
   });
   const identity = { targetRevision: "m8-local-pin", targetTree: "m8-local-tree" };
   const score = { summary: { overall: { mutationScore: 100, killed: 1, totalMutants: 1, ignored: 0, compileErrors: 0 } } };
-  function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
-    const result = prepareCorpusDependencies(options);
+  async function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
+    const result = await prepareCorpusDependencies(options);
     preparations.push(result);
     return result;
   }
@@ -1318,7 +1318,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     return `file:${archive}`;
   }
 
-  it.each([{ cached: false, workspace: false }, { cached: false, workspace: true }, { cached: true, workspace: false }, { cached: true, workspace: true }])("keeps real pnpm's store through the shipping M8 install: cached=$cached workspace=$workspace", ({ cached, workspace }) => {
+  it.each([{ cached: false, workspace: false }, { cached: false, workspace: true }, { cached: true, workspace: false }, { cached: true, workspace: true }])("keeps real pnpm's store through the shipping M8 install: cached=$cached workspace=$workspace", async ({ cached, workspace }) => {
     vi.stubEnv("COREPACK_ENABLE_NETWORK", "0");
     vi.stubEnv("COREPACK_DEFAULT_TO_LATEST", "0");
     const root = rootFixture();
@@ -1349,7 +1349,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
       dirs.push(join(out, ".."));
     });
     for (const [index, directory] of [target, second].entries()) {
-      const prepared = prepare({ targetDir: directory, cacheDir, ...identity });
+      const prepared = await prepare({ targetDir: directory, cacheDir, ...identity });
       expect(prepared).toMatchObject({ complete: true, status: cached ? index === 0 ? "miss" : "hit" : "non-cacheable" });
       const store = prepared.installation!.dependencyStore;
       expect(existsSync(store)).toBe(true);
@@ -1359,7 +1359,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
       const memberManifest = appPath ? readFileSync(join(currentAppDir, "package.json")) : undefined;
       const memberLock = appPath ? join(currentAppDir, "pnpm-lock.yaml") : undefined;
       const memberLockBefore = memberLock && existsSync(memberLock) ? readFileSync(memberLock) : undefined;
-      expect(runMutation("m8-local", directory, config, prepared)).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
+      expect(await runMutation("m8-local", directory, config, prepared)).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
       const extra = prepared.installation!.stages.at(-1)!;
       expect(extra).toMatchObject({ stage: "tool-install", outcome: "completed", selected: { executable: prepared.installation!.stages[0]!.selected!.executable, nodeExecutable: prepared.installation!.stages[0]!.selected!.nodeExecutable, version } });
       expect(extra.command).toContain(store);
@@ -1400,22 +1400,22 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
           inputs: inputs.map(({ path, before, after }) => ({ path, beforeSha256: sha256(before), afterSha256: sha256(after) })),
         }, null, 2)}\n`);
       }
-      expect(() => installCorpusDependencyExtras(prepared, { appDir: directory, packages: [tool] })).toThrow(/active preparation/);
+      await expect(installCorpusDependencyExtras(prepared, { appDir: directory, packages: [tool] })).rejects.toThrow(/active preparation/);
     }
     expect(consumed).toBe(2);
   });
 
-  it.each(["npm", "pnpm", "yarn"] as const)("retains %s selector environment and identity through extra installation", (manager) => {
+  it.each(["npm", "pnpm", "yarn"] as const)("retains %s selector environment and identity through extra installation", async (manager) => {
     const root = rootFixture();
     const bin = selectorFixture(root, manager);
     const target = join(root, "target"); mkdirSync(target);
     writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m8-selector", private: true, packageManager: `${manager}@9.9.9` }));
     writeFileSync(join(target, "control-mode"), "success");
-    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    const prepared = await prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
     vi.stubEnv("PATH", "/missing-new-selector");
     vi.stubEnv("COREPACK_HOME", join(root, "changed-home"));
     vi.stubEnv("HARVEY_UNKEYED_SELECTOR_2047", "select-another-version");
-    installCorpusDependencyExtras(prepared, { appDir: target, packages: ["local-tool"], installFlags: ["--legacy-peer-deps"] });
+    await installCorpusDependencyExtras(prepared, { appDir: target, packages: ["local-tool"], installFlags: ["--legacy-peer-deps"] });
     const invocation = JSON.parse(readFileSync(join(target, "manager-invocations.jsonl"), "utf8").trim().split("\n").at(-1)!) as { version: string; args: string[]; corepack: string; unkeyed?: string };
     expect(invocation).toMatchObject({ version: "9.9.9", corepack: join(root, "retained-home") });
     expect(invocation.unkeyed).toBeUndefined();
@@ -1424,13 +1424,13 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     expect(prepared.installation!.stages.at(-1)).toMatchObject({ stage: "tool-install", outcome: "completed" });
   });
 
-  it.each(["incomplete", "tool-failure", "identity-change"])("stops the shipping M8 consumer on %s and preserves its cause", (mode) => {
+  it.each(["incomplete", "tool-failure", "identity-change"])("stops the shipping M8 consumer on %s and preserves its cause", async (mode) => {
     const root = rootFixture();
     const bin = selectorFixture(root);
     const target = join(root, "target"); mkdirSync(target);
     writeFileSync(join(target, "package.json"), '{"name":"m8-failed-install","private":true,"packageManager":"npm@9.9.9"}');
     writeFileSync(join(target, "control-mode"), mode === "incomplete" ? "fail" : "success");
-    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    const prepared = await prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
     writeFileSync(join(target, "control-mode"), mode === "identity-change" ? "change" : mode === "incomplete" ? "success" : "fail");
     if (mode === "identity-change") writeFileSync(join(target, "selector-version"), "full");
     const mutation = vi.fn((_appDir: string, out: string) => {
@@ -1439,7 +1439,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     });
     const runMutation = corpusMutationConsumer(mutation);
     const cause = mode === "identity-change" ? /identity changed/ : /ERR_INSTALL_2047/;
-    expect(() => runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {} }, prepared)).toThrow(cause);
+    await expect(runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {} }, prepared)).rejects.toThrow(cause);
     expect(mutation).not.toHaveBeenCalled();
     expect(existsSync(join(target, "node_modules"))).toBe(false);
     expect(prepared.complete).toBe(false);
@@ -1451,7 +1451,7 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     expect(existsSync(store)).toBe(false);
   });
 
-  it.each([{ workspace: false, keep: false }, { workspace: false, keep: true }, { workspace: true, keep: false }, { workspace: true, keep: true }])("restores root/member inputs after a failed tool add and respects keep=$keep workspace=$workspace", ({ workspace, keep }) => {
+  it.each([{ workspace: false, keep: false }, { workspace: false, keep: true }, { workspace: true, keep: false }, { workspace: true, keep: true }])("restores root/member inputs after a failed tool add and respects keep=$keep workspace=$workspace", async ({ workspace, keep }) => {
     const root = rootFixture();
     const bin = selectorFixture(root, "pnpm");
     const target = join(root, "target");
@@ -1461,14 +1461,14 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     writeFileSync(join(target, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages: {}\n");
     if (workspace) writeFileSync(join(appDir, "package.json"), '{"name":"original-member","private":true}\n');
     writeFileSync(join(target, "control-mode"), "success");
-    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    const prepared = await prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
     expect(prepared.complete).toBe(true);
     const rootManifest = readFileSync(join(target, "package.json"));
     const rootLock = readFileSync(join(target, "pnpm-lock.yaml"));
     const memberManifest = workspace ? readFileSync(join(appDir, "package.json")) : undefined;
     writeFileSync(join(appDir, "control-mode"), "fail-write");
     const runMutation = corpusMutationConsumer(() => { throw new Error("unexpected mutation launch"); });
-    expect(() => runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {}, ...(workspace ? { appPath: "apps/web" } : {}) }, prepared)).toThrow(/ERR_INSTALL_2047/);
+    await expect(runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {}, ...(workspace ? { appPath: "apps/web" } : {}) }, prepared)).rejects.toThrow(/ERR_INSTALL_2047/);
     expect(prepared.installation!.stages.at(-1)).toMatchObject({ stage: "tool-install", outcome: "failed", exitCode: 42, selected: { version: "9.9.9" } });
     expect(readFileSync(join(target, "package.json"))).toEqual(rootManifest);
     expect(readFileSync(join(target, "pnpm-lock.yaml"))).toEqual(rootLock);
@@ -1480,33 +1480,34 @@ describe("M8 consumes the live dependency installation (#2047)", () => {
     expect(existsSync(store)).toBe(keep);
   });
 
-  it("requires a live preparation and retains an explicitly kept diagnostic store", () => {
+  it("requires a live preparation and retains an explicitly kept diagnostic store", async () => {
     const root = rootFixture();
     const bin = selectorFixture(root);
     const target = join(root, "target"); mkdirSync(target);
     writeFileSync(join(target, "package.json"), '{"name":"m8-store-retention","private":true,"packageManager":"npm@9.9.9"}');
     writeFileSync(join(target, "control-mode"), "success");
-    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    const prepared = await prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
     const runMutation = corpusMutationConsumer(() => { throw new Error("unexpected mutation launch"); });
     const config: M8CorpusConfig = { strykerPackages: ["tool"], installFlags: [], config: {} };
-    expect(() => runMutation("missing-prep", target, config, undefined)).toThrow(/requires dependency preparation/);
-    expect(() => runMutation("serialized-prep", target, config, JSON.parse(JSON.stringify(prepared)))).toThrow(/active preparation/);
+    await expect(runMutation("missing-prep", target, config, undefined)).rejects.toThrow(/requires dependency preparation/);
+    await expect(runMutation("serialized-prep", target, config, JSON.parse(JSON.stringify(prepared)))).rejects.toThrow(/active preparation/);
     const store = prepared.installation!.dependencyStore;
     releaseCorpusDependencies(prepared, true);
     expect(existsSync(store)).toBe(true);
-    expect(() => runMutation("released-prep", target, config, prepared)).toThrow(/active preparation/);
+    await expect(runMutation("released-prep", target, config, prepared)).rejects.toThrow(/active preparation/);
     dirs.push(join(store, "../../../.."));
   });
 
-  it.each([false, true])("releases root and nested stores at the shipping target failure boundary: keep=%s", (keep) => {
+  it.each([false, true])("releases root and nested stores at the shipping target failure boundary: keep=%s", async (keep) => {
     const root = rootFixture();
     const bin = selectorFixture(root);
-    const dependencies = ["target", "target/nextjs"].map((directory) => {
+    const dependencies: Awaited<ReturnType<typeof prepareCorpusDependencies>>[] = [];
+    for (const directory of ["target", "target/nextjs"]) {
       const targetDir = join(root, directory); mkdirSync(targetDir, { recursive: true });
       writeFileSync(join(targetDir, "package.json"), '{"name":"m8-target-cleanup","private":true,"packageManager":"npm@9.9.9"}');
       writeFileSync(join(targetDir, "control-mode"), "success");
-      return prepare({ targetDir, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
-    });
+      dependencies.push(await prepare({ targetDir, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } }));
+    }
     const stores = dependencies.map((prepared) => prepared.installation!.dependencyStore);
     expect(stores[0]).not.toBe(stores[1]);
     const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");

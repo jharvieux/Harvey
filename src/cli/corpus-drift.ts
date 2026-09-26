@@ -288,14 +288,14 @@ if (baselineFindingsPath) {
 // EUNSUPPORTEDPROTOCOL). The target's own lockfile says which package manager actually resolves it.
 //
 // Portable-store options belong in the install argv, not edits to the target's workspace policy.
-function installTargetDeps(dir: string, flags: readonly string[], identity: {
+async function installTargetDeps(dir: string, flags: readonly string[], identity: {
   targetSlug?: string;
   targetRevision: string;
   targetTree: string;
   sourceRoot: string;
   installationPolicy?: ExternalTarget["installationPolicy"];
-}, cacheDir = phaseCacheDir): DependencyPreparationResult {
-  return prepareCorpusDependencies({
+}, cacheDir = phaseCacheDir): Promise<DependencyPreparationResult> {
+  return await prepareCorpusDependencies({
     targetDir: dir,
     sourceRoot: identity.sourceRoot,
     cacheDir,
@@ -464,13 +464,13 @@ function rootScannerOptions(options: Omit<ScannerOptions, "script" | "scanner" |
 // clone root for a single-package target (proposit/boxyhq, cfg.appPath undefined), or the
 // workspace MEMBER that actually carries the suite (inbox-zero's apps/web) when set. The package
 // manager comes from the clone ROOT's preparation: that is where the workspace's lockfile lives.
-function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig, preparation: DependencyPreparationResult | undefined): { mutationScore: number; killed: number; valid: number } {
+async function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig, preparation: DependencyPreparationResult | undefined): Promise<{ mutationScore: number; killed: number; valid: number }> {
   if (!preparation) throw new Error(`${slug}: M8 mutation scoring requires dependency preparation; run with --install`);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
   // The extra-tool install snapshots both clone-root and member manifests/lockfiles before
   // running in appDir. Mutation scoring therefore sees the provisioned tools while its declared
   // target inputs retain their original bytes, including in a workspace member.
-  installCorpusDependencyExtras(preparation, {
+  await installCorpusDependencyExtras(preparation, {
     appDir, packages: cfg.strykerPackages, installFlags: cfg.installFlags,
     onEvent: (message) => console.error(`  ${slug}: ${message}`),
   });
@@ -819,9 +819,9 @@ for (const target of targets) {
       const binding = assertCorpusCachePreflight(target.slug, mechanicalSeedReadiness(prepared!, phaseCache!));
       if (binding !== coldMechanicalBindings.get(target.slug)) throw new Error(`${target.slug}: forced-cold mechanical/family plan changed after population preflight; keep the same immutable source, target, runtime/tools, mode and registry snapshot`);
     }
-    const prepareDependencies = (): DependencyPreparationResult | undefined => {
+    const prepareDependencies = async (): Promise<DependencyPreparationResult | undefined> => {
       const preparation = install
-        ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
+        ? await timedAsync("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
           targetSlug: target.slug,
           targetRevision: target.commit,
           targetTree: targetTreeIdentity,
@@ -832,7 +832,7 @@ for (const target of targets) {
       if (preparation) dependencyPreparations.push(preparation);
       return preparation;
     };
-    let dependencyPreparation = forceColdCache ? prepareDependencies() : undefined;
+    let dependencyPreparation = forceColdCache ? await prepareDependencies() : undefined;
     const scannerRecords: CorpusScannerRecord[] = [];
     if (forceColdCache) {
       const seeds = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: scannerRecords, dependencyPreparation }).flatMap(inspectScannerSeed);
@@ -905,7 +905,7 @@ for (const target of targets) {
 
     // The default path still installs after mechanical scanning. Forced-cold readiness needs the
     // real preparation receipt before deciding which scanner comparisons are eligible.
-    if (!forceColdCache) dependencyPreparation = prepareDependencies();
+    if (!forceColdCache) dependencyPreparation = await prepareDependencies();
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
     // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
@@ -920,7 +920,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8, dependencyPreparation));
+        const row = scoreMutationBaseline(target.slug, baseline, await runMutationScan(target.slug, scanDir, target.m8, dependencyPreparation));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
@@ -962,7 +962,7 @@ for (const target of targets) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
       const scopedDependencyPreparation = install
-        ? timed("install", () => installTargetDeps(rootDir, [], {
+        ? await timedAsync("install", () => installTargetDeps(rootDir, [], {
           targetSlug: target.slug,
           targetRevision: target.commit,
           targetTree: targetTreeIdentity,

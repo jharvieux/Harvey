@@ -11,7 +11,7 @@ import type { CorpusScannerRecord } from "./corpus-scanner-cache.js";
 import { EXTERNAL_CORPUS, type CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 // Execute both shipping propagation boundaries without starting unrelated corpus scanners.
-function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> } {
+async function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolicy, cacheDir: string): Promise<DependencyPreparationResult & { runQualityScan: () => ReturnType<typeof runCorpusScanner> }> {
   const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
   const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
   const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
@@ -33,12 +33,12 @@ function installThroughCorpus(targetDir: string, policy: CorpusInstallationPolic
     prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "policy-control", scanDir: targetDir,
     target: { slug: policy.targetSlug, commit: policy.targetRevision, installationPolicy: policy },
     targetTreeIdentity: "fixture-tree", targetPhaseCacheDir: cacheDir, install: true, forceColdCache: false,
-    timed: (_name: string, fn: () => unknown) => fn(),
+    timedAsync: async (_name: string, fn: () => Promise<unknown>) => await fn(),
     writeFileSync, jsonOut: join(targetDir, "corpus-policy.json"), rows: [], findingsBySlug: {},
     dependencyPreparationsBySlug: {}, detectorRecordsBySlug: {}, mechanicalContextBySlug: {}, currentExecution: undefined,
   };
-  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const handoff = new Function(...Object.keys(bindings), `${code}\nreturn { dependencyPreparation, runQualityScan };`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
+  const code = ts.transpileModule(`const dependencyPreparations = [];\n${registration}\n${installer}\n${preparation}\n${rootScannerOptions}\n${scannerInvocation}\n${runScanner}\nconst dependencyPreparation = await prepareDependencies();\nconst qualityScanner = rootScannerOptions({ targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, cacheDir: targetPhaseCacheDir, records: [], dependencyPreparation }).find((invocation) => invocation.scanner === "quality-scan");\nif (!qualityScanner) throw new Error("shipping quality scanner invocation is missing");\nconst runQualityScan = async () => ({ findings: await runScanner(qualityScanner) });\n${serializer}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const handoff = await new Function(...Object.keys(bindings), `return (async () => { ${code}\nreturn { dependencyPreparation, runQualityScan }; })();`)(...Object.values(bindings)) as { dependencyPreparation: DependencyPreparationResult; runQualityScan: () => ReturnType<typeof runCorpusScanner> };
   return Object.assign(handoff.dependencyPreparation, { runQualityScan: handoff.runQualityScan });
 }
 
@@ -92,11 +92,11 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     };
     return { root, targetDir, manager, policy, cacheDir: join(root, "cache"), targetSlug: policy.targetSlug, targetRevision: policy.targetRevision, targetTree: "fixture-tree", sourceRoot: "." };
   }
-  function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
-    const result = prepareCorpusDependencies(options); preparations.push(result); return result;
+  async function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
+    const result = await prepareCorpusDependencies(options); preparations.push(result); return result;
   }
 
-  it("configures only the approved Flori pin, manager, lock and original input identity", () => {
+  it("configures only the approved Flori pin, manager, lock and original input identity", async () => {
     const configured = EXTERNAL_CORPUS.filter((target) => target.installationPolicy);
     expect(configured).toHaveLength(1);
     const target = configured[0]!;
@@ -109,8 +109,8 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
 
   it("requires both shipping policy transfers before the installed M5 provider can reach the client", async () => {
     const f = fixture();
-    const first = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(first);
-    const second = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(second);
+    const first = await installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(first);
+    const second = await installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(second);
     for (const result of [first, second]) {
       expect(result).toMatchObject({ complete: true, status: "non-cacheable", cacheable: false, sourceTreeCacheable: false, packageManagerVersion: "11.1.3" });
       expect(result.key).toBeUndefined();
@@ -130,7 +130,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(readFileSync(join(f.targetDir, "provider-consumed"), "utf8")).toBe("yes");
     rmSync(join(f.targetDir, "provider-consumed"));
     writeFileSync(join(f.targetDir, "mode"), "install-fail");
-    const failed = installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(failed);
+    const failed = await installThroughCorpus(f.targetDir, f.policy, f.cacheDir); preparations.push(failed);
     const failure = await failed.runQualityScan();
     expect(failed).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("ERR_POLICY_INSTALL") });
     expect(failed.installation!.stages.at(-1)).toMatchObject({ stage: "frozen", outcome: "failed", exitCode: 42 });
@@ -143,7 +143,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
 
   it.each(["detect-static", "mutation-detect-only"])("keeps %s fresh through the shipping policy handoff", async (scanner) => {
     const f = fixture();
-    const dependencyPreparation = prepare({ ...f, installationPolicy: f.policy });
+    const dependencyPreparation = await prepare({ ...f, installationPolicy: f.policy });
     expect(dependencyPreparation).toMatchObject({ complete: true, sourceTreeCacheable: false });
     const ast = ts.createSourceFile("corpus-drift.ts", readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8"), ts.ScriptTarget.Latest, true);
     const functionText = (name: string) => ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)?.getText(ast) ?? "";
@@ -173,18 +173,18 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
   it.each([
     ["target", { targetSlug: "different" }], ["revision", { targetRevision: "2".repeat(40) }],
     ["source root", { sourceRoot: "nextjs" }], ["extra flags", { installFlags: ["--ignore-scripts"] }],
-  ])("rejects a different %s before provisioning", (_name, change) => {
+  ])("rejects a different %s before provisioning", async (_name, change) => {
     const f = fixture();
-    const result = prepare({ ...f, installationPolicy: f.policy, ...change });
+    const result = await prepare({ ...f, installationPolicy: f.policy, ...change });
     expect(result).toMatchObject({ complete: false, status: "incomplete" });
     expect(result.installation!.operatorPolicy!.admission).toBe("rejected");
     expect(result.installation!.stages).toEqual([]);
     expect(existsSync(join(f.targetDir, "selector-args.json"))).toBe(false);
   });
 
-  it.each(["package.json", "package-lock.json", "pnpm-lock.yaml"])("rejects changed original %s input bytes", (name) => {
+  it.each(["package.json", "package-lock.json", "pnpm-lock.yaml"])("rejects changed original %s input bytes", async (name) => {
     const f = fixture(); writeFileSync(join(f.targetDir, name), `${readFileSync(join(f.targetDir, name), "utf8")}\n`);
-    const result = prepare({ ...f, installationPolicy: f.policy });
+    const result = await prepare({ ...f, installationPolicy: f.policy });
     expect(result.reason).toContain("does not match the original install-input identity");
     expect(result.installation!.stages).toEqual([]);
   });
@@ -192,30 +192,30 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
   it.each([
     { packageManager: "npm@11.1.3" }, { packageManager: "pnpm@11.1.3" },
     { devEngines: { packageManager: { name: "pnpm", version: "11.1.3" } } },
-  ])("cannot override a target declaration even when its input digest is refreshed: %j", (declaration) => {
+  ])("cannot override a target declaration even when its input digest is refreshed: %j", async (declaration) => {
     const f = fixture(); writeFileSync(join(f.targetDir, "package.json"), JSON.stringify({ name: "policy-fixture", ...declaration }));
     f.policy.installConfigurationSha256 = inspectCorpusDependencyInputs(f.targetDir, "pnpm", "11.1.3").installConfiguration;
-    const result = prepare({ ...f, installationPolicy: f.policy });
+    const result = await prepare({ ...f, installationPolicy: f.policy });
     expect(result.complete).toBe(false); expect(result.installation!.stages).toEqual([]);
   });
 
-  it.each([{ packageManager: "npm" }, { packageManagerVersion: "latest" }, { packageManagerVersion: "11.1.3 --offline" }, { lockfile: "package-lock.json" }])("rejects an unsupported policy descriptor: %j", (change) => {
+  it.each([{ packageManager: "npm" }, { packageManagerVersion: "latest" }, { packageManagerVersion: "11.1.3 --offline" }, { lockfile: "package-lock.json" }])("rejects an unsupported policy descriptor: %j", async (change) => {
     const f = fixture();
-    const result = prepare({ ...f, installationPolicy: { ...f.policy, ...change } as CorpusInstallationPolicy });
+    const result = await prepare({ ...f, installationPolicy: { ...f.policy, ...change } as CorpusInstallationPolicy });
     expect(result.complete).toBe(false); expect(result.installation!.stages).toEqual([]);
   });
 
-  it.each([{ name: "pnpm", version: "11.18.0" }, { name: "npm", version: "11.1.3" }])("rejects the wrong observed manager identity: %j", (identity) => {
+  it.each([{ name: "pnpm", version: "11.18.0" }, { name: "npm", version: "11.1.3" }])("rejects the wrong observed manager identity: %j", async (identity) => {
     const f = fixture(); writeFileSync(join(f.manager, "package.json"), JSON.stringify(identity));
-    const result = prepare({ ...f, installationPolicy: f.policy });
+    const result = await prepare({ ...f, installationPolicy: f.policy });
     expect(result.complete).toBe(false); expect(result.installation!.stages).toHaveLength(1);
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
   });
 
-  it.each(["setup-fail", "install-fail", "rewrite-setup", "rewrite-install", "change-identity"])("rejects %s without fallback and restores both original locks", (mode) => {
+  it.each(["setup-fail", "install-fail", "rewrite-setup", "rewrite-install", "change-identity"])("rejects %s without fallback and restores both original locks", async (mode) => {
     const f = fixture(); const before = ["package.json", "package-lock.json", "pnpm-lock.yaml"].map((path) => readFileSync(join(f.targetDir, path)));
     writeFileSync(join(f.targetDir, "mode"), mode);
-    const result = prepare({ ...f, installationPolicy: f.policy });
+    const result = await prepare({ ...f, installationPolicy: f.policy });
     expect(result).toMatchObject({ complete: false, status: "incomplete", cacheable: false });
     expect(result.installation!.stages.some((stage) => ["legacy", "offline"].includes(stage.stage))).toBe(false);
     expect(["package.json", "package-lock.json", "pnpm-lock.yaml"].map((path) => readFileSync(join(f.targetDir, path)))).toEqual(before);

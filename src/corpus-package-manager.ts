@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,8 @@ export interface InstallInvocation {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** Test and bounded diagnostic override; production stages retain their established limits. */
+  timeoutMs?: number;
 }
 
 export interface SelectedPackageManager {
@@ -95,12 +97,12 @@ function failureReason(error: unknown): string {
   return output.slice(-6000) || e.message || String(error);
 }
 
-export function observePackageManager(
+export async function observePackageManager(
   manager: PackageManager,
   stage: DependencyPreparationStage["stage"],
   invocation: InstallInvocation,
   boundSelection?: SelectedPackageManager,
-): DependencyPreparationStage {
+): Promise<DependencyPreparationStage> {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-manager-observation-"));
   const trace = join(scratch, "trace.jsonl");
   const preload = join(scratch, "observe.cjs");
@@ -120,19 +122,27 @@ export function observePackageManager(
     writeFileSync(trace, "");
     let stdout = "";
     try {
-      stdout = execFileSync(launcher, args, {
-        cwd: invocation.cwd,
-        env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
-        encoding: "utf8",
-        timeout: stage === "version-probe" ? 120_000 : 600_000,
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
+      stdout = await new Promise<string>((resolveRun, rejectRun) => {
+        execFile(launcher, args, {
+          cwd: invocation.cwd,
+          env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
+          encoding: "utf8",
+          timeout: invocation.timeoutMs ?? (stage === "version-probe" ? 120_000 : 600_000),
+          maxBuffer: 16 * 1024 * 1024,
+          windowsHide: true,
+        }, (error, childStdout, childStderr) => {
+          if (error) {
+            rejectRun(Object.assign(error, { stdout: childStdout, stderr: childStderr }));
+            return;
+          }
+          resolveRun(childStdout);
+        });
       });
       result.exitCode = 0;
       result.outcome = "completed";
     } catch (error) {
-      const failure = error as { status?: number | null; signal?: string };
-      result.exitCode = failure.status ?? null;
+      const failure = error as { code?: number | string; signal?: string };
+      result.exitCode = typeof failure.code === "number" ? failure.code : null;
       result.signal = failure.signal;
       result.reason = failureReason(error);
     }
@@ -165,22 +175,22 @@ export function observePackageManager(
   return result;
 }
 
-export function selectPackageManager(
+export async function selectPackageManager(
   manager: PackageManager,
   cwd: string,
   env: NodeJS.ProcessEnv,
   requestedVersion?: string,
   source: "target-declaration" | "operator-policy" = "target-declaration",
-): DependencyPreparationStage[] {
+): Promise<DependencyPreparationStage[]> {
   const invocation = { bin: manager, args: ["--version"], cwd, env };
   // A validated corpus policy selects an exact pnpm without changing either original lock or
   // inventing a packageManager field. Its caller separately rejects a mismatched observation.
   if (source === "operator-policy" && manager === "pnpm" && requestedVersion && /^\d+\.\d+\.\d+$/.test(requestedVersion)) {
-    return [observePackageManager(manager, "version-probe", {
+    return [await observePackageManager(manager, "version-probe", {
       ...invocation, bin: "corepack", launcherArgs: [`pnpm@${requestedVersion}`],
     })];
   }
-  const native = observePackageManager(manager, "version-probe", invocation);
+  const native = await observePackageManager(manager, "version-probe", invocation);
   const stages = [native];
   // npm shipped with Node ignores packageManager. Corepack's explicit npm launcher supports
   // the target's exact declaration without installing a global npm or rewriting its manifest.
@@ -188,7 +198,7 @@ export function selectPackageManager(
   // exact native npm remains usable even when Corepack or its registry is unavailable.
   if (manager === "npm" && requestedVersion && native.outcome === "completed"
     && native.selected && native.selected.version !== requestedVersion.split("+")[0]) {
-    stages.push(observePackageManager(manager, "version-probe", {
+    stages.push(await observePackageManager(manager, "version-probe", {
       ...invocation, bin: "corepack", launcherArgs: [`npm@${requestedVersion}`],
     }));
   }

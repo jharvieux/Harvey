@@ -10,6 +10,7 @@ import {
   resolvePackageManagerEvidence,
   runPackageScriptCommand,
   withRestoredManifest,
+  withRestoredManifestAsync,
 } from "./package-manager.js";
 
 const dirs: string[] = [];
@@ -216,5 +217,24 @@ describe("withRestoredManifest (#1284/#1268 — the pnpm/yarn equivalent of npm'
       writeFileSync(join(dir, "yarn.lock"), "# mutated\n");
     });
     expect(readFileSync(join(dir, "yarn.lock"), "utf8")).toBe("# original\n");
+  });
+
+  it("restores only after an asynchronous provision settles, on success and failure", async () => {
+    const dir = tmpDir();
+    const manifest = join(dir, "package.json");
+    writeFileSync(manifest, '{"name":"fixture"}');
+    await withRestoredManifestAsync(dir, "pnpm", async () => {
+      writeFileSync(manifest, '{"name":"mutated"}');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(readFileSync(manifest, "utf8")).toBe('{"name":"mutated"}');
+    });
+    expect(readFileSync(manifest, "utf8")).toBe('{"name":"fixture"}');
+
+    await expect(withRestoredManifestAsync(dir, "pnpm", async () => {
+      writeFileSync(manifest, '{"name":"failed-mutation"}');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      throw new Error("provision failed");
+    })).rejects.toThrow("provision failed");
+    expect(readFileSync(manifest, "utf8")).toBe('{"name":"fixture"}');
   });
 });

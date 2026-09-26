@@ -47,10 +47,10 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     };
   }
 
-  it("selects the declaration after a host mismatch and binds installs to its observed executable/runtime", () => {
+  it("selects the declaration after a host mismatch and binds installs to its observed executable/runtime", async () => {
     const f = fixture();
     const original = readFileSync(join(f.targetDir, "package.json"));
-    const result = prepareCorpusDependencies(f);
+    const result = await prepareCorpusDependencies(f);
     expect(result).toMatchObject({ complete: true, status: "miss", packageManagerVersion: "9.9.9" });
     const stages = result.installation!.stages;
     expect(stages.map((stage) => [stage.stage, stage.selected?.version])).toEqual([["version-probe", "8.8.8"], ["version-probe", "9.9.9"], ["frozen", "9.9.9"]]);
@@ -67,43 +67,43 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(readFileSync(join(f.targetDir, "package.json"))).toEqual(original);
   });
 
-  it("keeps an exact native npm available without requiring Corepack", () => {
+  it("keeps an exact native npm available without requiring Corepack", async () => {
     const f = fixture("npm", "9.9.9");
     rmSync(join(f.bin, "corepack"));
-    const result = prepareCorpusDependencies({ ...f, environment: { ...f.environment, PATH: f.bin } });
+    const result = await prepareCorpusDependencies({ ...f, environment: { ...f.environment, PATH: f.bin } });
     expect(result).toMatchObject({ complete: true, packageManagerVersion: "9.9.9" });
     expect(result.installation?.stages.map((stage) => stage.stage)).toEqual(["version-probe", "frozen"]);
   });
 
-  it("refuses an unsatisfied declaration when Corepack is unavailable", () => {
+  it("refuses an unsatisfied declaration when Corepack is unavailable", async () => {
     const f = fixture();
     rmSync(join(f.bin, "corepack"));
-    const result = prepareCorpusDependencies({ ...f, environment: { ...f.environment, PATH: f.bin } });
+    const result = await prepareCorpusDependencies({ ...f, environment: { ...f.environment, PATH: f.bin } });
     expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("corepack executable was not found") });
     expect(result.installation?.stages).toHaveLength(2);
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
   });
 
-  it("rejects a provisioned manager that still disagrees with the declaration", () => {
+  it("rejects a provisioned manager that still disagrees with the declaration", async () => {
     const f = fixture("npm", "8.8.8", "10.10.10");
-    const result = prepareCorpusDependencies(f);
+    const result = await prepareCorpusDependencies(f);
     expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("declares npm@9.9.9 but the executable is 10.10.10") });
     expect(result.installation?.stages).toHaveLength(2);
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
   });
 
-  it("rejects setup that rewrites the original target input bytes", () => {
+  it("rejects setup that rewrites the original target input bytes", async () => {
     const f = fixture();
     writeFileSync(join(f.targetDir, "rewrite-input"), "yes");
-    const result = prepareCorpusDependencies(f);
+    const result = await prepareCorpusDependencies(f);
     expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("changed target-owned install inputs") });
     expect(result.installation?.stages).toHaveLength(2);
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
   });
 
-  it.each(["pnpm", "yarn"] as const)("keeps %s mismatch rejection without changing its selector policy", (manager) => {
+  it.each(["pnpm", "yarn"] as const)("keeps %s mismatch rejection without changing its selector policy", async (manager) => {
     const f = fixture(manager);
-    const result = prepareCorpusDependencies(f);
+    const result = await prepareCorpusDependencies(f);
     expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining(`declares ${manager}@9.9.9 but the executable is 8.8.8`) });
     expect(result.installation?.stages).toHaveLength(1);
     expect(existsSync(join(f.targetDir, "corepack-argv.json"))).toBe(false);
@@ -112,7 +112,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
   it("delivers the failed declared-version setup through the quality consumer and client HTML", async () => {
     const f = fixture();
     writeFileSync(join(f.targetDir, "provision-fail"), "yes");
-    const result = prepareCorpusDependencies(f);
+    const result = await prepareCorpusDependencies(f);
     expect(result).toMatchObject({ complete: false, status: "incomplete" });
     expect(result.installation?.stages.at(-1)).toMatchObject({ stage: "version-probe", outcome: "failed", exitCode: 43, reason: expect.stringContaining("ERR_DECLARED_NPM_SETUP") });
     const scan = await runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "declared npm failure", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation: result });
@@ -121,9 +121,34 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(buildHtml({ meta, findings: scan.findings })).toContain("ERR_DECLARED_NPM_SETUP");
   });
 
+  it("yields timers while a real manager child is delayed and retains missing, nonzero, and timeout failures", async () => {
+    const f = fixture("npm", "9.9.9");
+    const managerEntry = join(f.root, "native/manager.cjs");
+    writeFileSync(managerEntry, String.raw`
+if (process.argv.includes("--version")) setTimeout(() => console.log("9.9.9"), 120);
+else process.exit(37);
+`);
+    let heartbeats = 0;
+    const heartbeat = setInterval(() => { heartbeats += 1; }, 5);
+    const delayed = await observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } });
+    clearInterval(heartbeat);
+    expect(delayed).toMatchObject({ outcome: "completed", exitCode: 0, selected: { version: "9.9.9" } });
+    expect(heartbeats).toBeGreaterThan(2);
+
+    const nonzero = await observePackageManager("npm", "frozen", { bin: "npm", args: ["install"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } }, delayed.selected);
+    expect(nonzero).toMatchObject({ outcome: "failed", exitCode: 37 });
+
+    const missing = await observePackageManager("npm", "version-probe", { bin: "missing-package-manager", args: ["--version"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } });
+    expect(missing).toMatchObject({ outcome: "failed", exitCode: null, reason: expect.stringContaining("executable was not found") });
+
+    writeFileSync(managerEntry, String.raw`setTimeout(() => console.log("9.9.9"), 10_000);`);
+    const timedOut = await observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin }, timeoutMs: 25 });
+    expect(timedOut).toMatchObject({ outcome: "failed", exitCode: null, signal: "SIGTERM" });
+  });
+
   it("runs actual Corepack and npm offline, ignores target env expansion, and materializes a local provider", async () => {
     const f = fixture();
-    const host = observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: process.cwd(), env: process.env });
+    const host = await observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: process.cwd(), env: process.env });
     expect(host.outcome).toBe("completed");
     const npm = host.selected!;
     const npmRoot = dirname(dirname(npm.executable));
@@ -146,10 +171,10 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     writeFileSync(join(f.targetDir, ".corepack.env"), `COREPACK_HOME=${join(f.root, "wrong-target-cache")}\nCOREPACK_ENABLE_NETWORK=0\n`);
     const names = ["package.json", "package-lock.json", "knip.config.ts", ".corepack.env"];
     const originals = names.map((name) => readFileSync(join(f.targetDir, name)));
-    const unbounded = observePackageManager("npm", "version-probe", { bin: "corepack", launcherArgs: [`npm@${npm.version}`], args: ["--version"], cwd: f.targetDir, env: { ...environment, COREPACK_ENV_FILE: undefined } });
+    const unbounded = await observePackageManager("npm", "version-probe", { bin: "corepack", launcherArgs: [`npm@${npm.version}`], args: ["--version"], cwd: f.targetDir, env: { ...environment, COREPACK_ENV_FILE: undefined } });
     expect(unbounded).toMatchObject({ outcome: "failed", reason: expect.stringContaining("Network access disabled") });
-    const cold = prepareCorpusDependencies({ ...f, environment });
-    const warm = prepareCorpusDependencies({ ...f, environment });
+    const cold = await prepareCorpusDependencies({ ...f, environment });
+    const warm = await prepareCorpusDependencies({ ...f, environment });
     expect(cold).toMatchObject({ complete: true, status: "miss", packageManagerVersion: npm.version });
     expect(warm).toMatchObject({ complete: true, status: "hit", key: cold.key });
     for (const result of [cold, warm]) {
@@ -165,7 +190,7 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(scan.findings.some((finding) => finding.id === "M5-98")).toBe(false);
     expect(scan.findings.find((finding) => finding.id === "M5-00")?.evidence).toContain("configuration could not be inspected");
     expect(readFileSync(join(f.targetDir, "provider-consumed"), "utf8")).toBe("yes");
-    const failed = prepareCorpusDependencies({ ...f, environment: { ...environment, COREPACK_HOME: join(f.root, "empty-cache") } });
+    const failed = await prepareCorpusDependencies({ ...f, environment: { ...environment, COREPACK_HOME: join(f.root, "empty-cache") } });
     expect(failed).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("Network access disabled") });
     expect(failed.installation?.stages).toHaveLength(2);
     expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
