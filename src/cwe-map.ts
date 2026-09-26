@@ -16,9 +16,9 @@
 // code scanning, an ASPM platform, a CWE-scored benchmark) must not silently under-credit a real
 // detection because it lacks a CWE tag. So EVERY taxonomy a detector emits is accounted for here —
 // a security taxonomy gets its CWE, and a non-security one (a quality/perf/coverage signal) is
-// recorded as no-clean-CWE WITH A REASON. `owasp-cwe-map.test.ts` enumerates every `taxonomy: "…"`
-// literal in the detector source and fails loud on any that is unclassified, so a new detector
-// cannot quietly ship without a CWE decision.
+// recorded as no-clean-CWE WITH A REASON. `cwe-map.test.ts` discovers taxonomy expressions across
+// detector/scan sources, binds dynamic families to their source inventory, and rejects unresolved
+// emission shapes, so a new producer cannot quietly ship without a CWE decision.
 
 import type { Finding } from "./findings.js";
 
@@ -133,6 +133,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   rls_disabled_in_public: ["862", "A01"],
   "Middleware matcher excludes /api routes": ["862", "A01"],
   "Unauthenticated debug/admin route": ["862", "A01"],
+  // The boundary adapters name the same missing server-mutation authorization check differently.
+  // This is CWE-862/A01 for each framework; enrichment does not promote its review-tier evidence.
+  "M1 — Server Action missing authorization check": ["862", "A01"],
+  "M1 — route action missing authorization check": ["862", "A01"],
+  "M1 — server function missing authorization check": ["862", "A01"],
   "Edge Function verify_jwt disabled": ["862", "A01"],
   "draftMode().enable() reachable with no secret": ["862", "A01"],
   "Realtime channel lacks authorization": ["862", "A01"],
