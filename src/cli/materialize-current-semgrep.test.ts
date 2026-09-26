@@ -166,8 +166,7 @@ async function runResponsive(dir: string, fixtureRoot: { bin: string; state: str
   try {
     const result = await run(dir, fixtureRoot, mode);
     finished = true;
-    // This samples the worker while the real CLI child is active. Restoring spawnSync here leaves
-    // the interval at zero because the worker cannot service it until the child has exited.
+    // Sampling ends before the assertion to exclude timer work after child completion.
     expect(heartbeats, "registry CLI child work must service the Vitest worker event loop").toBeGreaterThan(0);
     return result;
   } finally {
