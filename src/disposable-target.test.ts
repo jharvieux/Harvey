@@ -210,8 +210,10 @@ describe("source and cleanup receipts", () => {
   });
 
   it("neutralizes target-owned Git filters without copying their opaque names into process argv", async () => {
-    const { root, source } = await fixture();
+    const { root, source: initialSource } = await fixture();
     const driverName = "HARVEY_SYNTHETIC_FILTER_IDENTITY_7d243e";
+    const source = join(root, driverName);
+    await rename(initialSource, source);
     await git(source, ["init", "-q"]);
     await writeFile(join(source, ".gitattributes"), `source.txt filter=${driverName}\n`);
     await writeFile(join(source, "filter.cjs"), "const f=require('node:fs');f.writeFileSync('filter-ran','unsafe');process.stdout.write(f.readFileSync(0));");
@@ -254,6 +256,23 @@ require('node:module').syncBuiltinESMExports();
       ["GIT_CONFIG_COUNT", "2"],
     ]));
     await expect(lstat(join(source, "filter-ran"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([["child_process", true], ["stream", true], ["child_process", false], ["stream", false]] as const)("refuses source observation before copy allocation with startup %s diagnostics and Git=%s", async (diagnostics, hasGit) => {
+    const { root, source, scratch } = await fixture();
+    const canary = "HARVEY_SYNTHETIC_PRIVATE_FILTER_c88a4d";
+    if (hasGit) {
+      await git(source, ["init", "-q"]);
+      await git(source, ["config", `filter.${canary}.clean`, "cat"]);
+    }
+    const probe = join(root, "diagnostic-probe.mjs");
+    await writeFile(probe, `import { createDisposableTarget } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "src/disposable-target.ts")).href)};\ndelete process.env.NODE_DEBUG;\nconsole.log(JSON.stringify(await createDisposableTarget(process.argv[2], { tempParent: process.argv[3] })));\n`);
+    const result = await exec(process.execPath, ["--import", "tsx", probe, source, scratch], {
+      timeout: 10_000, env: { PATH: process.env.PATH, HOME: root, NODE_DEBUG: diagnostics },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "not-assessed", reasonCode: "parent-raw-diagnostics", cleanup: { status: "not-required" } });
+    expect(result.stdout + result.stderr).not.toContain(canary);
+    expect(await readdir(scratch)).toEqual([]);
   });
 
   it("returns a failed cleanup receipt for an unrecognized handle without removing the authentic run", async () => {

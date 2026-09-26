@@ -4,7 +4,7 @@ import { constants, type Stats } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
-import { promisify } from "node:util";
+import { debuglog, promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_LIMITS = { maxEntries: 250_000, maxBytes: 2 * 1024 ** 3, maxDepth: 100 } as const;
@@ -113,7 +113,9 @@ function refusal(error: unknown): { reasonCode: string; reason: string; falsifie
   return {
     reasonCode: boundary ? error.code : "filesystem-unavailable",
     reason: boundary ? error.message : "The filesystem operation could not be verified; no target command is authorized.",
-    falsifier: "Provide an unchanged readable source and an independent writable temporary directory with only confined regular files, directories, and links, then retry.",
+    falsifier: boundary && error.code === "parent-raw-diagnostics"
+      ? "Restart Harvey with Node child_process and stream debug logging disabled, then retry."
+      : "Provide an unchanged readable source and an independent writable temporary directory with only confined regular files, directories, and links, then retry.",
   };
 }
 
@@ -137,9 +139,10 @@ async function gitSentinel(sourceRoot: string): Promise<SourceSentinelV1["git"]>
     dir = parent;
   }
   if (!hasGit) return { status: "absent" };
-  const args = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=/dev/null", "-C", sourceRoot];
+  const args = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=/dev/null"];
   const environment: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin:/usr/local/bin", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
   const options = {
+    cwd: sourceRoot,
     env: environment,
     timeout: 10_000,
     maxBuffer: 4 * 1024 ** 2,
@@ -172,6 +175,10 @@ async function gitSentinel(sourceRoot: string): Promise<SourceSentinelV1["git"]>
 
 /** Does not follow source symlinks or execute target code. Git observation disables optional writes and fsmonitor. */
 export async function captureSourceSentinel(source: string, requestedLimits: DisposableTargetLimits = {}): Promise<SourceSentinelV1> {
+  // Native diagnostics print cwd and private environment values before our
+  // capture/redaction boundary. Check the active logger, including startup state,
+  // before reading either Git or non-Git sources or allocating their copy.
+  if (debuglog("child_process").enabled || debuglog("stream").enabled) throw new BoundaryError("parent-raw-diagnostics", "Source observation is unavailable while raw parent process diagnostics are enabled.");
   const limits = limitsFor(requestedLimits);
   const sourceRoot = await realpath(source);
   await assertDirectory(sourceRoot, sourceRoot);
