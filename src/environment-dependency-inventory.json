@@ -71321,7 +71321,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 15,
+        "line": 16,
         "path": "docs/runbooks/corpus-advisory-refresh.md"
       },
       "freshness": {
@@ -374377,8 +374377,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "3b88ed56dbb0980579087941f18e201f0251bb3b",
-    "commitPayload": "dHJlZSBlYTI0OTEyMDhiYWNlMjI3MTk2ZWJhNTA1YmVjOWMwYmQ1N2Y3ZTY1CnBhcmVudCBlM2M2MjVlOWNmZTk2MzUyZTAzYzM5MGVmYjA4OGJhMjQxZGZmZGYxCmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg3NzY0IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg3NzY0IC0wNTAwCgpBZGQgYWR2aXNvcnkgZnJlc2huZXNzIHByZWZsaWdodCBhbmQgc2FmZSByZWZyZXNoIHB1YmxpY2F0aW9uICgjMjE0OCkK",
+    "commit": "ad502f217686954795de36bfa13a45a5e6b79682",
+    "commitPayload": "dHJlZSBiY2IyYjY3ZWY3ODMzMjdlNjM2MzFmYTcwNGM2NGE0ODExZDQwMTU3CnBhcmVudCBjOWQzYWU5ZDdlMTg4NGViZmY2ZjhjNTRkNmNmMmZhYWJlMWJhNGE3CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg4MTE2IC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwMzg4MTE2IC0wNTAwCgpDbGFyaWZ5IGFkdmlzb3J5IHJlZnJlc2ggcnVudGltZSB2YWxpZGF0aW9uICgjMjE0OCkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -374387,13 +374387,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "73d9cebfd8e8437f1da343e2dec08da005878dc7",
+        "gitOid": "5c3219f77228c570b4eb39a84c47218a488a2a02",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "55408870eb779f405336f17450636e6e6bb502de6340b384eb04256e652618d6",
-    "tree": "ea2491208bace227196eba505bec9c0bd57f7e65"
+    "populationSha256": "6fd0126a9ee0aef9bc62272b72e5e89342d14c02f93c401886c58804c4404510",
+    "tree": "bcb2b67ef783327e63631fa704c64a4811d40157"
   },
   "venues": [
     {
@@ -377652,11 +377652,11 @@
       "sha256": "6c169c3db6e59fff2c2e938effc3ee647f13ec182ba3bc292b3843035f1d3474"
     },
     {
-      "bytes": 2067,
+      "bytes": 2122,
       "disposition": "conservative-candidate",
       "format": "text",
       "gitMode": "100644",
-      "gitOid": "763d38fee98902300b8e9a5aed0c632609bd18ff",
+      "gitOid": "15968752641ab3b6756f5fe93cdd6653a523cf11",
       "id": "docs/runbooks/corpus-advisory-refresh.md",
       "kind": "document",
       "literalCount": 0,
@@ -377664,7 +377664,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "docs/runbooks/corpus-advisory-refresh.md",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "8ad434413a3d110423ac3ba4bd08af96855ae6fc03ffe6512e54f9ecc4abd04f"
+      "sha256": "4cd032c81b9a16f21f72c296e0258d12843f2f8acae1e15c89ed7d5713e68c28"
     },
     {
       "bytes": 46735,
