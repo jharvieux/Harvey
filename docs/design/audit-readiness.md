@@ -66,8 +66,9 @@ exact image, container, lease and isolation settings. Target exit/close metadata
 is read separately from container termination; a container exit cannot substitute
 for a target exit. A passed readiness receipt requires verified target identity,
 complete lifecycle and streams, an observed terminal namespace, and removal of
-the exact container. The native process-group implementation is retained only as a physical comparison
-test fixture; its success never proves readiness descendant containment.
+the exact container. The native process-group implementation is retained only as
+a physical comparison test fixture; its success never proves readiness descendant
+containment.
 
 The scheduler serializes undeclared shared output ownership. A failed prerequisite
 withholds its descendants while independent stages continue. Install-covered
@@ -108,6 +109,12 @@ These boundaries begin after module import. The separate
 records a synthetic inherited-value disclosure from `tsx`/esbuild startup with
 `NODE_DEBUG=child_process`, before a CLI redactor can run. Do not interpret the
 readiness adapter's diagnostic refusal as a global launcher secrecy guarantee.
+Source observation refuses active Node `child_process` and `stream` diagnostics
+before reading Git or non-Git sources or allocating a disposable copy. The check
+uses the active logger's cached startup state, so clearing `NODE_DEBUG` after
+import does not make execution safe. Restart without those diagnostics to retry.
+Git observations use fixed arguments, the source path as cwd, and private
+environment overrides to neutralize target-owned filters.
 
 ## Production controls
 
@@ -115,7 +122,8 @@ The physical suites in `disposable-target.test.ts`,
 `audit-readiness-authority.test.ts`, `bounded-process.test.ts`,
 `readiness-process-containment.test.ts`, `audit-readiness-artifacts.test.ts`,
 `audit-readiness-receipts.test.ts`, `audit-readiness-exec.test.ts` and
-`audit-readiness-run.test.ts` cover admission, environment/redaction, signals,
+`audit-readiness-run.test.ts` and `audit-readiness-containment-flow.test.ts`
+cover admission, environment/redaction, signals,
 drainage, missing executables, truncation, dependencies and cleanup. The real
 `run-audit.test.ts` continuity matrix compares readiness disabled, successful and
 failed: module observations, coverage, findings and conservation remain equal;
