@@ -50,16 +50,16 @@
   },
   "artifacts": {
     "findings.json": {
-      "sha256": "3f67a048a8114cc064624ca67b47f55d340a20285e6394d24a42e8f5af7866b7"
+      "sha256": "cd1843f2bdc88d701850807ba42bb3d324f1ea281076da64aeed6a32d54bc21f"
     },
     "pii-data-map.json": {
       "sha256": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9"
     },
     "scorecard.json": {
-      "sha256": "3092ff5321bb40395543bf2e00e4e0d27c60625573dc55b5d92e838f77d2e242"
+      "sha256": "3efd6c1ce8bf2c4b8c41ba9c6b66fee7b28fb702bbf478df612e18a0be1edd2c"
     },
     "findings-report.json": {
-      "sha256": "b8e54bfc2d83a527237d3ca437c955555409d4ecf16f03670102f478667888a3"
+      "sha256": "88f64fd75beb692f5b645295c5b4b479b33ce10cfc4d1393420cbda6d37f439d"
     }
   },
   "transformations": {

@@ -31,7 +31,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-2",
@@ -97,7 +103,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-5",
@@ -115,7 +127,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-6",
@@ -157,7 +175,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-8",
@@ -175,7 +199,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-9",
@@ -193,7 +223,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-10",
@@ -307,7 +343,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-15",
@@ -349,7 +391,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-17",
@@ -391,7 +439,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-19",
@@ -409,7 +463,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-20",
@@ -451,7 +511,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-22",
@@ -469,7 +535,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-23",
@@ -511,7 +583,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-25",
@@ -553,7 +631,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-27",
@@ -571,7 +655,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-28",
@@ -589,7 +679,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-29",
@@ -631,7 +727,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-31",
@@ -673,7 +775,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-33",
@@ -691,7 +799,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-34",
@@ -733,7 +847,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-36",
@@ -775,7 +895,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-38",
@@ -841,7 +967,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-41",
@@ -32301,7 +32433,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-PG-RESJSON-lib-express-pg-resjson-selectstar-js-546",
@@ -32319,7 +32457,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-PG-RESJSON-lib-express-pg-resjson-spread-js-569",
@@ -32337,7 +32481,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-PG-RESJSON-src-owasp-node-sensitive-response-cached-ts-498",
@@ -32355,7 +32505,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-prisma-tenant-scope-task-src-db-task-repo-ts-383",
@@ -33074,7 +33230,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-261",
@@ -33092,7 +33251,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-433",
@@ -33110,7 +33272,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-603",
@@ -33128,7 +33293,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-793",
@@ -33146,7 +33314,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-1004",
@@ -33164,7 +33335,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-no-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-1153",
@@ -33203,7 +33377,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-1661",
@@ -33221,7 +33398,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-3987",
@@ -33239,7 +33419,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-provider-override-malformed-ts-179",
@@ -33257,7 +33440,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-no-idempotency-key-src-inngest-external-send-idempotency-ts-485",
@@ -33317,7 +33503,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-project-idempotency-contract-src-inngest-external-send-idempotency-malformed-ts-2460-src-inngest-external-send-idempotency-malformed-ts-2735",
@@ -33335,7 +33524,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-project-idempotency-contract-src-inngest-external-send-idempotency-malformed-ts-2996-src-inngest-external-send-idempotency-malformed-ts-3170",
@@ -33353,7 +33545,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-project-idempotency-contract-src-inngest-external-send-idempotency-malformed-ts-3433-src-inngest-external-send-idempotency-malformed-ts-3705",
@@ -33371,7 +33566,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-project-idempotency-contract-src-inngest-external-send-idempotency-malformed-ts-4311-src-inngest-external-send-idempotency-malformed-ts-4522",
@@ -33389,7 +33587,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RETRY-project-idempotency-contract-src-inngest-external-send-idempotency-malformed-ts-4890-src-inngest-external-send-idempotency-malformed-ts-5094",
@@ -33407,7 +33608,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
   },
   {
     "id": "RACE-stale-quota-read-budget-src-d091-budget-gate-stale-ts-673",
@@ -34512,7 +34716,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "M1-HARDCODED-TENANT-src-m1-hardcoded-tenant-request-positive-ts-111",
@@ -34530,7 +34740,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "M5-HARDCODED-ENDPOINT-lib-admin-js-780",
