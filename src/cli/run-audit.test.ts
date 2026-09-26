@@ -23,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AUDIT_MODULES } from "../audit-coverage.js";
 import { discoverReadinessPlan, type ReadinessPlanV1 } from "../audit-readiness.js";
 import { bindReadinessPlanV1 } from "../audit-readiness-authority.js";
+import { parseReadinessArtifactsV1 } from "../audit-readiness-artifacts.js";
 import { captureSourceSentinel } from "../disposable-target.js";
 import { createReadinessReceiptContext, validateReadinessExecutionV1, type ReadinessExecutionV1 } from "../audit-readiness-receipts.js";
 import { createAuditReplayBinding, writeAuditReplayBundle, type AuditEvidenceInput } from "../audit-replay.js";
@@ -426,8 +427,10 @@ else {
     const execution: ReadinessExecutionV1 = validateReadinessExecutionV1(
       createReadinessReceiptContext(plan, { approvedEnvNames, environment: environment(mode) }), JSON.parse(bytes),
     );
+    const descriptorPath = `${receiptPath}.validation.json`;
+    expect(parseReadinessArtifactsV1({ descriptorJson: readFileSync(descriptorPath, "utf8"), executionJson: bytes }).execution).toEqual(execution);
     expect(JSON.parse(readFileSync(planPath, "utf8"))).toEqual(plan);
-    rmSync(receiptPath); rmSync(planPath);
+    rmSync(receiptPath); rmSync(planPath); rmSync(descriptorPath);
     expect(result.code, result.out).toBe(mode === "success" ? 0 : 1);
     const engagement = JSON.parse(readFileSync(out, "utf8")) as FindingsDocument;
     expect(engagement.coverage).toEqual(baseline.coverage);
@@ -449,6 +452,46 @@ else {
       expect(row("codegen")).toMatchObject({ status: "failed", execution: { kind: "process", process: { exit: { code: 7 }, close: { code: 7 } } } });
       for (const kind of ["build", "typecheck", "test"]) expect(row(kind)).toMatchObject({ status: "not-assessed", diagnostic: { reasonCode: "prerequisite-not-passed" } });
       expect(result.out).toContain("READINESS FAIL");
+    }
+  }, CASE_TIMEOUT_MS);
+
+  it("withholds a secret-bearing raw plan even when every stage is denied and an old export exists", async () => {
+    const canary = "plan-export-private-value-1897";
+    const manifestPath = join(target, "package.json");
+    const originalManifest = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(originalManifest) as { scripts: Record<string, string> };
+    manifest.scripts.build = `node -e 'console.log("${canary}")'`;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    try {
+      const before = await captureSourceSentinel(target);
+      const deniedPlan = discoverReadinessPlan(target);
+      const binding = bindReadinessPlanV1(deniedPlan, before);
+      const deniedAuthority = join(root, "denied-authority.json");
+      writeFileSync(deniedAuthority, JSON.stringify({ schemaVersion: 1, planSha256: binding.planSha256, approvedEnvNames: ["PROOF_TOKEN"], stageAuthorizations: [] }));
+      const planPath = join(root, "withheld-plan.json");
+      const receiptPath = join(root, "denied-execution.json");
+      const findingsPath = join(root, "denied-findings.json");
+      writeFileSync(planPath, "previous export must be preserved\n");
+      const result = await runCapturing([target, "--findings-out", findingsPath,
+        "--readiness-plan-out", planPath, "--readiness-execute-out", receiptPath,
+        "--readiness-authorizations", deniedAuthority], { PROOF_TOKEN: canary });
+      const executionJson = readFileSync(receiptPath, "utf8");
+      const descriptorJson = readFileSync(`${receiptPath}.validation.json`, "utf8");
+      const artifacts = parseReadinessArtifactsV1({ descriptorJson, executionJson }, { originalPlanSha256: binding.planSha256, sourceContentSha256: before.contentSha256 });
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("READINESS PLAN EXPORT WITHHELD");
+      expect(result.out).toContain("DELIVERY FAIL");
+      expect(result.out).not.toContain(canary);
+      expect(executionJson).not.toContain(canary);
+      expect(descriptorJson).not.toContain(canary);
+      expect(readFileSync(planPath, "utf8")).toBe("previous export must be preserved\n");
+      expect(artifacts.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+      const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+      expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+      expect(engagement.conservation?.ok).toBe(true);
+      expect(await captureSourceSentinel(target)).toEqual(before);
+    } finally {
+      writeFileSync(manifestPath, originalManifest);
     }
   }, CASE_TIMEOUT_MS);
 });

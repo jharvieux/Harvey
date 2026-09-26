@@ -31,6 +31,8 @@ export interface ReadinessAuthorityOptions {
   environment: Readonly<Record<string, string | undefined>>;
   /** Absolute, trusted toolchain directories; the target and its dependencies are inadmissible. */
   toolchainPath?: string;
+  /** Set by the contained adapter only after probing the operator's exact immutable image. */
+  toolchainScope?: { kind: "container-image"; imageId: string };
   /** Connect the receipt redactor here before any value reaches a child. */
   registerSecret?: (value: string) => void;
 }
@@ -72,6 +74,7 @@ interface AdmissionState {
   approvedEnvNames: string[];
   values: Record<string, string>;
   toolchainDirs: string[];
+  toolchainImageId: string | null;
   secrets: SecretRegistry;
   installLifecycle: { path: string; pointer: string }[];
 }
@@ -169,8 +172,13 @@ export function createReadinessAdmission(planInput: unknown, bindingInput: Readi
   }
   const toolchainDirs = [...new Set((options.toolchainPath ?? [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter)).split(delimiter))];
   if (toolchainDirs.some((path) => !isAbsolute(path) || path.includes("\0"))) throw new Error("The toolchain PATH must contain only explicit absolute directories.");
+  const scope = options.toolchainScope;
+  if (scope && (Object.keys(scope).some((key) => !["kind", "imageId"].includes(key))
+    || scope.kind !== "container-image" || !/^sha256:[a-f0-9]{64}$/.test(scope.imageId) || !options.toolchainPath)) {
+    throw new Error("Image toolchain admission requires the probed immutable image and its explicit search path.");
+  }
   const context = immutable({ plan, binding });
-  admissions.set(context, { authorizations, allowTargetInstall: options.allowTargetInstall === true, approvedEnvNames, values: Object.freeze(values), toolchainDirs, secrets, installLifecycle: plan.workspaceInventory.packages.flatMap((pkg) => pkg.scripts.filter((script) => ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"].includes(script.name)).map((script) => ({ ...script.source }))) });
+  admissions.set(context, { authorizations, allowTargetInstall: options.allowTargetInstall === true, approvedEnvNames, values: Object.freeze(values), toolchainDirs, toolchainImageId: scope?.imageId ?? null, secrets, installLifecycle: plan.workspaceInventory.packages.flatMap((pkg) => pkg.scripts.filter((script) => ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"].includes(script.name)).map((script) => ({ ...script.source }))) });
   return context;
 }
 
@@ -267,14 +275,16 @@ export async function admitReadinessStage(context: ReadinessAdmissionContext, st
   if (root.status !== "verified") return denied(authority, root.reasonCode, root.reason, root.falsifier);
   let toolchain: string[];
   try {
-    toolchain = await Promise.all(state.toolchainDirs.map(async (path) => {
+    // Image directories are checked inside the trusted observer, where they exist.
+    // Host realpath would either reject them or accidentally certify a different filesystem.
+    toolchain = state.toolchainImageId ? [...state.toolchainDirs] : await Promise.all(state.toolchainDirs.map(async (path) => {
       const resolved = await realpath(path);
       if (!(await stat(resolved)).isDirectory()) throw new Error("not a toolchain directory");
       return resolved;
     }));
     if (toolchain.some((path) => within(target.sourceRoot, path) || within(target.root, path))) throw new Error("untrusted toolchain directory");
   } catch {
-    return denied(authority, "toolchain-path-invalid", "The toolchain PATH is unavailable or resolves into source/disposable target content.", "Provide existing trusted toolchain directories outside both the original and disposable target roots.");
+    return denied(authority, "toolchain-path-invalid", "The toolchain PATH is unavailable or resolves into source/disposable target content.", "Provide trusted toolchain directories outside both target roots; image directories must be checked by the contained adapter in the selected image.");
   }
   const argv = [stage.command.bin, ...stage.command.args];
   try {

@@ -152,6 +152,7 @@ const assembleDir = flagValue("--assemble");
 const retainDir = flagValue("--retain-artifacts");
 const readinessPlanOut = flagValue("--readiness-plan-out");
 const readinessExecuteOut = flagValue("--readiness-execute-out");
+const readinessValidationOut = readinessExecuteOut ? `${readinessExecuteOut}.validation.json` : undefined;
 const readinessAuthorizations = flagValue("--readiness-authorizations");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
@@ -231,6 +232,7 @@ const appList = discoverTargets(targetDir, [], workspaceInventory).apps.map((a) 
 let readinessPlan: ReadinessPlanV1 | undefined;
 let readinessBinding: ReadinessPlanBindingV1 | undefined;
 let readinessPlanJson: string | undefined;
+let readinessPlanExportWithheld = Boolean(readinessPlanOut && (readinessExecuteOut || readinessAuthorizations));
 if (readinessPlanOut || readinessExecuteOut) {
   try {
     readinessPlan = discoverReadinessPlan(targetDir, workspaceInventory);
@@ -422,6 +424,7 @@ console.log("");
 const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions, producerExecutionReceipts } = runAudit(AUDIT_RUNNERS, ctx);
 const auditContext = freshCapture?.finish(producerExecutionReceipts);
 let readinessExecutionJson: string | undefined;
+let readinessValidationJson: string | undefined;
 let readinessExecutionFailed = false;
 if (readinessExecuteOut && readinessPlan && readinessBinding) {
   let authorization: ReturnType<typeof parseReadinessAuthorizations> | undefined;
@@ -431,7 +434,9 @@ if (readinessExecuteOut && readinessPlan && readinessBinding) {
       : { stageAuthorizations: [], approvedEnvNames: [] };
   } catch {
     readinessSetupFailed = true;
-    readinessExecutionJson = discloseReadinessSetupFailure(readinessPlan, readinessBinding).json;
+    const result = discloseReadinessSetupFailure(readinessPlan, readinessBinding);
+    readinessExecutionJson = result.json;
+    readinessValidationJson = result.descriptorJson;
   }
   if (authorization) {
     try {
@@ -441,6 +446,11 @@ if (readinessExecuteOut && readinessPlan && readinessBinding) {
         ...authorization,
       });
       readinessExecutionJson = result.json;
+      readinessValidationJson = result.descriptorJson;
+      if (result.planExport.status === "ready") {
+        readinessPlanJson = result.planExport.json;
+        readinessPlanExportWithheld = false;
+      }
       readinessExecutionFailed = result.execution.status === "failed";
     } catch {
       // Execution may have begun. The delivery gate exposes the missing receipt rather than
@@ -605,7 +615,7 @@ if (retainDir && replayBinding) {
 // Write readiness only after M1–M10 have finished. The operator may intentionally put this JSON
 // inside the target tree; writing it before runAudit would turn Harvey's own output into scan input
 // and change the findings/coverage of the run that produced it.
-if (readinessPlanOut && readinessPlanJson) {
+if (readinessPlanOut && readinessPlanJson && !readinessPlanExportWithheld) {
   writeFileSync(readinessPlanOut, readinessPlanJson);
   console.log(`\nAudit readiness plan → ${readinessPlanOut}`);
 }
@@ -613,6 +623,11 @@ if (readinessExecuteOut && readinessExecutionJson) {
   writeFileSync(readinessExecuteOut, readinessExecutionJson);
   console.log(`\nAudit readiness execution → ${readinessExecuteOut}`);
 }
+if (readinessValidationOut && readinessValidationJson) {
+  writeFileSync(readinessValidationOut, readinessValidationJson);
+  console.log("Audit readiness validation descriptor exported.");
+}
+if (readinessPlanExportWithheld) console.error("\nREADINESS PLAN EXPORT WITHHELD — the raw plan did not pass the producer-known-value export boundary. Audit execution evidence uses its redacted validation descriptor.");
 if (readinessSetupFailed) console.error("\nREADINESS NOT ASSESSED — its execution configuration or source binding was invalid; audit module collection completed independently.");
 if (readinessExecutionFailed) console.error("\nREADINESS FAIL — execution, disposable cleanup, or evidence validation failed. Audit module collection completed independently.");
 
@@ -629,8 +644,9 @@ const requestedExports = [
   ...(outPath ? [{ flag: "--out", path: outPath }] : []),
   ...(readinessPlanOut ? [{ flag: "--readiness-plan-out", path: readinessPlanOut }] : []),
   ...(readinessExecuteOut ? [{ flag: "--readiness-execute-out", path: readinessExecuteOut }] : []),
+  ...(readinessValidationOut ? [{ flag: "--readiness-execute-out validation descriptor", path: readinessValidationOut }] : []),
 ];
-const undelivered = requestedExports.filter((e) => (statSafe(e.path)?.size ?? 0) === 0);
+const undelivered = requestedExports.filter((e) => (e.flag === "--readiness-plan-out" && readinessPlanExportWithheld) || (statSafe(e.path)?.size ?? 0) === 0);
 if (undelivered.length) {
   console.error(`\nDELIVERY FAIL — ${undelivered.length} of ${requestedExports.length} requested export(s) were never written: ${undelivered.map((e) => `${e.flag} ${e.path}`).join(", ")}.`);
   console.error(deliveredNothing(findings.length, "a requested export produced no file, and the run reached the end without saying so"));

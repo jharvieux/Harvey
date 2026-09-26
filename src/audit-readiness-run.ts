@@ -13,11 +13,12 @@ import {
   createReadinessProcessReceipt,
   createReadinessReceiptContext,
   prepareReadinessSpawn,
-  serializeReadinessExecutionV1,
+  prepareReadinessPlanExportV1,
   type ReadinessExecutionV1,
   type ReadinessProcessLimitsV1,
   type StageReceiptV1,
 } from "./audit-readiness-receipts.js";
+import { createReadinessArtifactsV1 } from "./audit-readiness-artifacts.js";
 import { createBoundedProcessRunner } from "./bounded-process.js";
 import { cleanupDisposableTarget, createDisposableTarget, type DisposableCleanupReceipt } from "./disposable-target.js";
 
@@ -44,6 +45,23 @@ interface BoundReadinessOptions {
 interface BoundReadinessResult {
   execution: ReadinessExecutionV1;
   json: string;
+  descriptorJson: string;
+  descriptorSha256: string;
+  executionSha256: string;
+  planExport: ReturnType<typeof prepareReadinessPlanExportV1>;
+}
+
+function finalizeReadinessArtifacts(
+  evidence: ReturnType<typeof createReadinessReceiptContext>,
+  binding: ReadinessPlanBindingV1,
+  execution: ReadinessExecutionV1,
+): BoundReadinessResult {
+  const artifacts = createReadinessArtifactsV1(evidence, { binding, execution });
+  return {
+    execution: artifacts.execution, json: artifacts.executionJson,
+    descriptorJson: artifacts.descriptorJson, descriptorSha256: artifacts.descriptorSha256,
+    executionSha256: artifacts.executionSha256, planExport: prepareReadinessPlanExportV1(evidence),
+  };
 }
 
 /** Authorization files contain names and reviewed effects, never environment values. */
@@ -91,7 +109,7 @@ export function discloseReadinessSetupFailure(plan: ReadinessPlanV1, binding: Re
   const execution = closeReadinessExecutionV1(evidence, {
     binding, receipts, cleanup: { status: "not-required", root: null, reason: "No disposable target or process was created." },
   });
-  return { execution, json: serializeReadinessExecutionV1(evidence, execution) };
+  return finalizeReadinessArtifacts(evidence, binding, execution);
 }
 
 /** Owns the disposable copy, every child receipt, and cleanup after all children settle. */
@@ -161,7 +179,7 @@ export async function executeBoundReadinessPlan(options: BoundReadinessOptions):
     }
   }
   const execution = closeReadinessExecutionV1(evidence, { binding: options.binding, receipts, cleanup });
-  return { execution, json: serializeReadinessExecutionV1(evidence, execution) };
+  return finalizeReadinessArtifacts(evidence, options.binding, execution);
 }
 
 function receiptsFromOutcomes(

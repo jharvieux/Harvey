@@ -74,6 +74,24 @@ async function noMarker(target: DisposableTarget, name = "stage-ran"): Promise<v
 }
 
 describe("stage and effect authority", () => {
+  it("keeps image toolchain admission separate from host path observations and target directories", async () => {
+    const { plan, binding, target } = await fixture();
+    const toolchainPath = "/harvey-image-only-toolchain-1897/bin";
+    const toolchainScope = { kind: "container-image" as const, imageId: `sha256:${"c".repeat(64)}` };
+    const host = createReadinessAdmission(plan, binding, optionsFor(plan, { toolchainPath }));
+    expect(await admitReadinessStage(host, stage(plan, "test").id, target)).toMatchObject({ status: "not-assessed", reasonCode: "toolchain-path-invalid" });
+    const image = createReadinessAdmission(plan, binding, optionsFor(plan, { toolchainPath, toolchainScope }));
+    const admitted = await admitReadinessStage(image, stage(plan, "test").id, target);
+    expect(admitted.status).toBe("admitted");
+    if (admitted.status !== "admitted") throw new Error("expected image-scoped admission");
+    expect(admitted.request.env.PATH).toBe(toolchainPath);
+    const targetPath = createReadinessAdmission(plan, binding, optionsFor(plan, { toolchainPath: target.targetRoot, toolchainScope }));
+    expect(await admitReadinessStage(targetPath, stage(plan, "test").id, target)).toMatchObject({ status: "not-assessed", reasonCode: "toolchain-path-invalid" });
+    expect(() => createReadinessAdmission(plan, binding, optionsFor(plan, { toolchainScope }))).toThrow(/probed immutable image/);
+    expect(() => createReadinessAdmission(plan, binding, optionsFor(plan, { toolchainPath, toolchainScope: { ...toolchainScope, imageId: "mutable-tag" } }))).toThrow(/probed immutable image/);
+    await noMarker(target);
+  });
+
   it("does zero target work without a stage authorization and runs the same exact plan command when granted", async () => {
     const { plan, binding, target, source } = await fixture();
     const test = stage(plan, "test");
