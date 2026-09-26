@@ -23,7 +23,7 @@ import type {
 } from "./effectiveness-schema.js";
 import type { Finding } from "./findings.js";
 import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
-import { mutationRunnerValidityReason, testQualityFromArtifact } from "./mutation-scan.js";
+import { mutationExecutionFailureReason, mutationRunnerValidityReason, testQualityFromArtifact } from "./mutation-scan.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./scan/framework-detect.js";
 import { parseSourcePopulationReceipt, type SourcePopulationReceipt } from "./scan/polyglot-quality.js";
 
@@ -538,6 +538,8 @@ const mutationVerdict = (
 ): { kind: "ran" } | { kind: "partial"; note: string } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
   try {
     const parsed = (typeof input === "string" ? JSON.parse(input) : input) as { moduleRecord?: { note?: string; noSuite?: boolean }; summary?: unknown };
+    const executionReason = mutationExecutionFailureReason(parsed);
+    if (executionReason) return { kind: "partial", note: executionReason };
     const runnerReason = mutationRunnerValidityReason(parsed);
     if (runnerReason) return { kind: "partial", note: [parsed.moduleRecord?.note, runnerReason].filter(Boolean).join(" ") };
     if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") {

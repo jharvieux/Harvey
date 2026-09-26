@@ -17,10 +17,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Finding } from "../findings.js";
-import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
+import type { Finding, ReportMeta } from "../findings.js";
+import { assertCommandExecutionReceipt, commandReceiptSucceeded, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import { readNamesSafe, statSafe } from "../fs-walk.js";
 import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
+import { planMutationWorkspaces } from "../mutation-workspace.js";
+import { runMutationWorkspaces } from "../mutation-workspace-runner.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { runAudit, type RunContext } from "../audit-runner.js";
+import { assembleEngagementDocument } from "../audit-report.js";
+import { renderReport } from "../../report-template/render.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "mutation-scan.ts");
@@ -96,6 +102,125 @@ process.exit(0);
   writeFileSync(join(binDir, "stryker"), script);
   chmodSync(join(binDir, "stryker"), 0o755);
 }
+
+// Exercise the production 64 MiB parent limit: valid artifacts and a native zero exit must
+// not turn parent-interrupted execution into a completed measurement.
+const EXIT_ZERO_OVERFLOW = `
+process.stdout.on('error', () => {});
+process.on('SIGTERM', () => process.exit(0));
+process.stdout.write('x'.repeat(66 * 1024 * 1024));
+setInterval(() => {}, 1000);
+`;
+
+describe("M8 command receipt acceptance (#2215, real children)", () => {
+  it.each(["discovery", "baseline", "mutation", "healthy"] as const)("checks the %s workspace command before accepting a complete report", stage => {
+    const repo = fixtureRepo({ "src/add.ts": "export const add = (a, b) => a + b;", "src/add.test.ts": REAL_SPEC });
+    const storage = realpathSync(mkdtempSync(join(tmpdir(), "harvey-m8-workspace-receipts-"))); dirs.push(storage);
+    const vitest = join(repo, "node_modules", "vitest"); mkdirSync(vitest, { recursive: true });
+    writeFileSync(join(vitest, "package.json"), JSON.stringify({ name: "vitest", version: "3.2.6" }));
+    writeFileSync(join(vitest, "vitest.mjs"), `
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+const args = process.argv.slice(2);
+const discovery = args[0] === 'list';
+const config = args[args.indexOf('--config') + 1];
+writeFileSync(config + '.native.json', JSON.stringify({ root: process.cwd(), dir: process.cwd() }));
+if (discovery) writeFileSync(args.find(arg => arg.startsWith('--json=')).slice(7), JSON.stringify([{ file: resolve('src/add.test.ts'), name: 'adds' }]));
+else writeFileSync(args[args.indexOf('--outputFile') + 1], JSON.stringify({ numPassedTests: 1, success: true }));
+if (${JSON.stringify(stage)} === (discovery ? 'discovery' : 'baseline')) { ${EXIT_ZERO_OVERFLOW} }
+`);
+    const cli = join(storage, "mutation.mjs");
+    writeFileSync(cli, `
+import { writeFileSync } from 'node:fs';
+const rawReport = { files: { 'src/add.ts': { mutants: [{ id: '1', mutatorName: 'ArithmeticOperator', status: 'Killed', testsCompleted: 1, location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } }, testFiles: { 'src/add.test.ts': { tests: [{ id: 'test-1', name: 'adds' }] } } };
+writeFileSync(process.argv[process.argv.indexOf('--out') + 1], JSON.stringify({ rawReport, effectiveReport: rawReport, findings: [] }));
+${stage === "mutation" ? EXIT_ZERO_OVERFLOW : ""}
+`);
+    const artifact = runMutationWorkspaces(planMutationWorkspaces(repo), { storage, cliPath: cli });
+    const workspaces = artifact.workspaces as Array<{ state: string; reason: string; receipts: CommandExecutionReceipt[] }>;
+    expect(workspaces).toHaveLength(1);
+    if (stage === "healthy") {
+      expect(workspaces[0]!.state).toBe("complete");
+      expect(artifact.workspaceCoverage).toMatchObject({ complete: true, reported: 1 });
+      expect(workspaces[0]!.receipts).toHaveLength(3);
+      expect(workspaces[0]!.receipts.every(commandReceiptSucceeded)).toBe(true);
+      expect(artifact.summary).toMatchObject({ overall: { mutationScore: 100 } });
+    } else {
+      const receipt = workspaces[0]!.receipts[stage === "discovery" ? 0 : stage === "baseline" ? 1 : 2]!;
+      assertCommandExecutionReceipt(receipt);
+      verifyCommandExecutionReceiptArtifacts(receipt);
+      expect(receipt.outcome).toEqual({ state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" });
+      expect(commandReceiptSucceeded(receipt)).toBe(false);
+      expect(workspaces[0]!.state).toBe(stage === "discovery" ? "discovery-failed" : stage === "baseline" ? "dry-run-failed" : "runner-invalid");
+      expect(workspaces[0]!.reason).toContain("output-limit-exceeded");
+      expect(artifact.workspaceCoverage).toMatchObject({ complete: false, reported: 0 });
+      expect(artifact).not.toHaveProperty("summary");
+      expect(artifact.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining("ENOBUFS") });
+      expect(workspaces[0]!.receipts).toHaveLength(stage === "discovery" ? 1 : stage === "baseline" ? 2 : 3);
+    }
+  });
+
+  it("keeps an interrupted upstream score out of the actual audit and rendered client report", async () => {
+    const repo = fixtureRepo({ "src/add.ts": "export const add = (a, b) => a + b;", "src/add.test.ts": REAL_SPEC });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ mutate: ["src/add.ts"], testRunner: "vitest" }));
+    writeFakeStrykerBinaryHonoringConfig(repo);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", EXIT_ZERO_OVERFLOW));
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const artifact = JSON.parse(out);
+    assertCommandExecutionReceipt(artifact.executionReceipt);
+    verifyCommandExecutionReceiptArtifacts(artifact.executionReceipt);
+    expect(artifact.executionReceipt.outcome).toEqual({ state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" });
+    expect(commandReceiptSucceeded(artifact.executionReceipt)).toBe(false);
+    expect(artifact.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining("output-limit-exceeded") });
+    expect(artifact).not.toHaveProperty("summary");
+    const context: RunContext = {
+      targetDir: repo, env: { connected: false, dynamic: false, llm: false }, captureDir: repo,
+      exists: existsSync, readFindings: () => [], readArtifact: () => artifact,
+      exec: (_command, args) => args.includes("mutation-scan")
+        ? { ok: true, output: out }
+        : { ok: true, output: "loaded 2 source files (1 product source, 1 test)" },
+    };
+    const runners = AUDIT_RUNNERS.map(runner => runner.module === "M8" ? runner : {
+      ...runner, run: () => ({ kind: "not-assessed" as const, reason: "Outside this receipt acceptance fixture", provenance: "TRIED" as const, falsifier: "pnpm run-audit" }),
+    });
+    const delivered = runAudit(runners, context);
+    expect(delivered.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial", reason: expect.stringContaining("output-limit-exceeded") });
+    expect(delivered.testQuality).toBeUndefined();
+    const meta: ReportMeta = { client: "Synthetic", subtitle: "Receipt acceptance", date: "2026-09-25", commit: "fixture", auditor: "Harvey", confidential: false, overallHealth: 6, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Command receipts", scope: "Synthetic child", methodology: "M8", outOfScope: "Other modules" };
+    const document = assembleEngagementDocument(delivered.recorded, context.env, delivered.findings, meta, undefined, undefined, delivered.testQuality);
+    const htmlPath = join(repo, "report.html");
+    await renderReport(document, { htmlPath });
+    const html = readFileSync(htmlPath, "utf8");
+    expect(html).toContain("output-limit-exceeded");
+    expect(html).toContain("ENOBUFS");
+    expect(html).not.toContain('class="tq-score"');
+  });
+
+  it.each([
+    { exit: 0, threshold: undefined, accepted: true },
+    { exit: 1, threshold: 80, accepted: true },
+    { exit: 1, threshold: undefined, accepted: false },
+    { exit: 1, threshold: 0, accepted: false },
+    { exit: 2, threshold: 80, accepted: false },
+  ])("accepts upstream exit $exit with threshold $threshold only when the completed result explains it", async ({ exit, threshold, accepted }) => {
+    const repo = fixtureRepo({ "src/add.ts": "export const add = (a, b) => a + b;", "src/add.test.ts": REAL_SPEC });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ mutate: ["src/add.ts"], testRunner: "vitest", thresholds: { break: threshold } }));
+    writeFakeStrykerBinaryHonoringConfig(repo);
+    const bin = join(repo, "node_modules/.bin/stryker");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace('schemaVersion: "1"', 'config: cfg, schemaVersion: "1"').replace('status: "Killed"', 'status: "Survived", testsCompleted: 1').replace("process.exit(0);", `process.exit(${exit});`));
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const artifact = JSON.parse(out);
+    expect(artifact.executionReceipt.outcome).toEqual({ state: "exited", exitCode: exit, signal: null });
+    if (accepted) expect(artifact.summary.overall.mutationScore).toBe(0);
+    else {
+      expect(artifact).not.toHaveProperty("summary");
+      expect(artifact.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining(`exit ${exit}`) });
+    }
+  });
+});
 
 describe("mutation-scan --detect-only (#470/#252, child process, no stryker on PATH)", () => {
   it("exits 0 with an empty findings array when a meaningful suite is present — never invoking Stryker", async () => {
@@ -785,7 +910,7 @@ describe("mutation-scan monorepo root invoked directly, tests live in workspaces
 // exercise a distinct degrade rung of that attempt — proving it is really invoked, not skipped —
 // while a live Stryker run itself stays out of scope for a unit/CLI test (see #655's task note).
 describe("mutation-scan monorepo root-scoped run attempt (#655, child process)", () => {
-  it("preserves the original root-scoped invocation and unmodified report", async () => {
+  it.each([false, true])("preserves the original root-scoped receipt and rejects interrupted reports (overflow: %s, #2215)", async overflow => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-root-receipt-")); dirs.push(root);
     mkdirSync(join(root, ".git"));
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { test: "vitest run" }, devDependencies: { vitest: "3.0.0" } }));
@@ -797,11 +922,18 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     writeFakeStrykerBinaryHonoringConfig(root);
     const bin = join(root, "node_modules", ".bin", "stryker");
     writeFileSync(bin, readFileSync(bin, "utf8").replace('"src/add.ts"', '"apps/main/src/index.ts"'));
+    if (overflow) writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", EXIT_ZERO_OVERFLOW));
     const { status, out } = await runCli(app, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out);
     assertCommandExecutionReceipt(parsed.executionReceipt);
     expect(parsed.executionReceipt.command.cwd).toBe(root);
+    if (overflow) {
+      expect(parsed.executionReceipt.outcome).toEqual({ state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" });
+      expect(parsed).not.toHaveProperty("summary");
+      expect(parsed.moduleRecord).toMatchObject({ status: "partial", note: expect.stringContaining("output-limit-exceeded") });
+      return;
+    }
     expect(parsed.executionReceipt.outcome.exitCode).toBe(0);
     expect(Object.keys(parsed.rawReport.files)).toEqual(["apps/main/src/index.ts"]);
     expect(Object.keys(parsed.appScopedReport.files)).toEqual(["src/index.ts"]);
@@ -1382,6 +1514,23 @@ process.exit(0);
     const parsed = JSON.parse(out) as { lineCoverage: { status: string }; reportRows: { module: string; lineCoverage?: number }[] };
     expect(parsed.lineCoverage).toEqual({ status: "ran" });
     expect(parsed.reportRows.find((r) => r.module === "src")?.lineCoverage).toBe(80);
+  });
+
+  it.each(["overflow", "normal-nonzero"] as const)("checks line-coverage execution before accepting its summary (%s, #2215)", async mode => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a, b) => a + b;" });
+    writeFakeCoverageBinary(repo, "vitest", "succeed");
+    const bin = join(repo, "node_modules/.bin/vitest");
+    writeFileSync(bin, readFileSync(bin, "utf8").replace("process.exit(0);", mode === "overflow" ? EXIT_ZERO_OVERFLOW : "process.exit(1);"));
+    const { status, out } = await runCli(repo, ["--report", minimalReport(repo)]);
+    expect(status).toBe(0);
+    const artifact = JSON.parse(out);
+    if (mode === "overflow") {
+      expect(artifact.lineCoverage).toMatchObject({ status: "partial", reason: expect.stringContaining("ENOBUFS, observed exit 0, signal null") });
+      expect(artifact.reportRows[0]).not.toHaveProperty("lineCoverage");
+    } else {
+      expect(artifact.lineCoverage).toEqual({ status: "ran" });
+      expect(artifact.reportRows[0].lineCoverage).toBe(80);
+    }
   });
 
   it("discloses partial with a reason when the coverage tool produces no summary — never a silent blank column", async () => {

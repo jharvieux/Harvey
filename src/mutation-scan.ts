@@ -16,7 +16,7 @@
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
-import { assertCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
+import { assertCommandExecutionReceipt, commandReceiptSucceeded, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 export type MutantStatus =
   | "Killed"
@@ -86,6 +86,54 @@ export interface StrykerReport {
   testFiles?: Record<string, StrykerTestFile>;
 }
 
+/** A break-threshold result is completed execution; parent interruption never is. */
+export function mutationCommandFailureReason(value: unknown, report?: StrykerReport): string | undefined {
+  try { assertCommandExecutionReceipt(value); }
+  catch (error) { return `Mutation command receipt is invalid: ${(error as Error).message}; no mutation score is certified`; }
+  if (commandReceiptSucceeded(value)) return undefined;
+  const { outcome } = value;
+  // Stryker's mutation-test-report-helper sets exit 1 when the final score is below
+  // config.thresholds.break. Require that report evidence instead of guessing that any
+  // nonzero command with a JSON file must have completed mutation testing.
+  if (outcome.state === "exited" && outcome.exitCode === 1 && value.artifactFailures.length === 0 && report?.files) {
+    const threshold = (report.config?.thresholds as { break?: unknown } | undefined)?.break;
+    const mutants = Object.values(report.files).flatMap(file => file.mutants);
+    const valid = mutants.filter(mutant => !["Ignored", "Pending", "CompileError", "RuntimeError"].includes(mutant.status));
+    const detected = valid.filter(mutant => mutant.status === "Killed" || mutant.status === "Timeout").length;
+    if (typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 100
+      && valid.length > 0 && !mutants.some(mutant => mutant.status === "Pending") && 100 * detected / valid.length < threshold) return undefined;
+  }
+  const details = [
+    `state ${outcome.state}`, `exit ${outcome.exitCode ?? "null"}`,
+    ...(outcome.observedExitCode === undefined ? [] : [`observed exit ${outcome.observedExitCode}`]),
+    `signal ${outcome.signal ?? "null"}`, ...(outcome.errorCode ? [`error ${outcome.errorCode}`] : []),
+    ...value.artifactFailures.map(artifact => `${artifact.role} ${artifact.reason}: ${artifact.path}`),
+  ];
+  return `Mutation command did not complete an accepted execution (${details.join(", ")}); retained artifacts are diagnostic evidence, no mutation score is certified`;
+}
+
+/** Reject contradictory retained artifacts at every scoring/import boundary, including older runs. */
+export function mutationExecutionFailureReason(artifact: unknown): string | undefined {
+  if (!artifact || typeof artifact !== "object") return undefined;
+  const run = artifact as { executionReceipt?: unknown; rawReport?: StrykerReport; workspaces?: { id: string; state: string; receipts?: unknown[]; artifact?: unknown }[] };
+  if ("executionReceipt" in run && run.executionReceipt !== undefined) {
+    const reason = mutationCommandFailureReason(run.executionReceipt, run.rawReport);
+    if (reason) return reason;
+  }
+  for (const workspace of run.workspaces ?? []) {
+    // Failed workspaces are already excluded from a new aggregate's score. Inspect the
+    // workspaces it claims to have scored so healthy siblings keep their measured rows.
+    if (!["complete", "bounded"].includes(workspace.state)) continue;
+    for (const receipt of workspace.receipts ?? []) {
+      const reason = mutationCommandFailureReason(receipt);
+      if (reason) return `${workspace.id}: ${reason}`;
+    }
+    const reason = mutationExecutionFailureReason(workspace.artifact);
+    if (reason) return `${workspace.id}: ${reason}`;
+  }
+  return undefined;
+}
+
 export interface NativeMutationComparison {
   command: string[];
   selectedTests: string[];
@@ -144,7 +192,9 @@ export function compareMutationRuns(current: { rawReport: StrykerReport; executi
   if (!previous) return { schemaVersion: 1, status: "not-assessed", reason: "Mutation status stability was not assessed: no prior bound invocation was supplied. Falsifier: rerun the same source and selection with --compare-run <retained M8 artifact>.", invocationIds: current.executionReceipt ? [current.executionReceipt.invocationId] : [], comparedMutants: 0, changes: [] };
   for (const run of [current, previous]) {
     assertCommandExecutionReceipt(run.executionReceipt);
-    if (!run.executionReceipt.comparisonIdentity || run.executionReceipt.artifactFailures.length || run.executionReceipt.outcome.state !== "exited" || !run.rawReport?.files) throw new Error("Mutation comparison requires complete original command, report and comparison identities");
+    const executionReason = mutationCommandFailureReason(run.executionReceipt, run.rawReport);
+    if (executionReason) throw new Error(executionReason);
+    if (!run.executionReceipt.comparisonIdentity || !run.rawReport?.files) throw new Error("Mutation comparison requires complete original command, report and comparison identities");
   }
   const receipt = current.executionReceipt!, prior = previous.executionReceipt!;
   if (receipt.invocationId === prior.invocationId) throw new Error("Mutation comparison requires two distinct command invocations");
@@ -511,6 +561,7 @@ const SURVIVOR_LIST_MAX = 10;
 // the reason, so the report states why rather than rendering an empty table.
 export function testQualityFromArtifact(artifact: unknown): TestQuality | undefined {
   if (typeof artifact !== "object" || artifact === null) return undefined;
+  if (mutationExecutionFailureReason(artifact)) return undefined;
   const a = artifact as {
     summary?: MutationSummary;
     reportRows?: TestQualityRow[];
@@ -555,6 +606,8 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
  * says why.
  */
 export function mutationRunFromArtifact(slug: string, artifact: unknown): { mutationScore: number; killed: number; valid: number } {
+  const executionReason = mutationExecutionFailureReason(artifact);
+  if (executionReason) throw new Error(`${slug}: ${executionReason}`);
   const a = (typeof artifact === "object" && artifact !== null ? artifact : {}) as {
     summary?: MutationSummary;
     moduleRecord?: { status?: string; note?: string };

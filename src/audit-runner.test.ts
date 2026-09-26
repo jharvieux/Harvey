@@ -17,6 +17,7 @@ import { MAX_PASS_FUTURE_SKEW_MS } from "./audit-pass-artifact.js";
 import { renderReport } from "../report-template/render.mjs";
 import { runMutationWorkspaces } from "./mutation-workspace-runner.js";
 import { mutationWorkspaceFinding, planMutationWorkspaces } from "./mutation-workspace.js";
+import { createCommandExecutionReceipt } from "./producer-execution-receipt.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -728,6 +729,28 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m4).toMatchObject({ status: "requires-live-run", reason: expect.stringContaining(sourceGap) });
     expect(m4?.reason).toContain("MEASURED; falsifier:");
     expect(m4?.detail).toBeUndefined();
+  });
+
+  it("M8 — rejects a retained whole-repo score contradicted by its original command receipt (#2215)", async () => {
+    const executionReceipt = createCommandExecutionReceipt({
+      invocationId: "interrupted-upstream", command: { executable: "stryker", argv: ["run"], cwd: "/target" }, target: { identity: "target", value: "fixture" }, configuration: { identity: "fixture", value: "whole-repo" }, toolchain: [{ name: "StrykerJS", version: "9.6.1" }], startedAt: "2026-09-25T00:00:00Z", finishedAt: "2026-09-25T00:00:01Z",
+      outcome: { state: "output-limit-exceeded", exitCode: null, observedExitCode: 0, signal: null, errorCode: "ENOBUFS" }, stdout: "captured prefix", outputCompleteness: { stdout: "truncated", stderr: "unknown" },
+    });
+    const artifact = { executionReceipt, summary: { overall: { mutationScore: 100, totalMutants: 1 }, coveredScope: ["src/add.ts"] }, reportRows: [{ module: "src", mutationScore: 100, survivingCount: 0, hotspotSurvivingCount: 0 }], scope: { verified: true, scoped: false, note: "One source was reported" } };
+    const context = ctx({ captureDir: "/capture", readFindings: () => [], readArtifact: () => artifact, exec: (_c, argv) => argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv) });
+    const result = runAudit(AUDIT_RUNNERS, context);
+    expect(result.recorded.find(row => row.module === "M8")).toMatchObject({ status: "partial", reason: expect.stringContaining("output-limit-exceeded") });
+    expect(result.testQuality).toBeUndefined();
+    const document = assembleEngagementDocument(result.recorded, context.env, result.findings, m5137Meta, undefined, undefined, result.testQuality);
+    const directory = mkdtempSync(join(tmpdir(), "harvey-interrupted-m8-delivery-"));
+    try {
+      const htmlPath = join(directory, "report.html");
+      await renderReport(document, { htmlPath });
+      const html = readFileSync(htmlPath, "utf8");
+      expect(html).toContain("output-limit-exceeded");
+      expect(html).toContain("observed exit 0, signal null, error ENOBUFS");
+      expect(html).not.toContain('class="tq-score"');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   // #754: "no test suite at all" is a COMPLETE assessment — the M8-00 zero-coverage finding IS the

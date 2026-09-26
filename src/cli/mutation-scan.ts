@@ -124,7 +124,7 @@ import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub
 import { mirrorNodeModules } from "../stub-worktree.js";
 import { copyFilteredSourceTree, SourceCopyError } from "../source-copy.js";
 import { redactSecrets } from "../secret-redact.js";
-import { createCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt, type CommandTerminalState } from "../producer-execution-receipt.js";
+import { commandReceiptSucceeded, createCommandExecutionReceipt, verifyCommandExecutionReceiptArtifacts, type CommandExecutionReceipt } from "../producer-execution-receipt.js";
 import {
   coveredScopeLine,
   compareMutationRuns,
@@ -142,6 +142,7 @@ import {
   isIncompatibleTypeScript7,
   mutationNotRunModuleRecord,
   mutationRunnerValidityReason,
+  mutationCommandFailureReason,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   planTsconfigRewrites,
@@ -828,6 +829,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
     return { degradeReason: (err as Error).message };
   }
   assertTreePristine(pristineRoot, "#1285");
+  if (run.executionFailure) return { degradeReason: run.executionFailure };
   if (run.dryRunFailure) return { degradeReason: `root-scoped Stryker's initial dry run failed: ${run.dryRunFailure}` };
   if (run.ts7Crash) {
     return { degradeReason: `root-scoped Stryker crashed with the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility signature (#773: "parseConfigFileTextToJson is not a function") — a tooling gap, not a defect in the target` };
@@ -838,6 +840,8 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
 
   const rawReport = JSON.parse(readFileSync(rawReportPath, "utf8")) as StrykerReport;
+  const executionFailure = mutationCommandFailureReason(finalizeStrykerReceipt(rawReport), rawReport);
+  if (executionFailure) return { degradeReason: executionFailure };
   rootScopedComparison = { root: rootSuite.root, appRelative: appRelFromRoot, report: rawReport };
   const { report, dropped } = reRootReportToApp(rawReport, appRelFromRoot);
   if (dropped.length) {
@@ -1133,7 +1137,7 @@ interface CommandObservation {
   cwd: string;
   startedAt: string;
   finishedAt: string;
-  outcome: { state: CommandTerminalState; exitCode: number | null; signal: string | null; errorCode?: string };
+  outcome: CommandExecutionReceipt["outcome"];
   stdout: string;
   stderr: string;
   outputCompleteness?: {
@@ -1210,6 +1214,7 @@ function persistStrykerReceipt(receipt: CommandExecutionReceipt, preferred: stri
 }
 
 interface StrykerRunResult {
+  executionFailure?: string;
   dryRunFailure?: string;
   ts7Crash?: boolean;
   phases?: { testBaselineMs: number; mutationMs: number };
@@ -1289,7 +1294,8 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
   const durableReceipt = persistStrykerReceipt(receipt, retainedReceipt);
   console.error(`M8 upstream execution receipt: ${durableReceipt}`);
   if (errorCode === "ENOENT") return { dryRunFailure: "stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo", execution };
-  if (child.status === 0) {
+  if (receipt.outcome.state !== "exited") return { executionFailure: mutationCommandFailureReason(receipt), execution };
+  if (commandReceiptSucceeded(receipt)) {
     const phases = strykerPhaseDurations(stdout);
     const instrumented = instrumentedFileCount(stdout);
     return {
@@ -1311,7 +1317,8 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): Stryk
     const phases = strykerPhaseDurations(captured);
     return { ts7Crash: true, ...(phases ? { phases } : {}), execution };
   }
-  // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
+  // A nonzero normal exit is only a candidate: report acceptance below must establish
+  // the explicit break-threshold policy before any summary or score can be emitted.
   const phases = strykerPhaseDurations(captured);
   const instrumented = instrumentedFileCount(captured);
   return { ...(phases ? { phases } : {}), ...(instrumented === undefined ? {} : { instrumentedFileCount: instrumented }), execution };
@@ -1376,9 +1383,15 @@ function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: stri
 
   try {
     execFileSync(bin, runArgs, { cwd: runDir, env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-  } catch {
+  } catch (error) {
     // A suite with failing tests still often writes coverage before exiting non-zero (both vitest
-    // and jest do) — only give up once the summary file itself is confirmed absent, below.
+    // and jest do). Only a normal numeric exit can supply that measurement. A parent-interrupted
+    // command may also leave a valid summary and even exit 0 from its termination handler.
+    const failure = error as { code?: string; status?: number | null; signal?: string | null };
+    if (failure.code || failure.signal || !Number.isInteger(failure.status)) {
+      cleanUp();
+      return { status: "partial", reason: `${runner.runner} --coverage did not complete: error ${failure.code ?? "none"}, observed exit ${failure.status ?? "null"}, signal ${failure.signal ?? "null"}; a summary written before interruption is not accepted as line coverage` };
+    }
   }
 
   const summaryPath = join(outDir, "coverage-summary.json");
@@ -1662,6 +1675,7 @@ if (reportPath) {
   // Before the degrade branches, not after: a crashed or dry-run-failed Stryker is exactly when a
   // half-written sandbox would be left behind, so that exit must not skip the check.
   assertTreePristine(pristine, "#1285");
+  if (run.executionFailure) degradeExit(run.executionFailure);
   if (run.dryRunFailure) {
     emitAndExit(
       { finding: dryRunFailureFinding(run.dryRunFailure, detectedEnv), moduleRecord: dryRunFailureModuleRecord(run.dryRunFailure, detectedEnv) },
@@ -1693,6 +1707,11 @@ if (!existsSync(resolvedReportPath)) {
 }
 
 const rawReport = JSON.parse(readFileSync(resolvedReportPath, "utf8")) as StrykerReport;
+if (strykerExecution) {
+  const originalReport = rootScopedComparison?.report ?? rawReport;
+  const executionFailure = mutationCommandFailureReason(finalizeStrykerReceipt(originalReport), originalReport);
+  if (executionFailure) degradeExit(executionFailure);
+}
 const nativeComparisons = new Map<string, NativeMutationComparison>();
 // A replay proves only what its bound report contains. A live run can additionally reproduce a
 // suspect mutant with the native runner against an isolated copy of the same target and selection.

@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { readEntriesSafe } from "./fs-walk.js";
 import { copyFilteredSourceTree } from "./source-copy.js";
 import { mutationWorkspaceFinding, type MutationWorkspace, type MutationWorkspacePlan } from "./mutation-workspace.js";
-import { detectDryRunFailure, detectTestEnv, noTestSuiteFinding, summarizeMutationReport, toReportRows, type StrykerReport } from "./mutation-scan.js";
+import { detectDryRunFailure, detectTestEnv, mutationCommandFailureReason, mutationExecutionFailureReason, noTestSuiteFinding, summarizeMutationReport, toReportRows, type StrykerReport } from "./mutation-scan.js";
 import { createCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding } from "./findings.js";
 
@@ -173,10 +173,11 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       const discovery = command(process.execPath, [bin, "list", "--config", nativeConfig, `--json=${discoveryFile}`], cwd, join(storage, "discovery"), plan, workspace, versions, discoveryFile);
       result.receipts.push(discovery.receipt);
       assertCopiedInputs(plan, copy);
+      const discoveryFailure = mutationCommandFailureReason(discovery.receipt);
+      if (discoveryFailure) return stop("discovery-failed", `Native related-test discovery: ${discoveryFailure}`);
       let rows: Array<{ file?: string; name?: string; projectName?: string }>;
       try { const parsed: unknown = JSON.parse(readFileSync(discoveryFile, "utf8")); if (!Array.isArray(parsed)) throw new Error("not an array"); rows = parsed; }
       catch { return stop("discovery-failed", `Native related-test discovery produced no readable population (exit ${discovery.exit}); inspect discovery receipt`); }
-      if (discovery.exit !== 0) return stop("discovery-failed", `Native related-test discovery failed (exit ${discovery.exit}); ${rows.length} discovered test cases are not a completed measurement`);
       // Native evaluation owns root/dir semantics, including portable import.meta expressions.
       const observedConfigPath = `${nativeConfig}.native.json`;
       const observedConfig = parseJson(observedConfigPath);
@@ -191,10 +192,12 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
       const baseline = command(process.execPath, [bin, "related", "--run", "--config", nativeConfig, "--reporter=json", "--outputFile", baselineFile, ...workspace.selectedSources.map(path => join(copy, path))], cwd, join(storage, "baseline"), plan, workspace, versions, baselineFile);
       result.receipts.push(baseline.receipt);
       assertCopiedInputs(plan, copy);
+      const baselineFailure = mutationCommandFailureReason(baseline.receipt);
+      if (baselineFailure) return stop("dry-run-failed", `Native unmutated related-test baseline: ${baselineFailure}`);
       if (JSON.stringify(parseJson(observedConfigPath)) !== JSON.stringify(observedConfig)) return stop("discovery-failed", "Native Vitest root/dir changed between discovery and baseline; no mutation score is certified");
       const baselineReport = parseJson(baselineFile);
       result.testCount = typeof baselineReport?.numPassedTests === "number" ? baselineReport.numPassedTests : 0;
-      if (baseline.exit !== 0 || result.testCount === 0 || baselineReport?.success !== true) return stop("dry-run-failed", `Native unmutated related-test baseline failed or completed zero tests (exit ${baseline.exit}, passed ${result.testCount}); no mutation score is certified`);
+      if (result.testCount === 0 || baselineReport?.success !== true) return stop("dry-run-failed", `Native unmutated related-test baseline failed or completed zero tests (exit ${baseline.exit}, passed ${result.testCount}); no mutation score is certified`);
     }
     const configPath = join(storage, "effective-stryker.json");
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
@@ -203,6 +206,8 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
     result.receipts.push(run.receipt);
     result.artifactPath = artifactPath;
     const artifact = parseJson(artifactPath); result.artifact = artifact;
+    const executionFailure = mutationCommandFailureReason(run.receipt) ?? mutationExecutionFailureReason(artifact);
+    if (executionFailure) return stop("runner-invalid", `Mutation child: ${executionFailure}`);
     if (!artifact) return stop("missing-report", `Mutation child produced no readable machine report (exit ${run.exit}); original command receipt remains retained`);
     const raw = artifact.rawReport as StrykerReport | undefined;
     if (!raw?.files) {
@@ -225,7 +230,6 @@ function execute(plan: MutationWorkspacePlan, workspace: MutationWorkspace, stor
     const reason = (artifact.moduleRecord as { note?: string } | undefined)?.note;
     if (reason) return stop("runner-invalid", reason);
     if (workspace.runner !== "vitest") return stop("runner-invalid", "Stryker executed the supported runner and retained its test/report population; independent native related-test baseline verification is supported for Vitest only. Other runner populations remain explicitly unverified");
-    if (run.exit !== 0) return stop("runner-invalid", `Mutation child exited ${run.exit}; retained report is partial`);
     result.unassessedSources = result.unassessedSources.filter(path => !result.reportedSources.includes(path));
     return stop(result.unassessedSources.length ? "bounded" : "complete", `${result.reportedSources.length} production files reported; ${result.relatedTests.length || observedTests.length} related test files; ${result.unassessedSources.length} production files remain unassessed`);
   } catch (error) { return stop("discovery-failed", error instanceof Error ? error.message : String(error)); }
