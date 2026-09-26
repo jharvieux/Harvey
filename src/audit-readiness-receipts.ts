@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { delimiter, isAbsolute, relative, sep } from "node:path";
 import { constants as osConstants } from "node:os";
-import { serializeReadinessPlanV1, validateReadinessPlanV1, type ReadinessPlanV1, type ReadinessStageV1 } from "./audit-readiness.js";
+import { serializeReadinessPlanV1, validateReadinessPlanV1, type ReadinessPlanV1, type ReadinessStageV1, type ReadinessWorkspaceV1 } from "./audit-readiness.js";
 import { type ReadinessAuthorityReceipt, type ReadinessPlanBindingV1, type ReadinessSpawnRequest, type ReadinessStageAdmission } from "./audit-readiness-authority.js";
 import { type DisposableCleanupReceipt, type SourceSentinelV1 } from "./disposable-target.js";
 import { SecretRegistry, type SecretExcerptContext } from "./secret-argv.js";
@@ -105,6 +105,29 @@ export interface ReadinessExecutionV1 {
   cleanup: DisposableCleanupReceipt;
 }
 
+type StageExpectationBase = Pick<ReadinessStageV1, "id" | "kind" | "workspaceId" | "prerequisiteStageIds" | "requiredEnvNames" | "safety" | "provenance"> & {
+  /** Hash of retained execution configuration before redaction, excluding display prose. */
+  configurationSha256: string;
+};
+
+/** Redacted evidence expectations, never an executable plan or an admission capability. */
+export type ReadinessStageExpectationV1 = StageExpectationBase & (
+  | { assessment: "planned"; command: NonNullable<StageReceiptV1["command"]> & { actualCwd: null } }
+  | Pick<Extract<ReadinessStageV1, { assessment: "implicit" }>, "assessment" | "fulfilledByStageId" | "reason" | "falsifier">
+  | Pick<Extract<ReadinessStageV1, { assessment: "absent" }>, "assessment" | "reasonCode" | "reason" | "falsifier">
+  | Pick<Extract<ReadinessStageV1, { assessment: "not-assessed" }>, "assessment" | "reasonCode" | "reason" | "falsifier">
+);
+
+export interface ReadinessValidationProjectionV1 {
+  originalPlanSha256: string;
+  environment: { approvedNames: string[]; presentNames: string[] };
+  /** Paths and names are redacted display text; identity fields retain upstream V1 identities. */
+  workspaces: ReadinessWorkspaceV1[];
+  stages: ReadinessStageExpectationV1[];
+  workspaceObservations: ReadinessPlanV1["workspaceInventory"]["observations"];
+  applicationWorkspaceIds: ReadinessPlanV1["workspaceInventory"]["applicationWorkspaceIds"];
+}
+
 export interface ReadinessReceiptContext {
   /** Connect to B1 before admission; values live only in a private per-run registry. */
   readonly registerSecret: (value: string) => void;
@@ -142,7 +165,12 @@ function strings(value: unknown): asserts value is string[] {
   if (!Array.isArray(value)) invalid("text list");
   for (const item of value) text(item);
 }
-function equal(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b); }
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b, "en")).map(([key, nested]) => [key, canonical(nested)]));
+  return value;
+}
+function equal(a: unknown, b: unknown): boolean { return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b)); }
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const nested of Object.values(value)) immutable(nested);
@@ -246,6 +274,90 @@ function base(state: ReceiptState, stage: ReadinessStageV1, authority: Readiness
   };
 }
 
+/** Fingerprint only configuration retained by the plan; source files not retained there are not inferred. */
+export function readinessStageConfigurationSha256(plan: ReadinessPlanV1, stage: ReadinessStageV1): string {
+  const manager = plan.packageManager;
+  const configuration = {
+    assessment: stage.assessment, safety: stage.safety,
+    prerequisiteStageIds: [...stage.prerequisiteStageIds].sort(), requiredEnvNames: [...stage.requiredEnvNames].sort(),
+    command: stage.assessment === "planned" ? stage.command : null,
+    fulfilledByStageId: stage.assessment === "implicit" ? stage.fulfilledByStageId : null,
+    packageManager: manager.status === "selected" ? { status: manager.status, manager: manager.manager, requestedVersion: manager.requestedVersion ?? null } : { status: manager.status },
+    sources: stage.provenance.map((row) => ({
+      kind: row.kind, path: row.path, pointer: row.pointer ?? null, rawScript: row.rawScript ?? null,
+    })).sort((a, b) => JSON.stringify(canonical(a)).localeCompare(JSON.stringify(canonical(b)), "en")),
+  };
+  return createHash("sha256").update(JSON.stringify(canonical(configuration))).digest("hex");
+}
+
+function stageExpectation(state: ReceiptState, stage: ReadinessStageV1): ReadinessStageExpectationV1 {
+  const common: StageExpectationBase = {
+    id: stage.id, kind: stage.kind, workspaceId: stage.workspaceId, safety: stage.safety,
+    prerequisiteStageIds: [...stage.prerequisiteStageIds], requiredEnvNames: [...stage.requiredEnvNames],
+    provenance: safeProvenance(state, stage.provenance), configurationSha256: readinessStageConfigurationSha256(state.plan, stage),
+  };
+  if (stage.assessment === "planned") {
+    const command = base(state, stage, null).command;
+    if (!command) invalid("missing planned command expectation");
+    return { ...common, assessment: "planned", command: { ...command, actualCwd: null } };
+  }
+  const explanation = { reason: state.registry.redact(stage.reason), falsifier: state.registry.redact(stage.falsifier) };
+  if (stage.assessment === "implicit") return { ...common, ...explanation, assessment: stage.assessment, fulfilledByStageId: stage.fulfilledByStageId };
+  return { ...common, ...explanation, assessment: stage.assessment, reasonCode: stage.reasonCode } as ReadinessStageExpectationV1;
+}
+
+type ExecutionExpectations = Pick<ReadinessValidationProjectionV1, "originalPlanSha256" | "environment" | "stages">;
+
+function executionExpectations(state: ReceiptState): ExecutionExpectations {
+  return {
+    originalPlanSha256: state.planSha256,
+    environment: { approvedNames: [...state.approvedNames], presentNames: [...state.presentNames].sort() },
+    stages: state.plan.stages.map((stage) => stageExpectation(state, stage)),
+  };
+}
+
+/** Snapshot only after execution and secret registration settle. Nothing in this view authorizes work. */
+export function createReadinessValidationProjectionV1(context: ReadinessReceiptContext): ReadinessValidationProjectionV1 {
+  const state = stateOf(context);
+  const redact = (value: string): string => state.registry.redact(value);
+  const expectations = executionExpectations(state);
+  return immutable({
+    ...expectations,
+    stages: expectations.stages.sort((a, b) => a.id.localeCompare(b.id, "en")),
+    workspaces: state.plan.workspaces.map((workspace) => ({
+      id: workspace.id, dir: redact(workspace.dir), manifestPath: redact(workspace.manifestPath),
+      ...(workspace.name === undefined ? {} : { name: redact(workspace.name) }),
+      installStageId: workspace.installStageId, stageIds: [...workspace.stageIds].sort(),
+      provenance: safeProvenance(state, workspace.provenance),
+    })).sort((a, b) => a.id.localeCompare(b.id, "en")),
+    workspaceObservations: state.plan.workspaceInventory.observations.map((observation) => {
+      if (observation.kind === "excluded") return { ...observation, path: redact(observation.path), glob: redact(observation.glob), sourcePath: redact(observation.sourcePath) };
+      if (observation.kind === "unreadable-manifest") return { ...observation, path: redact(observation.path), reason: redact(observation.reason) };
+      return { ...observation, glob: redact(observation.glob), sourcePath: redact(observation.sourcePath), reason: redact(observation.reason) };
+    }),
+    applicationWorkspaceIds: [...state.plan.workspaceInventory.applicationWorkspaceIds].sort(),
+  });
+}
+
+/** Raw executable-plan exports remain V1 or are withheld; redacted plans cannot be re-admitted. */
+export function prepareReadinessPlanExportV1(context: ReadinessReceiptContext):
+  | { status: "ready"; json: string }
+  | ({ status: "withheld" } & ReadinessDiagnosticV1) {
+  const state = stateOf(context);
+  const unsafe = (value: unknown): boolean => {
+    if (typeof value === "string") return state.registry.redact(value) !== value;
+    if (value && typeof value === "object") return Object.values(value).some(unsafe);
+    return false;
+  };
+  if (unsafe(state.plan)) return {
+    status: "withheld", reasonCode: "approved-value-in-plan",
+    reason: "The raw executable plan cannot be exported because it contains a producer-known value. Use the redacted validation descriptor for delivery.",
+    provenance: ["producer receipt registry and original readiness plan"],
+    falsifier: "Remove the known value from the source plan and rediscover it before requesting a raw plan export.",
+  };
+  return { status: "ready", json: serializeReadinessPlanV1(state.plan) + "\n" };
+}
+
 export function createReadinessProcessReceipt(context: ReadinessReceiptContext, admission: Admitted, result: ReadinessProcessEvidenceV1, limits: ReadinessProcessLimitsV1): StageReceiptV1 {
   const state = stateOf(context);
   const stage = stageOf(state, admission.stageId);
@@ -305,7 +417,7 @@ export function createReadinessFailureReceipt(context: ReadinessReceiptContext, 
 export function createReadinessImplicitReceipt(context: ReadinessReceiptContext, stageId: StageId, fulfilledBy: StageReceiptV1): StageReceiptV1 {
   const state = stateOf(context);
   const stage = stageOf(state, stageId);
-  validateStage(state, fulfilledBy);
+  validateStage(executionExpectations(state), fulfilledBy);
   if (stage.assessment !== "implicit" || stage.fulfilledByStageId !== fulfilledBy.stageId || fulfilledBy.kind !== "install"
     || fulfilledBy.status !== "passed" || fulfilledBy.execution.kind !== "process") invalid("install lifecycle evidence");
   return immutable({
@@ -426,26 +538,26 @@ function validateToolchain(value: unknown): void {
     validateDiagnostic({ reasonCode: version.reasonCode, reason: version.reason, provenance: version.provenance, falsifier: version.falsifier });
   }
 }
-function validateStage(state: ReceiptState, value: unknown): asserts value is StageReceiptV1 {
+function validateStage(expected: ExecutionExpectations, value: unknown): asserts value is StageReceiptV1 {
   const row = value as Record<string, unknown>;
   const common = ["schemaVersion", "stageId", "kind", "workspaceId", "prerequisiteStageIds", "requiredEnvNames", "environment", "provenance", "authority", "command", "toolchain", "status", "execution"];
   object(value, [...common, ...(row?.status === "failed" ? ["diagnostic"] : row?.status === "not-assessed" ? ["diagnostic", "blockedByStageIds"] : [])]);
   if (row.schemaVersion !== 1 || !["passed", "failed", "not-assessed"].includes(row.status as string)) invalid("stage receipt version/status");
-  const stage = stageOf(state, row.stageId as StageId);
+  const stage = expected.stages.find((candidate) => candidate.id === row.stageId);
+  if (!stage) invalid("unplanned stage identity");
   if (row.kind !== stage.kind || row.workspaceId !== stage.workspaceId || !equal(row.prerequisiteStageIds, stage.prerequisiteStageIds)
-    || !equal(row.requiredEnvNames, stage.requiredEnvNames) || !equal(row.provenance, safeProvenance(state, stage.provenance))) invalid("stage plan binding");
+    || !equal(row.requiredEnvNames, stage.requiredEnvNames) || !equal(row.provenance, stage.provenance)) invalid("stage plan binding");
   const environment = object(row.environment, ["approvedNames", "presentNames"]);
   strings(environment.approvedNames); strings(environment.presentNames);
-  if (!equal(environment.approvedNames, state.approvedNames) || !equal(environment.presentNames, [...state.presentNames].sort())) invalid("environment names");
+  if (!equal(environment.approvedNames, expected.environment.approvedNames) || !equal(environment.presentNames, expected.environment.presentNames)) invalid("environment names");
   if (row.authority !== null) {
     validateAuthority(row.authority);
     const authority = row.authority as ReadinessAuthorityReceipt;
-    if (authority.stageId !== stage.id || !equal([...authority.approvedEnvNames].sort(), state.approvedNames)) invalid("authority stage binding");
+    if (authority.stageId !== stage.id || !equal([...authority.approvedEnvNames].sort(), expected.environment.approvedNames)) invalid("authority stage binding");
   }
   if (stage.assessment === "planned") {
     const command = object(row.command, ["bin", "args", "plannedCwd", "actualCwd", "source"]);
-    const expected = base(state, stage, null).command;
-    if (!expected || !equal({ ...command, actualCwd: null }, expected) || (command.actualCwd !== null && (typeof command.actualCwd !== "string" || !isAbsolute(command.actualCwd)))) invalid("planned command binding");
+    if (!equal({ ...command, actualCwd: null }, stage.command) || (command.actualCwd !== null && (typeof command.actualCwd !== "string" || !isAbsolute(command.actualCwd)))) invalid("planned command binding");
   } else if (row.command !== null) invalid("unplanned command");
   if (row.toolchain !== null) validateToolchain(row.toolchain);
   const execution = row.execution as Record<string, unknown>;
@@ -576,7 +688,8 @@ export function closeReadinessExecutionV1(context: ReadinessReceiptContext, inpu
   if (input.binding.schemaVersion !== 1 || input.binding.planSha256 !== state.planSha256) invalid("plan hash binding");
   validateSource(input.binding.source);
   validateCleanup(input.cleanup, input.binding.source);
-  for (const receipt of input.receipts) validateStage(state, receipt);
+  const expected = executionExpectations(state);
+  for (const receipt of input.receipts) validateStage(expected, receipt);
   const value: ReadinessExecutionV1 = {
     schemaVersion: 1, kind: "harvey-audit-readiness-execution", planSha256: state.planSha256,
     source: structuredClone(input.binding.source),
@@ -587,15 +700,20 @@ export function closeReadinessExecutionV1(context: ReadinessReceiptContext, inpu
 }
 
 export function validateReadinessExecutionV1(context: ReadinessReceiptContext, input: unknown): ReadinessExecutionV1 {
-  const state = stateOf(context);
+  return validateReadinessExecutionAgainstExpectationsV1(executionExpectations(stateOf(context)), input);
+}
+
+/** Pure evidence checks shared by the live producer and offline importer; never grants execution authority. */
+export function validateReadinessExecutionAgainstExpectationsV1(expected: ExecutionExpectations, input: unknown, expectedSource?: SourceSentinelV1): ReadinessExecutionV1 {
   const row = object(input, ["schemaVersion", "kind", "planSha256", "source", "status", "stages", "cleanup"]);
-  if (row.schemaVersion !== 1 || row.kind !== "harvey-audit-readiness-execution" || row.planSha256 !== state.planSha256 || !Array.isArray(row.stages)) invalid("execution version/plan binding");
+  if (row.schemaVersion !== 1 || row.kind !== "harvey-audit-readiness-execution" || row.planSha256 !== expected.originalPlanSha256 || !Array.isArray(row.stages)) invalid("execution version/plan binding");
   validateSource(row.source); validateCleanup(row.cleanup, row.source);
-  for (const stage of row.stages) validateStage(state, stage);
+  if (expectedSource !== undefined) { validateSource(expectedSource); if (!equal(row.source, expectedSource)) invalid("expected source binding"); }
+  for (const stage of row.stages) validateStage(expected, stage);
   const stages = row.stages as StageReceiptV1[];
   const ids = stages.map((stage) => stage.stageId);
-  const expected = state.plan.stages.map((stage) => stage.id).sort((a, b) => a.localeCompare(b, "en"));
-  if (!equal(ids, expected)) invalid("missing, duplicate, unknown, or unordered stage receipt");
+  const expectedIds = expected.stages.map((stage) => stage.id).sort((a, b) => a.localeCompare(b, "en"));
+  if (!equal(ids, expectedIds)) invalid("missing, duplicate, unknown, or unordered stage receipt");
   for (const stage of stages) {
     if (stage.execution.kind === "install-lifecycle") {
       const fulfilledByStageId = stage.execution.fulfilledByStageId;

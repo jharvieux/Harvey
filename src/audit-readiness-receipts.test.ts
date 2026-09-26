@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { discoverReadinessPlan, type ReadinessStageV1 } from "./audit-readiness.js";
 import { admitReadinessStage, bindReadinessPlanV1, createReadinessAdmission, type ReadinessSpawnRequest, type ReadinessStageAdmission } from "./audit-readiness-authority.js";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget } from "./disposable-target.js";
+import { createReadinessArtifactsV1, parseReadinessArtifactsV1 } from "./audit-readiness-artifacts.js";
 import {
   closeReadinessExecutionV1, createReadinessFailureReceipt, createReadinessImplicitReceipt, createReadinessNotAssessedReceipt,
   createReadinessProcessReceipt, createReadinessReceiptContext, prepareReadinessSpawn,
@@ -166,6 +167,16 @@ function processStage(receipts: StageReceiptV1[], kind: ReadinessStageV1["kind"]
   return receipt;
 }
 
+/** Rebind the file hash so malformed lifecycle facts must fail the shared evidence core itself. */
+function importChanged(f: Awaited<ReturnType<typeof fixture>>, original: ReturnType<typeof closeReadinessExecutionV1>, changed = original) {
+  const pair = createReadinessArtifactsV1(f.context, { binding: f.binding, execution: original });
+  const executionJson = JSON.stringify(changed, null, 2) + "\n";
+  const descriptor = structuredClone(pair.descriptor);
+  descriptor.execution.sha256 = createHash("sha256").update(executionJson).digest("hex");
+  descriptor.execution.bytes = Buffer.byteLength(executionJson);
+  return parseReadinessArtifactsV1({ descriptorJson: JSON.stringify(descriptor), executionJson });
+}
+
 describe("versioned receipt closure", () => {
   it("retains real success facts, names-only environment, source/argv provenance and canonical independent stages", async () => {
     const f = await fixture();
@@ -191,6 +202,7 @@ describe("versioned receipt closure", () => {
     expect(serialized).not.toContain('"env":');
     expect(JSON.stringify(f.context)).toBe("{}");
     expect(validateReadinessExecutionV1(f.context, JSON.parse(serialized))).toEqual(execution);
+    expect(importChanged(f, execution).execution).toEqual(execution);
     await expect(lstat(f.target.root)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(lstat(join(f.source, "physical-stage-ran"))).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -200,6 +212,7 @@ describe("versioned receipt closure", () => {
     const receipts = await execute(f);
     const cleanup = await cleanupDisposableTarget(f.target);
     const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts, cleanup });
+    expect(importChanged(f, execution).execution).toEqual(execution);
     const test = processStage(execution.stages);
     expect(test.status).toBe("failed");
     expect(execution.status).toBe("failed");
@@ -253,6 +266,7 @@ describe("versioned receipt closure", () => {
     const changed = structuredClone(execution);
     changed.stages = changed.stages.filter((row) => row.kind !== "install");
     expect(() => validateReadinessExecutionV1(f.context, changed)).toThrow(/missing|duplicate/);
+    expect(() => importChanged(f, execution, changed)).toThrow(/missing|duplicate/);
     expect(() => createReadinessImplicitReceipt(f.context, codegen.stageId, withheld(f).find((row) => row.kind === "install")!)).toThrow(/lifecycle/);
   });
 
@@ -270,6 +284,7 @@ describe("versioned receipt closure", () => {
       if (receipt.execution.kind !== "process") throw new Error("missing process");
       edit(receipt.execution.process as unknown as Record<string, unknown>);
       expect(() => validateReadinessExecutionV1(f.context, value)).toThrow(/Invalid readiness/);
+      expect(() => importChanged(f, execution, value)).toThrow(/Invalid readiness/);
     };
     mutate((value) => { delete value.close; });
     mutate((value) => { value.close = null; });
@@ -279,9 +294,21 @@ describe("versioned receipt closure", () => {
     mutate((value) => { (value.stdout as { complete: boolean }).complete = false; });
     mutate((value) => { (value.stderr as { truncated: boolean }).truncated = true; });
     mutate((value) => { (value.termination as { tree: string }).tree = "unconfirmed"; });
+    mutate((value) => { value.queuedAt = "not-a-timestamp"; });
+    mutate((value) => { value.queuedAt = "2099-01-01T00:00:00.000Z"; });
+    mutate((value) => { value.durationMs = -1; });
+    mutate((value) => { value.pid = 0; });
+    mutate((value) => { value.fromFirstByteMs = null; });
+    mutate((value) => { (value.exit as { signal: string | null }).signal = "NOT_A_SIGNAL"; });
+    mutate((value) => { (value.close as { code: number }).code = 1; });
+    mutate((value) => { (value.stdout as { omittedBytes: number }).omittedBytes++; });
+    mutate((value) => { (value.stdout as { sha256: string }).sha256 = "not-a-digest"; });
+    mutate((value) => { (value.stdout as { head: string }).head = "x".repeat(limits.headBytes + 1); });
+    mutate((value) => { (value.termination as { stdioForcedClosed: boolean }).stdioForcedClosed = true; });
     const unknown = structuredClone(execution);
     unknown.stages[0]!.stageId = "stage:workspace:unknown:test";
     expect(() => validateReadinessExecutionV1(f.context, unknown)).toThrow(/identity/);
+    expect(() => importChanged(f, execution, unknown)).toThrow(/identity/);
   });
 
   it("never reports clean after a physical cleanup identity failure or source mutation", async () => {
@@ -296,6 +323,7 @@ describe("versioned receipt closure", () => {
       expect(execution.status).toBe("failed");
       const forged = structuredClone(execution); forged.status = "passed";
       expect(() => serializeReadinessExecutionV1(f.context, forged)).toThrow(/aggregate/);
+      expect(() => importChanged(f, execution, forged)).toThrow(/aggregate/);
     }
   });
 
