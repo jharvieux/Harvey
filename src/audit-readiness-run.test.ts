@@ -6,12 +6,17 @@ import { discoverReadinessPlan, type ReadinessStageV1 } from "./audit-readiness.
 import { bindReadinessPlanV1 } from "./audit-readiness-authority.js";
 import { discloseReadinessSetupFailure, executeBoundReadinessPlan, parseReadinessAuthorizations } from "./audit-readiness-run.js";
 import { captureSourceSentinel } from "./disposable-target.js";
+import type { ReadinessContainmentConfig } from "./readiness-process-containment.js";
+import { parseReadinessArtifactsV1 } from "./audit-readiness-artifacts.js";
 
 const roots: string[] = [];
+const containment: ReadinessContainmentConfig | undefined = process.env.HARVEY_READINESS_DOCKER_SOCKET && process.env.HARVEY_READINESS_DOCKER_IMAGE ? {
+  kind: "docker-local", socketPath: process.env.HARVEY_READINESS_DOCKER_SOCKET, imageId: process.env.HARVEY_READINESS_DOCKER_IMAGE,
+} : undefined;
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 async function fixture(failCodegen = false) {
-  const root = await mkdtemp(join(tmpdir(), "harvey-readiness-integrated-"));
+  const root = await mkdtemp(join(process.env.HARVEY_READINESS_SHARED_PARENT ?? tmpdir(), "harvey-readiness-integrated-"));
   roots.push(root);
   const source = join(root, "source");
   const tools = join(root, "tools");
@@ -23,6 +28,9 @@ async function fixture(failCodegen = false) {
   await writeFile(join(source, "package.json"), JSON.stringify(pkg));
   await writeFile(join(source, "package-lock.json"), JSON.stringify({ name: pkg.name, version: pkg.version, lockfileVersion: 3, packages: { "": pkg } }));
   await writeFile(join(source, "source-canary"), "unchanged source");
+  for (const [kind, file] of Object.entries({ codegen: "generator.cjs", build: "builder.cjs", lint: "linter.cjs", test: "tester.cjs" })) {
+    await writeFile(join(source, file), `require('node:fs').writeFileSync('${kind}.marker', process.cwd()); process.stdout.write('stage ${kind} ' + process.env.READINESS_TOKEN); ${kind === "codegen" && failCodegen ? "process.exitCode=7;" : ""}`);
+  }
   const npm = join(tools, "npm");
   await writeFile(npm, `#!${process.execPath}
 const fs = require('node:fs');
@@ -43,10 +51,11 @@ if (kind === 'codegen' && ${failCodegen}) process.exitCode = 7;
   }));
   const run = () => executeBoundReadinessPlan({
     sourceRoot: source, plan, binding, allowTargetInstall: true, stageAuthorizations: authorizations,
-    approvedEnvNames: ["READINESS_TOKEN"], environment: { READINESS_TOKEN: "fixture-secret" }, toolchainPath: tools,
-    limits: { timeoutMs: 3_000, headBytes: 512, tailBytes: 512 },
+    approvedEnvNames: ["READINESS_TOKEN"], environment: { READINESS_TOKEN: "fixture-secret" }, containment,
+    disposableTempParent: root,
+    limits: { timeoutMs: 5_000, headBytes: 2_048, tailBytes: 512 },
   });
-  return { source, sentinel, plan, run };
+  return { source, sentinel, plan, run, root, authorizations };
 }
 
 function row(stages: readonly { kind: ReadinessStageV1["kind"] }[], kind: ReadinessStageV1["kind"]) {
@@ -94,22 +103,22 @@ describe("bound readiness production composition (#1897)", () => {
     expect(result.execution.cleanup).toMatchObject({ status: "not-required", root: null });
   });
 
-  it("executes the exact plan in a removed disposable copy and emits one real receipt per stage", async () => {
+  it.skipIf(!containment)("executes the exact plan in a removed disposable copy and emits one real receipt per stage", async () => {
     const fixtureState = await fixture();
     const { execution, json } = await fixtureState.run();
     expect(execution.stages).toHaveLength(fixtureState.plan.stages.length);
     expect(new Set(execution.stages.map((stage) => stage.stageId)).size).toBe(execution.stages.length);
     expect(execution.cleanup).toMatchObject({ status: "passed", removal: { status: "removed" }, source: { status: "passed" } });
     for (const kind of ["install", "codegen", "build", "lint", "test"] as const) {
-      expect(row(execution.stages, kind)).toMatchObject({ status: "passed", execution: { kind: "process", process: { succeeded: true, exit: { code: 0 }, close: { code: 0 } } } });
+      expect(row(execution.stages, kind)).toMatchObject({ status: "passed", execution: { kind: "process", process: { succeeded: true, exit: { code: 0 }, close: { code: 0 }, containment: { kind: "docker-pid-namespace", imageId: containment!.imageId, namespace: "terminated", targetWork: "begun", metadata: "verified", cleanup: "removed" } } } });
     }
     expect(row(execution.stages, "typecheck")).toMatchObject({ status: "not-assessed" });
     expect(json).not.toContain("fixture-secret");
     expect(await readFile(join(fixtureState.source, "source-canary"), "utf8")).toBe("unchanged source");
     expect(await captureSourceSentinel(fixtureState.source)).toEqual(fixtureState.sentinel);
-  });
+  }, 45_000);
 
-  it("counts a failed generator, withholds only descendants and still runs independent lint", async () => {
+  it.skipIf(!containment)("counts a failed generator, withholds only descendants and still runs independent lint", async () => {
     const fixtureState = await fixture(true);
     const { execution } = await fixtureState.run();
     expect(row(execution.stages, "codegen")).toMatchObject({ status: "failed", execution: { kind: "process", process: { close: { code: 7 } } } });
@@ -117,6 +126,18 @@ describe("bound readiness production composition (#1897)", () => {
     expect(row(execution.stages, "lint")).toMatchObject({ status: "passed", execution: { kind: "process" } });
     expect(execution.cleanup.status).toBe("passed");
     expect(execution.status).toBe("failed");
+  }, 45_000);
+
+  it("discloses unconfigured containment without executing a host fallback", async () => {
+    const state = await fixture();
+    const result = await executeBoundReadinessPlan({ sourceRoot: state.source, plan: state.plan,
+      binding: bindReadinessPlanV1(state.plan, state.sentinel), allowTargetInstall: true,
+      stageAuthorizations: state.authorizations, approvedEnvNames: [], environment: {}, disposableTempParent: state.root });
+    expect(result.execution.stages).toHaveLength(state.plan.stages.length);
+    expect(result.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+    expect(result.execution.cleanup).toMatchObject({ status: "passed", removal: { status: "removed" }, source: { status: "passed" } });
+    expect(parseReadinessArtifactsV1({ descriptorJson: result.descriptorJson, executionJson: result.json }).execution).toEqual(result.execution);
+    expect(await captureSourceSentinel(state.source)).toEqual(state.sentinel);
   });
 
   it("withholds every executable stage without a stage-specific operator authorization", async () => {
@@ -125,10 +146,11 @@ describe("bound readiness production composition (#1897)", () => {
       sourceRoot: fixtureState.source, plan: fixtureState.plan,
       binding: bindReadinessPlanV1(fixtureState.plan, fixtureState.sentinel),
       allowTargetInstall: false, stageAuthorizations: [], approvedEnvNames: [], environment: {},
+      containment, disposableTempParent: fixtureState.root,
       limits: { timeoutMs: 3_000 },
     });
     expect(execution.stages.every((stage) => stage.status === "not-assessed")).toBe(true);
-    expect(execution.stages.filter((stage) => stage.kind === "install")).toMatchObject([{ status: "not-assessed", diagnostic: { reasonCode: "authority-missing" } }]);
+    expect(execution.stages.filter((stage) => stage.kind === "install")).toMatchObject([{ status: "not-assessed", diagnostic: { reasonCode: containment ? "authority-missing" : "containment-not-configured" } }]);
     expect(execution.cleanup.status).toBe("passed");
   });
 });

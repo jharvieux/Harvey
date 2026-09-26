@@ -486,12 +486,18 @@ if (readinessExecuteOut && readinessPlan && readinessBinding) {
     // Without a completely valid name set the CLI must not read values or claim that a safely
     // redacted artifact was produced. Old destination files remain untouched and fail freshness.
     if (!readinessAuthorizations || capturedReadinessAuthorization.namesValidated) {
-      const result = discloseReadinessSetupFailure(readinessPlan, readinessBinding,
-        capturedReadinessAuthorization.redactionNames.length > 0
-          ? { names: capturedReadinessAuthorization.redactionNames, environment: process.env }
-          : undefined);
-      readinessExecutionJson = result.json;
-      readinessValidationJson = result.descriptorJson;
+      try {
+        const result = discloseReadinessSetupFailure(readinessPlan, readinessBinding,
+          capturedReadinessAuthorization.redactionNames.length > 0
+            ? { names: capturedReadinessAuthorization.redactionNames, environment: process.env }
+            : undefined);
+        readinessExecutionJson = result.json;
+        readinessValidationJson = result.descriptorJson;
+      } catch {
+        // Known values in preserved identities cannot be safely redacted. Withhold
+        // readiness artifacts and let their delivery checks fail after M1–M10 finish.
+        readinessExecutionFailed = true;
+      }
     }
   }
   if (authorization) {
