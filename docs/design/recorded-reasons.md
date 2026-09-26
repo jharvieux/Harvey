@@ -266,7 +266,7 @@ Two patterns, and there is no third:
 
 ```bash
 # guard the path, then read it
-test -f <path> || exit 127; grep -q "<pattern>" <path>
+test -f <path> || exit 127; grep -q <pattern> <path>
 
 # guard the tool and the fetch, then read the result
 command -v gh >/dev/null 2>&1 || exit 127; gh issue view 1341 --json state --jq .state > /tmp/f 2>/dev/null || exit 127; grep -qix closed /tmp/f && exit 0 || exit 1
