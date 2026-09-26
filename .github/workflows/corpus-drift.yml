@@ -165,11 +165,11 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
       - name: Check every pinned advisory snapshot before allocating hosted work
-        if: steps.route.outputs.relevant == 'true'
+        if: steps.route.outputs.relevant == 'true' && !inputs.alert_drill && !inputs.liveness_drill
         run: |
           pnpm exec tsx src/cli/corpus-advisory-freshness.ts --out "$RUNNER_TEMP/corpus-advisory-freshness.json" ${{ github.event_name == 'schedule' && '--fail-warning' || '' }}
       - name: Retain advisory freshness receipt
-        if: always() && steps.route.outputs.relevant == 'true'
+        if: always() && steps.route.outputs.relevant == 'true' && !inputs.alert_drill && !inputs.liveness_drill
         uses: actions/upload-artifact@v4
         with:
           name: corpus-advisory-freshness
