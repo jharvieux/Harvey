@@ -8,7 +8,8 @@ and fails the scheduled run when any snapshot is within 72 hours of expiry. That
 reaches the existing corpus alert issue. A relevant PR, merge-group or push run fails
 before hosted work when a snapshot is already expired, invalid, or could expire within
 the six-hour run budget. Runtime consumers still check freshness when they read each
-payload; a start-of-run receipt cannot certify a later read.
+payload. A start-of-run receipt covers only the preflight instant; consumers
+validate freshness again at each read.
 
 When the warning fires, the owner prepares a reviewed refresh before the earliest
 expiry. Confirm that each target's pinned commit is unchanged, obtain authorization for
