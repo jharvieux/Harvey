@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, join, relative, resolve } from "node:path";
 import { validateReadinessEnvironmentNames } from "./audit-readiness-authority.js";
 
-export interface CapturedReadinessAuthorization {
+interface CapturedReadinessAuthorization {
   value?: unknown;
   parsed: boolean;
   namesValidated: boolean;
@@ -35,7 +35,7 @@ export function captureReadinessAuthorization(
   return { value, parsed: true, namesValidated: true, redactionNames, redactionValues: [...new Set(redactionValues)].sort((a, b) => b.length - a.length) };
 }
 
-export function redactCliText(text: string, values: readonly string[]): string {
+function redactCliText(text: string, values: readonly string[]): string {
   let redacted = text;
   for (const value of values) if (value) redacted = redacted.split(value).join("[REDACTED]");
   return redacted;
@@ -89,7 +89,7 @@ export function assertDistinctArtifactDestinations(destinations: readonly Reques
   }
 }
 
-export interface CurrentArtifactWrite {
+interface CurrentArtifactWrite {
   bytes: number;
   sha256: string;
 }

@@ -33,7 +33,7 @@ export interface ReadinessValidationDescriptorV1 extends ReadinessValidationProj
   proof: ReadinessArtifactProofV1;
 }
 
-export interface ReadinessOfflineExpectationsV1 {
+interface ReadinessOfflineExpectationsV1 {
   descriptorSha256?: string;
   executionSha256?: string;
   originalPlanSha256?: string;

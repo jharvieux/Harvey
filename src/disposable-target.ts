@@ -15,7 +15,7 @@ const EXCLUDED_NAMES = new Set([
   ".pnp.cjs", ".pnp.loader.mjs", ".pnp.data.json", ".npmrc", ".yarnrc", ".yarnrc.yml",
 ]);
 
-export interface DisposableTargetLimits {
+interface DisposableTargetLimits {
   maxEntries?: number;
   maxBytes?: number;
   maxDepth?: number;
@@ -58,11 +58,11 @@ export interface DisposableTarget {
   readonly copy: { readonly files: number; readonly bytes: number; readonly excluded: readonly string[] };
 }
 
-export type DisposableTargetCreation =
+type DisposableTargetCreation =
   | { status: "ready"; target: DisposableTarget }
   | { status: "not-assessed"; reasonCode: string; reason: string; falsifier: string; cleanup: DisposableCleanupReceipt };
 
-export type RunRootVerification =
+type RunRootVerification =
   | { status: "verified"; root: string; cwd: string }
   | { status: "not-assessed"; reasonCode: string; reason: string; falsifier: string };
 

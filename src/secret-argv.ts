@@ -55,7 +55,7 @@ export class SecretInArgvError extends Error {}
 // is about to pass and the secrets it holds; a secret that reached argv throws before the spawn
 // rather than being discovered by a later inspection. The message names the site and the argv index
 // but NEVER the secret — this throws into logs Harvey writes.
-export interface SecretRegistryOptions {
+interface SecretRegistryOptions {
   /** Execution admission knows these are approved values; no length floor or placeholder exemption applies. */
   includeShortValues?: boolean;
 }
