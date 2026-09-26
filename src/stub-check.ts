@@ -127,7 +127,7 @@ export function interruptedStubCheckModuleRecord(runs: readonly StubCheckRun[]):
   const details = interrupted.map((run) => `${run.file}:${run.line} \`${run.exportName}\`: ${run.classification.status === "interrupted" ? run.classification.reason : ""}`).join("; ");
   return {
     status: "partial",
-    note: `M8 stub-check is partial: ${interrupted.length} of ${runs.length} stubbed test command(s) was interrupted and cannot prove deletion coverage. ${details}. Completed non-zero test exits remain distinct and count as caught deletions. [MEASURED from retained native command receipts; falsifier: rerun pnpm mutation-scan <target> --stub-check --out /tmp/m8-stub.json, then run node -e 'const a=require(process.argv[1]);process.exit(a.runs?.every(r=>r.classification?.status==="completed")?0:1)' /tmp/m8-stub.json].`,
+    note: `M8 stub-check is partial: ${interrupted.length} of ${runs.length} stubbed test command(s) was interrupted and cannot prove deletion coverage. ${details}. Completed non-zero test exits remain distinct and count as caught deletions. [MEASURED from retained native command receipts; falsifier: rerun pnpm mutation-scan <target> --stub-check --out /tmp/m8-stub.json, then run node -e 'const a=require(process.argv[1]);process.exit(a.baseline?.classification?.status==="completed"&&a.baseline.classification.suitePassed===true&&Array.isArray(a.runs)&&a.runs.length>0&&a.runs.every(r=>r.classification?.status==="completed")?0:1)' /tmp/m8-stub.json].`,
   };
 }
 

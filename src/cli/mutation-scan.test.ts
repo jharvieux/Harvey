@@ -10,7 +10,7 @@ import "../__tests__/mutation-runner-validity.js";
 // The same fixtures exercise #252's suite-absent threshold end-to-end through the CLI: a harness
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -670,6 +670,31 @@ switch (process.env.STUB_OUTCOME) {
       expect(parsed.runs[0]).toMatchObject({ suitePassed: false, classification: { status: "completed", suitePassed: false } });
       expect(parsed.allRunsFailed).toBe(true);
       expect(parsed).not.toHaveProperty("moduleRecord");
+    }
+  });
+
+  it("requires a passing baseline and nonempty completed runs in the emitted stub falsifier (#2221)", async () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const control = mkdtempSync(join(tmpdir(), "harvey-stub-falsifier-"));
+    dirs.push(control);
+    const runner = join(control, "runner.cjs");
+    writeFileSync(runner, "const fs = require('node:fs'); if (fs.readFileSync('src/add.ts', 'utf8').includes('return undefined;')) process.kill(process.pid, 'SIGKILL');\n");
+    const interrupted = await runCli(repo, ["--stub-check", "--test-cmd", `node ${runner}`]);
+    const interruptedArtifact = JSON.parse(interrupted.out);
+    const program = interruptedArtifact.moduleRecord.note.match(/then run node -e '([^']+)'/)[1];
+    const baselineFailed = await runCli(repo, ["--stub-check", "--test-cmd", "false"]);
+    const completed = await runCli(repo, ["--stub-check", "--test-cmd", "true"]);
+    const noExports = fixtureRepo({ "src/add.ts": "const add = (a: number, b: number) => a + b;\n", "src/add.test.ts": COVERING_TEST });
+    const empty = await runCli(noExports, ["--stub-check", "--test-cmd", "true"]);
+    expect(JSON.parse(baselineFailed.out)).toMatchObject({ baselineFailed: true, runs: [] });
+    expect(JSON.parse(empty.out)).toMatchObject({ runs: [], baseline: { classification: { suitePassed: true } } });
+    expect(JSON.parse(completed.out).runs.length).toBeGreaterThan(0);
+    for (const [name, result, expected] of [["interrupted", interrupted, 1], ["baseline-failed", baselineFailed, 1], ["empty", empty, 1], ["completed", completed, 0]] as const) {
+      expect(result.status).toBe(0);
+      const artifact = join(control, `${name}.json`);
+      writeFileSync(artifact, result.out);
+      const check = spawnSync(process.execPath, ["-e", program, artifact], { encoding: "utf8", timeout: 2000 });
+      expect(check.status, `${name}: ${check.stderr}`).toBe(expected);
     }
   });
 
