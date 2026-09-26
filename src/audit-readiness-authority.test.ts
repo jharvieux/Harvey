@@ -227,7 +227,7 @@ describe("environment names and values", () => {
     }
   });
 
-  it.each(["NODE_OPTIONS", "NODE_PATH", "PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NPM_CONFIG_USERCONFIG", "BASH_ENV", "GIT_CONFIG", "HTTP_PROXY", "INVALID-NAME"])("refuses approved environment overrides of %s", async (name) => {
+  it.each(["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NPM_CONFIG_USERCONFIG", "BASH_ENV", "GIT_CONFIG", "HTTP_PROXY", "INVALID-NAME"])("refuses approved environment overrides of %s", async (name) => {
     const { plan, binding } = await fixture();
     expect(() => createReadinessAdmission(plan, binding, optionsFor(plan, { approvedEnvNames: [name], environment: { [name]: "value" } }))).toThrow(/protected runtime\/toolchain control/);
   });
