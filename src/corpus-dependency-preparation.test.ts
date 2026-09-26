@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -463,12 +464,24 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     writeFileSync(preload, String.raw`
 const fs = require("node:fs");
 if (process.env.HARVEY_KNIP_STDIN_CONTROL === "wait") {
-  const timeout = setTimeout(() => process.exit(37), 250);
+  let inputEnded = false;
+  let watchdog;
   process.stdin.resume();
   process.stdin.once("end", () => {
-    clearTimeout(timeout);
+    inputEnded = true;
+    if (watchdog) clearTimeout(watchdog);
     fs.writeFileSync(process.env.HARVEY_KNIP_STDIN_MARKER, "ended");
   });
+  const originalWrite = process.stdout.write;
+  process.stdout.write = function (...args) {
+    const chunk = args[0];
+    const nonempty = typeof chunk === "string" ? Buffer.byteLength(chunk) > 0 : (chunk?.byteLength ?? 0) > 0;
+    if (!inputEnded && !watchdog && nonempty) watchdog = setTimeout(() => process.exit(37), 250);
+    return Reflect.apply(originalWrite, this, args);
+  };
+  const delay = Number(process.env.HARVEY_KNIP_STARTUP_DELAY_MS ?? 0);
+  const deadline = performance.now() + delay;
+  while (performance.now() < deadline) { /* controlled preload startup delay */ }
 } else if (process.env.HARVEY_KNIP_STDIN_CONTROL === "nonzero") {
   process.exit(37);
 }
@@ -476,8 +489,10 @@ if (process.env.HARVEY_KNIP_STDIN_CONTROL === "wait") {
     const originalNodeOptions = process.env.NODE_OPTIONS;
     const originalControl = process.env.HARVEY_KNIP_STDIN_CONTROL;
     const originalMarker = process.env.HARVEY_KNIP_STDIN_MARKER;
+    const originalDelay = process.env.HARVEY_KNIP_STARTUP_DELAY_MS;
     process.env.NODE_OPTIONS = `${originalNodeOptions ?? ""} --require=${preload}`.trim();
     process.env.HARVEY_KNIP_STDIN_MARKER = marker;
+    process.env.HARVEY_KNIP_STARTUP_DELAY_MS = "350";
     const options = {
       targetDir: target,
       cacheDir,
@@ -492,6 +507,16 @@ if (process.env.HARVEY_KNIP_STDIN_CONTROL === "wait") {
       expect(completed).toMatchObject({ complete: true, status: "miss", cacheable: true });
       expect(readFileSync(marker, "utf8")).toBe("ended");
 
+      rmSync(marker);
+      const missingEof = await new Promise<{ code?: number | string | null; stdout: string }>((resolveRun) => {
+        execFile(process.execPath, ["--eval", 'process.stdout.write("READY")'], {
+          cwd: target,
+          env: process.env,
+          encoding: "utf8",
+        }, (error, stdout) => resolveRun({ code: error?.code, stdout }));
+      });
+      expect(missingEof).toEqual({ code: 37, stdout: "READY" });
+
       process.env.HARVEY_KNIP_STDIN_CONTROL = "nonzero";
       const failed = await prepareCorpusDependencies({ ...options, targetRevision: "nonzero" });
       expect(failed).toMatchObject({ complete: true, status: "miss", cacheable: false });
@@ -503,6 +528,8 @@ if (process.env.HARVEY_KNIP_STDIN_CONTROL === "wait") {
       else process.env.HARVEY_KNIP_STDIN_CONTROL = originalControl;
       if (originalMarker === undefined) delete process.env.HARVEY_KNIP_STDIN_MARKER;
       else process.env.HARVEY_KNIP_STDIN_MARKER = originalMarker;
+      if (originalDelay === undefined) delete process.env.HARVEY_KNIP_STARTUP_DELAY_MS;
+      else process.env.HARVEY_KNIP_STARTUP_DELAY_MS = originalDelay;
     }
   });
 
