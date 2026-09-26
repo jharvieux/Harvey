@@ -18,7 +18,8 @@
 // a security taxonomy gets its CWE, and a non-security one (a quality/perf/coverage signal) is
 // recorded as no-clean-CWE WITH A REASON. `cwe-map.test.ts` discovers taxonomy expressions across
 // detector/scan sources, binds dynamic families to their source inventory, and rejects unresolved
-// emission shapes, so a new producer cannot quietly ship without a CWE decision.
+// emission shapes, so a new producer
+// cannot quietly ship without a CWE decision.
 
 import type { Finding } from "./findings.js";
 
