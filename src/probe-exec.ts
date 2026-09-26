@@ -7,8 +7,8 @@
 // A probe's view of the outside world has to be identical in both, so there is one of these.
 //
 // Await both child streams: quality-scan prints the jscpd/knip scope counts M4 and M5 need on
-// stderr, and the event loop must remain available while a module CLI runs. stderr is kept SEPARATE from `output` — M4/M5's non-capturing path parses
-// stdout as a bare Finding[] JSON, so merging the streams would break it.
+// stderr, and the event loop must remain available while a module CLI runs. Keep stderr separate
+// from `output`: M4/M5 parse stdout as bare Finding[] JSON, so merging the streams would break it.
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -48,7 +48,11 @@ function terminalState(result: ChildResult): CommandTerminalState {
 }
 
 function executeChild(command: string, argv: string[], options: ProbeExecOptions): Promise<ChildResult> {
-  return new Promise((resolve) => {
+  if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) {
+    return Promise.reject(new RangeError("command timeoutMs must be a positive integer"));
+  }
+  return new Promise((resolve, reject) => {
+    const began = performance.now();
     const child = spawn(command, argv, {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: options.cwd,
@@ -61,6 +65,7 @@ function executeChild(command: string, argv: string[], options: ProbeExecOptions
     let outputLimited = false;
     let timedOut = false;
     let error: NodeJS.ErrnoException | undefined;
+    let streamError: Error | undefined;
     let deadline: NodeJS.Timeout | undefined;
     let escalation: NodeJS.Timeout | undefined;
     let streamDeadline: NodeJS.Timeout | undefined;
@@ -86,6 +91,11 @@ function executeChild(command: string, argv: string[], options: ProbeExecOptions
     };
 
     for (const name of ["stdout", "stderr"] as const) {
+      child[name].on("error", (cause: Error) => {
+        streamError = new Error(`command ${name} stream failed: ${cause.message}`, { cause });
+        completeness[name] = "unknown";
+        terminate();
+      });
       child[name].on("data", (chunk: Buffer) => {
         const available = Math.max(0, MAX_OUTPUT_BYTES - capturedBytes);
         const retained = chunk.subarray(0, available);
@@ -100,7 +110,7 @@ function executeChild(command: string, argv: string[], options: ProbeExecOptions
         }
       });
     }
-    child.once("error", (cause: NodeJS.ErrnoException) => { error = cause; });
+    child.on("error", (cause: NodeJS.ErrnoException) => { error = cause; });
     child.once("close", (status, signal) => {
       clearTimeout(deadline);
       clearTimeout(escalation);
@@ -110,6 +120,7 @@ function executeChild(command: string, argv: string[], options: ProbeExecOptions
           if (completeness[name] === "complete") completeness[name] = "unknown";
         }
       }
+      if (streamError) { reject(streamError); return; }
       resolve({
         stdout: Buffer.concat(chunks.stdout),
         stderr: Buffer.concat(chunks.stderr),
@@ -123,8 +134,14 @@ function executeChild(command: string, argv: string[], options: ProbeExecOptions
             : error ? { error } : {}),
       });
     });
-    if (options.timeoutMs !== undefined) {
-      deadline = setTimeout(() => { timedOut = true; terminate(); }, options.timeoutMs);
+    const timeoutMs = options.timeoutMs;
+    if (timeoutMs !== undefined) {
+      const checkDeadline = () => {
+        const remaining = timeoutMs - (performance.now() - began);
+        if (remaining > 0) deadline = setTimeout(checkDeadline, Math.min(remaining, 2_147_483_647));
+        else { timedOut = true; terminate(); }
+      };
+      checkDeadline();
     }
   });
 }
@@ -175,12 +192,23 @@ function finalizeReceipt(
 }
 
 export const probeExec: RunContext["exec"] = async (command, argv, opts) => {
-  const options = opts ?? {};
-  const now = options.receipt?.now ?? (() => new Date().toISOString());
+  // Receipt inputs must describe the launched invocation even if its caller changes shared
+  // arrays, metadata, or the process cwd while this function yields. Keep only the live signal
+  // and clock callback outside the value snapshot; neither belongs in persisted metadata.
+  const args = [...argv];
+  const { signal, receipt: metadata, ...execution } = opts ?? {};
+  const { now: receiptNow, ...receiptValues } = metadata ?? {};
+  const options: ProbeExecOptions = {
+    ...structuredClone(execution),
+    cwd: execution.cwd ?? process.cwd(),
+    ...(signal ? { signal } : {}),
+    ...(metadata ? { receipt: { ...structuredClone(receiptValues), ...(receiptNow ? { now: receiptNow } : {}) } } : {}),
+  };
+  const now = receiptNow ?? (() => new Date().toISOString());
   const startedAt = now();
   if (options.receipt?.policyAllowed === false) {
     const receipt = finalizeReceipt(
-      command, argv, options, startedAt, now(), "", options.receipt.policyReason ?? "command denied by policy",
+      command, args, options, startedAt, now(), "", options.receipt.policyReason ?? "command denied by policy",
       "policy-denied", null, null, "POLICY_DENIED",
     );
     return { ok: false, output: options.receipt.policyReason ?? "command denied by policy", stderr: options.receipt.policyReason ?? "command denied by policy", receipt };
@@ -188,16 +216,16 @@ export const probeExec: RunContext["exec"] = async (command, argv, opts) => {
   // Cancellation remains pre-start-only. Yielding does not authorize late aborts to kill a child
   // or relabel the actual exit; callers retain the same cancellation contract.
   if (options.signal?.aborted) {
-    const receipt = finalizeReceipt(command, argv, options, startedAt, now(), "", "command cancelled before start", "cancelled", null, null, "ABORT_ERR");
+    const receipt = finalizeReceipt(command, args, options, startedAt, now(), "", "command cancelled before start", "cancelled", null, null, "ABORT_ERR");
     return { ok: false, output: "command cancelled before start", stderr: "command cancelled before start", receipt };
   }
-  const r = await executeChild(command, argv, options);
+  const r = await executeChild(command, args, options);
   const stdout = r.stdout.toString("utf8");
   const stderr = r.stderr.toString("utf8");
   const state = terminalState(r);
   const receipt = finalizeReceipt(
     command,
-    argv,
+    args,
     options,
     startedAt,
     now(),
