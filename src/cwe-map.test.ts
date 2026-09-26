@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { classifyTaxonomyCwe, enrichFindingsCwe } from "./cwe-map.js";
 import type { Finding } from "./findings.js";
+import { detectPgResponseExposureFindings } from "./scan/pg-response-exposure.js";
+import { toSarif } from "./sarif.js";
 
 function finding(over: Partial<Finding> = {}): Finding {
   return {
@@ -11,10 +13,11 @@ function finding(over: Partial<Finding> = {}): Finding {
   };
 }
 
-// Every `taxonomy: "…"` literal a detector emits, harvested from the detector/scan source the same
-// way `detector-census` does. Test files are excluded — their fixtures ("t", "stripe", "audit dsih")
-// are not real detector taxonomies. This is the fail-loud guard: a new detector taxonomy that isn't
-// classified in cwe-map.ts (security CWE, or a deliberate no-CWE-with-reason) fails here.
+// Every literal detector taxonomy, plus dynamic producer taxonomies emitted from finite control
+// inputs below. Test files are excluded from the literal harvest — their fixtures ("t", "stripe",
+// "audit dsih") are not real detector taxonomies. This is the fail-loud guard: a new detector
+// taxonomy that isn't classified in cwe-map.ts (security CWE, or a deliberate no-CWE-with-reason)
+// fails here.
 function detectorTaxonomies(): string[] {
   const out = execFileSync(
     "grep",
@@ -26,7 +29,29 @@ function detectorTaxonomies(): string[] {
     const m = line.match(/^taxonomy: "([^"]+)"$/);
     if (m) set.add(m[1]!);
   }
+  for (const finding of dynamicPgResponseExposureFindings()) set.add(finding.taxonomy);
   return [...set].sort();
+}
+
+const PG_RESPONSE_EXPOSURE_KINDS = ["direct", "spread", "select-star"] as const;
+const pgResponseExposureSources: Record<(typeof PG_RESPONSE_EXPOSURE_KINDS)[number], string> = {
+  direct: `export function getUser(req, res) {
+  res.json({ id: 1, passwordHash: "x" });
+}`,
+  spread: `export function getUser(req, res) {
+  const user = { id: 1, refreshToken: "x" };
+  res.json({ ...user });
+}`,
+  "select-star": `export async function getUser(req, res) {
+  const { rows } = await db.query("SELECT * FROM users");
+  res.json(rows[0]);
+}`,
+};
+
+function dynamicPgResponseExposureFindings(): Finding[] {
+  return PG_RESPONSE_EXPOSURE_KINDS.flatMap((kind) => detectPgResponseExposureFindings([
+    { path: `pg-response-${kind}.ts`, text: pgResponseExposureSources[kind] },
+  ]));
 }
 
 describe("#975: every detector taxonomy has a CWE decision (fail loud on an unclassified one)", () => {
@@ -48,6 +73,45 @@ describe("#975: every detector taxonomy has a CWE decision (fail loud on an uncl
     } else {
       expect(c?.kind).toBe("none");
       expect((c as { reason: string }).reason.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("#2227: dynamic pg response-exposure taxonomy coverage", () => {
+  const findings = dynamicPgResponseExposureFindings();
+  const taxonomyKind = (taxonomy: string): string | undefined => taxonomy.match(/\(pg-resjson-exposure-([^)]*)\)$/)?.[1];
+
+  it("enumerates every finite producer kind from emitted findings", () => {
+    // This deliberately invokes the production detector. A quoted-assignment grep cannot see these
+    // template-built taxonomies, and skipping any producer makes this cardinality assertion fail.
+    expect(findings).toHaveLength(PG_RESPONSE_EXPOSURE_KINDS.length);
+    expect(findings.map((finding) => taxonomyKind(finding.taxonomy)).sort()).toEqual([...PG_RESPONSE_EXPOSURE_KINDS].sort());
+  });
+
+  it("preserves the detector's severity, review boundary, and stable IDs", () => {
+    expect(findings.map(({ id, severity, precisionTier }) => ({ id: id.replace(/-\d+$/, ""), severity, precisionTier }))).toEqual([
+      { id: "SEC-PG-RESJSON-pg-response-direct-ts", severity: "High", precisionTier: "review" },
+      { id: "SEC-PG-RESJSON-pg-response-spread-ts", severity: "High", precisionTier: "review" },
+      { id: "SEC-PG-RESJSON-pg-response-select-star-ts", severity: "Medium", precisionTier: "review" },
+    ]);
+  });
+
+  it.each(findings)("classifies emitted %s taxonomy as CWE-200/A01", (finding) => {
+    expect(classifyTaxonomyCwe(finding.taxonomy)).toEqual({
+      kind: "cwe",
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"],
+      owasp: ["A01:2021 - Broken Access Control"],
+    });
+  });
+
+  it("carries each emitted decision through normal enrichment into SARIF CWE tags", () => {
+    const enriched = enrichFindingsCwe(findings.map((finding) => ({ ...finding })));
+    expect(enriched.map((finding) => finding.cwe)).toEqual(Array.from({ length: PG_RESPONSE_EXPOSURE_KINDS.length }, () => ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]));
+    const sarif = toSarif(enriched, { coverageAbsent: "#2227 exercises the normal CWE-to-SARIF seam." }) as {
+      runs: { tool: { driver: { rules: { properties: { tags: string[] } }[] } } }[];
+    };
+    for (const rule of sarif.runs[0]!.tool.driver.rules) {
+      expect(rule.properties.tags).toContain("external/cwe/cwe-200");
     }
   });
 });

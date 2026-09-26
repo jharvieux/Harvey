@@ -260,6 +260,13 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Framework version disclosed via X-Powered-By": ["200", "A01"],
 };
 
+// #2227: the pg response-exposure detector's taxonomy includes the exact field/expression it saw,
+// so its emitted strings are dynamic. Every finite producer class exposes a full sensitive row or
+// property to the response client; CWE-200 captures that information exposure, and OWASP maps it
+// to A01. The classifier is deliberately suffix-bounded: a new producer kind is unclassified until
+// its CWE decision is made, while labels/field names remain free to describe the observed evidence.
+const PG_RESPONSE_EXPOSURE_TAXONOMY = /^Excessive data exposure: res\.json\(\.\.\.\) .+ \(pg-resjson-exposure-(?:direct|spread|select-star)\)$/;
+
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.
 // First matching rule wins; a taxonomy that matches none is unclassified and fails the enumeration
 // test (fail loud — someone added a detector without a CWE decision).
@@ -318,6 +325,9 @@ export function classifyTaxonomyCwe(taxonomy: string): CweClassification {
   if (sec) {
     const [cweId, owaspId] = sec;
     return { kind: "cwe", cwe: [CWE[cweId]!], ...(owaspId ? { owasp: [OWASP[owaspId]!] } : {}) };
+  }
+  if (PG_RESPONSE_EXPOSURE_TAXONOMY.test(taxonomy)) {
+    return { kind: "cwe", cwe: [CWE["200"]!], owasp: [OWASP["A01"]!] };
   }
   const none = NO_CWE.find((r) => r.match(taxonomy));
   if (none) return { kind: "none", reason: none.reason };
