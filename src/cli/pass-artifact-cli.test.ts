@@ -19,7 +19,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { findFreshPass, ingestPassArtifactReceipts, ranFromPass } from "../audit-pass-artifact.js";
@@ -107,6 +107,12 @@ it("keeps the original combined 1 MiB output bound for an actual child", async (
   expect(Buffer.byteLength(error.stdout) + Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
   expect(error.stdout).not.toHaveLength(0);
   expect(error.stderr).not.toHaveLength(0);
+});
+
+it("enforces the combined output limit through the actual CLI consumer", async () => {
+  const noisyCli = join(dir, "combined-output.cjs");
+  writeFileSync(noisyCli, 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);');
+  await expect(runCli(relative(REPO_ROOT, noisyCli), [])).rejects.toMatchObject({ code: "ENOBUFS" });
 });
 
 /** The #416 read side, pointed at an artifacts dir the CLI just wrote into. */

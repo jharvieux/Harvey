@@ -224,6 +224,23 @@ async function cloneRepository(source: string, destination: string): Promise<voi
   await heartbeat;
 }
 
+it.each(["git", "cloneRepository"] as const)("enforces the combined output limit through the actual %s consumer", async (consumer) => {
+  const bin = mkdtempSync(join(tmpdir(), "harvey-git-combined-output-"));
+  disposable.push(bin);
+  writeFileSync(join(bin, "git"), `#!${process.execPath}
+process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);
+`, { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = `${bin}:${originalPath ?? dirname(process.execPath)}`;
+    const result = consumer === "git" ? git(bin, ["status"]) : cloneRepository(bin, join(bin, "clone"));
+    await expect(result).rejects.toMatchObject({ code: "ENOBUFS" });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
+
 describe("corpus-drift immutable runtime closure", () => {
   it("keeps the live manifest, baseline, schema, taxonomy, and mechanical implementation in runtime closure", async () => {
     const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
