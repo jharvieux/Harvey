@@ -94,6 +94,14 @@ import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
 import { beginFreshAuditContext, auditContextDigest } from "../audit-context.js";
 import { discoverReadinessPlan, serializeReadinessPlanV1, type ReadinessPlanV1 } from "../audit-readiness.js";
 import { bindReadinessPlanV1, type ReadinessPlanBindingV1 } from "../audit-readiness-authority.js";
+import {
+  assertDistinctArtifactDestinations,
+  captureReadinessAuthorization,
+  installCliConsoleRedaction,
+  isCurrentArtifact,
+  writeCurrentArtifact,
+  type RequestedArtifactDestination,
+} from "../audit-readiness-cli-boundary.js";
 import { discloseReadinessSetupFailure, executeBoundReadinessPlan, parseReadinessAuthorizations } from "../audit-readiness-run.js";
 import { captureSourceSentinel, type SourceSentinelV1 } from "../disposable-target.js";
 import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
@@ -115,7 +123,6 @@ import { enrichFindingsCwe } from "../cwe-map.js";
 import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
-import { statSafe } from "../fs-walk.js";
 import { discoverWorkspaceInventory } from "../workspaces.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -155,6 +162,47 @@ const readinessExecuteOut = flagValue("--readiness-execute-out");
 const readinessValidationOut = readinessExecuteOut ? `${readinessExecuteOut}.validation.json` : undefined;
 const readinessAuthorizations = flagValue("--readiness-authorizations");
 const artifactsDir = flagValue("--artifacts-dir");
+const requestedArtifactDestinations: RequestedArtifactDestination[] = [
+  ...(findingsOut ? [{ flag: "--findings-out", path: findingsOut }] : []),
+  ...(sarifOut ? [{ flag: "--sarif-out", path: sarifOut }] : []),
+  ...(sbomOut ? [{ flag: "--sbom-out", path: sbomOut }] : []),
+  ...(outPath ? [{ flag: "--out", path: outPath }] : []),
+  ...(htmlOut ? [{ flag: "--html-out", path: htmlOut }] : []),
+  ...(pdfOut ? [{ flag: "--pdf-out", path: pdfOut }] : []),
+  ...(flagValue("--conservation-out") ? [{ flag: "--conservation-out", path: flagValue("--conservation-out")! }] : []),
+  ...(readinessPlanOut ? [{ flag: "--readiness-plan-out", path: readinessPlanOut }] : []),
+  ...(readinessExecuteOut ? [{ flag: "--readiness-execute-out", path: readinessExecuteOut }] : []),
+  ...(readinessValidationOut ? [{ flag: "--readiness-execute-out validation descriptor", path: readinessValidationOut }] : []),
+];
+
+// Capture authorization bytes once, before target discovery or any path-bearing banner. A rejected
+// grant may still contribute a fully validated set of values for terminal redaction, but never
+// execution authority or public approved/present observations.
+const capturedReadinessAuthorization = captureReadinessAuthorization(readinessAuthorizations, process.env);
+installCliConsoleRedaction(capturedReadinessAuthorization.redactionValues);
+process.once("uncaughtException", () => {
+  console.error("AUDIT FAIL — an operation failed at the public CLI boundary.");
+  process.exit(1);
+});
+process.once("unhandledRejection", () => {
+  console.error("AUDIT FAIL — an operation failed at the public CLI boundary.");
+  process.exit(1);
+});
+try { assertDistinctArtifactDestinations(requestedArtifactDestinations); }
+catch {
+  console.error("Requested artifact destinations are invalid or alias.");
+  process.exit(2);
+}
+const currentArtifactWrites = new Map<string, { bytes: number; sha256: string }>();
+const writeRequestedArtifact = (flag: string, path: string, contents: string | Buffer): boolean => {
+  try {
+    writeCurrentArtifact(path, contents, currentArtifactWrites);
+    return true;
+  } catch {
+    console.error(`${flag} export failed at the public CLI boundary.`);
+    return false;
+  }
+};
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
 // tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
 const supabaseRefsArg = flagValues("--supabase");
@@ -429,14 +477,22 @@ let readinessExecutionFailed = false;
 if (readinessExecuteOut && readinessPlan && readinessBinding) {
   let authorization: ReturnType<typeof parseReadinessAuthorizations> | undefined;
   try {
-    authorization = readinessAuthorizations
-      ? parseReadinessAuthorizations(JSON.parse(readFileSync(readinessAuthorizations, "utf8")), readinessBinding.planSha256)
+    authorization = readinessAuthorizations && capturedReadinessAuthorization.parsed
+      ? parseReadinessAuthorizations(capturedReadinessAuthorization.value, readinessBinding.planSha256)
       : { stageAuthorizations: [], approvedEnvNames: [] };
+    if (readinessAuthorizations && !capturedReadinessAuthorization.parsed) throw new Error("Invalid readiness authorization input.");
   } catch {
     readinessSetupFailed = true;
-    const result = discloseReadinessSetupFailure(readinessPlan, readinessBinding);
-    readinessExecutionJson = result.json;
-    readinessValidationJson = result.descriptorJson;
+    // Without a completely valid name set the CLI must not read values or claim that a safely
+    // redacted artifact was produced. Old destination files remain untouched and fail freshness.
+    if (!readinessAuthorizations || capturedReadinessAuthorization.namesValidated) {
+      const result = discloseReadinessSetupFailure(readinessPlan, readinessBinding,
+        capturedReadinessAuthorization.redactionNames.length > 0
+          ? { names: capturedReadinessAuthorization.redactionNames, environment: process.env }
+          : undefined);
+      readinessExecutionJson = result.json;
+      readinessValidationJson = result.descriptorJson;
+    }
   }
   if (authorization) {
     try {
@@ -484,8 +540,9 @@ console.log(formatAuditCoverage(report));
 // the ATC engagement, silently un-prioritizing the semantic review).
 console.log(`\n${formatExecutionPlan(buildExecutionPlan(env))}`);
 if (outPath) {
-  writeFileSync(outPath, JSON.stringify(recorded, null, 2));
-  console.log(`\nDerived coverage ledger → ${outPath}`);
+  if (writeRequestedArtifact("--out", outPath, JSON.stringify(recorded, null, 2))) {
+    console.log(`\nDerived coverage ledger → ${outPath}`);
+  }
 }
 
 // #312: assemble the single engagement findings.json — the captured findings plus the derived
@@ -560,8 +617,9 @@ if (findingsOut || sarifOut) {
   // The §3b test-quality table (#1045) rides on the findings document only — the SARIF schema has
   // nowhere to put it — so its reporting stays inside this branch.
   if (findingsOut) {
-    writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
-    console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
+    if (writeRequestedArtifact("--findings-out", findingsOut, `${JSON.stringify(doc, null, 2)}\n`)) {
+      console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
+    }
     // #1045: absence of the §3b table is stated, never silent — a report with no test-quality section
     // reads as "nothing to report" rather than "the mutation tier produced no measurement".
     if (doc.testQuality) console.log(`M8 test-quality table: ${doc.testQuality.rows.length} module row(s), ${doc.testQuality.mutationScore}% overall mutation score`);
@@ -581,14 +639,14 @@ if (sarifOut) {
   // still gets a row), so the two exports of one run cannot disagree about what ran.
   const ledger = coverageLedger(recorded, env);
   const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir, auditContext: exportDocument?.auditContext, baseline: exportDocument?.baseline, conservation: exportDocument?.conservation });
-  writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
+  const sarifWritten = writeRequestedArtifact("--sarif-out", sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
   const gaps = ledger.filter((r) => r.status !== "ran").length;
   // #1061: the result count is printed AGAINST the count the probes captured, so the next time an
   // export silently drops findings the two numbers disagree in the terminal instead of the SARIF
   // quietly shipping short. A zero is called out loudly for the same reason — an empty SARIF is
   // indistinguishable from a clean scan once the file leaves this machine.
   const results = (sarif as { runs: { results: unknown[] }[] }).runs[0]!.results.length;
-  console.log(`\nSARIF 2.1.0 (${results} result(s) assembled from ${findings.length} captured finding(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
+  if (sarifWritten) console.log(`\nSARIF 2.1.0 (${results} result(s) assembled from ${findings.length} captured finding(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
   if (results === 0) console.error("⚠ the SARIF carries ZERO results — an importer will read that as a clean scan. Check the coverage notifications in the file before handing it over.");
 }
 
@@ -596,8 +654,9 @@ if (sarifOut) {
 // installed, not what is wrong with it.
 if (sbomOut) {
   const { bom, warning } = buildSbom(targetDir, { targetName: basename(targetDir) });
-  writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
-  console.log(`\nCycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
+  if (writeRequestedArtifact("--sbom-out", sbomOut, `${JSON.stringify(bom, null, 2)}\n`)) {
+    console.log(`\nCycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
+  }
   if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
 }
 
@@ -616,39 +675,31 @@ if (retainDir && replayBinding) {
 // inside the target tree; writing it before runAudit would turn Harvey's own output into scan input
 // and change the findings/coverage of the run that produced it.
 if (readinessPlanOut && readinessPlanJson && !readinessPlanExportWithheld) {
-  writeFileSync(readinessPlanOut, readinessPlanJson);
-  console.log(`\nAudit readiness plan → ${readinessPlanOut}`);
+  if (writeRequestedArtifact("--readiness-plan-out", readinessPlanOut, readinessPlanJson)) {
+    console.log(`\nAudit readiness plan → ${readinessPlanOut}`);
+  }
 }
 if (readinessExecuteOut && readinessExecutionJson) {
-  writeFileSync(readinessExecuteOut, readinessExecutionJson);
-  console.log(`\nAudit readiness execution → ${readinessExecuteOut}`);
+  if (writeRequestedArtifact("--readiness-execute-out", readinessExecuteOut, readinessExecutionJson)) {
+    console.log(`\nAudit readiness execution → ${readinessExecuteOut}`);
+  }
 }
 if (readinessValidationOut && readinessValidationJson) {
-  writeFileSync(readinessValidationOut, readinessValidationJson);
-  console.log("Audit readiness validation descriptor exported.");
+  if (writeRequestedArtifact("--readiness-execute-out validation descriptor", readinessValidationOut, readinessValidationJson)) {
+    console.log("Audit readiness validation descriptor exported.");
+  }
 }
 if (readinessPlanExportWithheld) console.error("\nREADINESS PLAN EXPORT WITHHELD — the raw plan did not pass the producer-known-value export boundary. Audit execution evidence uses its redacted validation descriptor.");
 if (readinessSetupFailed) console.error("\nREADINESS NOT ASSESSED — its execution configuration or source binding was invalid; audit module collection completed independently.");
 if (readinessExecutionFailed) console.error("\nREADINESS FAIL — execution, disposable cleanup, or evidence validation failed. Audit module collection completed independently.");
 
 // #1470: the delivery gate. Everything above proves what was PRODUCED and ASSEMBLED; this is the
-// only check that reads the client's side of the seam. Every export the operator asked for must
-// exist on disk with content — a run that was asked for a deliverable and produced no file may not
-// reach COVERAGE PASS, whatever the ledgers said. Independent of the writes above on purpose: it
-// asks the filesystem, so a future branch that skips a writeFileSync (as the schema-validation
-// branch silently did for --sarif-out) fails here instead of exiting green.
-const requestedExports = [
-  ...(findingsOut ? [{ flag: "--findings-out", path: findingsOut }] : []),
-  ...(sarifOut ? [{ flag: "--sarif-out", path: sarifOut }] : []),
-  ...(sbomOut ? [{ flag: "--sbom-out", path: sbomOut }] : []),
-  ...(outPath ? [{ flag: "--out", path: outPath }] : []),
-  ...(readinessPlanOut ? [{ flag: "--readiness-plan-out", path: readinessPlanOut }] : []),
-  ...(readinessExecuteOut ? [{ flag: "--readiness-execute-out", path: readinessExecuteOut }] : []),
-  ...(readinessValidationOut ? [{ flag: "--readiness-execute-out validation descriptor", path: readinessValidationOut }] : []),
-];
-const undelivered = requestedExports.filter((e) => (e.flag === "--readiness-plan-out" && readinessPlanExportWithheld) || (statSafe(e.path)?.size ?? 0) === 0);
+// only check that reads the client's side of the seam. A same-run byte/hash receipt and matching
+// current bytes are required; an old non-empty file cannot satisfy a skipped or failed write.
+const requestedExports = requestedArtifactDestinations.filter((entry) => !["--html-out", "--pdf-out", "--conservation-out"].includes(entry.flag));
+const undelivered = requestedExports.filter((e) => (e.flag === "--readiness-plan-out" && readinessPlanExportWithheld) || !isCurrentArtifact(e.path, currentArtifactWrites));
 if (undelivered.length) {
-  console.error(`\nDELIVERY FAIL — ${undelivered.length} of ${requestedExports.length} requested export(s) were never written: ${undelivered.map((e) => `${e.flag} ${e.path}`).join(", ")}.`);
+  console.error(`\nDELIVERY FAIL — ${undelivered.length} of ${requestedExports.length} requested export(s) lack current verified bytes: ${undelivered.map((e) => e.flag).join(", ")}.`);
   console.error(deliveredNothing(findings.length, "a requested export produced no file, and the run reached the end without saying so"));
   process.exit(1);
 }

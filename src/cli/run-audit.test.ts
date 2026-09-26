@@ -15,7 +15,8 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -492,6 +493,143 @@ else {
       expect(await captureSourceSentinel(target)).toEqual(before);
     } finally {
       writeFileSync(manifestPath, originalManifest);
+    }
+  }, CASE_TIMEOUT_MS);
+
+  it("redacts an approved value from source/output paths when unsupported grant fields force a not-run disclosure", async () => {
+    const canary = "cli-approved-path-canary-1897";
+    const sourceAlias = join(root, canary);
+    if (!existsSync(sourceAlias)) symlinkSync(target, sourceAlias);
+    const invalidAuthority = join(root, "unsupported-authority.json");
+    writeFileSync(invalidAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["READINESS_TOKEN"],
+      stageAuthorizations: [],
+      unsupportedOption: true,
+    }));
+    const outputDir = join(root, `outputs-${canary}`);
+    mkdirSync(outputDir);
+    const findingsPath = join(outputDir, "findings.json");
+    const executionPath = join(outputDir, "execution.json");
+    const result = await runCapturing([sourceAlias, "--findings-out", findingsPath,
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", invalidAuthority], {
+      READINESS_TOKEN: canary,
+    });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    const executionJson = readFileSync(executionPath, "utf8");
+    const descriptorJson = readFileSync(`${executionPath}.validation.json`, "utf8");
+    const artifacts = parseReadinessArtifactsV1({ descriptorJson, executionJson });
+    expect(artifacts.execution.stages.every((stage) => stage.status === "not-assessed" && stage.execution.kind === "not-run")).toBe(true);
+    expect(artifacts.execution.stages.every((stage) => stage.environment.approvedNames.length === 0 && stage.environment.presentNames.length === 0)).toBe(true);
+    expect(executionJson).not.toContain(canary);
+    expect(descriptorJson).not.toContain(canary);
+    const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+    expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(engagement.conservation?.ok).toBe(true);
+  }, CASE_TIMEOUT_MS);
+
+  it("redacts an approved value from a readiness export write failure", async () => {
+    const canary = "cli-write-error-canary-1897";
+    const invalidAuthority = join(root, "write-error-authority.json");
+    writeFileSync(invalidAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["READINESS_TOKEN"],
+      stageAuthorizations: [],
+      unsupportedOption: true,
+    }));
+    const findingsPath = join(root, "write-error-findings.json");
+    const executionPath = join(root, `missing-${canary}`, "execution.json");
+    const result = await runCapturing([target, "--findings-out", findingsPath,
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", invalidAuthority], {
+      READINESS_TOKEN: canary,
+    });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    expect(result.out).toContain("--readiness-execute-out export failed at the public CLI boundary");
+    expect(result.out).toContain("DELIVERY FAIL");
+    const engagement = JSON.parse(readFileSync(findingsPath, "utf8")) as FindingsDocument;
+    expect(new Set(engagement.coverage?.map((row) => row.module))).toEqual(new Set(AUDIT_MODULES));
+    expect(engagement.conservation?.ok).toBe(true);
+  }, CASE_TIMEOUT_MS);
+
+  it("reads the authorization file once before discovery", async () => {
+    const capturedAuthority = join(root, "single-capture-authority.json");
+    writeFileSync(capturedAuthority, readFileSync(authority));
+    const executionPath = join(root, "single-capture-execution.json");
+    const running = startChild("node_modules/.bin/tsx", [CLI, target, "--allow-target-install",
+      "--readiness-execute-out", executionPath, "--readiness-authorizations", capturedAuthority], environment("success"));
+    await once(running.child.stdout, "data", { signal: AbortSignal.timeout(10_000) });
+    writeFileSync(capturedAuthority, "{\"changedAfterCapture\":true}\n");
+    const result = await running.completion;
+    expect(result.code, result.out).toBe(0);
+    expect(parseReadinessArtifactsV1({
+      executionJson: readFileSync(executionPath, "utf8"),
+      descriptorJson: readFileSync(`${executionPath}.validation.json`, "utf8"),
+    }).execution.status).toBe("passed");
+  }, CASE_TIMEOUT_MS);
+
+  it("does not read unsafe authorization names or replace old files with an unproven safe artifact", async () => {
+    const canary = "unsafe-name-value-must-remain-unread-1897";
+    const unsafeAuthority = join(root, "unsafe-name-authority.json");
+    writeFileSync(unsafeAuthority, JSON.stringify({
+      schemaVersion: 1,
+      planSha256: bindReadinessPlanV1(plan, source).planSha256,
+      approvedEnvNames: ["unsafe_name"],
+      stageAuthorizations: [],
+    }));
+    const executionPath = join(root, "unsafe-name-execution.json");
+    const descriptorPath = `${executionPath}.validation.json`;
+    writeFileSync(executionPath, "old execution\n");
+    writeFileSync(descriptorPath, "old descriptor\n");
+    const result = await runCapturing([target, "--readiness-execute-out", executionPath,
+      "--readiness-authorizations", unsafeAuthority], { unsafe_name: canary });
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).not.toContain(canary);
+    expect(result.out).toContain("DELIVERY FAIL");
+    expect(readFileSync(executionPath, "utf8")).toBe("old execution\n");
+    expect(readFileSync(descriptorPath, "utf8")).toBe("old descriptor\n");
+  }, CASE_TIMEOUT_MS);
+
+  it("refuses aliased requested destinations before writing either artifact", async () => {
+    const alias = join(root, "aliased-readiness.json");
+    writeFileSync(alias, "old artifact must survive\n");
+    const result = await runCapturing([target, "--readiness-plan-out", alias, "--readiness-execute-out", alias]);
+    expect(result.code, result.out).toBe(2);
+    expect(result.out).toMatch(/Requested artifact destinations.*alias/);
+    expect(readFileSync(alias, "utf8")).toBe("old artifact must survive\n");
+    expect(existsSync(`${alias}.validation.json`)).toBe(false);
+  }, CASE_TIMEOUT_MS);
+
+  it("does not let old execution files satisfy a run whose readiness producer emitted no current bytes", async () => {
+    // Unix-domain socket paths are tightly bounded on macOS, so this one uses its own short root.
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "h1897-"));
+    const isolated = join(isolatedRoot, "t");
+    mkdirSync(isolated);
+    writeFileSync(join(isolated, "package.json"), JSON.stringify({ name: "sentinel-refusal", private: true }));
+    const socketPath = join(isolated, "unsupported.sock");
+    const server = createServer();
+    await new Promise<void>((resolveListen, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolveListen);
+    });
+    const executionPath = join(root, "stale-execution.json");
+    const descriptorPath = `${executionPath}.validation.json`;
+    writeFileSync(executionPath, "old execution\n");
+    writeFileSync(descriptorPath, "old descriptor\n");
+    try {
+      const result = await runCapturing([isolated, "--readiness-execute-out", executionPath]);
+      expect(result.code, result.out).toBe(1);
+      expect(result.out).toContain("DELIVERY FAIL");
+      expect(result.out).toContain("--readiness-execute-out");
+      expect(readFileSync(executionPath, "utf8")).toBe("old execution\n");
+      expect(readFileSync(descriptorPath, "utf8")).toBe("old descriptor\n");
+      for (const module of AUDIT_MODULES) expect(result.out).toContain(module);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+      rmSync(isolatedRoot, { recursive: true, force: true });
     }
   }, CASE_TIMEOUT_MS);
 });
