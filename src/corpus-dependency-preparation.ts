@@ -345,13 +345,15 @@ function qualityWorkspaceRequest(root: string): { root: string; workspacePattern
 
 function knipDiscoveryFailure(error: unknown): string {
   if (!error || typeof error !== "object") return String(error);
-  const failure = error as { code?: string; signal?: string; status?: number; stderr?: Buffer | string };
+  const failure = error as { code?: number | string; signal?: string; status?: number; stderr?: Buffer | string };
   const stderr = failure.stderr?.toString().trim();
   if (stderr) {
     const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
     return lines.slice(-3).join(" ").slice(0, 600);
   }
-  return `discovery process failed (status ${failure.status ?? "unknown"}, signal ${failure.signal ?? "none"}, code ${failure.code ?? "none"})`;
+  const status = failure.status ?? (typeof failure.code === "number" ? failure.code : undefined);
+  const code = typeof failure.code === "string" ? failure.code : undefined;
+  return `discovery process failed (status ${status ?? "unknown"}, signal ${failure.signal ?? "none"}, code ${code ?? "none"})`;
 }
 
 async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutableConfigDiscovery> {
@@ -359,7 +361,8 @@ async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutab
     const require = createRequire(import.meta.url);
     const knipDist = dirname(require.resolve("knip"));
     const stdout = await new Promise<string>((resolveRun, rejectRun) => {
-      execFile(process.execPath, ["--input-type=module", "--eval", KNIP_CONFIG_DISCOVERY_SCRIPT], {
+      let stdinFailure: Error | undefined;
+      const child = execFile(process.execPath, ["--input-type=module", "--eval", KNIP_CONFIG_DISCOVERY_SCRIPT], {
         encoding: "utf8",
         timeout: 30_000,
         maxBuffer: 1024 * 1024 * 8,
@@ -370,12 +373,29 @@ async function discoverKnipExecutableConfigs(root: string): Promise<KnipExecutab
           HARVEY_KNIP_CONFIG_REQUEST: JSON.stringify(qualityWorkspaceRequest(root)),
         },
       }, (error, childStdout, childStderr) => {
-        if (error) {
-          rejectRun(Object.assign(error, { stdout: childStdout, stderr: childStderr }));
+        if (error || stdinFailure) {
+          rejectRun(Object.assign(error ?? stdinFailure!, { stdout: childStdout, stderr: childStderr }));
           return;
         }
         resolveRun(childStdout);
       });
+      const stdin = child.stdin;
+      if (!stdin) {
+        stdinFailure = new Error("Knip discovery child stdin pipe was unavailable");
+        child.kill();
+        return;
+      }
+      stdin.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
+        stdinFailure = error;
+        child.kill();
+      });
+      try {
+        stdin.end();
+      } catch (error) {
+        stdinFailure = error instanceof Error ? error : new Error(String(error));
+        child.kill();
+      }
     });
     const parsed = JSON.parse(stdout) as Partial<KnipExecutableConfigDiscovery>;
     if (!Array.isArray(parsed.executable) || !parsed.executable.every((path) => typeof path === "string")) {

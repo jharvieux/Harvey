@@ -123,7 +123,8 @@ export async function observePackageManager(
     let stdout = "";
     try {
       stdout = await new Promise<string>((resolveRun, rejectRun) => {
-        execFile(launcher, args, {
+        let stdinFailure: Error | undefined;
+        const child = execFile(launcher, args, {
           cwd: invocation.cwd,
           env: { ...invocation.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}`, HARVEY_MANAGER_TRACE: trace },
           encoding: "utf8",
@@ -131,12 +132,32 @@ export async function observePackageManager(
           maxBuffer: 16 * 1024 * 1024,
           windowsHide: true,
         }, (error, childStdout, childStderr) => {
-          if (error) {
-            rejectRun(Object.assign(error, { stdout: childStdout, stderr: childStderr }));
+          if (error || stdinFailure) {
+            rejectRun(Object.assign(error ?? stdinFailure!, { stdout: childStdout, stderr: childStderr }));
             return;
           }
           resolveRun(childStdout);
         });
+        const stdin = child.stdin;
+        if (!stdin) {
+          stdinFailure = new Error("package-manager child stdin pipe was unavailable");
+          child.kill();
+          return;
+        }
+        stdin.on("error", (error: NodeJS.ErrnoException) => {
+          // A fast-exiting child may close its reader before the parent's EOF arrives.
+          if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
+          stdinFailure = error;
+          child.kill();
+        });
+        try {
+          // execFile defaults to a writable pipe. The previous synchronous invocation supplied
+          // no input, so preserve that EOF contract for managers that wait for stdin to close.
+          stdin.end();
+        } catch (error) {
+          stdinFailure = error instanceof Error ? error : new Error(String(error));
+          child.kill();
+        }
       });
       result.exitCode = 0;
       result.outcome = "completed";

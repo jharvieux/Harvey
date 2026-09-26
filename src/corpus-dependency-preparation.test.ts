@@ -454,6 +454,58 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(heartbeats).toBeGreaterThan(0);
   });
 
+  it("closes Knip discovery stdin and retains a real nonzero child status", async () => {
+    const target = fixture("npm");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-knip-stdin-"));
+    dirs.push(cacheDir);
+    const preload = join(cacheDir, "stdin-control.cjs");
+    const marker = join(cacheDir, "stdin-ended");
+    writeFileSync(preload, String.raw`
+const fs = require("node:fs");
+if (process.env.HARVEY_KNIP_STDIN_CONTROL === "wait") {
+  const timeout = setTimeout(() => process.exit(37), 250);
+  process.stdin.resume();
+  process.stdin.once("end", () => {
+    clearTimeout(timeout);
+    fs.writeFileSync(process.env.HARVEY_KNIP_STDIN_MARKER, "ended");
+  });
+} else if (process.env.HARVEY_KNIP_STDIN_CONTROL === "nonzero") {
+  process.exit(37);
+}
+`);
+    const originalNodeOptions = process.env.NODE_OPTIONS;
+    const originalControl = process.env.HARVEY_KNIP_STDIN_CONTROL;
+    const originalMarker = process.env.HARVEY_KNIP_STDIN_MARKER;
+    process.env.NODE_OPTIONS = `${originalNodeOptions ?? ""} --require=${preload}`.trim();
+    process.env.HARVEY_KNIP_STDIN_MARKER = marker;
+    const options = {
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    };
+    try {
+      process.env.HARVEY_KNIP_STDIN_CONTROL = "wait";
+      const completed = await prepareCorpusDependencies(options);
+      expect(completed).toMatchObject({ complete: true, status: "miss", cacheable: true });
+      expect(readFileSync(marker, "utf8")).toBe("ended");
+
+      process.env.HARVEY_KNIP_STDIN_CONTROL = "nonzero";
+      const failed = await prepareCorpusDependencies({ ...options, targetRevision: "nonzero" });
+      expect(failed).toMatchObject({ complete: true, status: "miss", cacheable: false });
+      expect(failed.reason).toContain("discovery process failed (status 37, signal none, code none)");
+    } finally {
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = originalNodeOptions;
+      if (originalControl === undefined) delete process.env.HARVEY_KNIP_STDIN_CONTROL;
+      else process.env.HARVEY_KNIP_STDIN_CONTROL = originalControl;
+      if (originalMarker === undefined) delete process.env.HARVEY_KNIP_STDIN_MARKER;
+      else process.env.HARVEY_KNIP_STDIN_MARKER = originalMarker;
+    }
+  });
+
   it("rejects a corrupt receipt visibly and performs a clean install", async () => {
     const target = fixture("npm");
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-corrupt-"));

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -126,7 +127,11 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     const managerEntry = join(f.root, "native/manager.cjs");
     writeFileSync(managerEntry, String.raw`
 if (process.argv.includes("--version")) setTimeout(() => console.log("9.9.9"), 120);
-else process.exit(37);
+else {
+  process.stdout.write("ERR_STDOUT_CONTROL");
+  process.stderr.write("ERR_STDERR_CONTROL");
+  process.exit(37);
+}
 `);
     let heartbeats = 0;
     const heartbeat = setInterval(() => { heartbeats += 1; }, 5);
@@ -136,7 +141,8 @@ else process.exit(37);
     expect(heartbeats).toBeGreaterThan(2);
 
     const nonzero = await observePackageManager("npm", "frozen", { bin: "npm", args: ["install"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } }, delayed.selected);
-    expect(nonzero).toMatchObject({ outcome: "failed", exitCode: 37 });
+    expect(nonzero).toMatchObject({ outcome: "failed", exitCode: 37, reason: expect.stringContaining("ERR_STDOUT_CONTROL") });
+    expect(nonzero.reason).toContain("ERR_STDERR_CONTROL");
 
     const missing = await observePackageManager("npm", "version-probe", { bin: "missing-package-manager", args: ["--version"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin } });
     expect(missing).toMatchObject({ outcome: "failed", exitCode: null, reason: expect.stringContaining("executable was not found") });
@@ -144,6 +150,33 @@ else process.exit(37);
     writeFileSync(managerEntry, String.raw`setTimeout(() => console.log("9.9.9"), 10_000);`);
     const timedOut = await observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: { ...f.environment, PATH: f.bin }, timeoutMs: 25 });
     expect(timedOut).toMatchObject({ outcome: "failed", exitCode: null, signal: "SIGTERM" });
+  });
+
+  it("closes manager stdin so a real child waiting for EOF can finish", async () => {
+    const f = fixture("npm", "9.9.9");
+    const managerEntry = join(f.root, "native/manager.cjs");
+    writeFileSync(managerEntry, String.raw`
+process.stdin.resume();
+process.stdin.on("end", () => console.log("9.9.9"));
+`);
+
+    const openInputControl = await new Promise<{ signal: string | null }>((resolveRun) => {
+      execFile(join(f.bin, "npm"), ["--version"], {
+        cwd: f.targetDir,
+        env: { ...f.environment, PATH: f.bin },
+        timeout: 50,
+      }, (error) => resolveRun({ signal: error?.signal ?? null }));
+    });
+    expect(openInputControl).toEqual({ signal: "SIGTERM" });
+
+    const observed = await observePackageManager("npm", "version-probe", {
+      bin: "npm",
+      args: ["--version"],
+      cwd: f.targetDir,
+      env: { ...f.environment, PATH: f.bin },
+      timeoutMs: 400,
+    });
+    expect(observed).toMatchObject({ outcome: "completed", exitCode: 0, selected: { version: "9.9.9" } });
   });
 
   it("runs actual Corepack and npm offline, ignores target env expansion, and materializes a local provider", async () => {
