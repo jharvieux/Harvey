@@ -32,7 +32,7 @@ export async function deliverAuditReplay(options: {
   sbomOut?: string; htmlOut?: string; pdfOut?: string; conservationOut?: string; metaPath?: string;
   configPath?: string; baselinePath?: string;
 }): Promise<void> {
-  const replay = replayAuditBundle(options.bundle, options.target, {
+  const replay = await replayAuditBundle(options.bundle, options.target, {
     ...(options.configPath ? { effectiveConfig: JSON.parse(readFileSync(options.configPath, "utf8")) as Record<string, unknown> } : {}),
   });
   const { result, evidence } = replay;

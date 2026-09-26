@@ -21,7 +21,7 @@ const finding = (id: string): Finding => ({
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: () => ({ ok: true, output: "" }),
+  exec: async () => ({ ok: true, output: "" }),
   exists: () => true,
   // #1556: doubled for the same reason `exists` is — "/target" is not a real directory, and the M1
   // probe reads the architecture off it. "unknown" leaves every M1 tier applicable, unchanged.
@@ -201,15 +201,15 @@ const artifactFor = (p: string): unknown => {
 // that rejected the assembled deliverable for duplicate ids.
 const qualityScanRows = [finding("M4-01"), finding("M5-01")];
 const capturingCtx = ctx({
-  exec: (_c, argv) => ({ ok: true, output: toolOutput(argv), stderr: toolStderr(argv) }),
+  exec: async (_c, argv) => ({ ok: true, output: toolOutput(argv), stderr: toolStderr(argv) }),
   captureDir: "/cap",
   readFindings: (p) => (["M4", "M5"].includes(basename(p, ".json")) ? qualityScanRows : [finding(basename(p, ".json"))]),
   readArtifact: artifactFor,
 });
 
 describe("runAudit findings capture (#312/#420)", () => {
-  it("collects findings from the emitting modules (bare-array AND object-artifact) and nothing from the non-emitters", () => {
-    const captured = runAudit(AUDIT_RUNNERS, capturingCtx);
+  it("collects findings from the emitting modules (bare-array AND object-artifact) and nothing from the non-emitters", async () => {
+    const captured = await runAudit(AUDIT_RUNNERS, capturingCtx);
     // M1/M4/M5/M9/M10 emit a bare Finding[] (M10 since #436, M1's mechanical tier since #1040);
     // M3/M8 embed findings in an object artifact (#420). M2/M7 collect nothing — their findings
     // come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect
@@ -221,14 +221,14 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M1-BRIEF-00", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
   });
 
-  it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturingCtx);
+  it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", async () => {
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, capturingCtx);
     expect(recorded.find((r) => r.module === "M8")?.status).toBe("partial");
     expect(findings.map((f) => f.id)).toContain("M8");
   });
 
-  it("assembles M3/M8/M10 findings into the deliverable, keeping M1/M2 non-collection legible", () => {
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturingCtx);
+  it("assembles M3/M8/M10 findings into the deliverable, keeping M1/M2 non-collection legible", async () => {
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, capturingCtx);
     const doc = assembleEngagementDocument(recorded, capturingCtx.env, findings, meta);
     expect(validateFindings(doc).ok).toBe(true);
     expect(doc.findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M3", "M8", "M10"]));
@@ -255,8 +255,8 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(m6?.reason).toMatch(/free indicator layer ran/i);
   });
 
-  it("captures nothing when the context is not capturing — coverage-only runs are unchanged", () => {
-    expect(runAudit(AUDIT_RUNNERS, ctx()).findings).toEqual([]);
+  it("captures nothing when the context is not capturing — coverage-only runs are unchanged", async () => {
+    expect((await runAudit(AUDIT_RUNNERS, ctx())).findings).toEqual([]);
   });
 });
 
@@ -265,14 +265,14 @@ describe("runAudit findings capture (#312/#420)", () => {
 // { summary, reportRows } shape — this is the "ran" branch, distinct from capturingCtx's fixture
 // above which exercises M8's no-test-suite ("partial") branch.
 describe("M8 captures findings from a real Stryker run (#435)", () => {
-  it("reads the mutation-scan --out artifact's `findings` array and reports ran with findings", () => {
+  it("reads the mutation-scan --out artifact's `findings` array and reports ran with findings", async () => {
     const realRunCtx = ctx({
-      exec: (_c, argv) => ({ ok: true, output: argv.includes("detect-static") ? "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target" : "" }),
+      exec: async (_c, argv) => ({ ok: true, output: argv.includes("detect-static") ? "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target" : "" }),
       captureDir: "/cap",
       readFindings: () => [],
       readArtifact: (p) => (basename(p, ".json") === "M8" ? { summary: { overall: {} }, reportRows: [], findings: [finding("M8-DENIAL")] } : undefined),
     });
-    const { recorded, findings } = runAudit(AUDIT_RUNNERS, realRunCtx);
+    const { recorded, findings } = await runAudit(AUDIT_RUNNERS, realRunCtx);
     expect(recorded.find((r) => r.module === "M8")?.status).toBe("ran");
     expect(findings.map((f) => f.id)).toContain("M8-DENIAL");
   });

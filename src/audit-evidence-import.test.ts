@@ -38,7 +38,7 @@ function inputs() {
 it("keeps original snapshot/engine/timestamps, per-workspace rows and explicit legacy partials", async () => {
   const f = inputs();
   const imported = importLegacyAuditEvidence(f.options);
-  const replay = replayAuditBundle(f.options.out, imported.target);
+  const replay = await replayAuditBundle(f.options.out, imported.target);
   expect(replay.result.findings.map((finding) => finding.id)).toEqual(["M4-CLONE@apps/one", "M4-CLONE@apps/two"]);
   expect(replay.result.recorded.filter((row) => row.module === "M4").map((row) => row.instance)).toEqual(["apps/one", "apps/two"]);
   expect(replay.result.recorded.every((row) => row.status !== "ran")).toBe(true);
@@ -61,7 +61,7 @@ it("refuses a historical acceptance receipt for another revision", () => {
   expect(() => importLegacyAuditEvidence(f.options)).toThrow(/identities disagree/);
 });
 
-it.each(["valid", "valid-without-source", "unbound", "tree", "configuration", "raw"])("recipe preserves original execution provenance (%s)", (kind) => {
+it.each(["valid", "valid-without-source", "unbound", "tree", "configuration", "raw"])("recipe preserves original execution provenance (%s)", async (kind) => {
   const f = inputs();
   const target = join(f.root, "source"); mkdirSync(target);
   const source = join(target, "source.ts"); writeFileSync(source, "original source");
@@ -72,17 +72,17 @@ it.each(["valid", "valid-without-source", "unbound", "tree", "configuration", "r
   if (kind === "valid-without-source") pass.rawArtifacts = [{ path: raw, sha256: createHash("sha256").update(readFileSync(raw)).digest("hex") }];
   const original = join(f.root, "original");
   writeAuditReplayBundle(original, { binding, scopes: [pass.scope], passes: [pass] });
-  const originalReplay = replayAuditBundle(original, target);
+  const originalReplay = await replayAuditBundle(original, target);
   if (kind === "valid-without-source") expect(originalReplay.evidence.current[0]!.rawArtifacts[0]!.sourcePath).toBeUndefined();
   const recipe = { target, expectedRevision: binding.target.revision, effectiveConfig, scopes: [pass.scope], passes: [kind === "unbound" ? { ...pass, resultFile: raw } : { bundle: original, receiptId: originalReplay.evidence.current[0]!.id }] };
   if (kind === "tree") writeFileSync(source, "changed source at the same revision");
   if (kind === "configuration") recipe.effectiveConfig = { mutate: ["different/**/*.ts"] };
   if (kind === "raw") writeFileSync(join(original, originalReplay.evidence.current[0]!.rawArtifacts[0]!.path), "tampered output");
   const path = join(f.root, "recipe.json"); writeFileSync(path, JSON.stringify(recipe));
-  if (!kind.startsWith("valid")) expect(() => bundleAuditEvidenceRecipe(path, join(f.root, "combined"))).toThrow(/original bound|mismatch|Tampered/);
+  if (!kind.startsWith("valid")) await expect(bundleAuditEvidenceRecipe(path, join(f.root, "combined"))).rejects.toThrow(/original bound|mismatch|Tampered/);
   else {
-    const combined = join(f.root, "combined"); bundleAuditEvidenceRecipe(path, combined);
-    const replay = replayAuditBundle(combined, target);
+    const combined = join(f.root, "combined"); await bundleAuditEvidenceRecipe(path, combined);
+    const replay = await replayAuditBundle(combined, target);
     expect(replay.evidence.current[0]!.id).toBe(originalReplay.evidence.current[0]!.id);
     expect(replay.evidence.current[0]!.generatedAt).toBe(pass.generatedAt);
     expect(replay.evidence.binding.target).toEqual(binding.target);
@@ -90,12 +90,12 @@ it.each(["valid", "valid-without-source", "unbound", "tree", "configuration", "r
 });
 
 
-it("repackages command receipts twice without losing distinct identical-byte source identities", () => {
+it("repackages command receipts twice without losing distinct identical-byte source identities", async () => {
   const f = inputs();
   const target = join(f.root, "source"); mkdirSync(target);
   writeFileSync(join(target, "source.ts"), "export const value = 1;");
   const reports = [join(f.root, "first.json"), join(f.root, "second.json")];
-  const executions = reports.map((report) => probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], '{}')", report], { receipt: { artifacts: [{ role: "report", path: report }] } }));
+  const executions = await Promise.all(reports.map((report) => probeExec(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], '{}')", report], { receipt: { artifacts: [{ role: "report", path: report }] } })));
   expect(executions.every((execution) => execution.ok)).toBe(true);
   const result = { kind: "examined" as const, unitsExamined: 2, scope: "files", detail: "Two actual child commands", findings: [] };
   const scope = { module: "M8" as const, workspace: ".", tier: "orchestrated", surface: "module", wholeModule: true };
@@ -104,13 +104,13 @@ it("repackages command receipts twice without losing distinct identical-byte sou
   const binding = createAuditReplayBinding(target, {});
   let bundle = join(f.root, "commands");
   writeAuditReplayBundle(bundle, { binding, scopes: [scope], passes: [{ scope, generatedAt: new Date().toISOString(), producer: { name: "audit-runner:M8", version: "fixture" }, result, rawArtifacts: [owner, ...reports] }] });
-  const original = replayAuditBundle(bundle, target).evidence.current[0]!;
+  const original = (await replayAuditBundle(bundle, target)).evidence.current[0]!;
   for (let round = 0; round < 2; round++) {
     const recipe = join(f.root, `command-recipe-${round}.json`);
     writeFileSync(recipe, JSON.stringify({ target, expectedRevision: binding.target.revision, effectiveConfig: {}, scopes: [scope], passes: [{ bundle, receiptId: original.id }] }));
     const next = join(f.root, `repacked-${round}`);
-    bundleAuditEvidenceRecipe(recipe, next);
-    const replay = replayAuditBundle(next, target);
+    await bundleAuditEvidenceRecipe(recipe, next);
+    const replay = await replayAuditBundle(next, target);
     expect(replay.evidence.current[0]).toEqual(original);
     expect(replay.evidence.current[0]!.rawArtifacts.map((raw) => raw.sourcePath)).toEqual([owner, ...reports]);
     bundle = next;
@@ -119,12 +119,12 @@ it("repackages command receipts twice without losing distinct identical-byte sou
 
 it("retains nested historical execution receipts without claiming current execution", async () => {
   const f = inputs();
-  const execution = probeExec(process.execPath, ["-e", "process.exit(0)"]);
+  const execution = await probeExec(process.execPath, ["-e", "process.exit(0)"]);
   expect(execution.ok).toBe(true);
   const mutation = join(f.root, "mutation.json");
   writeFileSync(mutation, JSON.stringify({ summary: { overall: { mutationScore: 25, mutationScoreBasedOnCoveredCode: 50 }, coveredScope: ["a.ts"] }, reportRows: [], scope: { verified: true, scoped: true, note: "Historical bounded fixture" }, executionReceipt: execution.receipt }));
   const imported = importLegacyAuditEvidence({ ...f.options, mutation });
-  const replay = replayAuditBundle(f.options.out, imported.target);
+  const replay = await replayAuditBundle(f.options.out, imported.target);
   const receipt = replay.evidence.current.find((row) => row.scope.module === "M8" && row.producer.name === "mutation-scan");
   expect(receipt?.legacyReason).toContain("Historical acceptance");
   expect(replay.result.recorded.filter((row) => row.module === "M8").every((row) => row.status !== "ran")).toBe(true);

@@ -82,14 +82,14 @@ describe("the typed-result migration is disclosed, not half-done in silence", ()
   // SEEDED: the hole the migration union opens. `run` accepts both shapes so unmigrated probes keep
   // compiling, which means a helper could silently hand a migrated module's result back in the
   // legacy shape and the compile-time guarantee would read as kept while the runtime one was gone.
-  it("FAILS LOUD when a runner declares itself typed and hands back a legacy outcome", () => {
+  it("FAILS LOUD when a runner declares itself typed and hands back a legacy outcome", async () => {
     const registry: ModuleRunner[] = AUDIT_MODULES.map((module) => ({
       module,
       producers: [],
       ...(module === "M9" ? { typed: true as const } : {}),
       run: () => ({ status: "ran" as const, detail: "laundered back to the legacy shape" }),
     }));
-    const run = runAudit(registry, { targetDir: "/t", env: { connected: false, dynamic: false, llm: false }, exec: () => ({ ok: true, output: "" }), exists: () => true });
+    const run = await runAudit(registry, { targetDir: "/t", env: { connected: false, dynamic: false, llm: false }, exec: async () => ({ ok: true, output: "" }), exists: () => true });
     expect(run.failures.map((f) => `${f.module}: ${f.error}`)).toEqual([
       expect.stringContaining("M9: M9 declares itself migrated (typed: true) but returned 1 legacy ProbeOutcome(s)"),
     ]);

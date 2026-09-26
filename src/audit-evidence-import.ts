@@ -11,7 +11,7 @@ const json = (path: string): unknown => JSON.parse(readFileSync(path, "utf8"));
 const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex");
 
 /** A recipe selects existing bound receipts. It cannot create execution provenance for raw files. */
-export function bundleAuditEvidenceRecipe(recipePath: string, out: string): string {
+export async function bundleAuditEvidenceRecipe(recipePath: string, out: string): Promise<string> {
   const recipe = json(recipePath) as {
     target: string; effectiveConfig: Record<string, unknown>; scopes: AuditEvidenceScope[];
     passes: { bundle: string; receiptId: string }[];
@@ -20,26 +20,27 @@ export function bundleAuditEvidenceRecipe(recipePath: string, out: string): stri
   const from = (path: string): string => resolve(dirname(recipePath), path);
   const binding = createAuditReplayBinding(from(recipe.target), recipe.effectiveConfig);
   if (recipe.expectedRevision !== binding.target.revision) throw new Error("Evidence recipe target revision mismatch");
-  const passes: AuditEvidenceInput[] = recipe.passes.map((selection) => {
+  const passes: AuditEvidenceInput[] = [];
+  for (const selection of recipe.passes) {
     if (!selection.bundle || !selection.receiptId) throw new Error("Evidence recipes require an original bound bundle and receiptId for every pass; raw result files cannot establish original execution provenance. Use explicit legacy import for unbound historical evidence.");
     const source = from(selection.bundle);
     // This validates the ORIGINAL tree, engine, configuration, timestamp, scope and raw hashes
     // before any receipt can be selected. A current snapshot must never re-sign older output.
-    const replay = replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
+    const replay = await replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
     const receipt = [...replay.evidence.current, ...replay.evidence.history.map((row) => row.receipt)].find((row) => row.id === selection.receiptId);
     if (!receipt) throw new Error(`Original bound receipt not found: ${selection.receiptId}`);
-    return {
+    passes.push({
       scope: receipt.scope, generatedAt: receipt.generatedAt, producer: receipt.producer, result: receipt.result,
       rawArtifacts: receipt.rawArtifacts.map((raw) => ({ path: join(source, raw.path), sourcePath: raw.sourcePath, sha256: raw.sha256 })),
       ...(receipt.legacyReason ? { legacyReason: receipt.legacyReason } : {}),
       ...(receipt.historicalOrigin ? { historicalOrigin: receipt.historicalOrigin } : {}),
       ...(receipt.supersedes ? { supersedes: receipt.supersedes } : {}),
-    };
-  });
+    });
+  }
   let sbomPath: string | undefined;
   if (recipe.sbomBundle) {
     const source = from(recipe.sbomBundle);
-    const replay = replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
+    const replay = await replayAuditBundle(source, from(recipe.target), { effectiveConfig: recipe.effectiveConfig });
     if (!replay.sbom) throw new Error("Original bound SBOM is missing from the selected bundle");
     const manifest = json(join(source, "audit-replay.json")) as { sbom: { path: string } };
     sbomPath = join(source, manifest.sbom.path);
