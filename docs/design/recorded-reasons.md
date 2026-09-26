@@ -195,13 +195,19 @@ So a placeholder is a **declared binding**, and this is the contract:
 - A `<lowercase-with-hyphens>` token in a `FALSIFIER:` is a run-time binding, resolved from the
   environment variable `HARVEY_FALSIFIER_<UPPER_SNAKE>` — `<superredhat-clone>` reads
   `HARVEY_FALSIFIER_SUPERREDHAT_CLONE`. Write each placeholder unquoted as a complete shell word,
-  or as the complete value in an assignment such as `TOKEN=<token>`. The structural and runtime
-  gates reject quoted or concatenated forms, including placeholders inside single or double
-  quotes, `$(...)`, backticks, and heredoc/here-string programs. At execution Harvey replaces it
-  with one POSIX-shell single-quoted word, escaping embedded quotes, so whitespace, glob
-  characters, redirections, substitutions and command separators in the environment value remain
-  literal data. The command author owns the surrounding shell program; Harvey owns literal
-  encoding of the bound value.
+  or as the complete value in a leading POSIX assignment such as `TOKEN=<token>`. Harvey replaces
+  each original placeholder span once with POSIX single-quoted literal encoding. Binding text is
+  never rescanned: placeholder-like text, replacement tokens such as `$&`, spaces, quotes,
+  newlines, Unicode, and shell metacharacters in a binding remain data.
+- Placeholder-bearing programs use a checked shell subset: simple commands joined by `;`, `&&`,
+  `||`, or `|`, optionally with a pipeline-leading `!`. Ordinary arguments may contain balanced
+  single or double quotes and plain `$NAME` or `$$` references. The structural and runtime gates
+  reject quoted or concatenated placeholders, backslashes, nested expansions (`$(`, `${`, `$[`,
+  `$'`, `$"`), backticks, redirects and heredocs, comments, grouping and control constructs, and
+  author newlines. Move complex logic into a script and pass bindings as separate arguments.
+  These restrictions apply to the original author text, never to binding contents. Commands
+  without placeholders retain their existing shell behavior. The author owns the command and
+  its lookup-failure handling; Harvey owns literal encoding of the bound values.
 - It is **legal only on a reason that carries `FALSIFIER-TIER:`**. A placeholder in an offline
   falsifier is a structural error, because offline the command really is run as written and really
   does hit the redirect. Write a real path instead, or declare the tier.
@@ -251,8 +257,10 @@ There are exactly two ways it happens, both boring, both silent:
    *still-blocked* bucket.
 2. **A pipeline exits with its LAST stage's code.** `grep -E … file | grep -Eq …` reports 1 when the
    first stage dies on a missing file. `set -o pipefail` is **not** a portable fix here:
-   `revalidateReasons` runs `spawnSync("sh", ["-c", cmd])`, and `/bin/sh` on a Linux CI runner is
-   dash, which has no `pipefail`. Eliminate the pipe — redirect to a file, then read it.
+   the CLI launches `sh` with fixed arguments and passes the program through
+   `HARVEY_RECORDED_FALSIFIER_PROGRAM`; `/bin/sh` on a Linux CI runner is dash, which has no
+   `pipefail`. Eliminate the pipe. For a placeholder-bearing program, move the complex lookup
+   into a script and pass its paths as separate bound arguments.
 
 Two patterns, and there is no third:
 
