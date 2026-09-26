@@ -6,7 +6,8 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { admitReadinessStage, bindReadinessPlanV1, createReadinessAdmission, type ReadinessSpawnRequest } from "./audit-readiness-authority.js";
 import { discoverReadinessPlan } from "./audit-readiness.js";
-import { createBoundedProcessRunner, type BoundedProcessOptions, type BoundedProcessRedactor, type BoundedProcessResult } from "./bounded-process.js";
+import { type BoundedProcessOptions, type BoundedProcessRedactor, type BoundedProcessResult } from "./bounded-process.js";
+import { createBoundedProcessRunner } from "../test-fixtures/readiness-native-process-group.js";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget } from "./disposable-target.js";
 
 const roots: string[] = [];
@@ -128,7 +129,7 @@ describe.skipIf(process.platform === "win32")("bounded readiness child lifecycle
   });
 
   it.each(["child_process", "stream"])("refuses Node's raw %s debug logger before a child or secret diagnostic can occur", async (debug) => {
-    const moduleUrl = new URL("./bounded-process.ts", import.meta.url).href;
+    const moduleUrl = new URL("../test-fixtures/readiness-native-process-group.ts", import.meta.url).href;
     const secret = "DEBUG_LOG_MUST_NOT_CONTAIN_THIS_TOKEN";
     const p = await fixture(`(async()=>{
 const {createBoundedProcessRunner}=await import(${JSON.stringify(moduleUrl)});

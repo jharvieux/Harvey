@@ -66,8 +66,8 @@ exact image, container, lease and isolation settings. Target exit/close metadata
 is read separately from container termination; a container exit cannot substitute
 for a target exit. A passed readiness receipt requires verified target identity,
 complete lifecycle and streams, an observed terminal namespace, and removal of
-the exact container. The native process-group helper remains available to other
-callers, but its success never proves readiness descendant containment.
+the exact container. The native process-group implementation is retained only as a physical comparison
+test fixture; its success never proves readiness descendant containment.
 
 The scheduler serializes undeclared shared output ownership. A failed prerequisite
 withholds its descendants while independent stages continue. Install-covered

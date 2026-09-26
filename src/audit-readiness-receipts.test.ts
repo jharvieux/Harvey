@@ -7,7 +7,7 @@ import { discoverReadinessPlan, type ReadinessStageV1 } from "./audit-readiness.
 import { admitReadinessStage, bindReadinessPlanV1, createReadinessAdmission, type ReadinessSpawnRequest, type ReadinessStageAdmission } from "./audit-readiness-authority.js";
 import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget } from "./disposable-target.js";
 import { createReadinessArtifactsV1, parseReadinessArtifactsV1 } from "./audit-readiness-artifacts.js";
-import { createBoundedProcessRunner } from "./bounded-process.js";
+import { createBoundedProcessRunner } from "../test-fixtures/readiness-native-process-group.js";
 import {
   closeReadinessExecutionV1, createReadinessFailureReceipt, createReadinessImplicitReceipt, createReadinessNotAssessedReceipt,
   createReadinessProcessReceipt, createReadinessReceiptContext, prepareReadinessSpawn,
