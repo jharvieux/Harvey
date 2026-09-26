@@ -339,7 +339,21 @@ export async function verifyRunRoot(target: DisposableTarget, relativeCwd = ".")
   } catch (error) { return { status: "not-assessed", ...refusal(error) }; }
 }
 
-/** Call after every scheduled child has settled. Repeated calls return the same retained receipt. */
+/** Unresolved ownership prevents deletion even if a later caller asks for unconditional cleanup. */
+export async function retainDisposableTarget(target: DisposableTarget, reason: { reasonCode: string; reason: string; falsifier: string }): Promise<DisposableCleanupReceipt> {
+  const state = targets.get(target);
+  if (!state) return { status: "failed", root: null, reasonCode: "unrecognized-target", reason: "Retention refused an unrecognized disposable target handle.", falsifier: "Retain only the authentic target handle created by this run." };
+  if (state.cleanup) return state.cleanup;
+  state.cleanup = (async () => {
+    const startedAt = new Date().toISOString();
+    const start = performance.now();
+    const source = await preservation(target, state.limits);
+    return { status: "failed" as const, root: target.root, startedAt, endedAt: new Date().toISOString(), durationMs: Math.max(0, performance.now() - start), removal: { status: "failed" as const, ...reason }, source };
+  })();
+  return state.cleanup;
+}
+
+/** Delete only after every owned workload has a terminal observation. */
 export function cleanupDisposableTarget(target: DisposableTarget): Promise<DisposableCleanupReceipt> {
   const state = targets.get(target);
   if (!state) return Promise.resolve({ status: "failed", root: null, reasonCode: "unrecognized-target", reason: "Cleanup refused an unrecognized disposable target handle; no path was removed.", falsifier: "Pass the authentic handle returned by createDisposableTarget to cleanup." });

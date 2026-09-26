@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget, type DisposableTarget, verifyRunRoot } from "./disposable-target.js";
+import { captureSourceSentinel, cleanupDisposableTarget, createDisposableTarget, retainDisposableTarget, type DisposableTarget, verifyRunRoot } from "./disposable-target.js";
 
 const exec = promisify(execFile);
 const owned: string[] = [];
@@ -37,6 +37,17 @@ async function git(source: string, args: string[]): Promise<void> {
 }
 
 describe("disposable source copy", () => {
+  it("retains an authentic root while namespace ownership is unresolved and refuses later unconditional deletion", async () => {
+    const { source, scratch } = await fixture();
+    const target = await ready(source, scratch);
+    const retained = await retainDisposableTarget(target, { reasonCode: "owned-workload-unconfirmed", reason: "The fixture has no terminal namespace observation.", falsifier: "Prove the owned workload has terminated before separately remediating the retained root." });
+    expect(retained).toMatchObject({ status: "failed", removal: { status: "failed", reasonCode: "owned-workload-unconfirmed" }, source: { status: "passed" } });
+    expect((await lstat(target.root)).isDirectory()).toBe(true);
+    expect(await cleanupDisposableTarget(target)).toEqual(retained);
+    expect((await lstat(target.root)).isDirectory()).toBe(true);
+    owned.push(target.root);
+  });
+
   it("copies independent files, excludes artifacts and credential config, and verifies source preservation after physical writes", async () => {
     const { source, scratch } = await fixture();
     for (const dir of ["node_modules", "dist", ".next", ".hg", ".yarn/cache"]) {

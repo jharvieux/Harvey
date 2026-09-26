@@ -120,6 +120,20 @@ function assertClosure<Receipt>(plan: ReadinessPlanV1, rows: ReadinessStageOutco
 }
 
 describe("readiness dependency closure", () => {
+  it("retains the shared execution lease after an unresolved workload and withholds independent ready stages", async () => {
+    const { plan, context, target } = await fixture();
+    const attempted: StageId[] = [];
+    let unresolved = false;
+    const rows = await executeReadinessPlan(context, target, {
+      concurrency: 1,
+      executionBarrier: () => unresolved ? { reasonCode: "owned-workload-unconfirmed", reason: "The fixture's owned namespace has no terminal observation.", falsifier: "Observe termination of that exact namespace before releasing its output lease." } : null,
+      runStage: async (row) => { attempted.push(row.id); unresolved = true; return failure(row); },
+    });
+    expect(attempted).toEqual([stage(plan, "install").id]);
+    expect(outcome(rows, stage(plan, "lint").id)).toMatchObject({ status: "not-assessed", execution: "withheld", reasonCode: "owned-workload-unconfirmed" });
+    assertClosure(plan, rows);
+  });
+
   it.each(["failed", "not-assessed", "throw", "invalid"] as const)("normalizes a %s codegen result and continues only independent branches", async (mode) => {
     const { plan, context, target } = await fixture({ workspace: true });
     const attempted: StageId[] = [];

@@ -51,6 +51,8 @@ export interface ReadinessExecutionOptions<Receipt> {
   runStage: (stage: PlannedStage, admission: AdmittedStage) => Promise<ReadinessStageRunResult<Receipt>>;
   /** Supplied by the execution caller; never inferred from script names or different workspaces. */
   independence?: readonly ReadinessStageIndependence[];
+  /** An unresolved owned workload retains the shared output lease before any later admission. */
+  executionBarrier?: () => StageReason | null;
 }
 
 function nonempty(value: unknown): value is string {
@@ -58,7 +60,8 @@ function nonempty(value: unknown): value is string {
 }
 
 function independenceFor<Receipt>(stages: readonly ReadinessStageV1[], options: ReadinessExecutionOptions<Receipt>): Map<StageId, ReadinessStageIndependence> {
-  if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 4 || typeof options.runStage !== "function") {
+  if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 4 || typeof options.runStage !== "function"
+    || (options.executionBarrier !== undefined && typeof options.executionBarrier !== "function")) {
     throw new Error("Readiness execution requires a concurrency limit from 1 to 4 and a stage runner.");
   }
   if (options.independence !== undefined && !Array.isArray(options.independence)) throw new Error("Readiness independence declarations must be an array.");
@@ -152,6 +155,13 @@ export async function executeReadinessPlan<Receipt>(context: ReadinessAdmissionC
       const base = baseFor(stage, declarations.get(stage.id));
       if (stage.assessment === "absent" || stage.assessment === "not-assessed") {
         outcomes.set(stage.id, { ...base, status: "not-assessed", execution: "withheld", reasonCode: stage.reasonCode, reason: stage.reason, falsifier: stage.falsifier });
+        pending.delete(stage.id);
+        continue;
+      }
+      const barrier = options.executionBarrier?.();
+      if (barrier) {
+        if (![barrier.reasonCode, barrier.reason, barrier.falsifier].every(nonempty)) throw new Error("Readiness execution barrier requires complete ownership evidence.");
+        outcomes.set(stage.id, { ...base, status: "not-assessed", execution: "withheld", ...barrier });
         pending.delete(stage.id);
         continue;
       }
