@@ -119,7 +119,7 @@ else {
 `;
   interface ShellReceipt { argv: string[]; program?: string; pid: number; status?: number; stdout?: string; stderr?: string }
   interface NativeTimeoutReceipt { requestedTimeout: number; pid: number; status: number | null; signal: string | null; error?: string }
-  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}, command = 'eval "$HARVEY_FALSIFIER_FIXTURE_PROGRAM"'): Promise<ChildResult & { receipt?: ShellReceipt; nativeTimeout?: NativeTimeoutReceipt }> {
+  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}, command = 'eval "$HARVEY_FALSIFIER_FIXTURE_PROGRAM"', tiers = ["--tier", "lighthouse"]): Promise<ChildResult & { receipt?: ShellReceipt; nativeTimeout?: NativeTimeoutReceipt }> {
     const dir = plant({ "reason.md": [
       "REASON: a controlled fixture still describes a blocker",
       "KIND: empirical", "PROVENANCE: MEASURED 2026-08-26",
@@ -142,7 +142,7 @@ cp.spawnSync=function(bin,args,options){
   return result;
 }; require("node:module").syncBuiltinESMExports();`);
     try {
-      const result = await gate(dir, ["--revalidate", "--tier", "lighthouse", "--list"], {
+      const result = await gate(dir, ["--revalidate", ...tiers, "--list"], {
         ...extraEnv, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_SH_RECEIPT: receiptPath,
         HARVEY_FALSIFIER_FIXTURE_PROGRAM: program,
         ...(extraEnv.HARVEY_SH_MODE === "timeout" ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}` } : {}),
@@ -235,6 +235,137 @@ cp.spawnSync=function(bin,args,options){
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    "test -f <fixture-path> && test -f <other>",
+    "test -f <other> && test -f <fixture-path>",
+  ])("never expands token-shaped binding data again, in either placeholder order: %s (#2090)", async (command) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-reason-tokens-"));
+    const path = join(fixture, "existing-<other>-file");
+    const other = join(fixture, "existing-<fixture-path>-file");
+    writeFileSync(path, "path");
+    writeFileSync(other, "other");
+    try {
+      const result = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: path, HARVEY_FALSIFIER_OTHER: other }, command);
+      expect(result.receipt?.status).toBe(0);
+      expect(result.code).toBe(1);
+      expect(result.out).toContain("STALE");
+      expect(result.out).toContain("a controlled fixture still describes a blocker");
+      expect(result.out).toContain("now exits 0");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a second binding's harmless shell marker inert when the first binding contains its token (#2090)", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-reason-injection-"));
+    const path = join(fixture, "existing-<other>-file");
+    const marker = join(fixture, "injection-marker");
+    writeFileSync(path, "path");
+    try {
+      const result = await falsifier("", {
+        HARVEY_FALSIFIER_FIXTURE_PATH: path,
+        HARVEY_FALSIFIER_OTHER: '$(printf harmless > "$HARVEY_INJECTION_MARKER")',
+        HARVEY_INJECTION_MARKER: marker,
+      }, "test -f <fixture-path> && test -n <other>");
+      expect(existsSync(marker)).toBe(false);
+      expect(result.receipt?.status).toBe(0);
+      expect(result.code).toBe(1);
+      expect(result.out).toContain("STALE");
+      expect(result.out).toContain("a controlled fixture still describes a blocker");
+      expect(JSON.stringify(result.receipt?.argv)).not.toContain(path);
+      expect(JSON.stringify(result.receipt?.argv)).not.toContain("printf harmless");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["$&", "$`", "$'", "$$"])("preserves replacement metacharacters %s in an existing filename through the actual CLI (#2090)", async (pattern) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-reason-replacement-"));
+    const path = join(fixture, `existing${pattern}file`);
+    writeFileSync(path, "fixture");
+    try {
+      const result = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: path }, "test -f <fixture-path>");
+      expect(result.receipt?.status).toBe(0);
+      expect(result.code).toBe(1);
+      expect(result.out).toContain("STALE");
+      expect(result.out).toContain("a controlled fixture still describes a blocker");
+      expect(result.out).toContain("now exits 0");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "test -f <fixture-path>",
+    'P=<fixture-path>; test -f "$P"',
+    'P=<fixture-path> sh -c \'test -f "$P"\'',
+    'test -f <fixture-path> && ! false || exit 127',
+  ])("preserves quotes, newlines and Unicode in standalone and leading-assignment bindings: %s (#2090)", async (command) => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-reason-value-"));
+    const path = join(fixture, "existing 'single' \"double\"\nnewline\ttab β\u00a0$*file");
+    writeFileSync(path, "fixture");
+    try {
+      const result = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: path }, command);
+      expect(result.receipt?.status).toBe(0);
+      expect(result.receipt?.stderr).toBe("");
+      expect(result.code).toBe(1);
+      expect(result.out).toContain("STALE");
+      expect(result.out).toContain("a controlled fixture still describes a blocker");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "test -f prefix\\ <fixture-path>",
+    "test -f prefix\u00a0<fixture-path>",
+    "test -f <fixture-path>\u00a0suffix",
+    'P=prefix=<fixture-path>; test -f "$P"',
+    "test -f /prefix=<fixture-path>",
+    "test -f P=<fixture-path>",
+    "test -f $( (:) ; printf '%s' <fixture-path>)",
+    "test -f <fixture-path> && test -n $(printf literal)",
+    "test -f '<fixture-path>'",
+    'test -f "<fixture-path>"',
+    "test -f $'<fixture-path>'",
+    "test -f `printf '%s' <fixture-path>`",
+    "test -f ${OTHER:-<fixture-path>}",
+    "cat <<< <fixture-path>",
+    "test -f <fixture-path> # comment",
+    "if test -f <fixture-path>; then true; fi",
+    "(test -f <fixture-path>)",
+  ])("refuses unsupported author placement before launching a shell: %s (#2090)", async (command) => {
+    const result = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: REPO_ROOT }, command);
+    expect(result.receipt).toBeUndefined();
+    expect(result.code).toBe(1);
+    expect(errors(result.out)).toEqual([expect.stringContaining("literal-binding author convention")]);
+    expect(result.out).toContain("UNVERIFIABLE");
+    expect(result.out).toContain("a controlled fixture still describes a blocker");
+    expect(result.out).toContain("It was NOT executed");
+    expect(result.out).not.toContain("HOLDS");
+  });
+
+  it("retains native exit 2 as holds and refuses unbound or unavailable-tier execution (#2090)", async () => {
+    const holds = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: REPO_ROOT }, "test -d <fixture-path>; exit 2");
+    expect(holds.receipt?.status).toBe(2);
+    expect(holds.code).toBe(0);
+    expect(holds.out).toContain("HOLDS");
+    expect(holds.out).toContain("exits 2 — reason still holds");
+    expect(holds.out).toContain("a controlled fixture still describes a blocker");
+
+    const unbound = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: undefined }, "test -d <fixture-path>");
+    expect(unbound.receipt).toBeUndefined();
+    expect(unbound.code).toBe(1);
+    expect(unbound.out).toContain("UNVERIFIABLE");
+    expect(unbound.out).toContain("HARVEY_FALSIFIER_FIXTURE_PATH");
+
+    const offline = await falsifier("", { HARVEY_FALSIFIER_FIXTURE_PATH: REPO_ROOT }, "test -d <fixture-path>", []);
+    expect(offline.receipt).toBeUndefined();
+    expect(offline.code).toBe(0);
+    expect(offline.out).toContain("SKIPPED-LIVE");
+    expect(offline.out).toContain("HARVEY_FALSIFIER_FIXTURE_PATH");
   });
 });
 

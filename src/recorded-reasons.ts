@@ -54,55 +54,66 @@ export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbenc
 // makes every unbound live target unfalsifiable by construction, a placeholder is now a declared
 // BINDING: read from HARVEY_FALSIFIER_<NAME> on the run that has the tier, encoded by Harvey as one
 // literal shell word, and UNVERIFIABLE — never executed — when unbound. The author must leave the
-// placeholder unquoted as a complete word or assignment value, keeping the quoting boundary under
-// Harvey's control. Lowercase-and-hyphens only, so a real redirect (`< /dev/null`, `2>&1`, `<<EOF`)
+// placeholder unquoted as a complete word or leading assignment value in the checked simple-command
+// language below. Lowercase-and-hyphens only, so a real redirect (`< /dev/null`, `2>&1`, `<<EOF`)
 // is not mistaken for one.
 const PLACEHOLDER_TOKEN = /<([a-z][a-z0-9-]*)>/g;
+const PLACEHOLDER_CONVENTION = "Use an unquoted complete shell word or assignment value in a leading NAME=<binding> assignment, within simple commands joined by ;, &&, || or | (optional leading !). Other arguments may use balanced quotes and plain $NAME or $$ references. Backslashes, nested expansions, backticks, redirects, comments, control/grouping syntax and author newlines are unsupported; put complex logic in a script and pass each binding as a separate argument.";
 
 function falsifierPlaceholders(command: string): string[] {
   return [...new Set([...command.matchAll(PLACEHOLDER_TOKEN)].map((m) => m[1] as string))];
 }
 
-function placeholderShellContext(command: string, end: number): "quote" | "command substitution" | undefined {
-  let quote: "'" | '"' | "`" | undefined;
-  let commandSubstitutionDepth = 0;
-  for (let i = 0; i < end; i += 1) {
-    const char = command[i];
-    if (char === "\\" && quote !== "'") {
-      i += 1;
-      continue;
-    }
-    if (quote !== undefined) {
-      if (char === quote) quote = undefined;
-      continue;
-    }
-    if (char === "'" || char === '"' || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "$" && command[i + 1] === "(") {
-      commandSubstitutionDepth += 1;
-      i += 1;
-      continue;
-    }
-    if (char === ")" && commandSubstitutionDepth > 0) commandSubstitutionDepth -= 1;
-  }
-  if (quote !== undefined) return "quote";
-  if (commandSubstitutionDepth > 0) return "command substitution";
-  return undefined;
-}
-
 function unsafePlaceholderSlots(command: string): string[] {
-  const shellBoundary = (char: string | undefined): boolean => char === undefined || /[\s;|&()]/.test(char);
-  const hasHereDocumentOrString = command.includes("<<");
-  return [...new Set([...command.matchAll(PLACEHOLDER_TOKEN)].flatMap((match) => {
-    const index = match.index ?? 0;
-    const before = index === 0 ? undefined : command[index - 1];
-    const afterIndex = index + match[0].length;
-    const after = afterIndex === command.length ? undefined : command[afterIndex];
-    const literalSlot = (shellBoundary(before) || before === "=") && shellBoundary(after);
-    return literalSlot && placeholderShellContext(command, index) === undefined && !hasHereDocumentOrString ? [] : [match[1] as string];
-  }))];
+  const placeholders = falsifierPlaceholders(command);
+  if (placeholders.length === 0) return [];
+
+  // Check a deliberately small language, not selected shell contexts. In particular, counting
+  // `$(` and `)` is unsound: a nested subshell, case pattern or quote changes which `)` closes it.
+  // No escape processing or nested evaluation is admitted, even inside an ordinary quoted word.
+  // Programs without bindings keep their existing shell semantics.
+  if (/[\\`\r\n\0]/.test(command) || ["$(", "${", "$'", '$"', "$["].some((syntax) => command.includes(syntax))) return placeholders;
+  const tokens = /[ \t]+|&&|\|\||[;|]|(?:<[a-z][a-z0-9-]*>|'[^']*'|"[^"]*"|[^ \t;&|<>'"(){}#])+/y;
+  const reserved = new Set(["if", "then", "elif", "else", "fi", "do", "done", "for", "while", "until", "case", "esac", "in", "function", "select", "time", "coproc", "[[", "]]"]);
+  let index = 0;
+  let hasWord = false;
+  let hasCommand = false;
+  let canNegate = true;
+  let needsWord = true;
+  const unsafe = new Set<string>();
+  while (index < command.length) {
+    tokens.lastIndex = index;
+    const match = tokens.exec(command);
+    if (!match) return placeholders;
+    const word = match[0];
+    index = tokens.lastIndex;
+    if (/^[ \t]+$/.test(word)) continue;
+    if (/^(?:;|&&|\|\||\|)$/.test(word)) {
+      if (!hasWord) return placeholders;
+      hasWord = false;
+      hasCommand = false;
+      canNegate = word !== "|";
+      needsWord = word !== ";";
+      continue;
+    }
+    if (word === "!") {
+      if (!canNegate || hasWord) return placeholders;
+      canNegate = false;
+      needsWord = true;
+      continue;
+    }
+    if (reserved.has(word)) return placeholders;
+    const assignment: boolean = /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) && !hasCommand;
+    const names = falsifierPlaceholders(word);
+    if (names.length > 0 && !/^<[a-z][a-z0-9-]*>$/.test(word) &&
+      !(assignment && /^[A-Za-z_][A-Za-z0-9_]*=<[a-z][a-z0-9-]*>$/.test(word))) {
+      for (const name of names) unsafe.add(name);
+    }
+    hasWord = true;
+    hasCommand ||= !assignment;
+    needsWord = false;
+  }
+  return needsWord ? placeholders : [...unsafe];
 }
 
 function shellLiteral(value: string): string {
@@ -667,7 +678,7 @@ export function validateRecordedReason(r: ParsedReason, exists: (path: string) =
     }
     const unsafeSlots = f.FALSIFIER ? unsafePlaceholderSlots(f.FALSIFIER) : [];
     if (unsafeSlots.length > 0) {
-      errors.push(`FALSIFIER: placeholder(s) ${bindingHint(unsafeSlots)} must be an unquoted complete shell word or assignment value (#2090). Harvey encodes the environment value as one literal shell word; quotes, concatenation, command substitutions, backticks, and heredoc/here-string programs put part of that boundary back under command-author control and are refused.`);
+      errors.push(`FALSIFIER: placeholder(s) ${bindingHint(unsafeSlots)} violate the literal-binding author convention (#2090). ${PLACEHOLDER_CONVENTION}`);
     }
   }
   if (kind === "decisional") {
@@ -767,14 +778,16 @@ export function revalidateReasons(
       return [{ ...base, status: "SKIPPED-LIVE" as const, detail: `live-only falsifier not run — its tier "${tier}" is not available on this run. Re-run where that tier exists: \`--tier ${tier}\` (or \`--live\`).${bindings} \`${command}\`` }];
     }
     if (unsafeSlots.length > 0) {
-      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier has placeholder(s) outside an unquoted complete shell word or assignment value — rewrite ${bindingHint(unsafeSlots)} before re-running. It was NOT executed because quotes, concatenation, command substitutions, backticks, and heredoc/here-string programs do not preserve Harvey's literal binding boundary. \`${command}\`` }];
+      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier violates the literal-binding author convention — rewrite ${bindingHint(unsafeSlots)} before re-running. It was NOT executed. ${PLACEHOLDER_CONVENTION} \`${command}\`` }];
     }
     const bindings = new Map(placeholders.map((placeholder) => [placeholder, binding(placeholder)]));
     const unbound = placeholders.filter((placeholder) => bindings.get(placeholder) === undefined);
     if (unbound.length > 0) {
       return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier has unbound placeholder(s) — set ${bindingHint(unbound)} and re-run. It was NOT executed: as written the shell reads \`<${unbound[0]}>\` as an input redirect and exits non-zero, which is indistinguishable from the blocker still holding. \`${command}\`` }];
     }
-    const resolved = placeholders.reduce((c, placeholder) => c.replaceAll(`<${placeholder}>`, shellLiteral(bindings.get(placeholder) as string)), command);
+    // Replace original spans exactly once. A binding may itself contain `<other>` or JS
+    // replacement patterns ($&, $`, $'); neither is command syntax or another substitution.
+    const resolved = command.replace(PLACEHOLDER_TOKEN, (_token, placeholder: string) => shellLiteral(bindings.get(placeholder) as string));
     const { code, output } = run(resolved);
     if (code === null || code === 127) {
       return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "exit 127: command not found"}): \`${resolved}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
