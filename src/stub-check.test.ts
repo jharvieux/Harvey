@@ -1,9 +1,25 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { coveringTests, runStubCheck, stubExportedFunctions, stubSurvivalFindings, type StubTestRunner } from "./stub-check.js";
 import type { SourceInput } from "./detectors/common.js";
+import { createCommandExecutionReceipt, type CommandExecutionReceipt } from "./producer-execution-receipt.js";
+
+function commandReceipt(outcome: CommandExecutionReceipt["outcome"], invocationId = randomUUID()): CommandExecutionReceipt {
+  return createCommandExecutionReceipt({
+    invocationId,
+    command: { executable: "test-runner", argv: ["run"], cwd: "/fixture" },
+    target: { identity: "fixture", value: "source" },
+    toolchain: [{ name: "test-runner", version: "fixture" }],
+    configuration: { identity: "stub", value: invocationId },
+    startedAt: "2026-09-26T00:00:00Z",
+    finishedAt: "2026-09-26T00:00:01Z",
+    outcome,
+    ...(outcome.state === "output-limit-exceeded" ? { stdout: "partial", outputCompleteness: { stdout: "truncated" as const, stderr: "unknown" as const } } : {}),
+  });
+}
 
 const calc: SourceInput = {
   path: "src/calc.ts",
@@ -72,7 +88,7 @@ describe("runStubCheck / stubSurvivalFindings", () => {
       seen.push(stub.exportName);
       expect(stub.stubbedText).not.toBe(calc.text); // the runner must receive the STUB, not the original
       expect(tests).toEqual(["src/calc.test.ts"]);
-      return stub.exportName === "add";
+      return commandReceipt({ state: "exited", exitCode: stub.exportName === "add" ? 0 : 1, signal: null });
     };
     const runs = runStubCheck(files, runner);
     expect(seen).toEqual(["add", "double", "triple"]);
@@ -85,7 +101,7 @@ describe("runStubCheck / stubSurvivalFindings", () => {
   });
 
   it("emits a Confirmed M8-01-* finding per survival, distinct from Stryker/M8-00 output", () => {
-    const runs = runStubCheck(files, (stub) => stub.exportName === "add");
+    const runs = runStubCheck(files, (stub) => commandReceipt({ state: "exited", exitCode: stub.exportName === "add" ? 0 : 1, signal: null }));
     const findings = stubSurvivalFindings(runs);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
@@ -97,6 +113,26 @@ describe("runStubCheck / stubSurvivalFindings", () => {
       location: "src/calc.ts:1",
     });
     expect(findings[0]?.evidence).toContain("src/calc.test.ts");
+  });
+
+  it.each([
+    { state: "signaled", exitCode: null, signal: "SIGKILL" },
+    { state: "timed-out", exitCode: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" },
+    { state: "output-limit-exceeded", exitCode: null, signal: "SIGTERM", errorCode: "ENOBUFS" },
+    { state: "spawn-failed", exitCode: null, signal: null, errorCode: "ENOENT" },
+    { state: "unknown-exit", exitCode: null, signal: null },
+  ] satisfies CommandExecutionReceipt["outcome"][])("keeps $state receipt data and refuses to classify interruption as a caught deletion", (outcome) => {
+    const runs = runStubCheck(files, () => commandReceipt(outcome));
+    expect(runs).toHaveLength(3);
+    expect(runs[0]).toMatchObject({ classification: { status: "interrupted", reason: expect.stringContaining(outcome.state) }, executionReceipt: { outcome } });
+    expect(runs[0]).not.toHaveProperty("suitePassed");
+    expect(stubSurvivalFindings(runs)).toEqual([]);
+  });
+
+  it("keeps a completed non-zero exit distinct from interruption and counts it as a caught deletion", () => {
+    const runs = runStubCheck(files, () => commandReceipt({ state: "exited", exitCode: 7, signal: null }));
+    expect(runs[0]).toMatchObject({ suitePassed: false, classification: { status: "completed", suitePassed: false }, executionReceipt: { outcome: { state: "exited", exitCode: 7, signal: null } } });
+    expect(stubSurvivalFindings(runs)).toEqual([]);
   });
 });
 
@@ -175,7 +211,7 @@ describe("M8-P-DELETION-SURVIVING calibration pair (executed, not recorded)", ()
     ]);
     const runner: StubTestRunner = (stub) => {
       const test = bySubject.get(stub.file)!;
-      return runSuite(test.text, execModule(stub.stubbedText, () => ({}))).failed === 0;
+      return commandReceipt({ state: "exited", exitCode: runSuite(test.text, execModule(stub.stubbedText, () => ({}))).failed === 0 ? 0 : 1, signal: null });
     };
     const findings = stubSurvivalFindings(runStubCheck(files, runner));
     expect(findings).toHaveLength(1);
