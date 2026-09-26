@@ -274,6 +274,20 @@ child.unref(); process.exit(0);`);
     expect(result.durationMs).toBeLessThan(1_500);
     pids.add(Number(await readFile(join(p.dir, "escaped.pid"), "utf8")));
   });
+
+  it("discloses that original-group absence cannot establish detached descendant ownership", async () => {
+    const p = await fixture(`const {spawn}=require('node:child_process');const fs=require('node:fs');
+const child=spawn(process.execPath,['-e',"require('node:fs').writeFileSync('escaped.pid',String(process.pid));setInterval(()=>require('node:fs').appendFileSync('heartbeat','tick'),20);"],{detached:true,stdio:'ignore'});
+child.unref();const wait=setInterval(()=>{if(fs.existsSync('heartbeat')){clearInterval(wait);process.exit(0);}},10);`);
+    const result = await run(p.request);
+    const escaped = Number(await readFile(join(p.dir, "escaped.pid"), "utf8")); pids.add(escaped);
+    // A clean native helper outcome cannot authorize a readiness pass for target code.
+    expect(result).toMatchObject({ state: "exited", succeeded: true, termination: { tree: "absent" }, containment: { kind: "native-process-group", descendantOwnership: "unproven", groupObservation: "absent" } });
+    expect(() => process.kill(escaped, 0)).not.toThrow();
+    const before = await readFile(join(p.dir, "heartbeat"), "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await readFile(join(p.dir, "heartbeat"), "utf8")).length).toBeGreaterThan(before.length);
+  });
 });
 
 describe.skipIf(process.platform === "win32")("redactor handoff and concurrency", () => {

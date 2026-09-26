@@ -29,6 +29,33 @@ interface ProcessEnd {
   signal: NodeJS.Signals | null;
 }
 
+/** Native process groups describe the original group only, never descendant ownership. */
+export type ReadinessProcessContainment =
+  | { kind: "native-process-group"; descendantOwnership: "unproven"; groupObservation: "not-started" | "absent" | "unconfirmed" }
+  | { kind: "unavailable"; reasonCode: string }
+  | {
+    kind: "docker-pid-namespace";
+    imageId: string;
+    containerId: string | null;
+    leaseName: string | null;
+    runtimeVersion: string;
+    apiVersion: string;
+    namespace: "not-started" | "terminated" | "unconfirmed";
+    targetWork: "not-started" | "begun" | "unknown";
+    terminalObservation: { at: string; running: false; pid: 0 } | null;
+    metadata: "verified" | "unavailable";
+    cleanup: "not-required" | "removed" | "retained";
+    /** The fixed restrictions below were compared with this exact container before start. */
+    isolationVerified: boolean;
+    isolation: {
+      privatePidNamespace: true; network: "none"; noNewPrivileges: true; capDrop: "ALL";
+      observerCapabilities: ["SETUID", "SETGID"]; targetUid: number; targetGid: number;
+      mountScope: "disposable-root-only"; rootfs: "private-writable-overlay";
+    };
+    targetIdentity: { uid: number; gid: number; capEff: "0000000000000000"; noNewPrivileges: true } | null;
+    observerNodeVersion: string | null;
+  };
+
 export interface BoundedProcessOutput {
   /** Byte count and SHA-256 cover every raw byte drained, including omitted bytes. */
   bytes: number;
@@ -47,7 +74,8 @@ export interface BoundedProcessOutput {
 }
 
 export interface BoundedProcessResult {
-  state: "exited" | "timed-out" | "aborted" | "spawn-error" | "io-error" | "observer-error" | "redaction-error" | "descendant-cleanup" | "termination-unconfirmed" | "unsupported-platform";
+  state: "exited" | "timed-out" | "aborted" | "spawn-error" | "io-error" | "observer-error" | "redaction-error" | "descendant-cleanup" | "termination-unconfirmed" | "unsupported-platform" | "containment-unavailable";
+  containment: ReadinessProcessContainment;
   succeeded: boolean;
   pid: number | null;
   queuedAt: string;
@@ -65,6 +93,7 @@ export interface BoundedProcessResult {
   termination: {
     reason: "timeout" | "abort" | "process-error" | "io-error" | "observer-error" | "descendants" | null;
     attempts: { at: string; signal: "SIGTERM" | "SIGKILL"; status: "sent" | "absent" | "failed"; code: string | null }[];
+    /** Native helper: original group only. Owned descendant absence requires containment evidence. */
     tree: "not-started" | "absent" | "unconfirmed";
     stdioForcedClosed: boolean;
   };
@@ -92,7 +121,7 @@ function integer(value: number, max: number): boolean {
   return Number.isSafeInteger(value) && value > 0 && value <= max;
 }
 
-function configure(options: BoundedProcessOptions): Configuration {
+export function configureBoundedProcess(options: BoundedProcessOptions): Configuration {
   const killGraceMs = options.killGraceMs ?? 250;
   const closeGraceMs = options.closeGraceMs ?? 1_000;
   const output = options.output ?? { headBytes: DEFAULT_EXCERPT_BYTES, tailBytes: DEFAULT_EXCERPT_BYTES };
@@ -108,7 +137,7 @@ function configure(options: BoundedProcessOptions): Configuration {
   return { ...options, killGraceMs, closeGraceMs, output: { ...output } };
 }
 
-function validateRequest(request: ReadinessSpawnRequest): void {
+export function validateBoundedProcessRequest(request: ReadinessSpawnRequest): void {
   if (request.shell !== false || typeof request.bin !== "string" || request.bin === "" || request.bin.includes("\0")
     || !Array.isArray(request.args) || request.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))
     || typeof request.cwd !== "string" || !isAbsolute(request.cwd) || request.cwd.includes("\0")
@@ -134,7 +163,7 @@ function boundedText(text: string, limit: number, boundary: "head" | "tail"): { 
   return { text: (boundary === "head" ? bytes.subarray(0, headEnd(bytes, limit)) : bytes.subarray(tailStart(bytes, bytes.length - limit))).toString("utf8"), truncated: true };
 }
 
-class Capture {
+export class BoundedOutputCapture {
   readonly hash = createHash("sha256");
   bytes = 0;
   prefix: Buffer = Buffer.alloc(0);
@@ -199,8 +228,8 @@ async function execute(request: ReadinessSpawnRequest, options: Configuration, q
   const startedAt = new Date().toISOString();
   // Full values remain transient; B3 also handles partial values longer than the overlap cap.
   const overlap = Math.min(MAX_OVERLAP_BYTES, Math.max(1_024, ...Object.values(request.env).map((value) => Buffer.byteLength(value))));
-  const stdout = new Capture(options.output.headBytes, options.output.tailBytes, overlap);
-  const stderr = new Capture(options.output.headBytes, options.output.tailBytes, overlap);
+  const stdout = new BoundedOutputCapture(options.output.headBytes, options.output.tailBytes, overlap);
+  const stderr = new BoundedOutputCapture(options.output.headBytes, options.output.tailBytes, overlap);
   const errors: BoundedProcessResult["errors"] = [];
   const termination: BoundedProcessResult["termination"] = { reason: null, attempts: [], tree: "not-started", stdioForcedClosed: false };
   let state: BoundedProcessResult["state"] = "exited";
@@ -343,6 +372,7 @@ async function execute(request: ReadinessSpawnRequest, options: Configuration, q
   };
   const ended = performance.now();
   return {
+    containment: { kind: "native-process-group", descendantOwnership: "unproven", groupObservation: termination.tree },
     state, succeeded: state === "exited" && spawnedAt !== null && exit !== null && close !== null
       && (exit as ProcessEnd).code === 0 && (exit as ProcessEnd).signal === null && (close as ProcessEnd).code === 0 && (close as ProcessEnd).signal === null
       && errors.length === 0 && termination.tree === "absent" && Object.values(output).every((stream) => stream.complete && !stream.truncated && !stream.redactionTruncated),
@@ -352,7 +382,7 @@ async function execute(request: ReadinessSpawnRequest, options: Configuration, q
   };
 }
 
-/** Admit after reserving a scheduler slot, keeping the disposable handle check adjacent to execution. */
+/** Trusted native helpers only. Escaped descendants are outside this original-group observation. */
 export function createBoundedProcessRunner(options: { concurrency?: number } = {}): { run(request: ReadinessSpawnRequest, options: BoundedProcessOptions): Promise<BoundedProcessResult> } {
   const concurrency = options.concurrency ?? 1;
   if (!integer(concurrency, 16)) throw new Error("Bounded process concurrency must be an integer between one and sixteen.");
@@ -361,8 +391,8 @@ export function createBoundedProcessRunner(options: { concurrency?: number } = {
   const drain = () => { while (active < concurrency && pending.length) pending.shift()!.start(); };
   return {
     async run(request, processOptions) {
-      validateRequest(request);
-      const configuration = configure(processOptions);
+      validateBoundedProcessRequest(request);
+      const configuration = configureBoundedProcess(processOptions);
       const queuedAt = new Date().toISOString();
       const queued = performance.now();
       return new Promise<BoundedProcessResult>((resolve, reject) => {
