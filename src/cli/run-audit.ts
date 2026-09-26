@@ -389,9 +389,9 @@ function retainedCommandArtifacts(receipts: readonly CommandExecutionReceipt[]):
 const ctx: RunContext = {
   targetDir,
   env,
-  exec: (command, argv, options) => {
+  exec: async (command, argv, options) => {
     const actualArgv = invocationOutputPaths(argv, options?.cwd);
-    const result = probeExec(command, actualArgv, {
+    const result = await probeExec(command, actualArgv, {
       ...options,
       receipt: {
         ...options?.receipt,
@@ -469,7 +469,7 @@ if (freshness.behind.length > 0) {
 }
 console.log("");
 
-const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions, producerExecutionReceipts } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions, producerExecutionReceipts } = await runAudit(AUDIT_RUNNERS, ctx);
 const auditContext = freshCapture?.finish(producerExecutionReceipts);
 let readinessExecutionJson: string | undefined;
 let readinessValidationJson: string | undefined;

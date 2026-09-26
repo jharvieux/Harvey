@@ -318,7 +318,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
 // probe through the real assembler to the real renderer. Deleting the `briefProvenanceFinding(...)`
 // spread in src/audit-runners.ts turns every assertion below red.
 describe("M1-BRIEF-00 reaches the assembled deliverable and the rendered report (#678 criterion 2)", () => {
-  function m1Findings(targetDir: string): Finding[] {
+  async function m1Findings(targetDir: string): Promise<Finding[]> {
     const runner = AUDIT_RUNNERS.find((r) => r.module === "M1")!;
     const ctx = {
       targetDir,
@@ -327,20 +327,20 @@ describe("M1-BRIEF-00 reaches the assembled deliverable and the rendered report 
       exec: () => ({ ok: true, output: "1,200 lines of application code across 12 file(s)", stderr: "" }),
       exists: () => false,
     } as unknown as Parameters<typeof runner.run>[0];
-    const result = runner.run(ctx) as { findings?: Finding[] };
+    const result = await runner.run(ctx) as { findings?: Finding[] };
     return result.findings ?? [];
   }
 
-  it("M1's probe emits the provenance row with the catalog version in its own words", () => {
-    const row = m1Findings(REPO_ROOT).find((f) => f.id === "M1-BRIEF-00");
+  it("M1's probe emits the provenance row with the catalog version in its own words", async () => {
+    const row = (await m1Findings(REPO_ROOT)).find((f) => f.id === "M1-BRIEF-00");
     expect(row).toBeDefined();
     expect(row?.confidence).toBe("N/A");
     expect(row?.evidence).toMatch(/vendored from ATC @ [0-9a-f]{7}/);
     expect(row?.evidence).toContain("29 classes");
   });
 
-  it("survives the assembler and the renderer, reason included", () => {
-    const findings = m1Findings(REPO_ROOT);
+  it("survives the assembler and the renderer, reason included", async () => {
+    const findings = await m1Findings(REPO_ROOT);
     const doc = assembleEngagementDocument(
       (["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const).map((module) => ({ module, status: "ran" as const })),
       { connected: false, dynamic: false, llm: false },

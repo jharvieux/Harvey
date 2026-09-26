@@ -104,7 +104,7 @@ const meta: ReportMeta = {
 };
 
 console.log(`Conservation gate — ${targetDir}\n`);
-const run = runAudit(AUDIT_RUNNERS, ctx);
+const run = await runAudit(AUDIT_RUNNERS, ctx);
 if (run.failures.length) {
   console.error(formatFailures(run.failures));
   process.exit(1);
