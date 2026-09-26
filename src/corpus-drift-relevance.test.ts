@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyCorpusDriftRelevance,
@@ -23,11 +22,75 @@ import {
 } from "./corpus-drift-relevance.js";
 
 const disposable: string[] = [];
-const execFileAsync = promisify(execFile);
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type ChildRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
+
+function runChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException
+        : launchError;
+      finish(status, signal, error);
+    });
+  });
+}
+
+async function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const result = await runChild(command, args, cwd, env);
+  if (result.error) throw Object.assign(result.error, result);
+  if (result.status !== 0) throw Object.assign(new Error(`${result.stderr}\nchild exited ${result.status ?? result.signal ?? "before-spawn"}`), result);
+  return result.stdout;
+}
 
 async function git(root: string, args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" })).stdout.trim();
+  return (await runCommand("git", ["-C", root, ...args], process.cwd(), process.env)).trim();
 }
+
+it("keeps the original combined 1 MiB output bound for an actual child", async () => {
+  let error: NodeJS.ErrnoException & ChildRun;
+  try {
+    await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], process.cwd(), process.env);
+    throw new Error("combined output control unexpectedly completed");
+  } catch (failure) {
+    error = failure as NodeJS.ErrnoException & ChildRun;
+  }
+  expect(error).toMatchObject({ code: "ENOBUFS" });
+  expect(Buffer.byteLength(error.stdout) + Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  expect(error.stdout).not.toHaveLength(0);
+  expect(error.stderr).not.toHaveLength(0);
+});
 
 function put(root: string, path: string, body: string | Buffer): void {
   const absolute = join(root, path);
@@ -156,7 +219,7 @@ afterEach(() => {
 async function cloneRepository(source: string, destination: string): Promise<void> {
   let serviced = false;
   const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
-  await execFileAsync("git", ["clone", "-q", "--no-hardlinks", source, destination]);
+  await runCommand("git", ["clone", "-q", "--no-hardlinks", source, destination], process.cwd(), process.env);
   expect(serviced, "corpus closure clone must service the Vitest worker event loop").toBe(true);
   await heartbeat;
 }

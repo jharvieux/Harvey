@@ -16,12 +16,11 @@
 // failure observed. A guard nobody has watched fail is indistinguishable from an inert one. And no
 // block may depend on what happens to be installed on the machine running it — the M3 block did,
 // and passed on a developer laptop while failing on every CI runner (see its comment).
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { findFreshPass, ingestPassArtifactReceipts, ranFromPass } from "../audit-pass-artifact.js";
 import { readNamesSafe } from "../fs-walk.js";
@@ -33,22 +32,82 @@ import { SEMANTIC_TARGET_COMMITS } from "../semantic-triage.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(join(tmpdir(), "harvey-pass-cli-"));
-const execFileAsync = promisify(execFile);
+const MAX_BUFFER_BYTES = 1024 * 1024;
+type ChildRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+function runChild(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException
+        : launchError;
+      finish(status, signal, error);
+    });
+  });
+}
+
+async function runCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const result = await runChild(command, args, cwd, env);
+  if (result.error) throw Object.assign(result.error, result);
+  if (result.status !== 0) throw Object.assign(new Error(`${result.stderr}\nchild exited ${result.status ?? result.signal ?? "before-spawn"}`), result);
+  return result.stdout;
+}
 
 /** Spawn a repo CLI through tsx, exactly as `pnpm exec tsx <cli>` does. */
 async function runCli(cli: string, args: string[], env: NodeJS.ProcessEnv = {}, extraNodeArgs: string[] = []): Promise<string> {
   let serviced = false;
   const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
-  const result = await execFileAsync("node", [...extraNodeArgs, "--import", "tsx", join(REPO_ROOT, cli), ...args], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
+  const stdout = await runCommand("node", [...extraNodeArgs, "--import", "tsx", join(REPO_ROOT, cli), ...args], REPO_ROOT, { ...process.env, ...env });
   expect(serviced, `${cli} child work must service the Vitest worker event loop`).toBe(true);
   await heartbeat;
-  return result.stdout;
+  return stdout;
 }
+
+it("keeps the original combined 1 MiB output bound for an actual child", async () => {
+  let error: NodeJS.ErrnoException & ChildRun;
+  try {
+    await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], REPO_ROOT, process.env);
+    throw new Error("combined output control unexpectedly completed");
+  } catch (failure) {
+    error = failure as NodeJS.ErrnoException & ChildRun;
+  }
+  expect(error).toMatchObject({ code: "ENOBUFS" });
+  expect(Buffer.byteLength(error.stdout) + Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  expect(error.stdout).not.toHaveLength(0);
+  expect(error.stderr).not.toHaveLength(0);
+});
 
 /** The #416 read side, pointed at an artifacts dir the CLI just wrote into. */
 function derives(artifactsDir: string, module: AuditModule, targetDir: string) {

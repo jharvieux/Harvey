@@ -227,6 +227,63 @@ function named(doc: WorkflowDocument, job: string, name: string): WorkflowStep {
   return found;
 }
 
+const MAX_BUFFER_BYTES = 1024 * 1024;
+const SHELL_TIMEOUT_MS = 10_000;
+type ShellRun = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException };
+
+function shellError(code: "ENOBUFS" | "ETIMEDOUT", message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code }) as NodeJS.ErrnoException;
+}
+
+function runShell(command: string, dir: string, env: NodeJS.ProcessEnv): Promise<ShellRun> {
+  return new Promise((resolveRun) => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    let timedOut = false;
+    let finished = false;
+    let launchError: NodeJS.ErrnoException | undefined;
+    const finish = (status: number | null, signal: NodeJS.Signals | null, error?: NodeJS.ErrnoException) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      resolveRun({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error });
+    };
+    const child = spawn("bash", ["-c", command], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env });
+    const collect = (output: Buffer[], chunk: Buffer) => {
+      if (overflow) return;
+      const remaining = MAX_BUFFER_BYTES - bytes;
+      if (chunk.length <= remaining) {
+        output.push(chunk);
+        bytes += chunk.length;
+        return;
+      }
+      if (remaining > 0) output.push(chunk.subarray(0, remaining));
+      bytes = MAX_BUFFER_BYTES;
+      overflow = true;
+      child.kill("SIGTERM");
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, SHELL_TIMEOUT_MS);
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      launchError = error;
+      if (child.pid === undefined) finish(null, null, error);
+    });
+    child.once("close", (status, signal) => {
+      const error = overflow
+        ? shellError("ENOBUFS", `stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`)
+        : timedOut ? shellError("ETIMEDOUT", `workflow shell exceeded ${SHELL_TIMEOUT_MS}ms`)
+          : launchError;
+      finish(status, signal, error);
+    });
+  });
+}
+
 async function shell(step: WorkflowStep, ctx: Context, options: { dir?: string; env?: Record<string, string>; prelude?: string } = {}) {
   if (!step.run) throw new Error(`missing shipping shell: ${step.name}`);
   const run = step.run;
@@ -234,20 +291,10 @@ async function shell(step: WorkflowStep, ctx: Context, options: { dir?: string; 
   const output = join(dir, "github-output");
   let serviced = false;
   const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
-  const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
-    const child = spawn("bash", ["-c", `${options.prelude ?? ""}\n${render(run, ctx)}`], {
-      cwd: dir, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, GITHUB_OUTPUT: output, ...Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value, ctx)])), ...options.env },
-    });
-    let stdout = "", stderr = "";
-    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", rejectRun);
-    child.on("close", (status, signal) => resolveRun({ status, signal, stdout, stderr }));
-  });
+  const result = await runShell(`${options.prelude ?? ""}\n${render(run, ctx)}`, dir, { ...process.env, GITHUB_OUTPUT: output, ...Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value, ctx)])), ...options.env });
   expect(serviced, `${step.name ?? "workflow shell"} child work must service the Vitest worker event loop`).toBe(true);
   await heartbeat;
+  if (result.error) throw Object.assign(result.error, result);
   return { ...result, dir, output: statSafe(output) ? readFileSync(output, "utf8") : "" };
 }
 
@@ -417,6 +464,18 @@ async function assertCompleteMerge(parts: Record<string, Scorecard>, run?: strin
 }
 
 describe("#1870 actual corpus workflow event and artifact topology", () => {
+  it("preserves the shell's combined output cap and deadline errors", async () => {
+    const runNode = (source: string) => `exec ${JSON.stringify(process.execPath)} --eval ${JSON.stringify(source)}`;
+    const overflow = await shell({ name: "combined output control", run: runNode('process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);') }, context("pull_request")).catch((error: NodeJS.ErrnoException & ShellRun) => error);
+    expect(overflow).toMatchObject({ code: "ENOBUFS" });
+    expect(Buffer.byteLength(overflow.stdout) + Buffer.byteLength(overflow.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+    expect(overflow.stdout).not.toHaveLength(0);
+    expect(overflow.stderr).not.toHaveLength(0);
+
+    const deadline = await shell({ name: "deadline control", run: runNode('process.on("SIGTERM", () => process.exit(0)); setTimeout(() => process.exit(0), 11000);') }, context("pull_request")).catch((error: NodeJS.ErrnoException & ShellRun) => error);
+    expect(deadline).toMatchObject({ code: "ETIMEDOUT", status: 0, signal: null });
+  }, 15_000);
+
   it.each(events)("binds %s scorers, every transport owner, artifacts, merge and replay to the shipping expressions", async (event) => {
     await assertTopology(document, event, true, true);
   });
