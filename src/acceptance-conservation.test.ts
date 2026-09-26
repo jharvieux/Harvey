@@ -84,6 +84,39 @@ describe("parseAcceptanceCriteria", () => {
     expect(parseAcceptanceCriteria("**Acceptance**\n- one\n\n**Scope note**\n- not a criterion\n").criteria).toHaveLength(1);
   });
 
+  it("reads a standalone plain Acceptance: section with positional numbering", () => {
+    const { criteria, source } = parseAcceptanceCriteria("intro\n\nAcceptance:\n\n- first\n- second\n");
+    expect(criteria).toEqual([
+      { index: 1, text: "first" },
+      { index: 2, text: "second" },
+    ]);
+    expect(source).toBe("acceptance-section");
+  });
+
+  it("folds nested bullets and bounds a plain Acceptance: section at the next plain label", () => {
+    const parsed = parseAcceptanceCriteria([
+      "Acceptance:",
+      "- first",
+      "  - detail of first",
+      "- second",
+      "",
+      "Scope:",
+      "- not a criterion",
+    ].join("\n"));
+    expect(parsed.criteria.map((criterion) => criterion.text)).toEqual(["first", "second"]);
+    expect(parsed.nestedFolded).toBe(1);
+  });
+
+  it("bounds a plain Acceptance: section at a following Markdown heading", () => {
+    expect(parseAcceptanceCriteria("Acceptance:\n- one\n\n## Scope\n- not a criterion\n").criteria).toHaveLength(1);
+  });
+
+  it("keeps Markdown and plain Acceptance section boundaries equivalent when a plain label follows", () => {
+    const plain = parseAcceptanceCriteria("Acceptance:\n- one\n\nScope:\n- not a criterion\n");
+    const markdown = parseAcceptanceCriteria("## Acceptance\n- one\n\nScope:\n- not a criterion\n");
+    expect(markdown).toEqual(plain);
+  });
+
   it("falls back to a checklist when the issue has no Acceptance heading", () => {
     const { criteria, source } = parseAcceptanceCriteria("Do the thing.\n\n- [ ] ship it\n- [x] test it\n");
     expect(criteria.map((c) => c.text)).toEqual(["ship it", "test it"]);
