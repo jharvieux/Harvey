@@ -145,7 +145,7 @@ function runCommand(command: string, args: string[], cwd: string, env: NodeJS.Pr
     child.once("close", (status, signal) => {
       if (!overflow) return finish(status, signal, launchError);
       const error = Object.assign(new Error(`stdout and stderr exceeded ${MAX_BUFFER_BYTES} bytes`), { code: "ENOBUFS" }) as NodeJS.ErrnoException;
-      finish(null, "SIGTERM", error);
+      finish(status, signal, error);
     });
   });
 }
@@ -165,6 +165,7 @@ async function runResponsive(dir: string, fixtureRoot: { bin: string; state: str
   const heartbeat = setInterval(() => { if (!finished) heartbeats += 1; }, 5);
   try {
     const result = await run(dir, fixtureRoot, mode);
+    if (result.error) throw result.error;
     finished = true;
     // Sampling ends before the assertion to exclude timer work after child completion.
     expect(heartbeats, "registry CLI child work must service the Vitest worker event loop").toBeGreaterThan(0);
@@ -191,6 +192,13 @@ function validate(dir: string, fixtureRoot: { bin: string; state: string }) {
 }
 
 describe("current Semgrep registry materialization transport (#2171)", () => {
+  it("retains the actual zero-exit close state and overflow error after a termination handler", async () => {
+    const script = 'process.on("SIGTERM", () => process.exit(0)); setTimeout(() => { process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); }, 30); setTimeout(() => process.exit(2), 2000);';
+    const result = await runCommand(process.execPath, ["--eval", script], ROOT, process.env);
+    expect(result).toMatchObject({ status: 0, signal: null, error: { code: "ENOBUFS" } });
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+  });
+
   it("caps combined local-child stdout and stderr at the former 1 MiB synchronous limit", async () => {
     const result = await runCommand(process.execPath, ["--eval", 'process.stdout.write("o".repeat(600000)); process.stderr.write("e".repeat(600000)); setTimeout(() => process.exit(0), 1000);'], ROOT, process.env);
     expect(result).toMatchObject({ status: null, signal: "SIGTERM", error: { code: "ENOBUFS" } });
