@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,17 +106,29 @@ process.stdout.write(JSON.stringify({ errors: [], paths: { scanned: [] }, skippe
   return { bin, state };
 }
 
-function run(dir: string, fixtureRoot: { bin: string; state: string }, mode: string) {
-  return spawnSync(process.execPath, ["--import", "tsx", CLI, "--dir", dir, "--out", join(dir, "receipt.json")], {
-    cwd: ROOT,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${fixtureRoot.bin}:${process.env.PATH ?? ""}`,
-      FAKE_CURL_MODE: mode,
-      FAKE_CURL_STATE: fixtureRoot.state,
-    },
+function run(dir: string, fixtureRoot: { bin: string; state: string }, mode: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, ["--import", "tsx", CLI, "--dir", dir, "--out", join(dir, "receipt.json")], {
+      cwd: ROOT,
+      env: { ...process.env, PATH: `${fixtureRoot.bin}:${process.env.PATH ?? ""}`, FAKE_CURL_MODE: mode, FAKE_CURL_STATE: fixtureRoot.state },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", rejectRun);
+    child.on("close", (status) => resolveRun({ status, stdout, stderr }));
   });
+}
+
+async function runResponsive(dir: string, fixtureRoot: { bin: string; state: string }, mode: string) {
+  let serviced = false;
+  const heartbeat = new Promise<void>((resolveHeartbeat) => setImmediate(() => { serviced = true; resolveHeartbeat(); }));
+  const result = await run(dir, fixtureRoot, mode);
+  expect(serviced, "registry CLI child work must service the Vitest worker event loop").toBe(true);
+  await heartbeat;
+  return result;
 }
 
 function attempts(state: string, pack: string): number {
@@ -143,10 +155,10 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(REGISTRY_PACK_FETCH_POLICY.http403Attempts).toBeLessThan(REGISTRY_PACK_FETCH_POLICY.maxAttempts);
   });
 
-  it("recovers one public-registry HTTP 403 and reports credential-free retry provenance", () => {
+  it("recovers one public-registry HTTP 403 and reports credential-free retry provenance", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "transient-403");
+    const result = await runResponsive(dir, f, "transient-403");
     expect(result.status, result.stderr).toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(2);
     for (const pack of REGISTRY_PACKS.slice(1)) expect(attempts(f.state, pack)).toBe(1);
@@ -155,20 +167,20 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(validate(dir, f).files).toHaveLength(6);
   });
 
-  it("uses the full transient HTTP retry budget before succeeding", () => {
+  it("uses the full transient HTTP retry budget before succeeding", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "transient-503");
+    const result = await runResponsive(dir, f, "transient-503");
     expect(result.status, result.stderr).toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(3);
     expect(result.stdout).toContain("p/typescript=3[http-503,http-503]");
     expect(validate(dir, f).files).toHaveLength(6);
   });
 
-  it("retries a partial transport response and publishes only the complete retry", () => {
+  it("retries a partial transport response and publishes only the complete retry", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "transient-partial");
+    const result = await runResponsive(dir, f, "transient-partial");
     expect(result.status, result.stderr).toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(2);
     expect(result.stdout).toContain("p/typescript=2[curl-exit-18]");
@@ -176,10 +188,10 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(validate(dir, f).files).toHaveLength(6);
   });
 
-  it("exhausts the bounded retry budget for persistent partial responses", () => {
+  it("exhausts the bounded retry budget for persistent partial responses", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "persistent-partial");
+    const result = await runResponsive(dir, f, "persistent-partial");
     expect(result.status).not.toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(3);
     expect(`${result.stdout}\n${result.stderr}`).toContain("curl-exit-18");
@@ -188,10 +200,10 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(existsSync(join(dir, "registry-packs/current.json"))).toBe(false);
   });
 
-  it("fails closed after the bounded HTTP 403 retry and invalidates stale bytes", () => {
+  it("fails closed after the bounded HTTP 403 retry and invalidates stale bytes", async () => {
     const dir = join(temporary("harvey-registry-output-"), "registry");
     const seeded = fixture();
-    expect(run(dir, seeded, "success").status).toBe(0);
+    expect((await runResponsive(dir, seeded, "success")).status).toBe(0);
     const producer = join(temporary("harvey-registry-producer-"), "registry");
     const replay = join(temporary("harvey-registry-replay-"), "registry");
     cpSync(dir, producer, { recursive: true });
@@ -199,7 +211,7 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(validate(producer, seeded).identity).toBe(validate(replay, seeded).identity);
 
     const denied = fixture();
-    const result = run(dir, denied, "persistent-403");
+    const result = await runResponsive(dir, denied, "persistent-403");
     expect(result.status).not.toBe(0);
     expect(attempts(denied.state, "p/typescript")).toBe(2);
     expect(`${result.stdout}\n${result.stderr}`).toContain("http-403");
@@ -209,39 +221,39 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(() => validateRestoredSemgrepPackArtifact(dir)).toThrow(/current\.json is missing|receipt\.json is missing/);
   });
 
-  it("does not retry stable authentication failures", () => {
+  it("does not retry stable authentication failures", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "persistent-401");
+    const result = await runResponsive(dir, f, "persistent-401");
     expect(result.status).not.toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).toContain("http-401");
   });
 
-  it("rejects an invalid sixth config before publishing any usable receipt", () => {
+  it("rejects an invalid sixth config before publishing any usable receipt", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "invalid-sixth");
+    const result = await runResponsive(dir, f, "invalid-sixth");
     expect(result.status).not.toBe(0);
     for (const pack of REGISTRY_PACKS) expect(attempts(f.state, pack)).toBe(1);
     expect(existsSync(join(dir, "receipt.json"))).toBe(false);
     expect(existsSync(join(dir, "registry-packs/current.json"))).toBe(false);
   });
 
-  it("rejects id-only rules that Semgrep cannot load before publishing a receipt", () => {
+  it("rejects id-only rules that Semgrep cannot load before publishing a receipt", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "id-only");
+    const result = await runResponsive(dir, f, "id-only");
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("semgrep validator exited with code 2");
     expect(existsSync(join(dir, "receipt.json"))).toBe(false);
     expect(existsSync(join(dir, "registry-packs/current.json"))).toBe(false);
   });
 
-  it("rejects a malformed pattern in the sixth config before publishing a receipt", () => {
+  it("rejects a malformed pattern in the sixth config before publishing a receipt", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "bad-pattern-sixth");
+    const result = await runResponsive(dir, f, "bad-pattern-sixth");
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("semgrep validator exited with code 2");
     for (const pack of REGISTRY_PACKS) expect(attempts(f.state, pack)).toBe(1);
@@ -249,10 +261,10 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(existsSync(join(dir, "registry-packs/current.json"))).toBe(false);
   });
 
-  it("rejects a response above the restored 32 MiB cap without reading or publishing it", () => {
+  it("rejects a response above the restored 32 MiB cap without reading or publishing it", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "oversized");
+    const result = await runResponsive(dir, f, "oversized");
     expect(result.status).not.toBe(0);
     expect(attempts(f.state, "p/typescript")).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).toContain("response-too-large");
@@ -260,10 +272,10 @@ describe("current Semgrep registry materialization transport (#2171)", () => {
     expect(existsSync(join(dir, "registry-packs/current.json"))).toBe(false);
   });
 
-  it("preserves a valid empty registry pack in the complete six-file artifact", () => {
+  it("preserves a valid empty registry pack in the complete six-file artifact", async () => {
     const f = fixture();
     const dir = join(temporary("harvey-registry-output-"), "registry");
-    const result = run(dir, f, "empty-nextjs");
+    const result = await runResponsive(dir, f, "empty-nextjs");
     expect(result.status, result.stderr).toBe(0);
     expect(validate(dir, f).files).toHaveLength(6);
     const manifest = JSON.parse(readFileSync(join(dir, "registry-packs/current.json"), "utf8"));
