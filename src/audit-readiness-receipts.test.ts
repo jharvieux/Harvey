@@ -249,6 +249,33 @@ describe("schema-only contained receipt guards (no container execution)", () => 
     }
   });
 
+  it("binds exact valid proof identities to pinned artifact bytes without claiming authenticity", async () => {
+    const f = await fixture();
+    const execution = closeReadinessExecutionV1(f.context, { binding: f.binding, receipts: await schemaOnlyReceipts(f), cleanup: await cleanupDisposableTarget(f.target) });
+    const pair = createReadinessArtifactsV1(f.context, { binding: f.binding, execution });
+    expect(parseReadinessArtifactsV1({ descriptorJson: pair.descriptorJson, executionJson: pair.executionJson }, { executionSha256: pair.executionSha256, descriptorSha256: pair.descriptorSha256 }).proof).toBe("schema-and-declared-bindings");
+    for (const edit of [
+      (p: ReadinessProcessEvidenceV1) => { docker(p).imageId = `sha256:${"d".repeat(64)}`; },
+      (p: ReadinessProcessEvidenceV1) => { docker(p).containerId = "e".repeat(64); },
+      (p: ReadinessProcessEvidenceV1) => { docker(p).leaseName = `harvey-readiness-${"f".repeat(32)}`; },
+      (p: ReadinessProcessEvidenceV1) => { docker(p).isolation.targetUid = docker(p).targetIdentity!.uid = 1001; },
+    ]) {
+      const changed = structuredClone(execution);
+      const row = processStage(changed.stages);
+      if (row.execution.kind !== "process") throw new Error("schema fixture process missing");
+      edit(row.execution.process);
+      const executionJson = JSON.stringify(changed, null, 2) + "\n";
+      const descriptor = structuredClone(pair.descriptor);
+      descriptor.execution.sha256 = createHash("sha256").update(executionJson).digest("hex");
+      descriptor.execution.bytes = Buffer.byteLength(executionJson);
+      const files = { descriptorJson: JSON.stringify(descriptor), executionJson };
+      expect(parseReadinessArtifactsV1(files).proof).toBe("schema-and-declared-bindings");
+      expect(() => parseReadinessArtifactsV1({ descriptorJson: pair.descriptorJson, executionJson })).toThrow(/digest\/bytes/);
+      expect(() => parseReadinessArtifactsV1(files, { executionSha256: pair.executionSha256 })).toThrow(/caller expectation binding/);
+      expect(() => parseReadinessArtifactsV1(files, { descriptorSha256: pair.descriptorSha256 })).toThrow(/caller expectation binding/);
+    }
+  });
+
   it("refuses late known-value collisions in exact containment identities at every public boundary", async () => {
     const f = await fixture();
     const install = f.plan.stages.find((row) => row.kind === "install")!;
@@ -364,7 +391,7 @@ describe("versioned receipt closure", () => {
     expect(() => createReadinessImplicitReceipt(f.context, codegen.stageId, withheld(f).find((row) => row.kind === "install")!)).toThrow(/lifecycle/);
   });
 
-  it("rejects missing/duplicate/unknown stage IDs, extra raw fields and absent lifecycle observations", async () => {
+  it("schema-only: rejects missing/duplicate/unknown stage IDs, raw fields and absent lifecycle observations", async () => {
     const f = await fixture();
     const receipts = await schemaOnlyReceipts(f);
     const cleanup = await cleanupDisposableTarget(f.target);
