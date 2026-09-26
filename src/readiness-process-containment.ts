@@ -3,6 +3,7 @@ import { lstat, realpath, unlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { Socket } from "node:net";
+import { debuglog } from "node:util";
 import type { ReadinessSpawnRequest } from "./audit-readiness-authority.js";
 import { BoundedOutputCapture, configureBoundedProcess, validateBoundedProcessRequest, type BoundedProcessOptions, type BoundedProcessResult, type ReadinessProcessContainment } from "./bounded-process.js";
 import { verifyRunRoot, type DisposableTarget } from "./disposable-target.js";
@@ -43,6 +44,7 @@ class RuntimeFailure extends Error {
 }
 
 function unavailable(code: string): ReadinessContainmentAvailability {
+  if (code === "containment-parent-diagnostics-unsafe") return { status: "unavailable", reasonCode: code, reason: "Parent Node HTTP/network/stream diagnostics can expose raw private input or output before redaction; no target command is permitted.", falsifier: "Restart Harvey with Node HTTP, network and stream debug logging disabled, then retry." };
   return { status: "unavailable", reasonCode: code, reason: "A verified local process-containment runtime is unavailable; no target command is permitted.", falsifier: "Provide an operator-approved local Unix socket, an already present immutable Linux image with the configured env/Node tools, and a runtime-visible disposable root, then retry." };
 }
 
@@ -283,6 +285,7 @@ export function createReadinessContainedProcessRunner(options: {
 
   async function probe(): Promise<ReadinessContainmentAvailability> {
     if (!config) return unavailable("containment-not-configured");
+    if (["stream", "http", "net"].some((name) => debuglog(name).enabled)) return unavailable("containment-parent-diagnostics-unsafe");
     if (process.platform !== "linux" && process.platform !== "darwin") return unavailable("containment-platform-unsupported");
     try {
       const path = await realpath(config.socketPath);

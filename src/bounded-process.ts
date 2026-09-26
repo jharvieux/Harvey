@@ -309,8 +309,8 @@ async function execute(request: ReadinessSpawnRequest, options: Configuration, q
     state = "unsupported-platform";
     errors.push({ phase: "spawn", code: "PROCESS_GROUPS_UNSUPPORTED" });
     finish();
-  } else if (debuglog("child_process").enabled) {
-    // Node's builtin child_process debug logger prints envPairs before any hook can redact them.
+  } else if (debuglog("child_process").enabled || debuglog("stream").enabled) {
+    // Builtin diagnostics print envPairs or raw stream chunks before any hook can redact them.
     state = "spawn-error";
     errors.push({ phase: "spawn", code: "UNSAFE_PARENT_DIAGNOSTICS" });
     finish();

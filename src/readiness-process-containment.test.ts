@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReadinessSpawnRequest } from "./audit-readiness-authority.js";
 import { createReadinessContainedProcessRunner, type ReadinessContainmentConfig } from "./readiness-process-containment.js";
@@ -104,6 +107,17 @@ describe("readiness containment prerequisites", () => {
     for (const value of [{ kind: "docker-local", socketPath: "/missing.sock", imageId: "node:latest" }, { kind: "docker-local", socketPath: "tcp://localhost:2375", imageId: `sha256:${"a".repeat(64)}` }]) {
       expect(() => createReadinessContainedProcessRunner({ config: value as ReadinessContainmentConfig, target: p.target, approvedEnvNames: [], assertArgv: () => undefined })).toThrow(/trusted local Unix socket/);
     }
+  });
+
+  it.each(["stream", "http", "net"])("refuses parent %s diagnostics before runtime transport can expose raw values", async (channel) => {
+    const secret = "PRIVATE_INPUT_DEBUG_CANARY";
+    const module = new URL("./readiness-process-containment.ts", import.meta.url).href;
+    const code = `const {createReadinessContainedProcessRunner}=await import(${JSON.stringify(module)});const runner=createReadinessContainedProcessRunner({config:{kind:'docker-local',socketPath:'/not-contacted.sock',imageId:'sha256:'+'a'.repeat(64)},target:{},approvedEnvNames:['APPROVED'],assertArgv:()=>{throw Error('guard should not be reached');}});const result=await runner.run({bin:'node',args:['-e','process.exit(0)'],cwd:process.cwd(),shell:false,env:{PATH:'/usr/local/bin:/usr/bin:/bin',APPROVED:process.env.DEBUG_CANARY}},{timeoutMs:500,redact:()=>''});process.stdout.write(JSON.stringify(result));`;
+    const output = await promisify(execFile)(process.execPath, ["--import", createRequire(import.meta.url).resolve("tsx"), "--input-type=module", "-e", code], {
+      env: { PATH: process.env.PATH, NODE_DEBUG: channel, DEBUG_CANARY: secret, NODE_V8_COVERAGE: undefined }, timeout: 5_000, maxBuffer: 1024 * 1024,
+    });
+    expect(JSON.parse(output.stdout)).toMatchObject({ state: "containment-unavailable", pid: null, containment: { kind: "unavailable", reasonCode: "containment-parent-diagnostics-unsafe" } });
+    expect(output.stdout + output.stderr).not.toContain(secret);
   });
 });
 

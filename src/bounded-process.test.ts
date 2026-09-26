@@ -127,14 +127,16 @@ describe.skipIf(process.platform === "win32")("bounded readiness child lifecycle
     }
   });
 
-  it("refuses Node's raw child-process debug logger before a child or secret diagnostic can occur", async () => {
+  it.each(["child_process", "stream"])("refuses Node's raw %s debug logger before a child or secret diagnostic can occur", async (debug) => {
     const moduleUrl = new URL("./bounded-process.ts", import.meta.url).href;
     const secret = "DEBUG_LOG_MUST_NOT_CONTAIN_THIS_TOKEN";
     const p = await fixture(`(async()=>{
 const {createBoundedProcessRunner}=await import(${JSON.stringify(moduleUrl)});
-const result=await createBoundedProcessRunner().run({bin:process.execPath,args:['-e',"require('node:fs').writeFileSync('should-not-run','bad')"],cwd:process.cwd(),shell:false,env:{TOKEN:${JSON.stringify(secret)}}},{timeoutMs:1000,redact:text=>text});
+const result=await createBoundedProcessRunner().run({bin:process.execPath,args:['-e',"require('node:fs').writeFileSync('should-not-run','bad')"],cwd:process.cwd(),shell:false,env:{TOKEN:require('node:fs').readFileSync('approved-value','utf8')}},{timeoutMs:1000,redact:text=>text});
 process.stdout.write(JSON.stringify(result));
-})().catch(()=>{process.stderr.write('fixture import failed');process.exitCode=1;});`, { NODE_DEBUG: "child_process" });
+})().catch(()=>{process.stderr.write('fixture import failed');process.exitCode=1;});`, { NODE_DEBUG: debug });
+    // Loader startup precedes this module's authority; admit the canary only after import.
+    await writeFile(join(p.dir, "approved-value"), secret, { mode: 0o600 });
     const request = { ...p.request, env: p.request.env, args: ["--import", createRequire(import.meta.url).resolve("tsx"), ...p.request.args] };
     const observed = await run(request, { output: { headBytes: 64 * 1024, tailBytes: 64 * 1024 } });
     expect(observed.exit?.code).toBe(0);
