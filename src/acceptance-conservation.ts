@@ -166,6 +166,7 @@ const DECORATION = /^[\s>|*+-]*(?:\[[ xX]\]\s*)?/;
 const HEADING = /^(#{1,6})\s+(.*?)\s*$/;
 const BOLD_HEADING = /^\*\*(.+?)\*\*:?\s*$/;
 const ACCEPTANCE_HEADING = /^\**\s*acceptance\b/i;
+const PLAIN_SECTION_LABEL = /^\s*([A-Za-z][A-Za-z0-9 /&()_-]{0,79})\s*:\s*$/;
 const BULLET = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(\S.*)$/;
 const CHECKLIST = /^\s*[-*+]\s+\[[ xX]\]\s+(\S.*)$/;
 
@@ -257,6 +258,17 @@ function heading(line: string): { level: number; text: string } | undefined {
   return b ? { level: 7, text: b[1]! } : undefined;
 }
 
+/**
+ * A plain section label has no Markdown level, so it is deliberately the strongest boundary: a
+ * following Markdown heading or another standalone label ends it. Plain labels also end Markdown
+ * acceptance sections, keeping `Acceptance:` and `## Acceptance` equivalent when the rest of an
+ * issue uses labels such as `Scope:`. Requiring the colon to end the line keeps prose such as
+ * `Acceptance: ship when green` out of the structural grammar.
+ */
+function plainSectionLabel(line: string): string | undefined {
+  return PLAIN_SECTION_LABEL.exec(line)?.[1];
+}
+
 interface ParsedCriteria {
   criteria: Criterion[];
   /** Bullets nested under a criterion. Elaboration, not separately dispositioned — reported so the choice is visible. */
@@ -268,16 +280,19 @@ export function parseAcceptanceCriteria(body: string): ParsedCriteria {
   const all = lines(body);
   let start = -1;
   let startLevel = 0;
+  let plainStart = false;
   let end = all.length;
   for (let i = 0; i < all.length; i++) {
     const h = heading(all[i]!);
-    if (h === undefined) continue;
+    const label = plainSectionLabel(all[i]!);
     if (start === -1) {
-      if (ACCEPTANCE_HEADING.test(h.text)) {
+      const text = h?.text ?? label;
+      if (text !== undefined && ACCEPTANCE_HEADING.test(text)) {
         start = i + 1;
-        startLevel = h.level;
+        startLevel = h?.level ?? 0;
+        plainStart = label !== undefined && h === undefined;
       }
-    } else if (h.level <= startLevel) {
+    } else if (label !== undefined || (h !== undefined && (plainStart || h.level <= startLevel))) {
       end = i;
       break;
     }
@@ -857,7 +872,7 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
 
   if (criteria.length === 0) {
     if (!declaredNone) {
-      problems.push(`#${issue} states no acceptance criteria (no \`## Acceptance\` section, no checklist) and this PR body declares no bar. An issue with no criteria is where closing-with-unmet-criteria is EASIEST, so it is not a silent pass — add \`ACCEPTANCE #${issue} no-stated-criteria: <what the bar was>\``);
+      problems.push(`#${issue} states no acceptance criteria (no Markdown Acceptance heading, standalone \`Acceptance:\` label or checklist) and this PR body declares no bar. An issue with no criteria is where closing-with-unmet-criteria is EASIEST, so it is not a silent pass — add \`ACCEPTANCE #${issue} no-stated-criteria: <what the bar was>\``);
     } else if (declaredNone.bar.trim().length < 12) {
       problems.push(`#${issue} no-stated-criteria names a bar of ${declaredNone.bar.trim().length} characters — say what the bar actually was`);
     }

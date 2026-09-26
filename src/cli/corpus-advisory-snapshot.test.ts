@@ -78,6 +78,8 @@ describe("corpus-advisory-snapshot CLI target selection", () => {
     const refreshed = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8")) as CorpusAdvisorySnapshotManifest;
     expect(refreshed.schema).toBe(2);
     expect(refreshed.targets.proposit?.capturedAt).not.toBe(prior.targets.proposit?.capturedAt);
+    expect(refreshed.targets.proposit?.file).toMatch(/^proposit\.[a-f0-9]{64}\.osv\.json\.gz$/);
+    expect(readFileSync(join(out, "proposit.osv.json.gz"))).toEqual(oldBytes);
     expect(refreshed.targets.untouched).toEqual(prior.targets.untouched);
     expect(loadCorpusAdvisorySnapshot("proposit", PROPOSIT.commit, { dir: out }).capturedAt).toBe(refreshed.targets.proposit?.capturedAt);
     expect(() => loadCorpusAdvisorySnapshot("untouched", "untouched-commit", { dir: out, now: new Date("2026-08-09") })).toThrow(
