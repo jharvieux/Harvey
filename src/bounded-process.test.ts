@@ -284,7 +284,7 @@ const child=spawn(process.execPath,['-e',"require('node:fs').writeFileSync('esca
 child.unref();const wait=setInterval(()=>{if(fs.existsSync('heartbeat')){clearInterval(wait);process.exit(0);}},10);`);
     const result = await run(p.request);
     const escaped = Number(await readFile(join(p.dir, "escaped.pid"), "utf8")); pids.add(escaped);
-    // A clean native helper outcome cannot authorize a readiness pass for target code.
+    // Native helper success retains unproven descendant ownership for the readiness decision.
     expect(result).toMatchObject({ state: "exited", succeeded: true, termination: { tree: "absent" }, containment: { kind: "native-process-group", descendantOwnership: "unproven", groupObservation: "absent" } });
     expect(() => process.kill(escaped, 0)).not.toThrow();
     const before = await readFile(join(p.dir, "heartbeat"), "utf8");

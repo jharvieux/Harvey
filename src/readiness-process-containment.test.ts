@@ -130,7 +130,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
       expect(result).toMatchObject({ succeeded: false, pid: null, spawnedAt: null, containment: { kind: "unavailable", reasonCode: "containment-target-identity-unavailable" } });
       await expect(lstat(join(p.target.targetRoot, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally { gid.mockRestore(); }
-  }, 20_000);
+  });
 
   it("preserves actual target lifecycle, exact environment and separate last stderr", async () => {
     const p = await fixture("process.stdout.write(JSON.stringify({cwd:process.cwd(),env:process.env,args:process.argv.slice(2)}));setTimeout(()=>process.stderr.write('LAST-STDERR'),40);", { APPROVED: "env-only-canary" }, ["space kept", "$(false)"]);
@@ -139,26 +139,26 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     expect(result, JSON.stringify(result)).toMatchObject({ state: "exited", succeeded: true, exit: { code: 0, signal: null }, close: { code: 0, signal: null }, errors: [], stderr: { head: "LAST-STDERR", complete: true }, containment: { kind: "docker-pid-namespace", namespace: "terminated", targetWork: "begun", metadata: "verified", cleanup: "removed", targetIdentity: { uid: process.getuid!(), gid: process.getgid!(), capEff: "0000000000000000", noNewPrivileges: true } } });
     expect(JSON.parse(result.stdout.head)).toEqual({ cwd: p.request.cwd, env: p.request.env, args: ["space kept", "$(false)"] });
     expect(result.pid).toBeGreaterThan(1);
-  }, 20_000);
+  });
 
   it("runs a selected npm script with a real zero exit", async () => {
     const p = await fixture("process.stdout.write('NPM-SCRIPT-RAN');");
     const result = await p.runner.run({ ...p.request, bin: "npm", args: ["run", "test"] }, bounds);
     expect(result, JSON.stringify(result)).toMatchObject({ succeeded: true, state: "exited", exit: { code: 0, signal: null }, containment: { namespace: "terminated", metadata: "verified", cleanup: "removed" } });
     expect(result.stdout.head).toContain("NPM-SCRIPT-RAN");
-  }, 20_000);
+  });
 
   it.each([{ script: "process.exitCode=7", code: 7, signal: null }, { script: "process.kill(process.pid,'SIGTERM')", code: null, signal: "SIGTERM" }, { script: "process.exitCode=137", code: 137, signal: null }])("retains actual code $code and signal $signal", async ({ script, code, signal }) => {
     const p = await fixture(script);
     const result = await p.runner.run(p.request, bounds);
     expect(result, JSON.stringify(result)).toMatchObject({ state: "exited", succeeded: false, exit: { code, signal }, close: { code, signal }, containment: { namespace: "terminated", metadata: "verified", cleanup: "removed" } });
-  }, 20_000);
+  });
 
   it("reports a missing executable without inventing a target exit", async () => {
     const p = await fixture("");
     const result = await p.runner.run({ ...p.request, bin: "harvey-executable-that-does-not-exist" }, bounds);
     expect(result, JSON.stringify(result)).toMatchObject({ state: "spawn-error", succeeded: false, pid: null, spawnedAt: null, exit: null, close: { signal: null }, errors: [{ phase: "spawn", code: "ENOENT" }], containment: { namespace: "terminated", targetWork: "not-started", metadata: "verified", cleanup: "removed" } });
-  }, 20_000);
+  });
 
   it("hashes full raw streams while bounding head and final stderr tail", async () => {
     const raw = `BEGIN${"x".repeat(200_000)}END`, err = `START${"y".repeat(100_000)}FINAL-TAIL`;
@@ -166,7 +166,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     const result = await p.runner.run(p.request, { ...bounds, output: { headBytes: 16, tailBytes: 32 } });
     expect(result, JSON.stringify(result)).toMatchObject({ state: "exited", succeeded: false, containment: { namespace: "terminated", metadata: "verified", cleanup: "removed" } });
     for (const [stream, text] of [[result.stdout, raw], [result.stderr, err]] as const) expect(stream).toMatchObject({ bytes: Buffer.byteLength(text), sha256: createHash("sha256").update(text).digest("hex"), head: text.slice(0, 16), tail: text.slice(-32), complete: true, truncated: true });
-  }, 20_000);
+  });
 
   it("kills detached stdio-ignore descendants when the namespace init exits", async () => {
     const p = await fixture("const cp=require('node:child_process'),fs=require('node:fs');const c=cp.spawn(process.execPath,['-e',\"setInterval(()=>require('node:fs').appendFileSync('heartbeat','tick\\\\n'),20)\"],{detached:true,stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),150);");
@@ -176,7 +176,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     expect(before.length).toBeGreaterThan(0);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await readFile(join(p.target.targetRoot, "heartbeat"), "utf8")).toBe(before);
-  }, 20_000);
+  });
 
   it("terminates inherited-pipe escapees without fabricating target close or full streams", async () => {
     const p = await fixture("const c=require('node:child_process').spawn(process.execPath,['-e',\"setInterval(()=>require('node:fs').appendFileSync('heartbeat','tick\\\\n'),20)\"],{detached:true,stdio:['ignore','inherit','inherit']});c.unref();setTimeout(()=>process.exit(0),150);");
@@ -185,7 +185,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     const before = await readFile(join(p.target.targetRoot, "heartbeat"), "utf8");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await readFile(join(p.target.targetRoot, "heartbeat"), "utf8")).toBe(before);
-  }, 20_000);
+  });
 
   it.each([{ resistant: false, signal: "SIGTERM" }, { resistant: true, signal: "SIGKILL" }])("bounds target timeout with actual $signal observation", async ({ resistant, signal }) => {
     const p = await fixture(`${resistant ? "process.on('SIGTERM',()=>process.stderr.write('TERM-IGNORED'));" : ""}process.stdout.write('READY');setInterval(()=>{},1000);`);
@@ -193,13 +193,13 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     expect(result, JSON.stringify(result)).toMatchObject({ state: "timed-out", succeeded: false, exit: { code: null, signal }, close: { code: null, signal }, termination: { reason: "timeout", tree: "absent" }, containment: { namespace: "terminated", metadata: "verified", cleanup: "removed" } });
     expect(result.termination.attempts.map((row) => row.signal)).toEqual(resistant ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
     expect(result.durationMs).toBeLessThan(3_000);
-  }, 20_000);
+  });
 
   it("preserves timeout as failure when the target exits zero from its signal handler", async () => {
     const p = await fixture("process.on('SIGTERM',()=>process.stderr.write('GRACEFUL-TAIL',()=>process.exit(0)));process.stdout.write('READY');setInterval(()=>{},1000);");
     const result = await p.runner.run(p.request, { ...bounds, timeoutMs: 300 });
     expect(result, JSON.stringify(result)).toMatchObject({ state: "timed-out", succeeded: false, exit: { code: 0, signal: null }, close: { code: 0, signal: null }, stderr: { head: "GRACEFUL-TAIL", complete: true }, containment: { namespace: "terminated", cleanup: "removed" } });
-  }, 20_000);
+  });
 
   it("records abort after first byte and a failing output observer", async () => {
     const p = await fixture("process.stdout.write('READY');setInterval(()=>{},1000);");
@@ -209,7 +209,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     const broken = await p.runner.run(p.request, { ...bounds, onFirstByte: () => { throw new Error("OBSERVATION_SECRET_DO_NOT_LOG"); } });
     expect(broken, JSON.stringify(broken)).toMatchObject({ state: "observer-error", succeeded: false, containment: { namespace: "terminated", cleanup: "removed" } });
     expect(JSON.stringify(broken)).not.toContain("OBSERVATION_SECRET_DO_NOT_LOG");
-  }, 20_000);
+  });
 
   it("redacts approved public values and refuses them in target argv before work", async () => {
     const secret = "PUBLIC_APPROVED_CANARY";
@@ -221,7 +221,7 @@ describe.skipIf(!config)("physical local PID namespace adapter", () => {
     expect(result).toMatchObject({ succeeded: true, stdout: { head: "[redacted]", bytes: secret.length, sha256: createHash("sha256").update(secret).digest("hex") }, stderr: { head: "[redacted]" } });
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(JSON.stringify(unsafe)).not.toContain(secret);
-  }, 20_000);
+  });
 
   it("keeps original source, root metadata and the observer outside target write authority", async () => {
     const p = await fixture("");
@@ -236,7 +236,7 @@ results.parent=fs.readFileSync('/proc/self/status','utf8').match(/^(CapEff|NoNew
     expect(attempts.parent).toEqual(["CapEff:\t0000000000000000", "NoNewPrivs:\t1"]);
     expect(attempts.child).toBe("CapEff:\t0000000000000000|NoNewPrivs:\t1");
     await expect(lstat(join(p.source, "host-canary"))).rejects.toMatchObject({ code: "ENOENT" });
-  }, 20_000);
+  });
 
   it("reports absent local image or socket as zero target work", async () => {
     const p = await fixture("require('node:fs').writeFileSync('ran','bad');");
@@ -246,7 +246,7 @@ results.parent=fs.readFileSync('/proc/self/status','utf8').match(/^(CapEff|NoNew
       expect(result).toMatchObject({ state: "containment-unavailable", pid: null, containment: { kind: "unavailable" } });
       await expect(lstat(join(p.target.targetRoot, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
     }
-  }, 20_000);
+  });
 
   it("refuses target-writable image PATH entries before target spawn", async () => {
     const p = await fixture("require('node:fs').writeFileSync('ran','bad');");
@@ -255,14 +255,14 @@ results.parent=fs.readFileSync('/proc/self/status','utf8').match(/^(CapEff|NoNew
     const result = await runner.run({ ...p.request, env: { ...p.request.env, PATH: toolchainPath } }, bounds);
     expect(result, JSON.stringify(result)).toMatchObject({ state: "containment-unavailable", pid: null, spawnedAt: null, exit: null, errors: [{ phase: "observer", code: "IMAGE_TOOLCHAIN_UNTRUSTED" }], containment: { namespace: "terminated", targetWork: "not-started", cleanup: "removed", metadata: "verified" } });
     await expect(lstat(join(p.target.targetRoot, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
-  }, 20_000);
+  });
 
   it.skipIf(process.platform !== "darwin" || !config?.socketPath.includes("/.colima/"))("does not substitute a different copy when the VM cannot mount the real disposable root", async () => {
     const p = await fixture("require('node:fs').writeFileSync('ran','bad');", {}, [], tmpdir());
     const result = await p.runner.run(p.request, bounds);
     expect(result, JSON.stringify(result)).toMatchObject({ state: "containment-unavailable", pid: null, spawnedAt: null, containment: { targetWork: "not-started", namespace: "not-started", cleanup: "not-required" } });
     await expect(lstat(join(p.target.targetRoot, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
-  }, 20_000);
+  });
 
   it.each(["inspect-after-start", "remove"] as const)("retains exact ownership and poisons reuse after runtime %s failure", async (failure) => {
     const p = await fixture("process.stdout.write('actual target');");
@@ -276,7 +276,7 @@ results.parent=fs.readFileSync('/proc/self/status','utf8').match(/^(CapEff|NoNew
     const retry = await runner.run(p.request, bounds);
     expect(retry).toMatchObject({ state: "containment-unavailable", pid: null, containment: { kind: "unavailable", reasonCode: "containment-ownership-unconfirmed" } });
     expect(proxy.owned.size).toBe(1);
-  }, 20_000);
+  });
 
   it("keeps all approved values and original argv out of runtime control requests", async () => {
     const approved = "PRIVATE_TRANSPORT_VALUE", arg = "LITERAL_TARGET_ARGV";
@@ -292,5 +292,5 @@ results.parent=fs.readFileSync('/proc/self/status','utf8').match(/^(CapEff|NoNew
     expect(ambient.length).toBeGreaterThan(0);
     expect(ambient).toContain("PATH=");
     expect(ambient.every((entry) => /^[A-Za-z_][A-Za-z0-9_]*=$/.test(entry))).toBe(true);
-  }, 20_000);
+  });
 });

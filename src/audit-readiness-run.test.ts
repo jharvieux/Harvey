@@ -116,7 +116,7 @@ describe("bound readiness production composition (#1897)", () => {
     expect(json).not.toContain("fixture-secret");
     expect(await readFile(join(fixtureState.source, "source-canary"), "utf8")).toBe("unchanged source");
     expect(await captureSourceSentinel(fixtureState.source)).toEqual(fixtureState.sentinel);
-  }, 45_000);
+  });
 
   it.skipIf(!containment)("counts a failed generator, withholds only descendants and still runs independent lint", async () => {
     const fixtureState = await fixture(true);
@@ -126,7 +126,7 @@ describe("bound readiness production composition (#1897)", () => {
     expect(row(execution.stages, "lint")).toMatchObject({ status: "passed", execution: { kind: "process" } });
     expect(execution.cleanup.status).toBe("passed");
     expect(execution.status).toBe("failed");
-  }, 45_000);
+  });
 
   it("discloses unconfigured containment without executing a host fallback", async () => {
     const state = await fixture();

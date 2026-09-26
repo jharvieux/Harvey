@@ -364,7 +364,7 @@ export function createReadinessValidationProjectionV1(context: ReadinessReceiptC
   });
 }
 
-/** Raw executable-plan exports remain V1 or are withheld; redacted plans cannot be re-admitted. */
+/** Raw executable-plan exports remain V1 or are withheld; descriptors grant no execution authority. */
 export function prepareReadinessPlanExportV1(context: ReadinessReceiptContext):
   | { status: "ready"; json: string }
   | ({ status: "withheld" } & ReadinessDiagnosticV1) {

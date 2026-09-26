@@ -278,7 +278,7 @@ describe("producer-owned readiness artifacts", () => {
     for (const ids of [[], ["workspace:root"]] as ReadinessValidationDescriptorV1["applicationWorkspaceIds"][]) {
       descriptor.applicationWorkspaceIds = ids;
       const replaced = replaceExecution(pair, pair.execution, descriptor);
-      // Without an original-plan anchor, membership alone cannot prove discovery completeness.
+      // Original-plan anchors additionally bind discovery completeness; membership validates the supplied population.
       expect(parseReadinessArtifactsV1(replaced).descriptor.proof.executionAuthenticity).toBe("not-established");
       expect(() => parseReadinessArtifactsV1(replaced, { originalPlan: pair.plan })).toThrow(/original workspace identity population/);
     }

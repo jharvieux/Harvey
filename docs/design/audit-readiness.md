@@ -54,7 +54,7 @@ The readiness runner uses a private Linux PID namespace in the selected local
 container. It binds only the verified disposable root, disables network access,
 drops target capabilities and enables no-new-privileges. The target runs with
 nonzero UID/GID. A trusted namespace-init observer retains only SETUID/SETGID;
-the target cannot write its root-owned metadata or signal it. A private writable
+metadata and observer signal ownership belong to root, distinct from the target UID. A private writable
 image overlay holds that metadata and is recorded explicitly. Fixed limits are
 64 PIDs, 512 MiB and two CPUs per container. Linux and macOS controllers require
 an owned local Unix socket and a Linux daemon; unsupported configurations are
@@ -63,8 +63,8 @@ disclosed before target work.
 Approved values enter the target environment through bounded private stdin,
 never runtime argv or container configuration. Runtime inspection proves the
 exact image, container, lease and isolation settings. Target exit/close metadata
-is read separately from container termination; a container exit cannot substitute
-for a target exit. A passed readiness receipt requires verified target identity,
+is read separately from container termination. A passed readiness receipt requires
+verified target exit and identity,
 complete lifecycle and streams, an observed terminal namespace, and removal of
 the exact container. The native process-group implementation is retained only as
 a physical comparison test fixture; its success never proves readiness descendant
@@ -94,7 +94,7 @@ undelivered and fails the delivery gate, after audit export. Requested readiness
 files are written after module collection and disposable cleanup, including when
 their paths are inside the target. Requested destinations are checked for lexical,
 symlink and existing hardlink aliases before writing. Delivery requires matching
-bytes and digests produced by this run; old files cannot satisfy the gate.
+bytes and digests produced by this run through a current write/readback receipt.
 
 The execution export has a producer-owned `.validation.json` companion. Pure
 offline validation checks exact bytes, digests, plan/source bindings, complete
@@ -109,6 +109,10 @@ These boundaries begin after module import. The separate
 records a synthetic inherited-value disclosure from `tsx`/esbuild startup with
 `NODE_DEBUG=child_process`, before a CLI redactor can run. Do not interpret the
 readiness adapter's diagnostic refusal as a global launcher secrecy guarantee.
+The host-source AST spawn census has a separate
+[owned executable-template discovery follow-up](https://github.com/jharvieux/Harvey/issues/2225).
+The contained observer is currently covered by manual input/argv review and
+physical guard controls; its embedded spawn is outside that AST population.
 Source observation refuses active Node `child_process` and `stream` diagnostics
 before reading Git or non-Git sources or allocating a disposable copy. The check
 uses the active logger's cached startup state, so clearing `NODE_DEBUG` after

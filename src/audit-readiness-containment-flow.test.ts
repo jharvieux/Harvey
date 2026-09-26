@@ -199,7 +199,7 @@ describe.skipIf(!config)("complete readiness containment ownership flow (#1897)"
     expect(JSON.parse(retained.body.toString("utf8"))).toMatchObject({ Id: owned.id, Config: { Labels: owned.labels } });
     expect(parseReadinessArtifactsV1({ descriptorJson: result.descriptorJson, executionJson: result.json }).execution).toEqual(execution);
     await assertSourceUnchanged(state);
-  }, 45_000);
+  });
 
   it("stops a detached stdio-ignore heartbeat before releasing the copy for cleanup", async () => {
     const state = await fixture("heartbeat");
@@ -220,7 +220,7 @@ describe.skipIf(!config)("complete readiness containment ownership flow (#1897)"
     await expect(lstat(state.proxy.owned[0]!.root)).rejects.toMatchObject({ code: "ENOENT" });
     expect(parseReadinessArtifactsV1({ descriptorJson: result.descriptorJson, executionJson: result.json }).execution).toEqual(result.execution);
     await assertSourceUnchanged(state);
-  }, 45_000);
+  });
 
   it("cleans a confirmed terminated namespace despite missing metadata while preserving a failed stage", async () => {
     const state = await fixture("metadata");
@@ -239,5 +239,5 @@ describe.skipIf(!config)("complete readiness containment ownership flow (#1897)"
     await expect(lstat(state.proxy.owned[0]!.root)).rejects.toMatchObject({ code: "ENOENT" });
     expect(parseReadinessArtifactsV1({ descriptorJson: result.descriptorJson, executionJson: result.json }).execution).toEqual(result.execution);
     await assertSourceUnchanged(state);
-  }, 45_000);
+  });
 });

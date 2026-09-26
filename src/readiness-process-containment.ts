@@ -147,7 +147,7 @@ class DockerLocal {
 }
 
 // This literal is the only program in container control argv. Target values arrive on stdin.
-// PID 1 owns the control directory; child uid/gid cannot alter metadata or signal the observer.
+// PID 1 owns the control directory and observer signals; the target has a distinct nonzero uid/gid.
 const OBSERVER = String.raw`
 const fs=require('node:fs'), cp=require('node:child_process'), crypto=require('node:crypto'),path=require('node:path');
 const MAX=1048576, codes=new Set(['EACCES','EAGAIN','EBADF','E2BIG','EFAULT','EINTR','EINVAL','EIO','EISDIR','ELOOP','EMFILE','ENAMETOOLONG','ENFILE','ENOENT','ENOEXEC','ENOMEM','ENOSYS','ENOTDIR','EPERM','EPIPE','ESRCH','ETXTBSY']);

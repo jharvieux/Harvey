@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { validateReadinessEnvironmentNames } from "./audit-readiness-authority.js";
 
@@ -72,7 +72,7 @@ function physicalPath(path: string): string {
 export function assertDistinctArtifactDestinations(destinations: readonly RequestedArtifactDestination[]): void {
   const identities = destinations.map((destination) => {
     const absolute = resolve(destination.path);
-    const stat = existsSync(absolute) ? statSync(absolute) : undefined;
+    const stat = existsSync(absolute) ? lstatSync(realpathSync.native(absolute)) : undefined;
     return {
       ...destination,
       absolute,

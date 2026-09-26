@@ -494,7 +494,7 @@ if (readinessExecuteOut && readinessPlan && readinessBinding) {
         readinessExecutionJson = result.json;
         readinessValidationJson = result.descriptorJson;
       } catch {
-        // Known values in preserved identities cannot be safely redacted. Withhold
+        // Known-value collisions in preserved identities require refusal. Withhold
         // readiness artifacts and let their delivery checks fail after M1–M10 finish.
         readinessExecutionFailed = true;
       }
@@ -701,7 +701,7 @@ if (readinessExecutionFailed) console.error("\nREADINESS FAIL — execution, dis
 
 // #1470: the delivery gate. Everything above proves what was PRODUCED and ASSEMBLED; this is the
 // only check that reads the client's side of the seam. A same-run byte/hash receipt and matching
-// current bytes are required; an old non-empty file cannot satisfy a skipped or failed write.
+// current bytes from the completed write/readback are required.
 const requestedExports = requestedArtifactDestinations.filter((entry) => !["--html-out", "--pdf-out", "--conservation-out"].includes(entry.flag));
 const undelivered = requestedExports.filter((e) => (e.flag === "--readiness-plan-out" && readinessPlanExportWithheld) || !isCurrentArtifact(e.path, currentArtifactWrites));
 if (undelivered.length) {
