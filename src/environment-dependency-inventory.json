@@ -103750,7 +103750,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 111,
+        "line": 119,
         "path": "src/cli/corpus-m8.test.ts"
       },
       "freshness": {
@@ -111206,7 +111206,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 62,
+        "line": 121,
         "path": "src/cli/pass-artifact-cli.test.ts"
       },
       "freshness": {
@@ -111243,7 +111243,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 184,
+        "line": 243,
         "path": "src/cli/pass-artifact-cli.test.ts"
       },
       "freshness": {
@@ -111280,7 +111280,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 39,
+        "line": 88,
         "path": "src/cli/pass-artifact-cli.test.ts"
       },
       "freshness": {
@@ -111354,7 +111354,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 127,
+        "line": 186,
         "path": "src/cli/pass-artifact-cli.test.ts"
       },
       "freshness": {
@@ -123968,7 +123968,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 440,
+        "line": 468,
         "path": "src/corpus-dependency-preparation.ts"
       },
       "freshness": {
@@ -124190,7 +124190,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 69,
+        "line": 132,
         "path": "src/corpus-drift-relevance.test.ts"
       },
       "freshness": {
@@ -124227,7 +124227,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 164,
+        "line": 227,
         "path": "src/corpus-drift-relevance.test.ts"
       },
       "freshness": {
@@ -124264,7 +124264,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 74,
+        "line": 137,
         "path": "src/corpus-drift-relevance.test.ts"
       },
       "freshness": {
@@ -124338,7 +124338,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 83,
+        "line": 146,
         "path": "src/corpus-drift-relevance.test.ts"
       },
       "freshness": {
@@ -124375,7 +124375,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 59,
+        "line": 122,
         "path": "src/corpus-drift-relevance.test.ts"
       },
       "freshness": {
@@ -125559,7 +125559,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 208,
+        "line": 261,
         "path": "src/corpus-package-manager.test.ts"
       },
       "freshness": {
@@ -125707,7 +125707,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 203,
+        "line": 256,
         "path": "src/corpus-package-manager.test.ts"
       },
       "freshness": {
@@ -125929,7 +125929,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 310,
+        "line": 357,
         "path": "src/corpus-phase-cache-workflow.test.ts"
       },
       "freshness": {
@@ -126003,7 +126003,7 @@
       "environmentOwner": "#1909 stability evidence",
       "evidence": {
         "anchor": "content-hint",
-        "line": 238,
+        "line": 253,
         "path": "src/corpus-phase-cache-workflow.test.ts"
       },
       "freshness": {
@@ -376211,8 +376211,8 @@
   ],
   "schemaVersion": 1,
   "source": {
-    "commit": "89425dc85e293d72c0d85c4fe981603e580ccc8a",
-    "commitPayload": "dHJlZSAxYThiMDZmOGM5NGE4NWU4YWI3MGNlMWQ2ZWJjZDBhNzI2MTRkNTViCnBhcmVudCAwZDA2YWNlNTk5NDU1ZWViNGU2NGQ0MjRjNWQxMTg2Y2I5ZDMzMDI2CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwNDA1NDMzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwNDA1NDMzIC0wNTAwCgpDbGFyaWZ5IGNoaWxkIGhlYXJ0YmVhdCBzYW1wbGluZyAoIzIyMDgpCg==",
+    "commit": "94288f3e20ccfcdb5589297bfb5b989d18bf549e",
+    "commitPayload": "dHJlZSBiY2YwODJkOTMyMmQzNGNiMDNlZTVjZjhkMjBkOTJkNGRjNzBiZWM4CnBhcmVudCA3MDc2OWZlOWE5ZGU5MmMzNGNiNjA4OTYyNGRjNjRhZGYzZjUyMmE1CmF1dGhvciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwNDA4MDYzIC0wNTAwCmNvbW1pdHRlciBKb2huIEhhcnZpZXV4IDxqaGFydmlldXhAZ21haWwuY29tPiAxNzkwNDA4MDYzIC0wNTAwCgpCaW5kIG5hdGl2ZSBjaGlsZCBsaW1pdHMgdG8gcmV2aWV3ZWQgcG9saWN5ICgjMjIwOCkK",
     "excludedObjects": [
       {
         "gitMode": "100644",
@@ -376221,13 +376221,13 @@
       },
       {
         "gitMode": "100644",
-        "gitOid": "436150a6d57db1fe08f65baf11206c9d708ad2fe",
+        "gitOid": "686323379cb3d75cce754b3dacfce9732480514f",
         "path": "src/environment-dependency-inventory.json"
       }
     ],
     "mode": "committed",
-    "populationSha256": "e2b441064b659644c0baf21571830742f6ca356d545f4fdc56bde9a5104f4b9a",
-    "tree": "1a8b06f8c94a85e8ab70ce1d6ebcd0a72614d55b"
+    "populationSha256": "466c25625d2d2828025a94129e7f6420ae957b0c2817a1ef801d92534af304c6",
+    "tree": "bcf082d9322d34cb03ee5cf8d20d92d4dc70bec8"
   },
   "venues": [
     {
@@ -383506,19 +383506,19 @@
       "sha256": "a8274539511b062d1f8c8e53a4a18dcbceb051e4026570f96a8b8185213aee63"
     },
     {
-      "bytes": 20773,
+      "bytes": 21464,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "844665646c681bb2077c527a1f9768f570a8b3fa",
+      "gitOid": "c07aea58e29d591afbd477cd8d1e981a9b520681",
       "id": "src/cli/corpus-m8.test.ts",
       "kind": "source",
-      "literalCount": 333,
-      "literalSha256": "1ea62749a3ee005e14847202137b6afb0e42476d750600d7ac6a9276b0974985",
+      "literalCount": 337,
+      "literalSha256": "d436538ff8ee932d9e31f30644ab5fbcf25b81bad1ca10efde8d21a7584c793b",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/corpus-m8.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "009d81842b37e5beb6c7838d78773cc90f732860516a28c3644cfd6efb2dd193"
+      "sha256": "4a27b7add43ade74528609daff3eba1b7e69e72e4a65d061ce4d19d87db0aeb7"
     },
     {
       "bytes": 10020,
@@ -384151,19 +384151,19 @@
       "sha256": "a2e160870154c5e9f807cb14f52aa4e198fb8a40110c60840f899bdd6340275b"
     },
     {
-      "bytes": 16953,
+      "bytes": 17635,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "31daf2efb6be8a1b47336259fba3d9c6272b96c6",
+      "gitOid": "21fa3551d8b4fa0bc4ea1f0413d64b11149bbeb2",
       "id": "src/cli/materialize-current-semgrep.test.ts",
       "kind": "source",
-      "literalCount": 207,
-      "literalSha256": "07473697b61aad3da6707dc83f5b6ad0ed15732b67786324e47304e055ebe51a",
+      "literalCount": 211,
+      "literalSha256": "c34bb6849d22590f56625a02276e4886b3ff8eb7a9b0318dd46e350bb26f60da",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/materialize-current-semgrep.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "154ba2956992467f0c28e4aa44fcace0bcdc036f42dec47b77afa08a49fbefb9"
+      "sha256": "957d5f96d3169a7f0f4447803caf5dbcfb66689612664f18cab218a636d41cfb"
     },
     {
       "bytes": 2070,
@@ -384346,19 +384346,19 @@
       "sha256": "53fbf20fdc3160ffc75916159ad3813c59f4458bd356985c2220119990d6c05f"
     },
     {
-      "bytes": 21641,
+      "bytes": 24597,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "e1e537241f6c8a2ba701462f8a534b4a8b75c58a",
+      "gitOid": "f930a69a5387f9903ce564aac1edfccfc4ff62d7",
       "id": "src/cli/pass-artifact-cli.test.ts",
       "kind": "source",
-      "literalCount": 336,
-      "literalSha256": "5d4b30401aeb4b72ee78964e405d18fd57cd44ae8b8eafad587f5514470c9268",
+      "literalCount": 363,
+      "literalSha256": "7412fbacc2f44199a017406ac8abcea613c6174112569bc25b313b4436c6a9db",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/cli/pass-artifact-cli.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "ae6b8b1f65ff531f591b0b8fde8518923b5df8a734b6b2ebc74e908f7351b0f7"
+      "sha256": "0ebde4b8fc837b70cdfd0f70b5c6c884d461a94fbbf197cc1a89e928b6a6939e"
     },
     {
       "bytes": 7113,
@@ -385726,49 +385726,49 @@
       "sha256": "d3f35bd3b0264eb3532081de6a7aee8356d1bf61602145b426c8ac3a1bd1039e"
     },
     {
-      "bytes": 31813,
+      "bytes": 33388,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "5669922d55e04fa336f66dbf113d817ed212b369",
+      "gitOid": "e2b82e406ab807de1474ffd3f433ff58b401c78f",
       "id": "src/corpus-dependency-preparation.test.ts",
       "kind": "source",
-      "literalCount": 504,
-      "literalSha256": "41fa835a6f29b6abd0476b6328571956c6daad49c30233b813dd939b122231fd",
+      "literalCount": 520,
+      "literalSha256": "94af2e4322e9d941dc8719a21312ebc0dd4960365e3bf2a0077d8a667d83e0fc",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-dependency-preparation.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "06f7c54b41b5667113b763562cdf5b70eb6ba2bdd3b3cea1a8c6a0a644bacc12"
+      "sha256": "5d914479c3366b21231cc7277d4607aa6ebb85f2822742bae9a938735b6388d3"
     },
     {
-      "bytes": 67115,
+      "bytes": 68653,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "a50ab92d9b6397c5d7b8fa7396f100a734846eb8",
+      "gitOid": "21e20a99099e900a0ade9c7dfd2e65aa6444c154",
       "id": "src/corpus-dependency-preparation.ts",
       "kind": "source",
-      "literalCount": 499,
-      "literalSha256": "a009b48e531fc3a80c05b3e99353df55ffcb232639011bc7e3fa9f2ea165abf9",
+      "literalCount": 516,
+      "literalSha256": "725a65bfddd06a3483aa01de9b40b293a63a93831d1948b3c67cae0e1087401c",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-dependency-preparation.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "f2312877242f61f3e85941cb337e10fd5b1b0c6d099db900ad1015a006ca6c85"
+      "sha256": "f76a595f4e71cc18b7f30d9bcbf9c51b589e733d67ec23ea873e26f8ac075a6a"
     },
     {
-      "bytes": 21384,
+      "bytes": 24422,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "9d89229a3b91cf3f4b9b9da5c348712babf64991",
+      "gitOid": "b2b3da4b52dec8f81398ba3fa3ac95b90ca8fcdb",
       "id": "src/corpus-drift-relevance.test.ts",
       "kind": "source",
-      "literalCount": 366,
-      "literalSha256": "5814fd39db3300a8b53c9800f1a324c5830aa5632157ad99841a8d8d9904e684",
+      "literalCount": 393,
+      "literalSha256": "be109071f11dae91aee429fc11e5d7fbad667ebf840e4022a03f245aa45cca1e",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-drift-relevance.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "988dfaaa16fcb9d04b0f69b0cc04712c259fb5cc43718f63277d665a6dd498b4"
+      "sha256": "d1fad298173f61529cb2243e126f534238eb43d58c8d484aa3141135e85cb856"
     },
     {
       "bytes": 54875,
@@ -385846,49 +385846,49 @@
       "sha256": "d5dfe1e020f5686058e136b8b67af9047a669f4cff2d3337df3a6dc9ea9b6b5b"
     },
     {
-      "bytes": 17435,
+      "bytes": 19917,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "021b9b1f2167089c73f7a29bfd06f9594f1d9eca",
+      "gitOid": "7fadff5c6ae37e75fbd733a8f4b6eea5e7aa4904",
       "id": "src/corpus-package-manager.test.ts",
       "kind": "source",
-      "literalCount": 299,
-      "literalSha256": "5491a0ddaa86cbec1a636880e604d07df9fe6f2d7ee7e9cfe870788c8ec3cc44",
+      "literalCount": 338,
+      "literalSha256": "1c9a834a73cb9f5b0a527475facec601f19bba7ec1188d5e1ff1cc23ad4b0498",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-package-manager.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "a28097c90ec6e66b764ab5cee63ba26b33926d9b1727c2eaad743e78d3472294"
+      "sha256": "b428a5692f21ceea388a74f5fa26b1caaadde14cc92bad122540389a48b5ebab"
     },
     {
-      "bytes": 11332,
+      "bytes": 13431,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "d3d4913717c4e223695b81d311209faae2042e38",
+      "gitOid": "e41429bdacdaad2802243f2db4335e6642e72cfb",
       "id": "src/corpus-package-manager.ts",
       "kind": "source",
-      "literalCount": 77,
-      "literalSha256": "847662d1d9bf96f1ca97a99362b8d1aa20d383eef72cba88bbea5161d11da814",
+      "literalCount": 102,
+      "literalSha256": "6c5436afa4ff0c1cda689b8ec83fa5f4d098306a1e569e2d365eb3c9d652d30e",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-package-manager.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "363b3c1148d9b602754b6664453072f1dd29e253506f91c5669492f333eab316"
+      "sha256": "4438b8e4c13332dd8ded1c4c93b82faef4ecfb0357a6bdeb5cd0440cee4a916f"
     },
     {
-      "bytes": 65656,
+      "bytes": 68575,
       "disposition": "conservative-candidate",
       "format": "source",
       "gitMode": "100644",
-      "gitOid": "0344d15c17d3564c6dc90fa35996149c1f9b155a",
+      "gitOid": "c0cc8b07857c504633c73c55d515d90b3e11ca6e",
       "id": "src/corpus-phase-cache-workflow.test.ts",
       "kind": "source",
-      "literalCount": 978,
-      "literalSha256": "a851a2f971c645ca88d465b9337559b63de773426e68ad42130aae8e54ea55df",
+      "literalCount": 1006,
+      "literalSha256": "5ea71ec84cf054d63a0fb70b81a2471439f2853740d29c438c59d216a9d1437c",
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/corpus-phase-cache-workflow.test.ts",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "08c15b8c0bfe06c763a755220c370551d04467ba000221f6e8b26295cff66ab8"
+      "sha256": "2955ab52675eb9cb745a05bad684647d9dde0a8292a9379ba70f9776eba0787b"
     },
     {
       "bytes": 22342,
@@ -404686,11 +404686,11 @@
       "sha256": "fe050ab552062ae76f417eb4e657843c1637100c174f8229cf8d8d12162c8d81"
     },
     {
-      "bytes": 332599,
+      "bytes": 336529,
       "disposition": "conservative-candidate",
       "format": "json",
       "gitMode": "100644",
-      "gitOid": "cc7337086c5d2481540f0f947b90df141cc58a10",
+      "gitOid": "7bde7d4fc3433aea9060af5e22e92c5422dc040e",
       "id": "src/secret-spawn-policy.json",
       "kind": "structured-data",
       "literalCount": 0,
@@ -404698,7 +404698,7 @@
       "owner": "#1906 discovery; #1909 environment classification",
       "path": "src/secret-spawn-policy.json",
       "reason": "Complete committed bytes are retained as a conservative candidate. Static discovery does not prove that every literal is evidence or that an absent identity is safe; authoritative adapters and unresolved rows distinguish those claims.",
-      "sha256": "61dfc8f404a155e676ca218b8b195cdf0a7d668231b4b33c3cd295bf905aef25"
+      "sha256": "f79f4291e953c5f9d56d2040f288ea0d1d9a08c1c7436f5f26c688e1854cd329"
     },
     {
       "bytes": 10289,
